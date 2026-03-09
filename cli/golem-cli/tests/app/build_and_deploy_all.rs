@@ -10,15 +10,9 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tag(group2)]
-async fn build_and_deploy_all_templates_default() {
-    build_and_deploy_all_templates(None).await;
-}
-
-async fn build_and_deploy_all_templates(group: Option<&str>) {
+async fn build_and_deploy_all_templates() {
     let mut ctx = TestContext::new();
-    if let Some(group) = group {
-        ctx.use_template_group(group);
-    }
+
     let app_name = "all-templates-app";
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;
@@ -130,6 +124,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "counter-agent",
                     "rust-counter-agent",
                 ),
+                (
+                    "components-rust/app-rust/golem.yaml",
+                    "CounterAgent",
+                    "RustCounterAgent",
+                ),
             ],
         ),
         AgentMeta::new(
@@ -146,6 +145,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust-human-in-the-loop/golem.yaml",
                     "workflow-agent",
                     "rust-workflow-agent",
+                ),
+                (
+                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                    "WorkflowAgent",
+                    "RustWorkflowAgent",
                 ),
             ],
         ),
@@ -164,6 +168,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "human-agent",
                     "rust-human-agent",
                 ),
+                (
+                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                    "HumanAgent",
+                    "RustHumanAgent",
+                ),
             ],
         ),
         AgentMeta::new(
@@ -180,6 +189,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-rust/app-rust-json/golem.yaml",
                     "tasks(name)",
                     "rust-tasks(name)",
+                ),
+                (
+                    "components-rust/app-rust-json/golem.yaml",
+                    "Tasks",
+                    "RustTasks",
                 ),
             ],
         ),
@@ -251,6 +265,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "counter-agent",
                     "ts-counter-agent",
                 ),
+                (
+                    "components-ts/app-ts/golem.yaml",
+                    "CounterAgent",
+                    "TsCounterAgent",
+                ),
             ],
         ),
         AgentMeta::new(
@@ -267,6 +286,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-ts/app-ts-human-in-the-loop/golem.yaml",
                     "workflow-agent",
                     "ts-workflow-agent",
+                ),
+                (
+                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "WorkflowAgent",
+                    "TsWorkflowAgent",
                 ),
             ],
         ),
@@ -285,6 +309,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "human-agent",
                     "ts-human-agent",
                 ),
+                (
+                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "HumanAgent",
+                    "TsHumanAgent",
+                ),
             ],
         ),
         AgentMeta::new(
@@ -302,6 +331,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "task-agent",
                     "ts-task-agent",
                 ),
+                (
+                    "components-ts/app-ts-json/golem.yaml",
+                    "TaskAgent",
+                    "TsTaskAgent",
+                ),
             ],
         ),
         AgentMeta::new(
@@ -318,6 +352,11 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-ts/app-ts-snapshotting/golem.yaml",
                     "counter-agent",
                     "ts-counter-agent-snapshotting",
+                ),
+                (
+                    "components-ts/app-ts-snapshotting/golem.yaml",
+                    "CounterAgent",
+                    "TsCounterAgentSnapshotting",
                 ),
             ],
         ),

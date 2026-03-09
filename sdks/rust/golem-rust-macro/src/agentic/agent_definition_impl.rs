@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -326,13 +326,13 @@ fn get_agent_type_with_remote_client(
                             let schema = <#ty as golem_rust::agentic::Schema>::get_type();
                             match schema {
                                 golem_rust::agentic::StructuredSchema::Default(element_schema) => {
-                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
+                                    default_outputs.push(("return_value".to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
                                 },
                                 golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                                     multi_modal_outputs.extend(name_and_types)
                                 },
                                 golem_rust::agentic::StructuredSchema::AutoInject(auto_injected_schema) => {
-                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_injected_schema)));
+                                    default_outputs.push(("return_value".to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_injected_schema)));
                                 }
                             }
                         });
@@ -559,6 +559,7 @@ fn get_agent_type_with_remote_client(
             golem_rust::agentic::ExtendedAgentType {
                 type_name: #agent_trait_name.to_string(),
                 description: #high_level_description_ident.to_string(),
+                source_language: "rust".to_string(),
                 methods: vec![#(#methods),*],
                 dependencies: vec![],
                 constructor: #agent_constructor,

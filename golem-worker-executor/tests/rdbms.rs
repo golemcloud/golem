@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::base_model::agent::AgentId;
+use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::AgentId;
 use golem_common::model::agent::DataValue;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::{IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
+use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
@@ -27,7 +28,8 @@ use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -41,6 +43,10 @@ use uuid::Uuid;
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
 
 #[test_dep]
 async fn postgres() -> DockerPostgresRdb {
@@ -208,6 +214,7 @@ async fn rdbms_postgres_crud(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let db_address = postgres.public_connection_string();
@@ -215,11 +222,7 @@ async fn rdbms_postgres_crud(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -327,8 +330,8 @@ async fn rdbms_postgres_crud(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids_1: Vec<WorkerId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
-    let worker_ids_3: Vec<WorkerId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_1: Vec<AgentId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_3: Vec<AgentId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
 
     workers_interrupt_test(&executor, worker_ids_1.clone()).await?;
     workers_interrupt_test(&executor, worker_ids_3.clone()).await?;
@@ -361,6 +364,7 @@ async fn rdbms_postgres_idempotency(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let db_address = postgres.public_connection_string();
@@ -368,11 +372,7 @@ async fn rdbms_postgres_idempotency(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -515,6 +515,7 @@ async fn postgres_transaction_recovery_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    host_api_tests: &PrecompiledComponent,
     fail_on: TransactionFailOn,
     transaction_end: TransactionEnd,
 ) -> anyhow::Result<()> {
@@ -522,11 +523,7 @@ async fn postgres_transaction_recovery_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -612,7 +609,7 @@ async fn postgres_transaction_recovery_test(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids: Vec<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids: Vec<AgentId> = workers.iter().map(|(w, _)| w.clone()).collect();
     workers_interrupt_test(&executor, worker_ids).await?;
 
     drop(executor);
@@ -657,6 +654,7 @@ async fn rdbms_postgres_commit_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
@@ -664,6 +662,7 @@ async fn rdbms_postgres_commit_recovery(
             last_unique_id,
             deps,
             postgres,
+            host_api_tests,
             TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
         )
@@ -678,12 +677,14 @@ async fn rdbms_postgres_pre_commit_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     postgres_transaction_recovery_test(
         last_unique_id,
         deps,
         postgres,
+        host_api_tests,
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 1),
         TransactionEnd::Commit,
     )
@@ -693,6 +694,7 @@ async fn rdbms_postgres_pre_commit_recovery(
         last_unique_id,
         deps,
         postgres,
+        host_api_tests,
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 2),
         TransactionEnd::Commit,
     )
@@ -707,6 +709,7 @@ async fn rdbms_postgres_rollback_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
@@ -714,6 +717,7 @@ async fn rdbms_postgres_rollback_recovery(
             last_unique_id,
             deps,
             postgres,
+            host_api_tests,
             TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
         )
@@ -729,12 +733,14 @@ async fn rdbms_postgres_pre_rollback_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     postgres_transaction_recovery_test(
         last_unique_id,
         deps,
         postgres,
+        host_api_tests,
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 1),
         TransactionEnd::Rollback,
     )
@@ -744,6 +750,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
         last_unique_id,
         deps,
         postgres,
+        host_api_tests,
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 2),
         TransactionEnd::Rollback,
     )
@@ -759,12 +766,14 @@ async fn rdbms_postgres_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     postgres_transaction_recovery_test(
         last_unique_id,
         deps,
         postgres,
+        host_api_tests,
         TransactionFailOn::oplog_add_and_tx(
             "CommittedRemoteTransaction",
             1,
@@ -857,6 +866,7 @@ async fn rdbms_postgres_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let test1 = StatementTest::execute_test("SELECT 1".to_string(), vec![], Some(1));
@@ -866,6 +876,7 @@ async fn rdbms_postgres_select1(
     rdbms_component_test::<PostgresType>(
         last_unique_id,
         deps,
+        host_api_tests,
         &postgres.public_connection_string(),
         RdbmsTest::new(vec![test1, test2], None),
         3,
@@ -881,6 +892,7 @@ async fn rdbms_mysql_crud(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let db_address = mysql.public_connection_string();
@@ -889,11 +901,7 @@ async fn rdbms_mysql_crud(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -1000,8 +1008,8 @@ async fn rdbms_mysql_crud(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids_1: Vec<WorkerId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
-    let worker_ids_3: Vec<WorkerId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_1: Vec<AgentId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_3: Vec<AgentId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
 
     workers_interrupt_test(&executor, worker_ids_1).await?;
     workers_interrupt_test(&executor, worker_ids_3).await?;
@@ -1034,6 +1042,7 @@ async fn rdbms_mysql_idempotency(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let db_address = mysql.public_connection_string();
@@ -1041,11 +1050,7 @@ async fn rdbms_mysql_idempotency(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -1185,6 +1190,7 @@ async fn mysql_transaction_recovery_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    host_api_tests: &PrecompiledComponent,
     fail_on: TransactionFailOn,
     transaction_end: TransactionEnd,
 ) -> anyhow::Result<()> {
@@ -1192,11 +1198,7 @@ async fn mysql_transaction_recovery_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -1277,7 +1279,7 @@ async fn mysql_transaction_recovery_test(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids: Vec<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids: Vec<AgentId> = workers.iter().map(|(w, _)| w.clone()).collect();
     workers_interrupt_test(&executor, worker_ids).await?;
 
     drop(executor);
@@ -1322,6 +1324,7 @@ async fn rdbms_mysql_commit_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
@@ -1329,6 +1332,7 @@ async fn rdbms_mysql_commit_recovery(
             last_unique_id,
             deps,
             mysql,
+            host_api_tests,
             TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
         )
@@ -1344,12 +1348,14 @@ async fn rdbms_mysql_pre_commit_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
         mysql,
+        host_api_tests,
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 1),
         TransactionEnd::Commit,
     )
@@ -1359,6 +1365,7 @@ async fn rdbms_mysql_pre_commit_recovery(
         last_unique_id,
         deps,
         mysql,
+        host_api_tests,
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 2),
         TransactionEnd::Commit,
     )
@@ -1373,6 +1380,7 @@ async fn rdbms_mysql_rollback_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
@@ -1380,6 +1388,7 @@ async fn rdbms_mysql_rollback_recovery(
             last_unique_id,
             deps,
             mysql,
+            host_api_tests,
             TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
         )
@@ -1395,12 +1404,14 @@ async fn rdbms_mysql_pre_rollback_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
         mysql,
+        host_api_tests,
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 1),
         TransactionEnd::Rollback,
     )
@@ -1410,6 +1421,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
         last_unique_id,
         deps,
         mysql,
+        host_api_tests,
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 2),
         TransactionEnd::Rollback,
     )
@@ -1425,12 +1437,14 @@ async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
         mysql,
+        host_api_tests,
         TransactionFailOn::oplog_add_and_tx(
             "CommittedRemoteTransaction",
             1,
@@ -1520,6 +1534,7 @@ async fn rdbms_mysql_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let test1 = StatementTest::execute_test("SELECT 1".to_string(), vec![], Some(0));
@@ -1529,6 +1544,7 @@ async fn rdbms_mysql_select1(
     rdbms_component_test::<MysqlType>(
         last_unique_id,
         deps,
+        host_api_tests,
         &mysql.public_connection_string(),
         RdbmsTest::new(vec![test1, test2], None),
         1,
@@ -1544,17 +1560,14 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -1624,6 +1637,7 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
 async fn rdbms_component_test<T: RdbmsType>(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
     db_address: &str,
     test: RdbmsTest,
     n_workers: u8,
@@ -1632,11 +1646,7 @@ async fn rdbms_component_test<T: RdbmsType>(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let workers = start_workers::<T>(&executor, &component, db_address, "", n_workers).await?;
@@ -1649,12 +1659,12 @@ async fn rdbms_component_test<T: RdbmsType>(
 async fn rdbms_workers_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    workers: Vec<(WorkerId, AgentId)>,
+    workers: Vec<(AgentId, ParsedAgentId)>,
     test: RdbmsTest,
 ) -> anyhow::Result<()> {
-    let mut workers_results: HashMap<WorkerId, DataValue> = HashMap::new();
+    let mut workers_results: HashMap<AgentId, DataValue> = HashMap::new();
 
-    let mut fibers = JoinSet::<anyhow::Result<(WorkerId, DataValue)>>::new();
+    let mut fibers = JoinSet::<anyhow::Result<(AgentId, DataValue)>>::new();
 
     for (worker_id, agent_id) in workers {
         let worker_id_clone = worker_id.clone();
@@ -1696,7 +1706,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
 async fn execute_worker_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &AgentId,
+    agent_id: &ParsedAgentId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
 ) -> anyhow::Result<DataValue> {
@@ -1745,7 +1755,7 @@ async fn execute_worker_test<T: RdbmsType>(
         .await
 }
 
-fn check_test_result(worker_id: &WorkerId, result: DataValue, test: RdbmsTest) {
+fn check_test_result(worker_id: &AgentId, result: DataValue, test: RdbmsTest) {
     let fn_name = test.fn_name();
 
     let return_value = result
@@ -1801,8 +1811,8 @@ async fn start_workers<T: RdbmsType>(
     db_address: &str,
     name_suffix: &str,
     n_workers: u8,
-) -> anyhow::Result<Vec<(WorkerId, AgentId)>> {
-    let mut workers: Vec<(WorkerId, AgentId)> = Vec::new();
+) -> anyhow::Result<Vec<(AgentId, ParsedAgentId)>> {
+    let mut workers: Vec<(AgentId, ParsedAgentId)> = Vec::new();
     let db_type = T::default().to_string();
 
     let mut env = HashMap::new();
@@ -1816,9 +1826,15 @@ async fn start_workers<T: RdbmsType>(
             Uuid::new_v4(),
             name_suffix
         );
-        let agent_id = agent_id!("relational-databases", worker_name);
+        let agent_id = agent_id!("RelationalDatabases", worker_name);
         let worker_id = executor
-            .start_agent_with(&component.id, agent_id.clone(), env.clone(), HashMap::new())
+            .start_agent_with(
+                &component.id,
+                agent_id.clone(),
+                env.clone(),
+                HashMap::new(),
+                Vec::new(),
+            )
             .await?;
         workers.push((worker_id, agent_id.clone()));
         let _result = executor
@@ -1830,11 +1846,11 @@ async fn start_workers<T: RdbmsType>(
 
 async fn workers_interrupt_test(
     executor: &TestWorkerExecutor,
-    worker_ids: Vec<WorkerId>,
+    worker_ids: Vec<AgentId>,
 ) -> anyhow::Result<()> {
-    let mut workers_results: HashMap<WorkerId, WorkerStatus> = HashMap::new();
+    let mut workers_results: HashMap<AgentId, AgentStatus> = HashMap::new();
 
-    let mut fibers = JoinSet::<anyhow::Result<(WorkerId, WorkerStatus)>>::new();
+    let mut fibers = JoinSet::<anyhow::Result<(AgentId, AgentStatus)>>::new();
 
     for worker_id in worker_ids {
         let worker_id_clone = worker_id.clone();
@@ -1844,7 +1860,7 @@ async fn workers_interrupt_test(
                 executor_clone.interrupt(&worker_id_clone).await?;
 
                 let metadata = executor_clone
-                    .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+                    .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
                     .await?;
 
                 let status = metadata.status;
@@ -1863,7 +1879,7 @@ async fn workers_interrupt_test(
     for (worker_id, status) in workers_results {
         assert_eq!(
             status,
-            WorkerStatus::Idle,
+            AgentStatus::Idle,
             "status for worker {worker_id} is Idle"
         );
     }

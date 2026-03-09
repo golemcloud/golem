@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -36,9 +36,10 @@ use golem_common::model::mcp_deployment::McpDeployment;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
-use golem_service_base::model::Component;
+use golem_service_base::model::component::Component;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
+use heck::ToKebabCase;
 use sqlx::FromRow;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -340,7 +341,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub agent_type_name: String,
-    pub agent_wrapper_type_name: String,
+    pub canonical_agent_type_name: String,
 
     pub component_id: Uuid,
     pub component_revision_id: i64,
@@ -358,7 +359,11 @@ impl DeploymentRegisteredAgentTypeRecord {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
             agent_type_name: registered_agent_type.agent_type.type_name.to_string(),
-            agent_wrapper_type_name: registered_agent_type.agent_type.wrapper_type_name(),
+            canonical_agent_type_name: registered_agent_type
+                .agent_type
+                .type_name
+                .to_string()
+                .to_kebab_case(),
             component_id: registered_agent_type.implemented_by.component_id.0,
             component_revision_id: registered_agent_type
                 .implemented_by
@@ -390,7 +395,7 @@ pub struct ResolvedAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub agent_type_name: String,
-    pub agent_wrapper_type_name: String,
+    pub canonical_agent_type_name: String,
     pub component_id: Uuid,
     pub component_revision_id: i64,
     pub webhook_prefix_authority_and_path: Option<String>,

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -38,12 +38,13 @@ use golem_common::model::component::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
-use golem_common::model::worker::WorkerUpdateMode;
-use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
-use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
+use golem_common::model::worker::AgentUpdateMode;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{
-    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
+    AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
 };
+use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
@@ -60,20 +61,21 @@ use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 pub trait WorkerClient: Send + Sync {
     async fn create(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<WorkerId>;
+    ) -> WorkerResult<AgentId>;
 
     async fn connect(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -81,14 +83,14 @@ pub trait WorkerClient: Send + Sync {
 
     async fn delete(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn complete_promise(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         oplog_id: u64,
         data: Vec<u8>,
         environment_id: EnvironmentId,
@@ -97,7 +99,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn interrupt(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         recover_immediately: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
@@ -105,25 +107,25 @@ pub trait WorkerClient: Send + Sync {
 
     async fn get_metadata(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<WorkerMetadataDto>;
+    ) -> WorkerResult<AgentMetadataDto>;
 
     async fn find_metadata(
         &self,
         component_id: ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)>;
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)>;
 
     async fn resume(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         force: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
@@ -131,8 +133,8 @@ pub trait WorkerClient: Send + Sync {
 
     async fn update(
         &self,
-        worker_id: &WorkerId,
-        update_mode: WorkerUpdateMode,
+        agent_id: &AgentId,
+        update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         environment_id: EnvironmentId,
@@ -141,7 +143,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn get_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
@@ -151,7 +153,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn search_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -161,7 +163,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn get_file_system_node(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         path: ComponentFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
@@ -170,7 +172,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn get_file_contents(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         path: ComponentFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
@@ -179,7 +181,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn activate_plugin(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
@@ -187,7 +189,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn deactivate_plugin(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
@@ -195,8 +197,8 @@ pub trait WorkerClient: Send + Sync {
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &AgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         environment_id: EnvironmentId,
         account_id: AccountId,
@@ -205,7 +207,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn revert_worker(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target: RevertWorkerTarget,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
@@ -213,7 +215,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn cancel_invocation(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
@@ -221,7 +223,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn invoke_agent(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         method_name: String,
         method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
         mode: i32,
@@ -263,9 +265,9 @@ impl WorkerExecutorWorkerClient {
     async fn find_running_metadata_internal(
         &self,
         component_id: ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<Vec<WorkerMetadataDto>> {
+    ) -> WorkerResult<Vec<AgentMetadataDto>> {
         let result = self.call_worker_executor(
             AllExecutors,
             "get_running_workers_metadata",
@@ -292,7 +294,7 @@ impl WorkerExecutorWorkerClient {
                                                                                                                 workers
                                                                                                             })),
                         } => {
-                            let workers: Vec<WorkerMetadataDto> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| WorkerExecutorError::unknown("Convert response error"))?;
+                            let workers: Vec<AgentMetadataDto> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| WorkerExecutorError::unknown("Convert response error"))?;
                             Ok(workers)
                         }
                         workerexecutor::v1::GetRunningWorkersMetadataResponse {
@@ -314,13 +316,13 @@ impl WorkerExecutorWorkerClient {
     async fn find_metadata_internal(
         &self,
         component_id: ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
         let result = self
             .call_worker_executor(
                 RandomExecutor,
@@ -399,34 +401,42 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 impl WorkerClient for WorkerExecutorWorkerClient {
     async fn create(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<WorkerId> {
-        let worker_id_clone = worker_id.clone();
+    ) -> WorkerResult<AgentId> {
+        let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "create_worker",
             move |worker_executor_client| {
-                let worker_id = worker_id_clone.clone();
-                Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
-                    worker_id: Some(worker_id.into()),
-                    env: environment_variables.clone(),
-                    config_vars: config_vars.clone().into_iter().collect(),
-                    component_owner_account_id: Some(account_id_clone.into()),
-                    environment_id: Some(environment_id.into()),
-                    ignore_already_existing,
-                    auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: principal.clone(),
-                    invocation_context: invocation_context.clone(),
-                }))
+                let agent_id = agent_id_clone.clone();
+                Box::pin(
+                    worker_executor_client.create_worker(CreateWorkerRequest {
+                        agent_id: Some(agent_id.into()),
+                        env: environment_variables.clone(),
+                        config_vars: config_vars.clone().into_iter().collect(),
+                        local_agent_config: local_agent_config
+                            .clone()
+                            .into_iter()
+                            .map(golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry::from)
+                            .collect(),
+                        component_owner_account_id: Some(account_id_clone.into()),
+                        environment_id: Some(environment_id.into()),
+                        ignore_already_existing,
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: principal.clone(),
+                        invocation_context: invocation_context.clone(),
+                    }),
+                )
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::CreateWorkerResponse {
@@ -441,26 +451,26 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         )
         .await?;
 
-        Ok(worker_id.clone())
+        Ok(agent_id.clone())
     }
 
     async fn connect(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<WorkerStream<LogEvent>> {
-        let worker_id_clone = worker_id.clone();
+        let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
-        let worker_id_err = worker_id.clone();
+        let agent_id_err = agent_id.clone();
         let stream = self
             .call_worker_executor(
-                worker_id.clone(),
+                agent_id.clone(),
                 "connect_worker",
                 move |worker_executor_client| {
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
-                        worker_id: Some(worker_id_clone.clone().into()),
+                        agent_id: Some(agent_id_clone.clone().into()),
                         component_owner_account_id: Some(account_id_clone.into()),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
@@ -472,7 +482,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     CallWorkerExecutorError::FailedToConnectToPod(status)
                         if status.code() == Code::NotFound =>
                     {
-                        WorkerServiceError::WorkerNotFound(worker_id_err.clone())
+                        WorkerServiceError::AgentNotFound(agent_id_err.clone())
                     }
                     _ => WorkerServiceError::InternalCallError(error),
                 },
@@ -484,19 +494,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn delete(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let worker_id_clone = worker_id.clone();
+        let agent_id_clone = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "delete_worker",
             move |worker_executor_client| {
                 Box::pin(worker_executor_client.delete_worker(
                     workerexecutor::v1::DeleteWorkerRequest {
-                        worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(
-                            worker_id_clone.clone(),
+                        agent_id: Some(golem_api_grpc::proto::golem::worker::AgentId::from(
+                            agent_id_clone.clone(),
                         )),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
@@ -522,20 +532,20 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn complete_promise(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         oplog_id: u64,
         data: Vec<u8>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<bool> {
         let promise_id = PromiseId {
-            worker_id: worker_id.clone(),
+            agent_id: agent_id.clone(),
             oplog_idx: OplogIndex::from_u64(oplog_id),
         };
 
         let result = self
             .call_worker_executor(
-                worker_id.clone(),
+                agent_id.clone(),
                 "complete_promise",
                 move |worker_executor_client| {
                     let promise_id = promise_id.clone();
@@ -577,20 +587,20 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn interrupt(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         recover_immediately: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "interrupt_worker",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 Box::pin(
                     worker_executor_client.interrupt_worker(InterruptWorkerRequest {
-                        worker_id: Some(worker_id.into()),
+                        agent_id: Some(agent_id.into()),
                         recover_immediately,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
@@ -617,19 +627,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn get_metadata(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<WorkerMetadataDto> {
-        let worker_id = worker_id.clone();
+    ) -> WorkerResult<AgentMetadataDto> {
+        let agent_id = agent_id.clone();
         let metadata = self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "get_metadata",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
-                Box::pin(worker_executor_client.get_worker_metadata(
-                    workerexecutor::v1::GetWorkerMetadataRequest {
-                        worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id.clone())),
+                let agent_id = agent_id.clone();
+                Box::pin(worker_executor_client.get_agent_metadata(
+                    workerexecutor::v1::GetAgentMetadataRequest {
+                        agent_id: Some(golem_api_grpc::proto::golem::worker::AgentId::from(agent_id.clone())),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }
@@ -637,19 +647,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             |response| {
                 match response.into_inner() {
-                    workerexecutor::v1::GetWorkerMetadataResponse {
+                    workerexecutor::v1::GetAgentMetadataResponse {
                         result:
-                        Some(workerexecutor::v1::get_worker_metadata_response::Result::Success(metadata)),
+                        Some(workerexecutor::v1::get_agent_metadata_response::Result::Success(metadata)),
                     } => {
                         Ok(metadata.try_into().unwrap())
                     }
-                    workerexecutor::v1::GetWorkerMetadataResponse {
+                    workerexecutor::v1::GetAgentMetadataResponse {
                         result:
-                        Some(workerexecutor::v1::get_worker_metadata_response::Result::Failure(err)),
+                        Some(workerexecutor::v1::get_agent_metadata_response::Result::Failure(err)),
                     } => {
                         Err(err.into())
                     }
-                    workerexecutor::v1::GetWorkerMetadataResponse { .. } => {
+                    workerexecutor::v1::GetAgentMetadataResponse { .. } => {
                         Err("Empty response".into())
                     }
                 }
@@ -663,13 +673,13 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn find_metadata(
         &self,
         component_id: ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
@@ -692,19 +702,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn resume(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         force: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "resume_worker",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 Box::pin(worker_executor_client.resume_worker(ResumeWorkerRequest {
-                    worker_id: Some(worker_id.into()),
+                    agent_id: Some(agent_id.into()),
                     force: Some(force),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -728,21 +738,21 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn update(
         &self,
-        worker_id: &WorkerId,
-        update_mode: WorkerUpdateMode,
+        agent_id: &AgentId,
+        update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "update_worker",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
-                    worker_id: Some(worker_id.into()),
+                    agent_id: Some(agent_id.into()),
                     mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode)
                         as i32,
                     target_revision: target_revision.into(),
@@ -769,22 +779,22 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn get_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "get_oplog",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 Box::pin(
                     worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
-                        worker_id: Some(worker_id.into()),
+                        agent_id: Some(agent_id.into()),
                         from_oplog_index: from_oplog_index.into(),
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
@@ -842,23 +852,23 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn search_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "search_oplog",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 let query_clone = query.clone();
                 Box::pin(
                     worker_executor_client.search_oplog(workerexecutor::v1::SearchOplogRequest {
-                        worker_id: Some(worker_id.into()),
+                        agent_id: Some(agent_id.into()),
                         query: query_clone,
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
@@ -903,22 +913,22 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn get_file_system_node(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         path: ComponentFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         let path_clone = path.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "get_file_system_node",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 Box::pin(
                     worker_executor_client.get_file_system_node(workerexecutor::v1::GetFileSystemNodeRequest {
-                        worker_id: Some(worker_id.into()),
+                        agent_id: Some(agent_id.into()),
                         component_owner_account_id: Some(account_id.into()),
                         path: path_clone.to_string(),
                         environment_id: Some(environment_id.into()),
@@ -966,22 +976,22 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn get_file_contents(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         path: ComponentFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         let path_clone = path.clone();
         let stream = self
             .call_worker_executor(
-                worker_id.clone(),
+                agent_id.clone(),
                 "read_file",
                 move |worker_executor_client| {
                     Box::pin(worker_executor_client.get_file_contents(
                         workerexecutor::v1::GetFileContentsRequest {
-                            worker_id: Some(worker_id.clone().into()),
+                            agent_id: Some(agent_id.clone().into()),
                             component_owner_account_id: Some(account_id.into()),
                             file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.into()),
@@ -1061,20 +1071,20 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn activate_plugin(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "activate_plugin",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 Box::pin(
                     worker_executor_client.activate_plugin(ActivatePluginRequest {
-                        worker_id: Some(worker_id.into()),
+                        agent_id: Some(agent_id.into()),
                         plugin_priority: plugin_priority.0,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
@@ -1101,20 +1111,20 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn deactivate_plugin(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "deactivate_plugin",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 Box::pin(
                     worker_executor_client.deactivate_plugin(DeactivatePluginRequest {
-                        worker_id: Some(worker_id.into()),
+                        agent_id: Some(agent_id.into()),
                         plugin_priority: plugin_priority.0,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
@@ -1141,24 +1151,24 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &AgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let source_worker_id = source_worker_id.clone();
-        let target_worker_id = target_worker_id.clone();
+        let source_agent_id = source_agent_id.clone();
+        let target_agent_id = target_agent_id.clone();
         self.call_worker_executor(
-            source_worker_id.clone(),
+            source_agent_id.clone(),
             "fork_worker",
             move |worker_executor_client| {
-                let source_worker_id = source_worker_id.clone();
-                let target_worker_id = target_worker_id.clone();
+                let source_agent_id = source_agent_id.clone();
+                let target_agent_id = target_agent_id.clone();
                 Box::pin(worker_executor_client.fork_worker(ForkWorkerRequest {
-                    source_worker_id: Some(source_worker_id.into()),
-                    target_worker_id: Some(target_worker_id.into()),
+                    source_agent_id: Some(source_agent_id.into()),
+                    target_agent_id: Some(target_agent_id.into()),
                     component_owner_account_id: Some(account_id.into()),
                     oplog_index_cutoff: oplog_index_cut_off.into(),
                     environment_id: Some(environment_id.into()),
@@ -1183,20 +1193,20 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn revert_worker(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target: RevertWorkerTarget,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "revert_worker",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 let target = target.clone();
                 Box::pin(worker_executor_client.revert_worker(RevertWorkerRequest {
-                    worker_id: Some(worker_id.into()),
+                    agent_id: Some(agent_id.into()),
                     target: Some(target.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -1220,21 +1230,21 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn cancel_invocation(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<bool> {
-        let worker_id = worker_id.clone();
+        let agent_id = agent_id.clone();
         let idempotency_key = idempotency_key.clone();
         let canceled = self.call_worker_executor(
-            worker_id.clone(),
+            agent_id.clone(),
             "cancel_invocation",
             move |worker_executor_client| {
-                let worker_id = worker_id.clone();
+                let agent_id = agent_id.clone();
                 let idempotency_key = idempotency_key.clone();
                 Box::pin(worker_executor_client.cancel_invocation(CancelInvocationRequest {
-                    worker_id: Some(worker_id.into()),
+                    agent_id: Some(agent_id.into()),
                     idempotency_key: Some(idempotency_key.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -1258,7 +1268,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn invoke_agent(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         method_name: String,
         method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
         mode: i32,
@@ -1270,17 +1280,17 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let worker_id = worker_id.clone();
-        let worker_id_clone = worker_id.clone();
+        let agent_id = agent_id.clone();
+        let agent_id_clone = agent_id.clone();
 
         let result = self
             .call_worker_executor(
-                worker_id.clone(),
+                agent_id.clone(),
                 "invoke_agent",
                 move |worker_executor_client| {
                     Box::pin(worker_executor_client.invoke_agent(
                         workerexecutor::v1::InvokeAgentRequest {
-                            worker_id: Some(worker_id_clone.clone().into()),
+                            agent_id: Some(agent_id_clone.clone().into()),
                             method_name: method_name.clone(),
                             method_parameters: Some(method_parameters.clone()),
                             mode,
@@ -1336,14 +1346,14 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     }
 }
 
-fn is_filter_with_running_status(filter: &WorkerFilter) -> bool {
+fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
     match filter {
-        WorkerFilter::Status(f)
-            if f.value == WorkerStatus::Running && f.comparator == FilterComparator::Equal =>
+        AgentFilter::Status(f)
+            if f.value == AgentStatus::Running && f.comparator == FilterComparator::Equal =>
         {
             true
         }
-        WorkerFilter::And(f) => f.filters.iter().any(is_filter_with_running_status),
+        AgentFilter::And(f) => f.filters.iter().any(is_filter_with_running_status),
         _ => false,
     }
 }

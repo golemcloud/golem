@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -160,5 +160,9 @@ impl Oplog for DebugOplog {
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
         self.inner.switch_persistence_level(mode).await
+    }
+
+    fn inner(&self) -> Option<Arc<dyn Oplog>> {
+        Some(self.inner.clone())
     }
 }

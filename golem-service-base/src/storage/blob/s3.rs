@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -121,18 +121,18 @@ impl S3BlobStorage {
             }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
-                worker_id,
+                agent_id,
             } => {
                 let environment_id_string = environment_id.to_string();
-                let worker_id_string = worker_id.to_string();
+                let agent_id_string = agent_id.to_string();
                 if self.config.object_prefix.is_empty() {
                     Path::new(&environment_id_string)
-                        .join(worker_id_string)
+                        .join(agent_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
                         .join(environment_id_string)
-                        .join(worker_id_string)
+                        .join(agent_id_string)
                         .to_path_buf()
                 }
             }

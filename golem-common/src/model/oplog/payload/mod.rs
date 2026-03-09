@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -32,7 +32,7 @@ use crate::model::oplog::types::{
 };
 use crate::model::oplog::PayloadId;
 use crate::model::worker::RevertWorkerTarget;
-use crate::model::{ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId, WorkerId};
+use crate::model::{AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId};
 use crate::oplog_payload;
 use crate::serialization::serialize;
 use desert_rust::{
@@ -85,7 +85,7 @@ oplog_payload! {
             path: String
         },
         GolemApiAgentId {
-            agent_id: WorkerId
+            agent_id: AgentId
         },
         GolemApiComponentSlug {
             component_slug: String
@@ -95,19 +95,19 @@ oplog_payload! {
             agent_name: String
         },
         GolemApiForkAgent {
-            source_agent_id: WorkerId,
-            target_agent_id: WorkerId,
+            source_agent_id: AgentId,
+            target_agent_id: AgentId,
             oplog_index_cut_off: OplogIndex
         },
         GolemApiPromiseId {
             promise_id: PromiseId
         },
         GolemApiRevertAgent {
-            agent_id: WorkerId,
+            agent_id: AgentId,
             target: RevertWorkerTarget
         },
         GolemApiUpdateAgent {
-            agent_id: WorkerId,
+            agent_id: AgentId,
             target_revision: ComponentRevision,
             mode: UpdateMode
         },
@@ -118,7 +118,7 @@ oplog_payload! {
             request: Option<SerializableRdbmsRequest>
         },
         GolemRpcInvoke {
-            remote_worker_id: WorkerId,
+            remote_agent_id: AgentId,
             idempotency_key: IdempotencyKey,
             method_name: String,
             input: UntypedDataValue,
@@ -130,7 +130,7 @@ oplog_payload! {
             remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
         },
         GolemRpcScheduledInvocation {
-            remote_worker_id: WorkerId,
+            remote_agent_id: AgentId,
             idempotency_key: IdempotencyKey,
             method_name: String,
             input: UntypedDataValue,
@@ -218,7 +218,7 @@ oplog_payload! {
             result: Result<String, String>
         },
         GolemApiAgentId {
-            result: Result<Option<WorkerId>, String>
+            result: Result<Option<AgentId>, String>
         },
         GolemApiAgentMetadata {
             metadata: Option<AgentMetadataForGuests>
@@ -421,7 +421,7 @@ pub mod host_functions {
         (GolemApiForkWorker => "golem::api", "fork_worker", GolemApiForkAgent, GolemApiUnit),
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
-        (GolemApiResolveWorkerIdStrict => "golem::api", "resolve_worker_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
+        (GolemApiResolveAgentIdStrict => "golem::api", "resolve_agent_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
         (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork)
     }
 }

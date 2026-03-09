@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -224,7 +224,28 @@ fn parse_tracing_level(s: &str) -> Option<Level> {
     }
 }
 
-pub async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeout: Duration) {
+/// Checks if a child process has exited early (e.g. due to a startup error like a failed
+/// DB migration). Call this between health check retries to fail fast with a clear message
+/// instead of waiting for the full timeout.
+fn check_child_process_alive(child: &mut Child, name: &str) {
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            panic!("{name} process exited early with {status}. Check the logs above for the root cause (e.g. DB migration failure).");
+        }
+        Ok(None) => {} // still running
+        Err(e) => {
+            warn!("Failed to check {name} process status: {e}");
+        }
+    }
+}
+
+pub async fn wait_for_startup_grpc(
+    host: &str,
+    grpc_port: u16,
+    name: &str,
+    timeout: Duration,
+    mut child: Option<&mut Child>,
+) {
     info!(
         "Waiting for {name} (GRPC) start on host {host}:{grpc_port}, timeout: {}s",
         timeout.as_secs()
@@ -254,6 +275,9 @@ pub async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeo
         if success {
             break;
         } else {
+            if let Some(ref mut child) = child {
+                check_child_process_alive(child, name);
+            }
             if start.elapsed() > timeout {
                 panic!("Failed to verify that {name} is running");
             }
@@ -262,7 +286,13 @@ pub async fn wait_for_startup_grpc(host: &str, grpc_port: u16, name: &str, timeo
     }
 }
 
-pub async fn wait_for_startup_http(host: &str, http_port: u16, name: &str, timeout: Duration) {
+pub async fn wait_for_startup_http(
+    host: &str,
+    http_port: u16,
+    name: &str,
+    timeout: Duration,
+    mut child: Option<&mut Child>,
+) {
     info!(
         "Waiting for {name} (HTTP) start on host {host}:{http_port}, timeout: {}s",
         timeout.as_secs()
@@ -288,6 +318,9 @@ pub async fn wait_for_startup_http(host: &str, http_port: u16, name: &str, timeo
         if success {
             break;
         } else {
+            if let Some(ref mut child) = child {
+                check_child_process_alive(child, name);
+            }
             if start.elapsed() > timeout {
                 panic!("Failed to verify that {name} is running");
             }
@@ -301,6 +334,7 @@ pub async fn wait_for_startup_http_any_response(
     http_port: u16,
     name: &str,
     timeout: Duration,
+    mut child: Option<&mut Child>,
 ) {
     info!(
         "Waiting for {name} (HTTP) start on host {host}:{http_port}, timeout: {}s",
@@ -321,6 +355,9 @@ pub async fn wait_for_startup_http_any_response(
         if success {
             break;
         } else {
+            if let Some(ref mut child) = child {
+                check_child_process_alive(child, name);
+            }
             if start.elapsed() > timeout {
                 panic!("Failed to verify that {name} is running");
             }

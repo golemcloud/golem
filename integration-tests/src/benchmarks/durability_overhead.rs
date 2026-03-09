@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,9 +15,9 @@
 use crate::benchmarks::{delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::agent::AgentId;
+use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::model::component::{ComponentDto, ComponentId};
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -38,16 +38,16 @@ pub struct DurabilityOverheadBenchmarkContext {
 pub struct DurabilityOverheadIterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    durable_persistent_agent_ids: Vec<AgentId>,
-    durable_nonpersistent_agent_ids: Vec<AgentId>,
-    ephemeral_agent_ids: Vec<AgentId>,
-    durable_persistent_commit_agent_ids: Vec<AgentId>,
+    durable_persistent_agent_ids: Vec<ParsedAgentId>,
+    durable_nonpersistent_agent_ids: Vec<ParsedAgentId>,
+    ephemeral_agent_ids: Vec<ParsedAgentId>,
+    durable_persistent_commit_agent_ids: Vec<ParsedAgentId>,
 }
 
-fn agent_ids_to_worker_ids(component_id: ComponentId, agent_ids: &[AgentId]) -> Vec<WorkerId> {
+fn agent_ids_to_agent_ids(component_id: ComponentId, agent_ids: &[ParsedAgentId]) -> Vec<AgentId> {
     agent_ids
         .iter()
-        .filter_map(|agent_id| WorkerId::from_agent_id(component_id, agent_id).ok())
+        .filter_map(|agent_id| AgentId::from_agent_id(component_id, agent_id).ok())
         .collect()
 }
 
@@ -163,7 +163,7 @@ impl Benchmark for DurabilityOverhead {
         async fn warmup(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
-            ids: &[AgentId],
+            ids: &[ParsedAgentId],
         ) {
             let result_futures = ids
                 .iter()
@@ -218,7 +218,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, true, false),
                 )
                 .await
@@ -238,7 +238,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, false, false),
                 )
                 .await
@@ -262,7 +262,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, false, false),
                 )
                 .await
@@ -282,7 +282,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, true, true),
                 )
                 .await
@@ -305,12 +305,12 @@ impl Benchmark for DurabilityOverhead {
     ) {
         delete_workers(
             &context.user,
-            &agent_ids_to_worker_ids(context.component.id, &context.durable_persistent_agent_ids),
+            &agent_ids_to_agent_ids(context.component.id, &context.durable_persistent_agent_ids),
         )
         .await;
         delete_workers(
             &context.user,
-            &agent_ids_to_worker_ids(
+            &agent_ids_to_agent_ids(
                 context.component.id,
                 &context.durable_nonpersistent_agent_ids,
             ),
@@ -318,12 +318,12 @@ impl Benchmark for DurabilityOverhead {
         .await;
         delete_workers(
             &context.user,
-            &agent_ids_to_worker_ids(context.component.id, &context.ephemeral_agent_ids),
+            &agent_ids_to_agent_ids(context.component.id, &context.ephemeral_agent_ids),
         )
         .await;
         delete_workers(
             &context.user,
-            &agent_ids_to_worker_ids(
+            &agent_ids_to_agent_ids(
                 context.component.id,
                 &context.durable_persistent_commit_agent_ids,
             ),

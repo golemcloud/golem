@@ -31,3 +31,5 @@ sdks/**/dist/
 .vscode/
 .cursorrules
 .cursorignore
+.cqs/
+.ck

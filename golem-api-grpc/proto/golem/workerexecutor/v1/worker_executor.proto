@@ -2,29 +2,30 @@ syntax = "proto3";
 
 package golem.workerexecutor.v1;
 
+import "golem/auth/auth_ctx.proto";
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
+import "golem/common/environment.proto";
 import "golem/common/revert_worker_response.proto";
+import "golem/common/uuid.proto";
+import "golem/component/agent.proto";
+import "golem/component/component_id.proto";
+import "golem/shardmanager/shard_id.proto";
+import "golem/worker/agent_config.proto";
+import "golem/worker/cursor.proto";
+import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/log_event.proto";
-import "golem/worker/promise_id.proto";
-import "golem/shardmanager/shard_id.proto";
-import "golem/component/component_id.proto";
-import "golem/worker/cursor.proto";
 import "golem/worker/oplog_cursor.proto";
+import "golem/worker/promise_id.proto";
 import "golem/worker/public_oplog.proto";
 import "golem/worker/update_mode.proto";
+import "golem/worker/v1/worker_execution_error.proto";
+import "golem/worker/worker_filter.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_metadata.proto";
 import "golem/worker/worker_status.proto";
-import "golem/worker/worker_filter.proto";
-import "golem/worker/v1/worker_execution_error.proto";
-import "golem/worker/filesystem.proto";
-import "golem/common/environment.proto";
-import "golem/common/uuid.proto";
-import "golem/auth/auth_ctx.proto";
-import "golem/component/agent.proto";
 import "google/protobuf/timestamp.proto";
 
 service WorkerExecutor {
@@ -36,7 +37,7 @@ service WorkerExecutor {
   rpc InterruptWorker(InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
-  rpc GetWorkerMetadata(GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
+  rpc GetAgentMetadata(GetAgentMetadataRequest) returns (GetAgentMetadataResponse);
   rpc ResumeWorker(ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
@@ -58,8 +59,8 @@ service WorkerExecutor {
 
 message ForkWorkerRequest {
   golem.common.AccountId component_owner_account_id = 1;
-  golem.worker.WorkerId source_worker_id = 2;
-  golem.worker.WorkerId target_worker_id = 3;
+  golem.worker.AgentId source_agent_id = 2;
+  golem.worker.AgentId target_agent_id = 3;
   uint64 oplog_index_cutoff = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
@@ -74,7 +75,7 @@ message ForkWorkerResponse {
 }
 
 message DeleteWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   golem.auth.AuthCtx auth_ctx = 3;
   optional golem.component.Principal principal = 4;
@@ -113,17 +114,18 @@ message InterruptWorkerResponse {
 }
 
 message CreateWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   map<string, string> env = 2;
   map<string, string> config_vars = 3;
+  repeated golem.worker.LocalAgentConfigEntry local_agent_config = 4;
   // Account the component belongs to
-  golem.common.AccountId component_owner_account_id = 4;
+  golem.common.AccountId component_owner_account_id = 5;
   // Component's owner environment
-  golem.common.EnvironmentId environment_id = 5;
-  bool ignore_already_existing = 6;
-  golem.auth.AuthCtx auth_ctx = 7;
-  optional golem.component.Principal principal = 8;
-  optional golem.worker.InvocationContext invocation_context = 9;
+  golem.common.EnvironmentId environment_id = 6;
+  bool ignore_already_existing = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
+  optional golem.component.Principal principal = 9;
+  optional golem.worker.InvocationContext invocation_context = 10;
 }
 
 message CreateWorkerResponse {
@@ -135,7 +137,7 @@ message CreateWorkerResponse {
 
 
 message ConnectWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   // Account the request belongs to
   golem.common.AccountId component_owner_account_id = 2;
   // Component's owner project
@@ -145,7 +147,7 @@ message ConnectWorkerRequest {
 }
 
 message InterruptWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   bool recover_immediately = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
@@ -174,21 +176,21 @@ message AssignShardsResponse {
   }
 }
 
-message GetWorkerMetadataRequest {
-  golem.worker.WorkerId worker_id = 1;
+message GetAgentMetadataRequest {
+  golem.worker.AgentId agent_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   golem.auth.AuthCtx auth_ctx = 3;
 }
 
-message GetWorkerMetadataResponse {
+message GetAgentMetadataResponse {
   oneof result {
-    golem.worker.WorkerMetadata success = 1;
+    golem.worker.AgentMetadata success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
 
 message ResumeWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   optional bool force = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
@@ -204,7 +206,7 @@ message ResumeWorkerResponse {
 
 message GetRunningWorkersMetadataRequest {
   golem.component.ComponentId component_id = 1;
-  golem.worker.WorkerFilter filter = 2;
+  golem.worker.AgentFilter filter = 2;
   golem.auth.AuthCtx auth_ctx = 3;
 }
 
@@ -217,12 +219,12 @@ message GetRunningWorkersMetadataResponse {
 }
 
 message GetRunningWorkersMetadataSuccessResponse {
-  repeated golem.worker.WorkerMetadata workers = 1;
+  repeated golem.worker.AgentMetadata workers = 1;
 }
 
 message GetWorkersMetadataRequest {
   golem.component.ComponentId component_id = 1;
-  golem.worker.WorkerFilter filter = 2;
+  golem.worker.AgentFilter filter = 2;
   golem.worker.Cursor cursor = 3;
   uint64 count = 4;
   bool precise = 5;
@@ -238,12 +240,12 @@ message GetWorkersMetadataResponse {
 }
 
 message GetWorkersMetadataSuccessResponse {
-  repeated golem.worker.WorkerMetadata workers = 1;
+  repeated golem.worker.AgentMetadata workers = 1;
   optional golem.worker.Cursor cursor = 2;
 }
 
 message UpdateWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   uint64 target_revision = 2;
   golem.worker.UpdateMode mode = 3;
   golem.common.EnvironmentId environment_id = 4;
@@ -260,7 +262,7 @@ message UpdateWorkerResponse {
 }
 
 message GetOplogRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   uint64 from_oplog_index = 3;
   optional golem.worker.OplogCursor cursor = 4;
   uint64 count = 5;
@@ -283,7 +285,7 @@ message GetOplogSuccessResponse {
 }
 
 message SearchOplogRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   string query = 2;
   optional golem.worker.OplogCursor cursor = 3;
   uint64 count = 4;
@@ -305,7 +307,7 @@ message SearchOplogSuccessResponse {
 }
 
 message GetFileSystemNodeRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 2;
   // Component's owner project
@@ -333,7 +335,7 @@ message ListFileDataSuccessResponse {
 }
 
 message GetFileContentsRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 2;
   // Component's owner project
@@ -361,7 +363,7 @@ message GetFileContentsResponseHeader {
 }
 
 message ActivatePluginRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   int32 plugin_priority = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
@@ -376,7 +378,7 @@ message ActivatePluginResponse {
 }
 
 message DeactivatePluginRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   int32 plugin_priority = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
@@ -391,7 +393,7 @@ message DeactivatePluginResponse {
 }
 
 message RevertWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   golem.common.RevertWorkerTarget target = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
@@ -406,7 +408,7 @@ message RevertWorkerResponse {
 }
 
 message CancelInvocationRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   golem.worker.IdempotencyKey idempotency_key = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
@@ -426,7 +428,7 @@ enum AgentInvocationMode {
 }
 
 message InvokeAgentRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   string method_name = 5;
   golem.component.UntypedDataValue method_parameters = 6;
   AgentInvocationMode mode = 7;

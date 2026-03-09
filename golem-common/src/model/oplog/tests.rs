@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,26 +15,37 @@
 use crate::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
-    AgentInvocationFinishedParams, AgentInvocationStartedParams, BeginAtomicRegionParams,
-    BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams, CreateResourceParams,
+    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
+    CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
+    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, GrowMemoryParams, HostCallParams, InterruptedParams, JumpParams, LogParams,
-    NoOpParams, PendingAgentInvocationParams, PendingUpdateParams, RestartParams,
-    SuccessfulUpdateParams, SuspendParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
+    JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
+    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    AgentInvocationOutputParameters, AgentMethodInvocationParameters, LogLevel,
+    AgentInitializationParameters, AgentInvocationOutputParameters,
+    AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel, PersistenceLevel,
     PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
-    PublicOplogEntry, PublicRetryConfig, PublicSpanData, PublicUpdateDescription,
-    SnapshotBasedUpdateParameters, StringAttributeValue, WorkerResourceId,
+    PublicOplogEntry, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
+    PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
+use crate::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::model::{
-    AccountId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp, WorkerId,
+    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp,
+    TransactionId,
 };
-use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
-use golem_wasm::{Value, ValueAndType};
+use golem_wasm::analysis::analysed_type::{
+    bool, f64, field, handle, list, option, r#enum, record, result_err, result_ok, s16, s32, str,
+    tuple, u64, variant,
+};
+use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,11 +59,11 @@ fn create_serialization_poem_serde_equivalence() {
 
     let entry = PublicOplogEntry::Create(CreateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        worker_id: WorkerId {
+        agent_id: AgentId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
             ),
-            worker_name: "test1".to_string(),
+            agent_id: "test1".to_string(),
         },
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![("x".to_string(), "y".to_string())]
@@ -60,12 +71,16 @@ fn create_serialization_poem_serde_equivalence() {
             .collect(),
         created_by: AccountId::new(),
         config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
+        local_agent_config: vec![ParsedWorkerCreationLocalAgentConfigEntry {
+            key: vec!["foo".to_string(), "bar".to_string()],
+            value: 1.into_value_and_type(),
+        }],
         environment_id: EnvironmentId::new(),
-        parent: Some(WorkerId {
+        parent: Some(AgentId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
             ),
-            worker_name: "test2".to_string(),
+            agent_id: "test2".to_string(),
         }),
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
@@ -94,6 +109,84 @@ fn host_call_serialization_poem_serde_equivalence() {
         response: ValueAndType {
             value: Value::List(vec![Value::U64(1)]),
             typ: list(u64()),
+        },
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn host_call_with_handle_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::HostCall(HostCallParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
+        request: ValueAndType {
+            value: Value::Handle {
+                uri: "urn:worker:component-id/worker-name".to_string(),
+                resource_id: 42,
+            },
+            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+        },
+        response: ValueAndType {
+            value: Value::Tuple(vec![Value::U64(5)]),
+            typ: tuple(vec![u64()]),
+        },
+        durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn host_call_with_complex_values_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::HostCall(HostCallParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        function_name: "wasi:keyvalue/store.{get}".to_string(),
+        request: ValueAndType {
+            value: Value::Record(vec![
+                Value::String("key".to_string()),
+                Value::Option(Some(Box::new(Value::List(vec![
+                    Value::U8(1),
+                    Value::U8(2),
+                ])))),
+                Value::Result(Ok(Some(Box::new(Value::Tuple(vec![
+                    Value::Bool(true),
+                    Value::F64(1.23),
+                ]))))),
+                Value::Variant {
+                    case_idx: 1,
+                    case_value: Some(Box::new(Value::S32(-42))),
+                },
+                Value::Flags(vec![true, false, true]),
+                Value::Enum(2),
+            ]),
+            typ: record(vec![
+                field("name", str()),
+                field(
+                    "data",
+                    option(list(golem_wasm::analysis::analysed_type::u8())),
+                ),
+                field("status", result_ok(tuple(vec![bool(), f64()]))),
+                field(
+                    "kind",
+                    variant(vec![
+                        golem_wasm::analysis::analysed_type::case("none", str()),
+                        golem_wasm::analysis::analysed_type::case("some", s32()),
+                    ]),
+                ),
+                field(
+                    "perms",
+                    golem_wasm::analysis::analysed_type::flags(&["read", "write", "exec"]),
+                ),
+                field("color", r#enum(&["red", "green", "blue"])),
+            ]),
+        },
+        response: ValueAndType {
+            value: Value::Result(Err(Some(Box::new(Value::String("not found".to_string()))))),
+            typ: result_err(str()),
         },
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
@@ -297,6 +390,68 @@ fn end_remote_write_serialization_poem_serde_equivalence() {
 }
 
 #[test]
+fn agent_invocation_started_with_initialization_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
+            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            constructor_parameters: DataValue::Tuple(ElementValues {
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType {
+                        value: Value::String("test".to_string()),
+                        typ: str(),
+                    },
+                })],
+            }),
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
+                span_id: SpanId::generate(),
+                start: Timestamp::now_utc().rounded(),
+                parent_id: None,
+                linked_context: None,
+                attributes: vec![],
+                inherited: false,
+            })]],
+        }),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn pending_agent_invocation_with_initialization_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
+            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            constructor_parameters: DataValue::Tuple(ElementValues {
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType {
+                        value: Value::Tuple(vec![]),
+                        typ: tuple(vec![]),
+                    },
+                })],
+            }),
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
+                span_id: SpanId::generate(),
+                start: Timestamp::now_utc().rounded(),
+                parent_id: None,
+                linked_context: None,
+                attributes: vec![],
+                inherited: false,
+            })]],
+        }),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -435,7 +590,7 @@ fn grow_memory_serialization_poem_serde_equivalence() {
 fn create_resource_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::CreateResource(CreateResourceParams {
         timestamp: Timestamp::now_utc().rounded(),
-        id: WorkerResourceId(100),
+        id: AgentResourceId(100),
         name: "test".to_string(),
         owner: "owner".to_string(),
     });
@@ -449,7 +604,7 @@ fn create_resource_serialization_poem_serde_equivalence() {
 fn drop_resource_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::DropResource(DropResourceParams {
         timestamp: Timestamp::now_utc().rounded(),
-        id: WorkerResourceId(100),
+        id: AgentResourceId(100),
         name: "test".to_string(),
         owner: "owner".to_string(),
     });
@@ -476,6 +631,202 @@ fn log_serialization_poem_serde_equivalence() {
 fn restart_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Restart(RestartParams {
         timestamp: Timestamp::now_utc().rounded(),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn activate_plugin_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        plugin: PluginInstallationDescription {
+            plugin_priority: PluginPriority(1),
+            plugin_name: "my-plugin".to_string(),
+            plugin_version: "1.0.0".to_string(),
+            parameters: BTreeMap::from_iter(vec![("key".to_string(), "value".to_string())]),
+        },
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn deactivate_plugin_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::DeactivatePlugin(DeactivatePluginParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        plugin: PluginInstallationDescription {
+            plugin_priority: PluginPriority(2),
+            plugin_name: "my-plugin".to_string(),
+            plugin_version: "2.0.0".to_string(),
+            parameters: BTreeMap::new(),
+        },
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn revert_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Revert(RevertParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        dropped_region: OplogRegion {
+            start: OplogIndex::from_u64(5),
+            end: OplogIndex::from_u64(10),
+        },
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn cancel_pending_invocation_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        idempotency_key: IdempotencyKey::new("cancel-key".to_string()),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn start_span_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::StartSpan(StartSpanParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        span_id: SpanId::generate(),
+        parent_id: Some(SpanId::generate()),
+        linked_context: Some(SpanId::generate()),
+        attributes: vec![PublicAttribute {
+            key: "test-attr".to_string(),
+            value: PublicAttributeValue::String(StringAttributeValue {
+                value: "test-value".to_string(),
+            }),
+        }],
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn finish_span_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::FinishSpan(FinishSpanParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        span_id: SpanId::generate(),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn set_span_attribute_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        span_id: SpanId::generate(),
+        key: "http.method".to_string(),
+        value: PublicAttributeValue::String(StringAttributeValue {
+            value: "GET".to_string(),
+        }),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn change_persistence_level_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        persistence_level: PersistenceLevel::Smart,
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn begin_remote_transaction_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        transaction_id: TransactionId::new("txn-123".to_string()),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn pre_commit_remote_transaction_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::PreCommitRemoteTransaction(PreCommitRemoteTransactionParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        begin_index: OplogIndex::from_u64(3),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn pre_rollback_remote_transaction_serialization_poem_serde_equivalence() {
+    let entry =
+        PublicOplogEntry::PreRollbackRemoteTransaction(PreRollbackRemoteTransactionParams {
+            timestamp: Timestamp::now_utc().rounded(),
+            begin_index: OplogIndex::from_u64(3),
+        });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn committed_remote_transaction_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::CommittedRemoteTransaction(CommittedRemoteTransactionParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        begin_index: OplogIndex::from_u64(3),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn rolled_back_remote_transaction_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::RolledBackRemoteTransaction(RolledBackRemoteTransactionParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        begin_index: OplogIndex::from_u64(3),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn snapshot_raw_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: PublicSnapshotData::Raw(RawSnapshotData {
+            data: vec![1, 2, 3, 4],
+            mime_type: "application/octet-stream".to_string(),
+        }),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn snapshot_json_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: PublicSnapshotData::Json(JsonSnapshotData {
+            data: serde_json::json!({"key": "value", "count": 42}),
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

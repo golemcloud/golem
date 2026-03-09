@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -25,6 +25,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use std::collections::HashMap;
+use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Level;
@@ -61,9 +62,15 @@ pub trait RegistryService: Send + Sync {
     }
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, http_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-registry-service", timeout).await;
-    wait_for_startup_http(host, http_port, "golem-registry-service", timeout).await;
+async fn wait_for_startup(
+    host: &str,
+    grpc_port: u16,
+    http_port: u16,
+    timeout: Duration,
+    child: Option<&mut Child>,
+) {
+    wait_for_startup_grpc(host, grpc_port, "golem-registry-service", timeout, child).await;
+    wait_for_startup_http(host, http_port, "golem-registry-service", timeout, None).await;
 }
 
 async fn env_vars(

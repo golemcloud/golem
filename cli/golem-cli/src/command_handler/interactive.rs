@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,7 +17,7 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_warn, log_warn_action, logln, LogColorize};
 use crate::model::format::Format;
-use crate::model::worker::WorkerName;
+use crate::model::worker::RawAgentId;
 use crate::model::{GuestLanguage, NewInteractiveApp};
 use anyhow::bail;
 use colored::Colorize;
@@ -55,7 +55,7 @@ impl InteractiveHandler {
         confirm(
             yes,
             true,
-            "Profiles defined in the application manifest were loaded with warnings.\nDo you want to continue?",
+            "Environments defined in the application manifest were loaded with warnings.\nDo you want to continue?",
             None,
         )
     }
@@ -171,14 +171,14 @@ impl InteractiveHandler {
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
-        worker_name: &WorkerName,
+        agent_name: &RawAgentId,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
-                    worker_name.0.log_color_highlight(),
+                    agent_name.0.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
             ),
             None,
@@ -391,11 +391,7 @@ impl InteractiveHandler {
         &self,
         existing_component_names: HashSet<String>,
     ) -> anyhow::Result<Option<(String, ComponentName)>> {
-        let available_languages = self
-            .ctx
-            .templates(self.ctx.dev_mode())
-            .keys()
-            .collect::<HashSet<_>>();
+        let available_languages = self.ctx.app_template_repo()?.languages();
 
         let Some(language) = Select::new(
             "Select language for the new component",
@@ -411,21 +407,12 @@ impl InteractiveHandler {
 
         let template_options = self
             .ctx
-            .templates(self.ctx.dev_mode())
-            .get(&language)
-            .unwrap()
-            .get(self.ctx.template_group())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Template group not found: {}",
-                    self.ctx.template_group().as_str().log_color_highlight()
-                )
-            })?
-            .components
-            .iter()
-            .map(|(name, template)| TemplateOption {
-                template_name: name.to_string(),
-                description: template.description.clone(),
+            .app_template_repo()?
+            .component_templates(language)?
+            .values()
+            .map(|template| TemplateOption {
+                template_name: template.0.name.to_string(),
+                description: template.0.description().to_string(),
             })
             .collect::<Vec<_>>();
 

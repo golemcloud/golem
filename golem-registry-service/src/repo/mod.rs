@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,6 +15,7 @@
 // Repos
 pub mod account;
 pub mod account_usage;
+pub mod agent_secret;
 pub mod application;
 pub mod component;
 pub mod deployment;
@@ -28,7 +29,7 @@ pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod plan;
 pub mod plugin;
-pub mod reports;
+pub mod report;
 pub mod security_scheme;
 pub mod token;
 

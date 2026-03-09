@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -13,16 +13,15 @@
 // limitations under the License.
 
 use super::{
-    AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, FallibleResultParameters, JsonSnapshotData,
+    AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
+    AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
     LoadSnapshotParameters, LogLevel, ManualUpdateParameters, OplogCursor,
     PluginInstallationDescription, ProcessOplogEntriesParameters, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
     PublicRetryConfig, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
     RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    StringAttributeValue, WorkerError, WorkerResourceId, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::model::agent::DataValue;
@@ -42,6 +41,7 @@ use crate::model::oplog::public_oplog_entry::{
 };
 use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
+use crate::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
@@ -84,13 +84,13 @@ impl From<golem_api_grpc::proto::golem::worker::PersistenceLevel> for Persistenc
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerError> for WorkerError {
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::worker::WorkerError,
+        value: golem_api_grpc::proto::golem::worker::AgentError,
     ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::worker::worker_error::Error;
+        use golem_api_grpc::proto::golem::worker::agent_error::Error;
         match value.error.ok_or("no error field")? {
             Error::StackOverflow(_) => Ok(Self::StackOverflow),
             Error::OutOfMemory(_) => Ok(Self::OutOfMemory),
@@ -101,23 +101,23 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerError> for WorkerError 
     }
 }
 
-impl From<WorkerError> for golem_api_grpc::proto::golem::worker::WorkerError {
-    fn from(value: WorkerError) -> Self {
+impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
+    fn from(value: AgentError) -> Self {
         use golem_api_grpc::proto::golem::worker as grpc_worker;
-        use golem_api_grpc::proto::golem::worker::worker_error::Error;
+        use golem_api_grpc::proto::golem::worker::agent_error::Error;
         let error = match value {
-            WorkerError::StackOverflow => Error::StackOverflow(grpc_worker::StackOverflow {}),
-            WorkerError::OutOfMemory => Error::OutOfMemory(grpc_worker::OutOfMemory {}),
-            WorkerError::InvalidRequest(details) => {
+            AgentError::StackOverflow => Error::StackOverflow(grpc_worker::StackOverflow {}),
+            AgentError::OutOfMemory => Error::OutOfMemory(grpc_worker::OutOfMemory {}),
+            AgentError::InvalidRequest(details) => {
                 Error::InvalidRequest(grpc_worker::InvalidRequest { details })
             }
-            WorkerError::Unknown(details) => {
+            AgentError::Unknown(details) => {
                 Error::UnknownError(grpc_worker::UnknownError { details })
             }
-            WorkerError::ExceededMemoryLimit => {
+            AgentError::ExceededMemoryLimit => {
                 Error::ExceededMemoryLimit(grpc_worker::ExceededMemoryLimit {})
             }
-            WorkerError::AgentError(details) => {
+            AgentError::InternalError(details) => {
                 Error::UnknownError(grpc_worker::UnknownError { details })
             }
         };
@@ -210,13 +210,18 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
         match value.entry.ok_or("Oplog entry is empty")? {
             oplog_entry::Entry::Create(create) => Ok(PublicOplogEntry::Create(CreateParams {
                 timestamp: create.timestamp.ok_or("Missing timestamp field")?.into(),
-                worker_id: create
-                    .worker_id
-                    .ok_or("Missing worker_id field")?
+                agent_id: create
+                    .agent_id
+                    .ok_or("Missing agent_id field")?
                     .try_into()?,
                 component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
                 config_vars: create.config_vars.into_iter().collect(),
+                local_agent_config: create
+                    .local_agent_config
+                    .into_iter()
+                    .map(ParsedWorkerCreationLocalAgentConfigEntry::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
                 environment_id: create
                     .environment_id
                     .ok_or("Missing environment_id field")?
@@ -426,7 +431,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    id: WorkerResourceId(create_resource.resource_id),
+                    id: AgentResourceId(create_resource.resource_id),
                     name: create_resource.name,
                     owner: create_resource.owner,
                 }))
@@ -437,7 +442,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    id: WorkerResourceId(drop_resource.resource_id),
+                    id: AgentResourceId(drop_resource.resource_id),
                     name: drop_resource.name,
                     owner: drop_resource.owner,
                 }))
@@ -603,10 +608,15 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 entry: Some(oplog_entry::Entry::Create(
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
-                        worker_id: Some(create.worker_id.into()),
+                        agent_id: Some(create.agent_id.into()),
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
                         config_vars: create.config_vars.into_iter().collect(),
+                        local_agent_config: create
+                            .local_agent_config
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
                         created_by: Some(create.created_by.into()),
                         environment_id: Some(create.environment_id.into()),
                         parent: create.parent.map(Into::into),

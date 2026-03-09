@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.0.23"
+  WASM_RQUICKJS_VERSION: "0.0.24"
 
 jobs:
   build-and-store:
@@ -107,7 +107,7 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -119,7 +119,7 @@ jobs:
       - uses: cargo-bins/cargo-binstall@main
 
       - name: Install cargo-test-r
-        run: cargo binstall --force --locked cargo-test-r@2.2.2
+        run: cargo binstall --force --locked cargo-test-r@2.2.4
       #      - name: Restore binary archive
       #        uses: actions/download-artifact@v4
       #        with:
@@ -158,6 +158,8 @@ jobs:
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          upload-artifact: 'true'
+          artifact-name: unit-tests-report
           summary: true
           summary-report: true
           failed-report: true
@@ -182,6 +184,7 @@ jobs:
           - name: misc
           - name: group1
           - name: group2
+          - name: group3
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - name: Checkout
@@ -199,7 +202,7 @@ jobs:
           auto-start: false
 
       - name: Install cargo-test-r
-        run: cargo binstall --force --locked cargo-test-r@2.2.2
+        run: cargo binstall --force --locked cargo-test-r@2.2.4
       #      - name: Restore binary archive
       #        uses: actions/download-artifact@v4
       #        with:
@@ -224,12 +227,14 @@ jobs:
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
-        timeout-minutes: 15
+        timeout-minutes: 20
       - name: Publish Test Report
         uses: ctrf-io/github-test-reporter@v1
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          upload-artifact: 'true'
+          artifact-name: worker-executor-tests-${{ matrix.group.name }}-report
           summary: true
           summary-report: true
           failed-report: true
@@ -302,7 +307,7 @@ jobs:
         run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
 
       - name: Install cargo-test-r
-        run: cargo binstall --force --locked cargo-test-r@2.2.2
+        run: cargo binstall --force --locked cargo-test-r@2.2.4
       #      - name: Restore binary archive
       #        uses: actions/download-artifact@v4
       #        with:
@@ -333,12 +338,14 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 20
+        timeout-minutes: 30
       - name: Publish Test Report
         uses: ctrf-io/github-test-reporter@v1
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          upload-artifact: 'true'
+          artifact-name: '${{ matrix.group.name }}-report'
           summary: true
           summary-report: true
           failed-report: true

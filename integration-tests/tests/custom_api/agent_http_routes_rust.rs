@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -30,15 +30,15 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
         deps,
         vec![
             (
-                AgentTypeName("http-agent".to_string()),
+                AgentTypeName("HttpAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("cors-agent".to_string()),
+                AgentTypeName("CorsAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("webhook-agent".to_string()),
+                AgentTypeName("WebhookAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ],
@@ -176,8 +176,8 @@ async fn path_and_header(agent: &HttpTestContext) -> anyhow::Result<()> {
     assert_eq!(
         body,
         json!({
-            "resource-id": "res-42",
-            "request-id": "req-abc"
+            "resource_id": "res-42",
+            "request_id": "req-abc"
         })
     );
 
@@ -858,7 +858,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
                 .base_url
                 .join("/webhook-agents/test-agent/set-test-server-url")?,
         )
-        .json(&serde_json::json!({ "test-server-url": test_server_url }))
+        .json(&serde_json::json!({ "test_server_url": test_server_url }))
         .send()
         .await?
         .error_for_status()?;
@@ -876,7 +876,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "payload-length": 5 }));
+    assert_eq!(body, json!({ "payload_length": 5 }));
 
     http_server.abort();
 

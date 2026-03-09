@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,6 +17,7 @@ mod custom_api;
 mod fork;
 mod plugins;
 mod worker;
+mod worker_local_agent_config;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
@@ -31,7 +32,10 @@ pub struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        unsafe { backtrace_on_stack_overflow::enable() };
+        #[cfg(unix)]
+        unsafe {
+            backtrace_on_stack_overflow::enable()
+        };
         init_tracing_with_default_debug_env_filter(
             &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
         );

@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ use std::collections::HashSet;
 pub struct ExtendedAgentType {
     pub type_name: String,
     pub description: String,
+    pub source_language: String,
     pub constructor: ExtendedAgentConstructor,
     pub methods: Vec<EnrichedAgentMethod>,
     pub dependencies: Vec<AgentDependency>,
@@ -57,6 +58,7 @@ impl ExtendedAgentType {
         AgentType {
             type_name: self.type_name.clone(),
             description: self.description.clone(),
+            source_language: self.source_language.clone(),
             constructor: self.constructor.to_agent_constructor(),
             methods: self.methods.iter().map(|m| m.to_agent_method()).collect(),
             dependencies: self.dependencies.clone(),

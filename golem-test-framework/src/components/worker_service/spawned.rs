@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -89,6 +89,7 @@ impl SpawnedWorkerService {
             http_port,
             custom_request_port,
             Duration::from_secs(90),
+            Some(&mut child),
         )
         .await;
 

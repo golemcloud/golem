@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -27,7 +27,7 @@ mod tests {
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 
-    use golem_common::model::agent::AgentId;
+    use golem_common::model::agent::ParsedAgentId;
     use rand::prelude::*;
     use rand::rng;
     use std::time::Duration;
@@ -40,7 +40,10 @@ mod tests {
 
     impl Tracing {
         pub fn init() -> Self {
-            unsafe { backtrace_on_stack_overflow::enable() };
+            #[cfg(unix)]
+            unsafe {
+                backtrace_on_stack_overflow::enable()
+            };
             init_tracing_with_default_debug_env_filter(
                 &TracingConfig::test("sharding-tests").with_env_overrides(),
             );
@@ -336,12 +339,12 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentDto, Vec<AgentId>);
+        ) -> (ComponentDto, Vec<ParsedAgentId>);
         async fn invoke_and_await_workers(
             &self,
             component: &ComponentDto,
-            agent_ids: &[AgentId],
-        ) -> Result<(), worker::v1::worker_error::Error>;
+            agent_ids: &[ParsedAgentId],
+        ) -> Result<(), worker::v1::agent_error::Error>;
         async fn start_all_worker_executors(&self);
         async fn stop_random_worker_executor(&self);
         async fn start_random_worker_executor(&self);
@@ -374,7 +377,7 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentDto, Vec<AgentId>) {
+        ) -> (ComponentDto, Vec<ParsedAgentId>) {
             let admin = self.admin().await;
             let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
@@ -390,7 +393,7 @@ mod tests {
 
             for i in 1..=n {
                 info!("Worker {i} starting");
-                let agent_id = agent_id!("counter", format!("sharding-test-{i}"));
+                let agent_id = agent_id!("Counter", format!("sharding-test-{i}"));
                 admin
                     .start_agent(&component.id, agent_id.clone())
                     .await
@@ -407,8 +410,8 @@ mod tests {
         async fn invoke_and_await_workers(
             &self,
             component: &ComponentDto,
-            agent_ids: &[AgentId],
-        ) -> Result<(), worker::v1::worker_error::Error> {
+            agent_ids: &[ParsedAgentId],
+        ) -> Result<(), worker::v1::agent_error::Error> {
             let mut tasks = JoinSet::new();
             for agent_id in agent_ids {
                 let self_clone = self.admin().await;
@@ -664,7 +667,7 @@ mod tests {
         InvokeAndAwaitWorkers {
             name: String,
             component: Box<ComponentDto>,
-            agent_ids: Vec<AgentId>,
+            agent_ids: Vec<ParsedAgentId>,
         },
         Stop,
     }

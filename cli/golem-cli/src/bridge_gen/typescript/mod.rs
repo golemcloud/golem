@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -30,7 +30,6 @@ use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
     NamedElementSchema, NamedElementSchemas, TextDescriptor,
@@ -45,6 +44,7 @@ pub struct TypeScriptBridgeGenerator {
     type_naming: TypeNaming<TypeScriptTypeName>,
     agent_type: AgentType,
     testing: bool,
+    same_language: bool,
 }
 
 impl BridgeGenerator for TypeScriptBridgeGenerator {
@@ -82,11 +82,16 @@ impl TypeScriptBridgeGenerator {
         target_path: &Utf8Path,
         testing: bool,
     ) -> anyhow::Result<Self> {
+        let same_language = agent_type
+            .source_language
+            .eq_ignore_ascii_case("typescript")
+            || agent_type.source_language.eq_ignore_ascii_case("ts");
         Ok(Self {
             target_path: target_path.to_path_buf(),
-            type_naming: TypeNaming::new(&agent_type)?,
+            type_naming: TypeNaming::new(&agent_type, same_language)?,
             agent_type,
             testing,
+            same_language,
         })
     }
 
@@ -234,14 +239,14 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         method_def: &AgentMethod,
     ) -> anyhow::Result<()> {
-        let method_name_pascal = method_def.name.to_upper_camel_case();
+        let method_name_pascal = self.to_method_pascal(&method_def.name);
         let mut encode_input =
             writer.begin_export_async_function(&format!("encode{}Input", method_name_pascal));
         encode_input.result("void");
         encode_input.write_line("const __json = await readStdin();");
         if !method_def.input_schema.is_unit() {
             encode_input.write("const [");
-            Self::write_parameter_name_list(&mut encode_input, &method_def.input_schema);
+            self.write_parameter_name_list(&mut encode_input, &method_def.input_schema);
             encode_input.write_line("] = __json;");
         }
         encode_input.write_line("const __result: base.DataValue = ");
@@ -258,7 +263,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         method_def: &AgentMethod,
     ) -> anyhow::Result<()> {
-        let method_name_pascal = method_def.name.to_upper_camel_case();
+        let method_name_pascal = self.to_method_pascal(&method_def.name);
         let mut decode_input =
             writer.begin_export_async_function(&format!("decode{}Input", method_name_pascal));
         decode_input.result("void");
@@ -281,7 +286,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         method_def: &AgentMethod,
     ) -> anyhow::Result<()> {
-        let method_name_pascal = method_def.name.to_upper_camel_case();
+        let method_name_pascal = self.to_method_pascal(&method_def.name);
         let mut encode_output =
             writer.begin_export_async_function(&format!("encode{}Output", method_name_pascal));
         encode_output.result("void");
@@ -291,7 +296,7 @@ impl TypeScriptBridgeGenerator {
             encode_output.write_line("const __json = await readStdin();");
             if !method_def.output_schema.is_unit() {
                 encode_output.write("const [");
-                Self::write_parameter_name_list(&mut encode_output, &method_def.output_schema);
+                self.write_parameter_name_list(&mut encode_output, &method_def.output_schema);
                 encode_output.write_line("] = __json;");
             }
             encode_output.write_line("const __result: base.DataValue =");
@@ -308,7 +313,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         method_def: &AgentMethod,
     ) -> anyhow::Result<()> {
-        let method_name_pascal = method_def.name.to_upper_camel_case();
+        let method_name_pascal = self.to_method_pascal(&method_def.name);
         let mut decode_output =
             writer.begin_export_async_function(&format!("decode{}Output", method_name_pascal));
         decode_output.result("void");
@@ -333,7 +338,7 @@ impl TypeScriptBridgeGenerator {
         writer.write_line("const testFunctions: { [key: string]: () => Promise<void> | void } = {");
         writer.indent();
         for method_def in &self.agent_type.methods {
-            let method_name_pascal = method_def.name.to_upper_camel_case();
+            let method_name_pascal = self.to_method_pascal(&method_def.name);
             writer.write_line(format!("encode{}Input,", method_name_pascal));
             writer.write_line(format!("decode{}Input,", method_name_pascal));
             writer.write_line(format!("encode{}Output,", method_name_pascal));
@@ -368,7 +373,7 @@ impl TypeScriptBridgeGenerator {
         main.write_line("console.error('Available functions:');");
 
         for method_def in &self.agent_type.methods {
-            let method_name_pascal = method_def.name.to_upper_camel_case();
+            let method_name_pascal = self.to_method_pascal(&method_def.name);
             main.write_line(format!(
                 "console.error('  encode{}Input, decode{}Input, encode{}Output, decode{}Output');",
                 method_name_pascal, method_name_pascal, method_name_pascal, method_name_pascal
@@ -625,7 +630,7 @@ impl TypeScriptBridgeGenerator {
 
         writer.write_doc(&method_def.description);
         writer.declare_field(
-            &method_def.name.to_lower_camel_case(),
+            &self.to_js_ident(&method_def.name),
             &format!(
                 "base.RemoteMethod<[{}], {}>",
                 self.data_schema_as_type_list(&method_def.input_schema)?,
@@ -674,7 +679,7 @@ impl TypeScriptBridgeGenerator {
         get_method_request.write_line("envName: this.__getConfig().environment,");
         get_method_request.write_line(format!(
             "agentTypeName: \"{}\",",
-            self.agent_type.type_name.to_wit_naming().0
+            self.agent_type.type_name.0
         ));
         get_method_request.write_line("parameters: this.parameters,");
         get_method_request.write_line("phantomId: this.phantomId,");
@@ -697,7 +702,7 @@ impl TypeScriptBridgeGenerator {
                 self.data_schema_as_type_list(&method_def.input_schema)?
             ),
         );
-        Self::destructure_args_tuple(&mut encode_args, "args", &method_def.input_schema)?;
+        self.destructure_args_tuple(&mut encode_args, "args", &method_def.input_schema)?;
         encode_args.write_line("const methodParameters: base.DataValue = ");
         self.write_encode_data_value(&mut encode_args, &method_def.input_schema)?;
         encode_args.write_line("return methodParameters;");
@@ -797,7 +802,7 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("return {");
                 writer.indent();
                 for (idx, field) in record.fields.iter().enumerate() {
-                    let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
+                    let js_field_name = self.to_js_ident(&field.name);
                     let wit_field_name = &field.name;
                     let field_encode =
                         self.encode_wit_value(&format!("{}.{}", value, js_field_name), &field.typ);
@@ -869,7 +874,7 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("return [");
                 writer.indent();
                 for flag in &flags.names {
-                    let flag_name = escape_js_ident(flag.to_lower_camel_case());
+                    let flag_name = self.to_js_ident(flag);
                     writer.write_line(format!(
                         "({}[\"{}\"] ? \"{}\" : undefined),",
                         value, flag_name, flag
@@ -1002,7 +1007,7 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("return {");
                 writer.indent();
                 for (idx, field) in record.fields.iter().enumerate() {
-                    let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
+                    let js_field_name = self.to_js_ident(&field.name);
                     let wit_field_name = &field.name;
                     let field_decode =
                         self.decode_wit_value(&format!("obj[\"{}\"]", wit_field_name), &field.typ);
@@ -1073,7 +1078,7 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("const result = {");
                 writer.indent();
                 for flag in &flags.names {
-                    let flag_name = escape_js_ident(flag.to_lower_camel_case());
+                    let flag_name = self.to_js_ident(flag);
                     writer.write_line(format!("{}: false,", flag_name));
                 }
                 writer.unindent();
@@ -1088,7 +1093,7 @@ impl TypeScriptBridgeGenerator {
                 let flag_names_str = flags
                     .names
                     .iter()
-                    .map(|name| format!("'{}'", escape_js_ident(name.to_lower_camel_case())))
+                    .map(|name| format!("'{}'", self.to_js_ident(name)))
                     .collect::<Vec<_>>()
                     .join(", ");
                 writer.write_line(format!("if (![{}].includes(flag)) {{", flag_names_str));
@@ -1333,6 +1338,7 @@ impl TypeScriptBridgeGenerator {
 
     /// Destructures the function arguments coming in `tuple` as a TypeScript tuple
     fn destructure_args_tuple<Target: FunctionWriter>(
+        &self,
         writer: &mut Target,
         tuple: &str,
         schema: &DataSchema,
@@ -1342,7 +1348,7 @@ impl TypeScriptBridgeGenerator {
                 let param_names: Vec<String> = params
                     .elements
                     .iter()
-                    .map(|param| escape_js_ident(param.name.to_lower_camel_case()))
+                    .map(|param| self.to_js_ident(&param.name))
                     .collect();
                 writer.write_line(format!("const [{}] = {};", param_names.join(", "), tuple));
                 Ok(())
@@ -1367,7 +1373,7 @@ impl TypeScriptBridgeGenerator {
                 writer.write_line("{ type: \"Tuple\", elements: [");
                 writer.indent();
                 for param in &params.elements {
-                    let param_name = escape_js_ident(param.name.to_lower_camel_case());
+                    let param_name = self.to_js_ident(&param.name);
                     match &param.schema {
                         ElementSchema::ComponentModel(component_model) => {
                             writer.write_line(format!(
@@ -1500,7 +1506,7 @@ impl TypeScriptBridgeGenerator {
                         .names
                         .iter()
                         .map(|name| {
-                            let flag_name = escape_js_ident(name.to_lower_camel_case());
+                            let flag_name = self.to_js_ident(name);
                             format!("'{}'", flag_name)
                         })
                         .collect::<Vec<_>>()
@@ -1509,7 +1515,7 @@ impl TypeScriptBridgeGenerator {
                         .names
                         .iter()
                         .map(|name| {
-                            let flag_name = escape_js_ident(name.to_lower_camel_case());
+                            let flag_name = self.to_js_ident(name);
                             format!("{flag_name}: false")
                         })
                         .collect::<Vec<_>>()
@@ -1543,7 +1549,7 @@ impl TypeScriptBridgeGenerator {
                         .fields
                         .iter()
                         .map(|field| {
-                            let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
+                            let js_field_name = self.to_js_ident(&field.name);
                             let wit_field_name = &field.name;
                             let field_decode = self.decode_wit_value(
                                 &format!("(v as any)[\"{}\"]", wit_field_name),
@@ -1658,7 +1664,7 @@ impl TypeScriptBridgeGenerator {
                         .names
                         .iter()
                         .map(|name| {
-                            let flag_name = escape_js_ident(name.to_lower_camel_case());
+                            let flag_name = self.to_js_ident(name);
                             format!("({}[\"{}\"]) ? \"{}\" : undefined", value, flag_name, name)
                         })
                         .collect();
@@ -1684,7 +1690,7 @@ impl TypeScriptBridgeGenerator {
                         .fields
                         .iter()
                         .map(|field| {
-                            let js_field_name = escape_js_ident(field.name.to_lower_camel_case());
+                            let js_field_name = self.to_js_ident(&field.name);
                             let field_encode = self.encode_wit_value(
                                 &format!("{}.{}", value, js_field_name),
                                 &field.typ,
@@ -1839,13 +1845,13 @@ impl TypeScriptBridgeGenerator {
         })
     }
 
-    fn write_parameter_name_list(writer: &mut TsFunctionWriter<'_>, schema: &DataSchema) {
+    fn write_parameter_name_list(&self, writer: &mut TsFunctionWriter<'_>, schema: &DataSchema) {
         match schema {
             DataSchema::Tuple(params) => {
                 let param_names: Vec<String> = params
                     .elements
                     .iter()
-                    .map(|param| escape_js_ident(param.name.to_lower_camel_case()))
+                    .map(|param| self.to_js_ident(&param.name))
                     .collect();
                 writer.write(param_names.join(", "));
             }
@@ -1863,7 +1869,7 @@ impl TypeScriptBridgeGenerator {
         match schema {
             DataSchema::Tuple(params) => {
                 for param in &params.elements {
-                    let param_name = escape_js_ident(param.name.to_lower_camel_case());
+                    let param_name = self.to_js_ident(&param.name);
                     match &param.schema {
                         ElementSchema::ComponentModel(component_model) => writer.param(
                             &param_name,
@@ -1967,7 +1973,13 @@ impl TypeScriptBridgeGenerator {
                     }
                     AnalysedType::Handle(_) => Err(anyhow!("Handle types are not supported")),
                     _ => match typ.name() {
-                        Some(name) => Ok(name.to_upper_camel_case()), // TODO: use owner too?
+                        Some(name) => {
+                            if self.same_language {
+                                Ok(name.to_string())
+                            } else {
+                                Ok(name.to_upper_camel_case())
+                            }
+                        }
                         None => self.type_definition(typ),
                     },
                 }
@@ -2027,7 +2039,7 @@ impl TypeScriptBridgeGenerator {
                 let mut flags_def = String::new();
                 flags_def.push_str("{\n");
                 for flag in &flags.names {
-                    let flag_name = escape_js_ident(flag.to_lower_camel_case());
+                    let flag_name = self.to_js_ident(flag);
                     flags_def.push_str(&format!("  {flag_name}: boolean;\n"));
                 }
                 flags_def.push('}');
@@ -2037,7 +2049,7 @@ impl TypeScriptBridgeGenerator {
                 let mut record_def = String::new();
                 record_def.push_str("{\n");
                 for field in &record.fields {
-                    let js_name = escape_js_ident(field.name.to_lower_camel_case());
+                    let js_name = self.to_js_ident(&field.name);
                     let field_str = if let AnalysedType::Option(option) = &field.typ {
                         let field_type = self.type_reference(&option.inner)?;
                         format!("{js_name}?: {field_type};\n")
@@ -2093,5 +2105,29 @@ impl TypeScriptBridgeGenerator {
             "{}Configuration",
             self.agent_type.type_name.0.to_lower_camel_case()
         )
+    }
+
+    /// Converts a name to a JS/TS identifier (camelCase for cross-language, as-is for same language).
+    fn to_js_ident(&self, name: &str) -> String {
+        if self.same_language {
+            escape_js_ident(name)
+        } else {
+            escape_js_ident(name.to_lower_camel_case())
+        }
+    }
+
+    /// Converts a method name to PascalCase for use in generated function names like `encodeXxxInput`.
+    /// These are internal generated names, not user-facing API names, so always use PascalCase.
+    fn to_method_pascal(&self, name: &str) -> String {
+        if self.same_language {
+            // Already camelCase; capitalize the first letter to get PascalCase
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        } else {
+            name.to_upper_camel_case()
+        }
     }
 }

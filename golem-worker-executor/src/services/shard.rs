@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,7 +14,7 @@
 
 use crate::metrics::sharding::*;
 use crate::model::ShardAssignmentCheck;
-use golem_common::model::{ShardAssignment, ShardId, WorkerId};
+use golem_common::model::{AgentId, ShardAssignment, ShardId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use itertools::Itertools;
 use std::collections::HashSet;
@@ -26,7 +26,7 @@ use tracing::debug;
 pub trait ShardService: Send + Sync {
     fn is_ready(&self) -> bool;
     fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError>;
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), WorkerExecutorError>;
+    fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError>;
     fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>);
     fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError>;
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError>;
@@ -95,9 +95,9 @@ impl ShardService for ShardServiceDefault {
         })
     }
 
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), WorkerExecutorError> {
+    fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
         self.with_read_shard_assignment(|shard_assignment: &ShardAssignment| {
-            shard_assignment.check_worker(worker_id)
+            shard_assignment.check_worker(agent_id)
         })
         .and_then(identity)
     }

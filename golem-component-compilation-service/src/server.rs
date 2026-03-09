@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,7 +18,6 @@ use golem_component_compilation_service::config::{make_config_loader, ServerConf
 use prometheus::Registry;
 use tokio::task::JoinSet;
 use tracing::info;
-use wasmtime::component::__internal::anyhow;
 
 pub fn main() -> anyhow::Result<()> {
     match make_config_loader().load_or_dump_config() {

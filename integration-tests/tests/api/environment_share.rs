@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,7 +15,6 @@
 use golem_client::api::{
     AgentClient, AgentError, RegistryServiceClient, RegistryServiceGetEnvironmentShareError,
 };
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment_share::{EnvironmentShareCreation, EnvironmentShareUpdate};
 use golem_common::model::IdempotencyKey;
@@ -174,7 +173,7 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
         .await?;
 
     // Grantee invokes the agent using owner's email
-    let agent_id = agent_id!("rpc-counter", "shared-counter-1");
+    let agent_id = agent_id!("RpcCounter", "shared-counter-1");
 
     let grantee_agent_client = deps
         .worker_service()
@@ -189,7 +188,7 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
             &golem_client::model::AgentInvocationRequest {
                 app_name: app.name.0.clone(),
                 env_name: env.name.0.clone(),
-                agent_type_name: agent_id.agent_type.to_wit_naming().0.clone(),
+                agent_type_name: agent_id.agent_type.0.clone(),
                 parameters: agent_id.parameters.clone().into(),
                 phantom_id: agent_id.phantom_id,
                 method_name: "inc_by".to_string(),
@@ -211,7 +210,7 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
             &golem_client::model::AgentInvocationRequest {
                 app_name: app.name.0.clone(),
                 env_name: env.name.0.clone(),
-                agent_type_name: agent_id.agent_type.to_wit_naming().0.clone(),
+                agent_type_name: agent_id.agent_type.0.clone(),
                 parameters: agent_id.parameters.clone().into(),
                 phantom_id: agent_id.phantom_id,
                 method_name: "get_value".to_string(),
@@ -274,7 +273,7 @@ async fn invoke_agent_in_shared_environment_fails_without_share(
 
     // No share is created — non_shared_user should NOT be able to invoke
 
-    let agent_id = agent_id!("rpc-counter", "no-share-counter");
+    let agent_id = agent_id!("RpcCounter", "no-share-counter");
 
     let client = deps
         .worker_service()
@@ -287,7 +286,7 @@ async fn invoke_agent_in_shared_environment_fails_without_share(
             &golem_client::model::AgentInvocationRequest {
                 app_name: app.name.0.clone(),
                 env_name: env.name.0.clone(),
-                agent_type_name: agent_id.agent_type.to_wit_naming().0.clone(),
+                agent_type_name: agent_id.agent_type.0.clone(),
                 parameters: agent_id.parameters.clone().into(),
                 phantom_id: agent_id.phantom_id,
                 method_name: "get_value".to_string(),

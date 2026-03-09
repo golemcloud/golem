@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,8 +17,8 @@ use golem_api_grpc::proto::golem;
 use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::oplog::WorkerError;
-use golem_common::model::{PromiseId, ShardId, Timestamp, WorkerId};
+use golem_common::model::oplog::AgentError;
+use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
@@ -33,18 +33,18 @@ pub enum WorkerExecutorError {
     InvalidRequest {
         details: String,
     },
-    WorkerAlreadyExists {
-        worker_id: WorkerId,
+    AgentAlreadyExists {
+        agent_id: AgentId,
     },
-    WorkerNotFound {
-        worker_id: WorkerId,
+    AgentNotFound {
+        agent_id: AgentId,
     },
-    WorkerCreationFailed {
-        worker_id: WorkerId,
+    AgentCreationFailed {
+        agent_id: AgentId,
         details: String,
     },
-    FailedToResumeWorker {
-        worker_id: WorkerId,
+    FailedToResumeAgent {
+        agent_id: AgentId,
         reason: Box<WorkerExecutorError>,
     },
     ComponentDownloadFailed {
@@ -95,7 +95,7 @@ pub enum WorkerExecutorError {
     InvalidAccount,
     /// The worker failed with a TrapType::Error in a previous attempt
     PreviousInvocationFailed {
-        error: WorkerError,
+        error: AgentError,
         stderr: String,
     },
     PreviousInvocationExited,
@@ -113,32 +113,32 @@ pub enum WorkerExecutorError {
     },
     /// The worker failed with a TrapType::Error
     InvocationFailed {
-        error: WorkerError,
+        error: AgentError,
         stderr: String,
     },
 }
 
 impl WorkerExecutorError {
-    pub fn failed_to_resume_worker(worker_id: WorkerId, reason: WorkerExecutorError) -> Self {
-        Self::FailedToResumeWorker {
-            worker_id,
+    pub fn failed_to_resume_worker(agent_id: AgentId, reason: WorkerExecutorError) -> Self {
+        Self::FailedToResumeAgent {
+            agent_id,
             reason: Box::new(reason),
         }
     }
 
-    pub fn worker_creation_failed(worker_id: WorkerId, details: impl Into<String>) -> Self {
-        Self::WorkerCreationFailed {
-            worker_id,
+    pub fn worker_creation_failed(agent_id: AgentId, details: impl Into<String>) -> Self {
+        Self::AgentCreationFailed {
+            agent_id,
             details: details.into(),
         }
     }
 
-    pub fn worker_not_found(worker_id: WorkerId) -> Self {
-        Self::WorkerNotFound { worker_id }
+    pub fn worker_not_found(agent_id: AgentId) -> Self {
+        Self::AgentNotFound { agent_id }
     }
 
-    pub fn worker_already_exists(worker_id: WorkerId) -> Self {
-        Self::WorkerAlreadyExists { worker_id }
+    pub fn worker_already_exists(agent_id: AgentId) -> Self {
+        Self::AgentAlreadyExists { agent_id }
     }
 
     pub fn component_download_failed(
@@ -196,17 +196,17 @@ impl Display for WorkerExecutorError {
             Self::InvalidRequest { details } => {
                 write!(f, "Invalid request: {details}")
             }
-            Self::WorkerAlreadyExists { worker_id } => {
-                write!(f, "Worker already exists: {worker_id}")
+            Self::AgentAlreadyExists { agent_id } => {
+                write!(f, "Worker already exists: {agent_id}")
             }
-            Self::WorkerNotFound { worker_id } => {
-                write!(f, "Worker not found: {worker_id}")
+            Self::AgentNotFound { agent_id } => {
+                write!(f, "Worker not found: {agent_id}")
             }
-            Self::WorkerCreationFailed { worker_id, details } => {
-                write!(f, "Failed to create worker: {worker_id}: {details}")
+            Self::AgentCreationFailed { agent_id, details } => {
+                write!(f, "Failed to create worker: {agent_id}: {details}")
             }
-            Self::FailedToResumeWorker { worker_id, reason } => {
-                write!(f, "Failed to resume worker: {worker_id}: {reason}")
+            Self::FailedToResumeAgent { agent_id, reason } => {
+                write!(f, "Failed to resume worker: {agent_id}: {reason}")
             }
             Self::ComponentDownloadFailed {
                 component_id,
@@ -314,10 +314,10 @@ impl Error for WorkerExecutorError {
     fn description(&self) -> &str {
         match self {
             Self::InvalidRequest { .. } => "Invalid request",
-            Self::WorkerAlreadyExists { .. } => "Worker already exists",
-            Self::WorkerNotFound { .. } => "Worker not found",
-            Self::WorkerCreationFailed { .. } => "Failed to create worker",
-            Self::FailedToResumeWorker { .. } => "Failed to resume worker",
+            Self::AgentAlreadyExists { .. } => "Worker already exists",
+            Self::AgentNotFound { .. } => "Worker not found",
+            Self::AgentCreationFailed { .. } => "Failed to create worker",
+            Self::FailedToResumeAgent { .. } => "Failed to resume worker",
             Self::ComponentDownloadFailed { .. } => "Failed to download component",
             Self::ComponentParseFailed { .. } => "Failed to parse downloaded component",
             Self::GetLatestVersionOfComponentFailed { .. } => {
@@ -349,10 +349,10 @@ impl ApiErrorDetails for WorkerExecutorError {
     fn trace_error_kind(&self) -> &'static str {
         match self {
             Self::InvalidRequest { .. } => "InvalidRequest",
-            Self::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",
-            Self::WorkerNotFound { .. } => "WorkerNotFound",
-            Self::WorkerCreationFailed { .. } => "WorkerCreationFailed",
-            Self::FailedToResumeWorker { .. } => "FailedToResumeWorker",
+            Self::AgentAlreadyExists { .. } => "AgentAlreadyExists",
+            Self::AgentNotFound { .. } => "AgentNotFound",
+            Self::AgentCreationFailed { .. } => "AgentCreationFailed",
+            Self::FailedToResumeAgent { .. } => "FailedToResumeAgent",
             Self::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
             Self::ComponentParseFailed { .. } => "ComponentParseFailed",
             Self::GetLatestVersionOfComponentFailed { .. } => "GetLatestVersionOfComponentFailed",
@@ -379,16 +379,16 @@ impl ApiErrorDetails for WorkerExecutorError {
 
     fn is_expected(&self) -> bool {
         match self {
-            Self::WorkerAlreadyExists { .. }
-            | Self::WorkerNotFound { .. }
+            Self::AgentAlreadyExists { .. }
+            | Self::AgentNotFound { .. }
             | Self::PromiseNotFound { .. }
             | Self::PromiseDropped { .. }
             | Self::PromiseAlreadyCompleted { .. }
             | Self::Interrupted { .. }
             | Self::InvalidShardId { .. } => true,
             Self::InvalidRequest { .. }
-            | Self::WorkerCreationFailed { .. }
-            | Self::FailedToResumeWorker { .. }
+            | Self::AgentCreationFailed { .. }
+            | Self::FailedToResumeAgent { .. }
             | Self::ComponentDownloadFailed { .. }
             | Self::ComponentParseFailed { .. }
             | Self::GetLatestVersionOfComponentFailed { .. }
@@ -443,8 +443,8 @@ impl From<WorkerExecutorError> for Status {
             WorkerExecutorError::PromiseNotFound { promise_id } => {
                 Self::not_found(format!("Promise not found: {promise_id}"))
             }
-            WorkerExecutorError::WorkerNotFound { worker_id } => {
-                Self::not_found(format!("Worker not found: {worker_id}"))
+            WorkerExecutorError::AgentNotFound { agent_id } => {
+                Self::not_found(format!("Worker not found: {agent_id}"))
             }
             WorkerExecutorError::ParamTypeMismatch { details } => {
                 Self::invalid_argument(format!("Parameter type mismatch: {details}"))
@@ -474,40 +474,40 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            WorkerExecutorError::WorkerAlreadyExists { worker_id } => Self {
+            WorkerExecutorError::AgentAlreadyExists { agent_id } => Self {
                 error: Some(
-                    golem::worker::v1::worker_execution_error::Error::WorkerAlreadyExists(
-                        golem::worker::v1::WorkerAlreadyExists {
-                            worker_id: Some(worker_id.into()),
+                    golem::worker::v1::worker_execution_error::Error::AgentAlreadyExists(
+                        golem::worker::v1::AgentAlreadyExists {
+                            agent_id: Some(agent_id.into()),
                         },
                     ),
                 ),
             },
-            WorkerExecutorError::WorkerNotFound { worker_id } => Self {
+            WorkerExecutorError::AgentNotFound { agent_id } => Self {
                 error: Some(
-                    golem::worker::v1::worker_execution_error::Error::WorkerNotFound(
-                        golem::worker::v1::WorkerNotFound {
-                            worker_id: Some(worker_id.into()),
+                    golem::worker::v1::worker_execution_error::Error::AgentNotFound(
+                        golem::worker::v1::AgentNotFound {
+                            agent_id: Some(agent_id.into()),
                         },
                     ),
                 ),
             },
-            WorkerExecutorError::WorkerCreationFailed { worker_id, details } => Self {
+            WorkerExecutorError::AgentCreationFailed { agent_id, details } => Self {
                     error: Some(
-                        golem::worker::v1::worker_execution_error::Error::WorkerCreationFailed(
-                            golem::worker::v1::WorkerCreationFailed {
-                                worker_id: Some(worker_id.into()),
+                        golem::worker::v1::worker_execution_error::Error::AgentCreationFailed(
+                            golem::worker::v1::AgentCreationFailed {
+                                agent_id: Some(agent_id.into()),
                                 details,
                             },
                         ),
                     ),
                 },
-            WorkerExecutorError::FailedToResumeWorker { worker_id, reason } =>
+            WorkerExecutorError::FailedToResumeAgent { agent_id, reason } =>
                 Self {
                     error: Some(
-                        golem::worker::v1::worker_execution_error::Error::FailedToResumeWorker(
-                            Box::new(golem::worker::v1::FailedToResumeWorker {
-                                worker_id: Some(worker_id.into()),
+                        golem::worker::v1::worker_execution_error::Error::FailedToResumeAgent(
+                            Box::new(golem::worker::v1::FailedToResumeAgent {
+                                agent_id: Some(agent_id.into()),
                                 reason: Some(Box::new((*reason).clone().into())),
                             }),
                         ),
@@ -708,37 +708,37 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
             )) => Ok(Self::InvalidRequest {
                 details: invalid_request.details,
             }),
-            Some(golem::worker::v1::worker_execution_error::Error::WorkerAlreadyExists(
+            Some(golem::worker::v1::worker_execution_error::Error::AgentAlreadyExists(
                 worker_already_exists,
-            )) => Ok(Self::WorkerAlreadyExists {
-                worker_id: worker_already_exists
-                    .worker_id
-                    .ok_or("Missing worker_id")?
+            )) => Ok(Self::AgentAlreadyExists {
+                agent_id: worker_already_exists
+                    .agent_id
+                    .ok_or("Missing agent_id")?
                     .try_into()?,
             }),
-            Some(golem::worker::v1::worker_execution_error::Error::WorkerNotFound(
+            Some(golem::worker::v1::worker_execution_error::Error::AgentNotFound(
                 worker_not_found,
-            )) => Ok(Self::WorkerNotFound {
-                worker_id: worker_not_found
-                    .worker_id
-                    .ok_or("Missing worker_id")?
+            )) => Ok(Self::AgentNotFound {
+                agent_id: worker_not_found
+                    .agent_id
+                    .ok_or("Missing agent_id")?
                     .try_into()?,
             }),
-            Some(golem::worker::v1::worker_execution_error::Error::WorkerCreationFailed(
+            Some(golem::worker::v1::worker_execution_error::Error::AgentCreationFailed(
                 worker_creation_failed,
-            )) => Ok(Self::WorkerCreationFailed {
-                worker_id: worker_creation_failed
-                    .worker_id
-                    .ok_or("Missing worker_id")?
+            )) => Ok(Self::AgentCreationFailed {
+                agent_id: worker_creation_failed
+                    .agent_id
+                    .ok_or("Missing agent_id")?
                     .try_into()?,
                 details: worker_creation_failed.details,
             }),
-            Some(golem::worker::v1::worker_execution_error::Error::FailedToResumeWorker(
+            Some(golem::worker::v1::worker_execution_error::Error::FailedToResumeAgent(
                 failed_to_resume_worker,
-            )) => Ok(Self::FailedToResumeWorker {
-                worker_id: failed_to_resume_worker
-                    .worker_id
-                    .ok_or("Missing worker_id")?
+            )) => Ok(Self::FailedToResumeAgent {
+                agent_id: failed_to_resume_worker
+                    .agent_id
+                    .ok_or("Missing agent_id")?
                     .try_into()?,
                 reason: Box::new(
                     (*failed_to_resume_worker.reason.ok_or("Missing reason")?).try_into()?,
@@ -948,11 +948,10 @@ impl Error for InterruptKind {}
 #[cfg(feature = "worker-executor")]
 mod service {
     use super::WorkerExecutorError;
-    use anyhow::anyhow;
 
     impl From<WorkerExecutorError> for wasmtime_wasi::p2::StreamError {
         fn from(value: WorkerExecutorError) -> Self {
-            Self::Trap(anyhow!(value))
+            Self::Trap(wasmtime::Error::msg(value.to_string()))
         }
     }
 

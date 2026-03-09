@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
-use golem_common::model::OwnedWorkerId;
+use golem_common::model::OwnedAgentId;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct EphemeralOplog {
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     primary: Arc<dyn Oplog>,
     target: Arc<dyn OplogArchive + Send + Sync>,
     state: Arc<Mutex<EphemeralOplogState>>,
@@ -77,7 +77,7 @@ impl EphemeralOplogState {
 
 impl EphemeralOplog {
     pub async fn new(
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         last_oplog_idx: OplogIndex,
         max_operations_before_commit: u64,
         primary: Arc<dyn Oplog>,
@@ -85,7 +85,7 @@ impl EphemeralOplog {
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         Self {
-            owned_worker_id,
+            owned_agent_id,
             primary,
             target: target.clone(),
             state: Arc::new(Mutex::new(EphemeralOplogState {
@@ -112,7 +112,7 @@ impl Drop for EphemeralOplog {
 impl Debug for EphemeralOplog {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EphemeralOplog")
-            .field("worker_id", &self.owned_worker_id)
+            .field("agent_id", &self.owned_agent_id)
             .finish()
     }
 }
@@ -209,6 +209,10 @@ impl Oplog for EphemeralOplog {
     }
 
     async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
+
+    fn inner(&self) -> Option<Arc<dyn Oplog>> {
+        Some(self.primary.clone())
+    }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
         self.primary.upload_raw_payload(data).await

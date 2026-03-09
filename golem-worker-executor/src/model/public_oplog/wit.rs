@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -42,7 +42,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
         match value {
             PublicOplogEntry::Create(CreateParams {
                 timestamp,
-                worker_id,
+                agent_id,
                 component_revision,
                 env,
                 created_by,
@@ -52,10 +52,11 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 original_phantom_id: _,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
-                agent_id: worker_id.into(),
+                agent_id: agent_id.into(),
                 component_revision: component_revision.into(),
                 args: vec![],
                 env: env.into_iter().collect(),
@@ -69,6 +70,13 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     .map(|pr| pr.into())
                     .collect(),
                 config_vars: config_vars.into_iter().collect(),
+                local_agent_config: local_agent_config
+                    .into_iter()
+                    .map(|lac| oplog::LocalAgentConfigEntry {
+                        key: lac.key,
+                        value: lac.value.into(),
+                    })
+                    .collect(),
             }),
             PublicOplogEntry::HostCall(HostCallParams {
                 timestamp,
@@ -632,7 +640,7 @@ fn oplog_payload_from_wit<T: desert_rust::BinaryCodec + std::fmt::Debug + Clone 
     }
 }
 
-impl From<oplog::WorkerError> for golem_common::model::oplog::WorkerError {
+impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
     fn from(err: oplog::WorkerError) -> Self {
         match err {
             oplog::WorkerError::Unknown(msg) => Self::Unknown(msg),
@@ -640,7 +648,7 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::WorkerError {
             oplog::WorkerError::StackOverflow => Self::StackOverflow,
             oplog::WorkerError::OutOfMemory => Self::OutOfMemory,
             oplog::WorkerError::ExceededMemoryLimit => Self::ExceededMemoryLimit,
-            oplog::WorkerError::AgentError(msg) => Self::AgentError(msg),
+            oplog::WorkerError::InternalError(msg) => Self::InternalError(msg),
         }
     }
 }
@@ -731,7 +739,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
         match value {
             oplog::OplogEntry::Create(params) => Ok(Self::Create {
                 timestamp: timestamp_from_datetime(params.timestamp),
-                worker_id: golem_common::model::WorkerId::from(params.worker_id),
+                agent_id: golem_common::model::AgentId::from(params.agent_id),
                 component_revision: golem_common::model::component::ComponentRevision::try_from(
                     params.component_revision,
                 )
@@ -747,7 +755,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                         params.created_by.uuid.low_bits,
                     ),
                 ),
-                parent: params.parent.map(golem_common::model::WorkerId::from),
+                parent: params.parent.map(golem_common::model::AgentId::from),
                 component_size: params.component_size,
                 initial_total_linear_memory_size: params.initial_total_linear_memory_size,
                 initial_active_plugins: params
@@ -756,6 +764,8 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .map(golem_common::model::component::PluginPriority)
                     .collect(),
                 config_vars: params.config_vars.into_iter().collect(),
+                // FIXME: agent-config
+                local_agent_config: Vec::new(),
                 original_phantom_id: params
                     .original_phantom_id
                     .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
@@ -900,7 +910,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::CreateResource(params) => Ok(Self::CreateResource {
                 timestamp: timestamp_from_datetime(params.timestamp),
-                id: golem_common::model::oplog::WorkerResourceId(params.id),
+                id: golem_common::model::oplog::AgentResourceId(params.id),
                 resource_type_id: golem_wasm::wasmtime::ResourceTypeId {
                     name: params.resource_type_id.name,
                     owner: params.resource_type_id.owner,
@@ -908,7 +918,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::DropResource(params) => Ok(Self::DropResource {
                 timestamp: timestamp_from_datetime(params.timestamp),
-                id: golem_common::model::oplog::WorkerResourceId(params.id),
+                id: golem_common::model::oplog::AgentResourceId(params.id),
                 resource_type_id: golem_wasm::wasmtime::ResourceTypeId {
                     name: params.resource_type_id.name,
                     owner: params.resource_type_id.owner,

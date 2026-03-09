@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -19,6 +19,7 @@ use super::worker_service::WorkerService;
 use super::{wait_for_startup_grpc, EnvVarBuilder};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Level;
@@ -39,8 +40,13 @@ pub trait WorkerExecutor: Send + Sync {
     async fn is_running(&self) -> bool;
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-worker-executor", timeout).await
+async fn wait_for_startup(
+    host: &str,
+    grpc_port: u16,
+    timeout: Duration,
+    child: Option<&mut Child>,
+) {
+    wait_for_startup_grpc(host, grpc_port, "golem-worker-executor", timeout, child).await
 }
 
 async fn env_vars(

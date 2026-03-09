@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -156,7 +156,7 @@ export function getReturnTypeDataSchemaFromTypeInternal(
         tag: 'tuple',
         val: [
           [
-            'return-value',
+            'returnValue',
             {
               tag: 'unstructured-text',
               val: typeInfoInternal.val,
@@ -178,7 +178,7 @@ export function getReturnTypeDataSchemaFromTypeInternal(
         tag: 'tuple',
         val: [
           [
-            'return-value',
+            'returnValue',
             {
               tag: 'component-model',
               val: typeInfoInternal.witType,
@@ -192,7 +192,7 @@ export function getReturnTypeDataSchemaFromTypeInternal(
         tag: 'tuple',
         val: [
           [
-            'return-value',
+            'returnValue',
             {
               tag: 'unstructured-binary',
               val: typeInfoInternal.val,

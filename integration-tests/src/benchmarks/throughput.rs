@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,14 +17,14 @@ use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
-use golem_common::base_model::agent::{AgentId, DataValue};
+use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
-use golem_common::model::{RoutingTable, WorkerId};
+use golem_common::model::{AgentId, RoutingTable};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -76,6 +76,7 @@ impl Benchmark for ThroughputEcho {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
+            "echo",
             "echo",
             Box::new(|_| data_value!("benchmark")),
             Box::new(|port, idx, _length| {
@@ -172,7 +173,8 @@ impl Benchmark for ThroughputLargeInput {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
-            "large-input",
+            "large_input",
+            "largeInput",
             Box::new(|length| {
                 let bytes = vec![0u8; length];
                 data_value!(bytes)
@@ -277,7 +279,8 @@ impl Benchmark for ThroughputCpuIntensive {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
-            "cpu-intensive",
+            "cpu_intensive",
+            "cpuIntensive",
             Box::new(|length| data_value!(length as f64)),
             Box::new(|port, idx, length| {
                 let url = Url::parse(&format!(
@@ -353,18 +356,18 @@ impl Benchmark for ThroughputCpuIntensive {
 #[derive(Debug, Clone)]
 pub struct AgentIdPair {
     pub component_id: ComponentId,
-    pub parent: AgentId,
-    pub child: AgentId,
+    pub parent: ParsedAgentId,
+    pub child: ParsedAgentId,
 }
 
 impl AgentIdPair {
     fn at_same_worker_executor(&self, routing_table: &RoutingTable) -> bool {
-        let parent_worker_id = WorkerId::from_agent_id(self.component_id, &self.parent)
+        let parent_agent_id = AgentId::from_agent_id(self.component_id, &self.parent)
             .expect("Failed to create worker id from parent agent id");
-        let child_worker_id = WorkerId::from_agent_id(self.component_id, &self.child)
+        let child_agent_id = AgentId::from_agent_id(self.component_id, &self.child)
             .expect("Failed to create worker id from child agent id");
-        let parent_pod = routing_table.lookup(&parent_worker_id);
-        let child_pod = routing_table.lookup(&child_worker_id);
+        let parent_pod = routing_table.lookup(&parent_agent_id);
+        let child_pod = routing_table.lookup(&child_agent_id);
 
         match (parent_pod, child_pod) {
             (Some(parent_pod), Some(child_pod)) => parent_pod == child_pod,
@@ -376,7 +379,7 @@ impl AgentIdPair {
 enum AgentInvocationTarget {
     Single {
         component: ComponentDto,
-        agent_id: AgentId,
+        agent_id: ParsedAgentId,
     },
     Pair {
         component: ComponentDto,
@@ -392,7 +395,7 @@ impl AgentInvocationTarget {
         }
     }
 
-    pub fn agent_id(&self) -> &AgentId {
+    pub fn agent_id(&self) -> &ParsedAgentId {
         match self {
             AgentInvocationTarget::Single { agent_id, .. } => agent_id,
             AgentInvocationTarget::Pair { pair, .. } => &pair.parent,
@@ -418,10 +421,10 @@ pub struct IterationContext {
     domain: Domain,
     rust_agent_component: ComponentDto,
     ts_agent_component: ComponentDto,
-    rust_agent_ids: Vec<AgentId>,
-    ts_agent_ids: Vec<AgentId>,
-    rust_agent_ids_for_http: Vec<AgentId>,
-    ts_agent_ids_for_http: Vec<AgentId>,
+    rust_agent_ids: Vec<ParsedAgentId>,
+    ts_agent_ids: Vec<ParsedAgentId>,
+    rust_agent_ids_for_http: Vec<ParsedAgentId>,
+    ts_agent_ids_for_http: Vec<ParsedAgentId>,
     length: usize,
     routing_table: RoutingTable,
     ts_rpc_agent_id_pairs: Vec<AgentIdPair>,
@@ -429,7 +432,8 @@ pub struct IterationContext {
 }
 
 pub struct ThroughputBenchmark {
-    method_name: String,
+    rust_method_name: String,
+    ts_method_name: String,
     agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
     http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
     rust_http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
@@ -437,15 +441,16 @@ pub struct ThroughputBenchmark {
     call_count: usize,
 }
 
-fn agent_ids_to_worker_ids(component_id: ComponentId, ids: &[AgentId]) -> Vec<WorkerId> {
+fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[ParsedAgentId]) -> Vec<AgentId> {
     ids.iter()
-        .filter_map(|id| WorkerId::from_agent_id(component_id, id).ok())
+        .filter_map(|id| AgentId::from_agent_id(component_id, id).ok())
         .collect()
 }
 
 impl ThroughputBenchmark {
     pub async fn new(
-        method_name: &str,
+        rust_method_name: &str,
+        ts_method_name: &str,
         agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
         http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
         rust_http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
@@ -457,7 +462,8 @@ impl ThroughputBenchmark {
         otlp: bool,
     ) -> Self {
         Self {
-            method_name: method_name.to_string(),
+            rust_method_name: rust_method_name.to_string(),
+            ts_method_name: ts_method_name.to_string(),
             agent_params,
             http_request,
             rust_http_request,
@@ -513,21 +519,20 @@ impl ThroughputBenchmark {
             .unwrap();
 
         for n in 0..config.size {
-            rust_agent_ids.push(agent_id!("rust-benchmark-agent", format!("test-{n}")));
-            ts_agent_ids.push(agent_id!("benchmark-agent", format!("test-{n}")));
-            rust_agent_ids_for_http
-                .push(agent_id!("rust-benchmark-agent", format!("test-{n}-http")));
-            ts_agent_ids_for_http.push(agent_id!("benchmark-agent", format!("test-{n}-http")));
+            rust_agent_ids.push(agent_id!("RustBenchmarkAgent", format!("test-{n}")));
+            ts_agent_ids.push(agent_id!("BenchmarkAgent", format!("test-{n}")));
+            rust_agent_ids_for_http.push(agent_id!("RustBenchmarkAgent", format!("test-{n}-http")));
+            ts_agent_ids_for_http.push(agent_id!("BenchmarkAgent", format!("test-{n}-http")));
 
             ts_rpc_agent_id_pairs.push(AgentIdPair {
                 component_id: ts_agent_component.id,
-                parent: agent_id!("rpc-benchmark-agent", format!("rpc-test-{n}")),
-                child: agent_id!("benchmark-agent", format!("rpc-test-{n}")),
+                parent: agent_id!("RpcBenchmarkAgent", format!("rpc-test-{n}")),
+                child: agent_id!("BenchmarkAgent", format!("rpc-test-{n}")),
             });
             rust_rpc_agent_id_pairs.push(AgentIdPair {
                 component_id: rust_agent_component.id,
-                parent: agent_id!("rust-rpc-benchmark-agent", format!("rpc-test-{n}")),
-                child: agent_id!("rust-benchmark-agent", format!("rpc-test-{n}")),
+                parent: agent_id!("RustRpcBenchmarkAgent", format!("rpc-test-{n}")),
+                child: agent_id!("RustBenchmarkAgent", format!("rpc-test-{n}")),
             });
         }
 
@@ -554,11 +559,11 @@ impl ThroughputBenchmark {
             webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
             agents: BTreeMap::from_iter([
                 (
-                    AgentTypeName("benchmark-agent".to_string()),
+                    AgentTypeName("BenchmarkAgent".to_string()),
                     HttpApiDeploymentAgentOptions::default(),
                 ),
                 (
-                    AgentTypeName("rust-benchmark-agent".to_string()),
+                    AgentTypeName("RustBenchmarkAgent".to_string()),
                     HttpApiDeploymentAgentOptions::default(),
                 ),
             ]),
@@ -595,7 +600,7 @@ impl ThroughputBenchmark {
         async fn warmup_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
-            ids: &[AgentId],
+            ids: &[ParsedAgentId],
             method_name: &str,
             params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
             length: usize,
@@ -623,7 +628,7 @@ impl ThroughputBenchmark {
             &iteration.user,
             &iteration.rust_agent_component,
             &iteration.rust_agent_ids,
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -634,7 +639,7 @@ impl ThroughputBenchmark {
             &iteration.user,
             &iteration.ts_agent_component,
             &iteration.ts_agent_ids,
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -645,7 +650,7 @@ impl ThroughputBenchmark {
             &iteration.user,
             &iteration.rust_agent_component,
             &iteration.rust_agent_ids_for_http,
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -656,7 +661,7 @@ impl ThroughputBenchmark {
             &iteration.user,
             &iteration.ts_agent_component,
             &iteration.ts_agent_ids_for_http,
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -671,7 +676,7 @@ impl ThroughputBenchmark {
                 .iter()
                 .map(|pair| pair.parent.clone())
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -686,7 +691,7 @@ impl ThroughputBenchmark {
                 .iter()
                 .map(|pair| pair.parent.clone())
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -756,7 +761,7 @@ impl ThroughputBenchmark {
                     agent_id: id,
                 })
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             "rust-agent-",
         )
@@ -778,7 +783,7 @@ impl ThroughputBenchmark {
                     agent_id: id,
                 })
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             "ts-agent-",
         )
@@ -872,7 +877,7 @@ impl ThroughputBenchmark {
                     pair,
                 })
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             "ts-agent-rpc-",
         )
@@ -894,7 +899,7 @@ impl ThroughputBenchmark {
                     pair,
                 })
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             "rust-agent-rpc-",
         )
@@ -904,17 +909,17 @@ impl ThroughputBenchmark {
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(iteration.rust_agent_component.id, &iteration.rust_agent_ids),
+            &agent_ids_to_agent_ids(iteration.rust_agent_component.id, &iteration.rust_agent_ids),
         )
         .await;
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(iteration.ts_agent_component.id, &iteration.ts_agent_ids),
+            &agent_ids_to_agent_ids(iteration.ts_agent_component.id, &iteration.ts_agent_ids),
         )
         .await;
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(
+            &agent_ids_to_agent_ids(
                 iteration.rust_agent_component.id,
                 &iteration.rust_agent_ids_for_http,
             ),
@@ -922,30 +927,30 @@ impl ThroughputBenchmark {
         .await;
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(
+            &agent_ids_to_agent_ids(
                 iteration.ts_agent_component.id,
                 &iteration.ts_agent_ids_for_http,
             ),
         )
         .await;
 
-        let mut ts_rpc_workers: Vec<WorkerId> = Vec::new();
+        let mut ts_rpc_workers: Vec<AgentId> = Vec::new();
         for pair in &iteration.ts_rpc_agent_id_pairs {
-            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.parent) {
+            if let Ok(id) = AgentId::from_agent_id(pair.component_id, &pair.parent) {
                 ts_rpc_workers.push(id);
             }
-            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.child) {
+            if let Ok(id) = AgentId::from_agent_id(pair.component_id, &pair.child) {
                 ts_rpc_workers.push(id);
             }
         }
         delete_workers(&iteration.user, &ts_rpc_workers).await;
 
-        let mut rust_rpc_workers: Vec<WorkerId> = Vec::new();
+        let mut rust_rpc_workers: Vec<AgentId> = Vec::new();
         for pair in &iteration.rust_rpc_agent_id_pairs {
-            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.parent) {
+            if let Ok(id) = AgentId::from_agent_id(pair.component_id, &pair.parent) {
                 rust_rpc_workers.push(id);
             }
-            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.child) {
+            if let Ok(id) = AgentId::from_agent_id(pair.component_id, &pair.child) {
                 rust_rpc_workers.push(id);
             }
         }

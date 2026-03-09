@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -19,7 +19,7 @@ use std::{
 
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::model::{WorkerEvent, WorkerId};
+use golem_common::model::{AgentEvent, AgentId};
 use poem::web::websocket::Message;
 use tonic::Status;
 use tracing::{error, info};
@@ -28,9 +28,9 @@ use tracing::{error, info};
 ///
 /// keep_alive_interval: Interval at which Ping messages are sent
 /// max_pong_timeout: Maximum time to wait for a Pong message before considering the connection dead
-#[tracing::instrument(skip_all, fields(worker_id = worker_id.to_string()))]
+#[tracing::instrument(skip_all, fields(agent_id = agent_id.to_string()))]
 pub async fn proxy_worker_connection(
-    worker_id: WorkerId,
+    agent_id: AgentId,
     mut worker_stream: impl Stream<Item = Result<LogEvent, Status>> + Unpin,
     websocket_sender: impl Sink<Message, Error = IoError> + Unpin,
     websocket_receiver: impl Stream<Item = IoResult<Message>> + Unpin,
@@ -109,7 +109,7 @@ async fn forward_worker_message<E>(
 where
     ConnectProxyError: From<E>,
 {
-    let message: WorkerEvent = message?.try_into().map_err(ConnectProxyError::Proto)?;
+    let message: AgentEvent = message?.try_into().map_err(ConnectProxyError::Proto)?;
     let msg_json = serde_json::to_string(&message)?;
     socket.send(Message::Text(msg_json)).await?;
     Ok(())

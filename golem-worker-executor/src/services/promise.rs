@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::All;
 use crate::metrics::promises::record_promise_created;
+use crate::services::active_workers;
+use crate::services::component;
+use crate::services::golem_config;
+use crate::services::oplog;
+use crate::services::worker;
+use crate::services::worker_activator::WorkerActivator;
+use crate::services::{HasConfig, HasOplogService};
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use crate::worker::Worker;
+use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
@@ -25,7 +31,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{OwnedWorkerId, PromiseId, WorkerId, WorkerStatus};
+use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 #[cfg(test)]
@@ -88,7 +94,7 @@ impl PromiseHandle {
 #[async_trait]
 pub trait PromiseService: Send + Sync {
     /// poll and complete for a given promise must be called on the same
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId;
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId;
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
 
@@ -125,9 +131,9 @@ impl LazyPromiseService {
 
 #[async_trait]
 impl PromiseService for LazyPromiseService {
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().create(worker_id, oplog_idx).await
+        lock.as_ref().unwrap().create(agent_id, oplog_idx).await
     }
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
@@ -200,20 +206,34 @@ impl PromiseRegistry {
     }
 }
 
-pub struct DefaultPromiseService<Ctx: WorkerCtx> {
+/// A lighter trait than `HasAll` that only provides the required functionality
+/// for `DefaultPromiseService::complete`, breaking the circular Arc reference
+/// `All -> LazyPromiseService -> DefaultPromiseService -> All`.
+#[async_trait]
+pub trait PromiseWorkerAccess: Send + Sync {
+    /// Activates the worker that owns the given promise if it is in a
+    /// state that requires activation (Interrupted, Running, Suspended, Retrying).
+    async fn activate_worker_if_needed(
+        &self,
+        promise_id: &PromiseId,
+        completed_by: AccountId,
+    ) -> Result<(), WorkerExecutorError>;
+}
+
+pub struct DefaultPromiseService {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
-    services: All<Ctx>,
+    worker_access: Arc<dyn PromiseWorkerAccess>,
     registry: Mutex<PromiseRegistry>,
 }
 
-impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
+impl DefaultPromiseService {
     pub fn new(
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
-        services: All<Ctx>,
+        worker_access: Arc<dyn PromiseWorkerAccess>,
     ) -> Self {
         Self {
             key_value_storage,
-            services,
+            worker_access,
             registry: Mutex::new(PromiseRegistry::new()),
         }
     }
@@ -223,7 +243,7 @@ impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
             .with("promise", "complete")
             .exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &get_promise_redis_key(promise_id),
             )
@@ -235,10 +255,10 @@ impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId {
+impl PromiseService for DefaultPromiseService {
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
         let promise_id = PromiseId {
-            worker_id: worker_id.clone(),
+            agent_id: agent_id.clone(),
             oplog_idx,
         };
         debug!("Created promise {promise_id}");
@@ -248,7 +268,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: worker_id.clone(),
+                    agent_id: agent_id.clone(),
                 },
                 &key,
                 &RedisPromiseState::Pending,
@@ -288,7 +308,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .with_entity("promise", "poll", "promise")
             .get(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &get_promise_result_redis_key(&promise_id),
             )
@@ -318,7 +338,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
@@ -335,62 +355,139 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         // Wake up the worker that owns the promise, ensuring that it resumes its work.
         // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
         // the result to redis, but failed before the worker could persist the result.
-        {
-            let worker_id = promise_id.worker_id.clone();
-
-            let component_metdata = self
-                .services
-                .component_service
-                .get_metadata(worker_id.component_id, None)
-                .await?;
-
-            let owned_worker_id = OwnedWorkerId {
-                environment_id: component_metdata.environment_id,
-                worker_id,
-            };
-
-            let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
-                .await
-                .ok_or(WorkerExecutorError::worker_not_found(
-                    owned_worker_id.worker_id(),
-                ))?;
-
-            let should_activate = match &metadata.last_known_status.status {
-                WorkerStatus::Interrupted
-                | WorkerStatus::Running
-                | WorkerStatus::Suspended
-                | WorkerStatus::Retrying => true,
-                WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Idle => false,
-            };
-
-            tracing::warn!(
-                "complete_promise, worker-status of {}: {}, should_activate={}",
-                owned_worker_id.worker_id,
-                metadata.last_known_status.status,
-                should_activate
-            );
-
-            if should_activate {
-                Worker::get_or_create_running(
-                    &self.services,
-                    completed_by,
-                    &owned_worker_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
-                )
-                .await?;
-            }
-        }
+        self.worker_access
+            .activate_worker_if_needed(&promise_id, completed_by)
+            .await?;
 
         Ok(written)
     }
 
     async fn cleanup(&self) {
         self.registry.lock().await.cleanup();
+    }
+}
+
+/// Default implementation of `PromiseWorkerAccess` that holds only the individual
+/// services it needs, avoiding the circular `All -> PromiseService -> All` reference.
+pub struct DefaultPromiseWorkerAccess<Ctx: WorkerCtx> {
+    component_service: Arc<dyn component::ComponentService>,
+    worker_service: Arc<dyn worker::WorkerService>,
+    active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    oplog_service: Arc<dyn oplog::OplogService>,
+    config: Arc<golem_config::GolemConfig>,
+    worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+}
+
+impl<Ctx: WorkerCtx> DefaultPromiseWorkerAccess<Ctx> {
+    pub fn new(
+        component_service: Arc<dyn component::ComponentService>,
+        worker_service: Arc<dyn worker::WorkerService>,
+        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        oplog_service: Arc<dyn oplog::OplogService>,
+        config: Arc<golem_config::GolemConfig>,
+        worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+    ) -> Self {
+        Self {
+            component_service,
+            worker_service,
+            active_workers,
+            oplog_service,
+            config,
+            worker_activator,
+        }
+    }
+}
+
+/// Adapter to satisfy the `HasOplogService + HasConfig` bounds required by
+/// `calculate_last_known_status` without pulling in the full `All<Ctx>`.
+struct StatusDeps {
+    oplog_service: Arc<dyn oplog::OplogService>,
+    config: Arc<golem_config::GolemConfig>,
+}
+
+impl HasOplogService for StatusDeps {
+    fn oplog_service(&self) -> Arc<dyn oplog::OplogService> {
+        self.oplog_service.clone()
+    }
+}
+
+impl HasConfig for StatusDeps {
+    fn config(&self) -> Arc<golem_config::GolemConfig> {
+        self.config.clone()
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
+    async fn activate_worker_if_needed(
+        &self,
+        promise_id: &PromiseId,
+        completed_by: AccountId,
+    ) -> Result<(), WorkerExecutorError> {
+        let agent_id = promise_id.agent_id.clone();
+
+        let component_metadata = self
+            .component_service
+            .get_metadata(agent_id.component_id, None)
+            .await?;
+
+        let owned_agent_id = OwnedAgentId {
+            environment_id: component_metadata.environment_id,
+            agent_id,
+        };
+
+        // Check if worker is active first, otherwise fall back to stored metadata
+        let metadata = if let Some(worker) = self.active_workers.try_get(&owned_agent_id).await {
+            worker.get_latest_worker_metadata().await
+        } else if let Some(worker::GetWorkerMetadataResult {
+            mut initial_worker_metadata,
+            last_known_status,
+        }) = self.worker_service.get(&owned_agent_id).await
+        {
+            let status_deps = StatusDeps {
+                oplog_service: self.oplog_service.clone(),
+                config: self.config.clone(),
+            };
+            let last_known_status = calculate_last_known_status(
+                &status_deps,
+                &owned_agent_id,
+                last_known_status,
+            )
+            .await
+            .expect("Failed to calculate worker status for worker even though it is initialized");
+            initial_worker_metadata.last_known_status = last_known_status;
+            initial_worker_metadata
+        } else {
+            return Err(WorkerExecutorError::worker_not_found(
+                owned_agent_id.agent_id(),
+            ));
+        };
+
+        let should_activate = match &metadata.last_known_status.status {
+            AgentStatus::Interrupted
+            | AgentStatus::Running
+            | AgentStatus::Suspended
+            | AgentStatus::Retrying => true,
+            AgentStatus::Exited | AgentStatus::Failed | AgentStatus::Idle => false,
+        };
+
+        if should_activate {
+            self.worker_activator
+                .get_or_create_running(
+                    completed_by,
+                    &owned_agent_id,
+                    None,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
+                )
+                .await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -437,7 +534,7 @@ impl PromiseServiceMock {
 #[cfg(test)]
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
-    async fn create(&self, _worker_id: &WorkerId, _oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(&self, _agent_id: &AgentId, _oplog_idx: OplogIndex) -> PromiseId {
         unimplemented!()
     }
 

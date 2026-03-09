@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -72,11 +72,11 @@ impl FileSystemBlobStorage {
             }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
-                worker_id,
+                agent_id,
             } => {
                 result.push("oplog_payload");
                 result.push(environment_id.to_string());
-                result.push(worker_id.to_string());
+                result.push(agent_id.to_string());
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,

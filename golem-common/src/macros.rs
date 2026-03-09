@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -492,18 +492,18 @@ macro_rules! data_value {
 #[macro_export]
 macro_rules! agent_id {
     ($name:expr) => {
-        $crate::base_model::agent::AgentId::new(
+        $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             None
-        )
+        ).unwrap()
     };
     ($name:expr, $($element:expr),+ $(,)?) => {
-        $crate::base_model::agent::AgentId::new(
+        $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             None
-        )
+        ).unwrap()
     };
 }
 
@@ -522,17 +522,17 @@ macro_rules! agent_id {
 #[macro_export]
 macro_rules! phantom_agent_id {
     ($name:expr, $phantom_id:expr) => {
-        $crate::base_model::agent::AgentId::new(
+        $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             Some($phantom_id)
-        )
+        ).unwrap()
     };
     ($name:expr, $phantom_id:expr, $($element:expr),+ $(,)?) => {
-        $crate::base_model::agent::AgentId::new(
+        $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             Some($phantom_id)
-        )
+        ).unwrap()
     };
 }

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -11,8 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-import { convertVariantTypeNameToKebab } from './stringFormat';
 
 let GlobalVariantTermIdx = 0;
 
@@ -27,7 +25,7 @@ let GlobalVariantTermIdx = 0;
 //
 // If the union has a name (Ex: type MyUnion = string | number), then we simply suffix the actual name of the union
 // with the actual index (termIdx argument below) of the variant
-// That is, `MyUnion` is converted to `variant { my-union-0(string), my-union-1(number)`
+// That is, `MyUnion` is converted to `variant { MyUnion1(string), MyUnion2(number) }`
 export function generateVariantTermName(
   originalUnionName: string | undefined,
   termIdx: number,
@@ -38,9 +36,5 @@ export function generateVariantTermName(
     return `case${GlobalVariantTermIdx}`;
   }
 
-  // otherwise, convert the original union name to kebab-case and append the term index
-  // Example: type MyUnion = A | B | C
-  // generates: my-union0, my-union1, my-union2
-  const kebabCasedVariantName = convertVariantTypeNameToKebab(originalUnionName);
-  return `${kebabCasedVariantName}${termIdx}`;
+  return `${originalUnionName}${termIdx}`;
 }

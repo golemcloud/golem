@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,6 +15,7 @@
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::process::Child;
 use std::time::Duration;
 use tracing::Level;
 
@@ -29,12 +30,18 @@ pub trait ComponentCompilationService: Send + Sync {
     async fn kill(&self);
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
+async fn wait_for_startup(
+    host: &str,
+    grpc_port: u16,
+    timeout: Duration,
+    child: Option<&mut Child>,
+) {
     wait_for_startup_grpc(
         host,
         grpc_port,
         "golem-component-compilation-service",
         timeout,
+        child,
     )
     .await
 }
