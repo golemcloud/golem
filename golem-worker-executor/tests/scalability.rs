@@ -15,9 +15,9 @@
 use crate::Tracing;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::WorkerStatus;
+use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
@@ -59,8 +59,8 @@ async fn spawning_many_workers_that_sleep(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    fn agent_id(n: i32) -> AgentId {
-        agent_id!("clocks", format!("sleeping-agent-{n}"))
+    fn agent_id(n: i32) -> ParsedAgentId {
+        agent_id!("Clocks", format!("sleeping-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -114,7 +114,7 @@ async fn spawning_many_workers_that_sleep(
             {
                 spawn(async move {
                     let agent_id = agent_id(n);
-                    let _worker_id = executor_clone
+                    let _agent_id = executor_clone
                         .start_agent(&component_clone.id, agent_id.clone())
                         .await?;
 
@@ -176,8 +176,8 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    fn agent_id(n: i32) -> AgentId {
-        agent_id!("clocks", format!("sleeping-suspending-agent-{n}"))
+    fn agent_id(n: i32) -> ParsedAgentId {
+        agent_id!("Clocks", format!("sleeping-suspending-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -324,7 +324,7 @@ async fn initial_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_clone = component.clone();
-        let agent_id = agent_id!("large-initial-memory-agent", format!("mem-{i}"));
+        let agent_id = agent_id!("LargeInitialMemoryAgent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone
@@ -377,7 +377,7 @@ async fn dynamic_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_clone = component.clone();
-        let agent_id = agent_id!("large-dynamic-memory-agent", format!("mem-{i}"));
+        let agent_id = agent_id!("LargeDynamicMemoryAgent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone
@@ -409,10 +409,10 @@ async fn dynamic_large_memory_allocation(
 async fn primary_oplog_length(
     redis: &dyn golem_test_framework::components::redis::Redis,
     redis_prefix: &str,
-    worker_id: &golem_common::base_model::WorkerId,
+    agent_id: &golem_common::base_model::AgentId,
 ) -> u64 {
     let mut conn = redis.get_async_connection(0).await;
-    let key = format!("{redis_prefix}worker:oplog:{}", worker_id.to_redis_key());
+    let key = format!("{redis_prefix}worker:oplog:{}", agent_id.to_redis_key());
     redis::cmd("XLEN")
         .arg(&key)
         .query_async(&mut conn)
@@ -424,12 +424,12 @@ async fn primary_oplog_length(
 async fn wait_for_primary_oplog_empty(
     redis: &dyn golem_test_framework::components::redis::Redis,
     redis_prefix: &str,
-    worker_id: &golem_common::base_model::WorkerId,
+    agent_id: &golem_common::base_model::AgentId,
     timeout: Duration,
 ) -> bool {
     let start = tokio::time::Instant::now();
     while start.elapsed() < timeout {
-        let len = primary_oplog_length(redis, redis_prefix, worker_id).await;
+        let len = primary_oplog_length(redis, redis_prefix, agent_id).await;
         if len == 0 {
             return true;
         }
@@ -459,21 +459,21 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         .store()
         .await?;
 
-    let agent_id = agent_id!("environment", "archive-idle-1");
+    let agent_id = agent_id!("Environment", "archive-idle-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // Invoke a simple function; after it completes the worker becomes Idle
+    // Invoke a simple function; after it completes, the worker becomes Idle
     executor
         .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
         .await?;
 
     // Verify the worker is idle
     let metadata = executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
         .await?;
-    assert_eq!(metadata.status, WorkerStatus::Idle);
+    assert_eq!(metadata.status, AgentStatus::Idle);
 
     // Wait for archiving to move entries out of the primary oplog
     let redis_prefix = context.redis_prefix();
@@ -520,7 +520,7 @@ async fn oplog_archive_scheduled_when_worker_fails(
         .store()
         .await?;
 
-    let agent_id = agent_id!("golem-host-api", "archive-failed-1");
+    let agent_id = agent_id!("GolemHostApi", "archive-failed-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -537,9 +537,9 @@ async fn oplog_archive_scheduled_when_worker_fails(
 
     // Verify the worker is failed
     let metadata = executor
-        .wait_for_status(&worker_id, WorkerStatus::Failed, Duration::from_secs(15))
+        .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(15))
         .await?;
-    assert_eq!(metadata.status, WorkerStatus::Failed);
+    assert_eq!(metadata.status, AgentStatus::Failed);
 
     // Wait for archiving to move entries out of the primary oplog
     let redis_prefix = context.redis_prefix();

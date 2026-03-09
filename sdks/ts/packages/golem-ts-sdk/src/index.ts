@@ -103,7 +103,7 @@ async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
   try {
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
-    // Have to throw AgentError, as the discover-agent-types WIT function returns result<list<agent-type>, AgentError>
+    // Have to throw RuntimeError, as the discover-agent-types WIT function returns result<list<agent-type>, RuntimeError>
     if (isAgentError(e)) {
       throw e;
     } else {

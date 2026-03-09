@@ -1,10 +1,10 @@
 use crate::*;
 use golem_common::base_model::component::ComponentRevision;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
-use golem_common::model::{Timestamp, WorkerId};
+use golem_common::model::{AgentId, Timestamp};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_test_framework::dsl::TestDsl;
@@ -33,20 +33,20 @@ async fn test_connect_non_invoked_worker(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "non-invoked");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "non-invoked");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await
         .unwrap_or_else(|e| panic!("Failed to start a regular worker: {e}"));
 
     let connect_result = debug_executor
-        .connect(&worker_id)
+        .connect(&agent_id)
         .await
         .expect("Failed to connect to the worker in debug mode");
 
     drop(regular_worker_executor);
 
-    assert_eq!(connect_result.worker_id, worker_id);
+    assert_eq!(connect_result.agent_id, agent_id);
 
     Ok(())
 }
@@ -69,8 +69,8 @@ async fn test_connect_invoked_worker(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "invoked");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "invoked");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
@@ -92,9 +92,9 @@ async fn test_connect_invoked_worker(
         )
         .await?;
 
-    let connect_result = debug_executor.connect(&worker_id).await?;
+    let connect_result = debug_executor.connect(&agent_id).await?;
 
-    assert_eq!(connect_result.worker_id, worker_id);
+    assert_eq!(connect_result.agent_id, agent_id);
 
     Ok(())
 }
@@ -116,18 +116,18 @@ async fn test_connect_and_playback(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "playback");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "playback");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
     run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
         .await?;
 
-    let connect_result = debug_executor.connect(&worker_id).await?;
+    let connect_result = debug_executor.connect(&agent_id).await?;
 
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
 
@@ -135,8 +135,8 @@ async fn test_connect_and_playback(
         .playback(first_invocation_boundary, None)
         .await?;
 
-    assert_eq!(connect_result.worker_id, worker_id);
-    assert_eq!(playback_result.worker_id, worker_id);
+    assert_eq!(connect_result.agent_id, agent_id);
+    assert_eq!(playback_result.agent_id, agent_id);
     assert_eq!(playback_result.current_index, first_invocation_boundary);
 
     Ok(())
@@ -159,8 +159,8 @@ async fn test_connect_and_playback_raw(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "playback-raw");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "playback-raw");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
@@ -180,10 +180,10 @@ async fn test_connect_and_playback_raw(
         .await?;
 
     let oplogs = regular_worker_executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
         .await?;
 
-    debug_executor.connect(&worker_id).await?;
+    debug_executor.connect(&agent_id).await?;
 
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
     let fourth_invocation_boundary = nth_invocation_boundary(&oplogs, 4);
@@ -251,18 +251,18 @@ async fn test_connect_and_playback_to_middle_of_invocation(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "playback-middle");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "playback-middle");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
     run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
         .await?;
 
-    let connect_result = debug_executor.connect(&worker_id).await?;
+    let connect_result = debug_executor.connect(&agent_id).await?;
 
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
 
@@ -270,8 +270,8 @@ async fn test_connect_and_playback_to_middle_of_invocation(
 
     let playback_result = debug_executor.playback(index_in_middle, None).await?;
 
-    assert_eq!(connect_result.worker_id, worker_id);
-    assert_eq!(playback_result.worker_id, worker_id);
+    assert_eq!(connect_result.agent_id, agent_id);
+    assert_eq!(playback_result.agent_id, agent_id);
     assert_eq!(playback_result.current_index, first_invocation_boundary); // Playback should stop at the end of the invocation
 
     Ok(())
@@ -295,22 +295,22 @@ async fn test_playback_from_breakpoint(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "breakpoint");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "breakpoint");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
     run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
         .await?;
 
     let first_add_boundary = nth_invocation_boundary(&oplogs, 1);
 
     let second_add_boundary = nth_invocation_boundary(&oplogs, 2);
 
-    let connect_result = debug_executor.connect(&worker_id).await?;
+    let connect_result = debug_executor.connect(&agent_id).await?;
 
     let playback_result1 = debug_executor.playback(first_add_boundary, None).await?;
 
@@ -324,11 +324,11 @@ async fn test_playback_from_breakpoint(
 
     assert_eq!(current_index, second_add_boundary);
 
-    assert_eq!(connect_result.worker_id, worker_id);
-    assert_eq!(playback_result1.worker_id, worker_id);
+    assert_eq!(connect_result.agent_id, agent_id);
+    assert_eq!(playback_result1.agent_id, agent_id);
     assert_eq!(playback_result1.current_index, first_add_boundary);
     assert!(!playback_result1.incremental_playback);
-    assert_eq!(playback_result2.worker_id, worker_id);
+    assert_eq!(playback_result2.agent_id, agent_id);
     assert!(playback_result2.incremental_playback);
 
     Ok(())
@@ -351,31 +351,31 @@ async fn test_playback_and_rewind(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "rewind");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "rewind");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
     run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
         .await?;
 
     let first_boundary = nth_invocation_boundary(&oplogs, 1);
 
     let second_boundary = nth_invocation_boundary(&oplogs, 2);
 
-    let connect_result = debug_executor.connect(&worker_id).await?;
+    let connect_result = debug_executor.connect(&agent_id).await?;
 
     let playback_result = debug_executor.playback(second_boundary, None).await?;
 
     let rewind_result = debug_executor.rewind(first_boundary).await?;
 
-    assert_eq!(connect_result.worker_id, worker_id);
-    assert_eq!(playback_result.worker_id, worker_id);
+    assert_eq!(connect_result.agent_id, agent_id);
+    assert_eq!(playback_result.agent_id, agent_id);
     assert_eq!(playback_result.current_index, second_boundary);
-    assert_eq!(rewind_result.worker_id, worker_id);
+    assert_eq!(rewind_result.agent_id, agent_id);
     assert_eq!(rewind_result.current_index, first_boundary);
 
     Ok(())
@@ -398,33 +398,33 @@ async fn test_playback_and_fork(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "fork-source");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "fork-source");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
     run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
-        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
         .await
         .unwrap();
 
     let first_boundary = nth_invocation_boundary(&oplogs, 1);
 
-    let connect_result = debug_executor.connect(&worker_id).await?;
+    let connect_result = debug_executor.connect(&agent_id).await?;
 
     let playback_result = debug_executor.playback(first_boundary, None).await?;
 
-    let forked_repo_id = agent_id!("repository", "forked-worker");
-    let target_worker_id = WorkerId::from_agent_id(worker_id.component_id, &forked_repo_id)
+    let forked_repo_id = agent_id!("Repository", "forked-worker");
+    let target_agent_id = AgentId::from_agent_id(agent_id.component_id, &forked_repo_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let fork_result = debug_executor.fork(&target_worker_id, first_boundary).await;
+    let fork_result = debug_executor.fork(&target_agent_id, first_boundary).await;
 
     // Verify forked worker has oplog entries up to first boundary (first add only)
     let forked_oplogs = regular_worker_executor
-        .get_oplog(&target_worker_id, OplogIndex::INITIAL)
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
     let forked_oplog_len_before = forked_oplogs.len();
 
@@ -439,11 +439,11 @@ async fn test_playback_and_fork(
         .await?;
 
     let forked_oplogs_after = regular_worker_executor
-        .get_oplog(&target_worker_id, OplogIndex::INITIAL)
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
 
-    assert_eq!(connect_result.worker_id, worker_id);
-    assert_eq!(playback_result.worker_id, worker_id);
+    assert_eq!(connect_result.agent_id, agent_id);
+    assert_eq!(playback_result.agent_id, agent_id);
     assert!(fork_result.is_ok());
     assert_eq!(forked_oplog_len_before, u64::from(first_boundary) as usize);
     assert!(forked_oplogs_after.len() > forked_oplog_len_before);
@@ -468,8 +468,8 @@ async fn test_playback_with_overrides(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "overrides");
-    let worker_id = regular_worker_executor
+    let repo_id = agent_id!("Repository", "overrides");
+    let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
@@ -498,7 +498,7 @@ async fn test_playback_with_overrides(
     };
 
     // Connect in Debug mode
-    debug_executor.connect(&worker_id).await?;
+    debug_executor.connect(&agent_id).await?;
 
     // Playback until the last invocation boundary
     debug_executor
@@ -509,19 +509,19 @@ async fn test_playback_with_overrides(
         .await?;
 
     // Fork from the list boundary
-    let target_agent_id = phantom_agent_id!("repository", uuid::Uuid::new_v4(), "overrides");
-    let target_worker_id = WorkerId::from_agent_id(worker_id.component_id, &target_agent_id)
+    let target_agent_id = phantom_agent_id!("Repository", uuid::Uuid::new_v4(), "overrides");
+    let target_agent_id = AgentId::from_agent_id(agent_id.component_id, &target_agent_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let fork = debug_executor
-        .fork(&target_worker_id, workflow_result.list_boundary)
+        .fork(&target_agent_id, workflow_result.list_boundary)
         .await;
 
     assert!(fork.is_ok());
 
     // Oplogs in forked worker in regular executor
     let oplogs_in_forked_worker = regular_worker_executor
-        .get_oplog(&target_worker_id, OplogIndex::INITIAL)
+        .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
 
     let entry = oplogs_in_forked_worker.last();
@@ -563,7 +563,7 @@ fn previous_index(index: OplogIndex) -> OplogIndex {
 async fn run_repo_add_two(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    repo_id: &AgentId,
+    repo_id: &ParsedAgentId,
 ) -> anyhow::Result<()> {
     executor
         .invoke_and_await_agent(
@@ -589,7 +589,7 @@ async fn run_repo_add_two(
 async fn run_repo_workflow(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    repo_id: &AgentId,
+    repo_id: &ParsedAgentId,
 ) -> anyhow::Result<RepoWorkflowResult> {
     // Add two items
     run_repo_add_two(executor, component, repo_id).await?;
@@ -604,10 +604,10 @@ async fn run_repo_workflow(
         .invoke_and_await_agent(component, repo_id, "add", data_value!("G1002", "Mud Golem"))
         .await?;
 
-    let worker_id =
-        WorkerId::from_agent_id(component.id, repo_id).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let agent_id =
+        AgentId::from_agent_id(component.id, repo_id).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    let oplogs = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let oplogs = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
 
     let list_boundary = nth_invocation_boundary(&oplogs, 3);
     let last_add_boundary = nth_invocation_boundary(&oplogs, 4);

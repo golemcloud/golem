@@ -61,67 +61,67 @@ pub fn start_router(
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name",
+            "/v1/components/:component_id/workers/:agent_name",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/activate-plugin",
+            "/v1/components/:component_id/workers/:agent_name/activate-plugin",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/complete",
+            "/v1/components/:component_id/workers/:agent_name/complete",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/connect",
+            "/v1/components/:component_id/workers/:agent_name/connect",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/deactivate-plugin",
+            "/v1/components/:component_id/workers/:agent_name/deactivate-plugin",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/file-contents/:file_name",
+            "/v1/components/:component_id/workers/:agent_name/file-contents/:file_name",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/files/:file_name",
+            "/v1/components/:component_id/workers/:agent_name/files/:file_name",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/fork",
+            "/v1/components/:component_id/workers/:agent_name/fork",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/interrupt",
+            "/v1/components/:component_id/workers/:agent_name/interrupt",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/invocations/:idempotency_key",
+            "/v1/components/:component_id/workers/:agent_name/invocations/:idempotency_key",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/invoke",
+            "/v1/components/:component_id/workers/:agent_name/invoke",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/invoke-and-await",
+            "/v1/components/:component_id/workers/:agent_name/invoke-and-await",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/oplog",
+            "/v1/components/:component_id/workers/:agent_name/oplog",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/resume",
+            "/v1/components/:component_id/workers/:agent_name/resume",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/revert",
+            "/v1/components/:component_id/workers/:agent_name/revert",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_name/update",
+            "/v1/components/:component_id/workers/:agent_name/update",
             worker_service_api.clone(),
         )
         // Metrics

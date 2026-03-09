@@ -5,7 +5,7 @@ package golem.worker.v1;
 import "golem/common/error_body.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 
-message WorkerError {
+message AgentError {
   oneof error {
     golem.common.ErrorsBody bad_request = 1;
     golem.common.ErrorBody unauthorized = 2;

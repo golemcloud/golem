@@ -20,7 +20,7 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
-use golem_common::model::{IdempotencyKey, PromiseId, WorkerId};
+use golem_common::model::{AgentId, IdempotencyKey, PromiseId};
 use std::fmt::{Debug, Display, Formatter};
 
 pub enum GrpcError<E> {
@@ -133,12 +133,12 @@ pub fn proto_component_id_string(
         .map(|v| v.to_string())
 }
 
-pub fn proto_worker_id_string(
-    worker_id: &Option<golem_api_grpc::proto::golem::worker::WorkerId>,
+pub fn proto_agent_id_string(
+    agent_id: &Option<golem_api_grpc::proto::golem::worker::AgentId>,
 ) -> Option<String> {
-    worker_id
+    agent_id
         .clone()
-        .and_then(|v| TryInto::<WorkerId>::try_into(v).ok())
+        .and_then(|v| TryInto::<AgentId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
 
@@ -159,8 +159,8 @@ pub fn proto_promise_id_string(
         .map(|v| v.to_string())
 }
 
-pub fn proto_invocation_context_parent_worker_id_string(
+pub fn proto_invocation_context_parent_agent_id_string(
     invocation_context: &Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
 ) -> Option<String> {
-    proto_worker_id_string(&invocation_context.as_ref().and_then(|c| c.parent.clone()))
+    proto_agent_id_string(&invocation_context.as_ref().and_then(|c| c.parent.clone()))
 }

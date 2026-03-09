@@ -29,6 +29,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
     vec![AgentType {
         type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
         description: "An example agent".to_string(),
+        source_language: String::new(),
         constructor: AgentConstructor {
             name: None,
             description: "Creates an example agent instance".into(),
@@ -127,6 +128,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
         AgentType {
             type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
             description: "An example agent".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "Creates an example agent instance".into(),
@@ -178,6 +180,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
         AgentType {
             type_name: golem_common::model::agent::AgentTypeName("agent2".to_string()),
             description: "Another example agent".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "Creates another example agent instance".into(),

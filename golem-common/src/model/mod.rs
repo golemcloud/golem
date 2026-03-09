@@ -53,14 +53,14 @@ use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use self::environment::EnvironmentId;
 use self::worker::ParsedWorkerCreationLocalAgentConfigEntry;
-use crate::base_model::agent::AgentId;
+use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::model::account::AccountId;
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{
-    OplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId,
+    AgentResourceId, OplogEntry, RawSnapshotData, TimestampedUpdateDescription,
 };
 use crate::model::regions::DeletedRegions;
 use crate::{grpc_uri, SafeDisplay};
@@ -81,25 +81,25 @@ use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
 
-impl WorkerId {
-    const WORKER_ID_MAX_LENGTH: usize = 512;
+impl AgentId {
+    const AGENT_ID_MAX_LENGTH: usize = 512;
 
     pub fn from_agent_id(
         component_id: ComponentId,
-        agent_id: &AgentId,
-    ) -> Result<WorkerId, String> {
+        agent_id: &ParsedAgentId,
+    ) -> Result<AgentId, String> {
         let agent_id = agent_id.to_string();
-        if agent_id.len() > Self::WORKER_ID_MAX_LENGTH {
+        if agent_id.len() > Self::AGENT_ID_MAX_LENGTH {
             return Err(format!(
                 "Agent id is too long: {}, max length: {}, agent id: {}",
                 agent_id.len(),
-                Self::WORKER_ID_MAX_LENGTH,
+                Self::AGENT_ID_MAX_LENGTH,
                 agent_id,
             ));
         }
         Ok(Self {
             component_id,
-            worker_name: agent_id,
+            agent_id,
         })
     }
 
@@ -107,24 +107,24 @@ impl WorkerId {
         component_id: ComponentId,
         agent_id: S,
         resolver: impl AgentTypeResolver,
-    ) -> Result<WorkerId, String> {
-        Self::from_agent_id(component_id, &AgentId::parse(agent_id, resolver)?)
+    ) -> Result<AgentId, String> {
+        Self::from_agent_id(component_id, &ParsedAgentId::parse(agent_id, resolver)?)
     }
 
-    pub fn from_component_metadata_and_worker_id<S: AsRef<str>>(
+    pub fn from_component_metadata_and_agent_id<S: AsRef<str>>(
         component_id: ComponentId,
         component_metadata: &component_metadata::ComponentMetadata,
         id: S,
-    ) -> Result<WorkerId, String> {
+    ) -> Result<AgentId, String> {
         if component_metadata.is_agent() {
             Self::from_agent_id_literal(component_id, id, component_metadata)
         } else {
             let id = id.as_ref();
-            if id.len() > Self::WORKER_ID_MAX_LENGTH {
+            if id.len() > Self::AGENT_ID_MAX_LENGTH {
                 return Err(format!(
                     "Legacy worker id is too long: {}, max length: {}, worker id: {}",
                     id.len(),
-                    Self::WORKER_ID_MAX_LENGTH,
+                    Self::AGENT_ID_MAX_LENGTH,
                     id,
                 ));
             }
@@ -135,40 +135,40 @@ impl WorkerId {
                 ));
             }
 
-            Ok(WorkerId {
+            Ok(AgentId {
                 component_id,
-                worker_name: id.to_string(),
+                agent_id: id.to_string(),
             })
         }
     }
 
-    pub fn from_worker_name_string<S: AsRef<str>>(
+    pub fn from_agent_name_string<S: AsRef<str>>(
         component_id: ComponentId,
         id: S,
-    ) -> Result<WorkerId, String> {
+    ) -> Result<AgentId, String> {
         let id = id.as_ref();
 
-        match AgentId::normalize_text(id) {
+        match ParsedAgentId::normalize_text(id) {
             Ok(normalized) => {
-                if normalized.len() > Self::WORKER_ID_MAX_LENGTH {
+                if normalized.len() > Self::AGENT_ID_MAX_LENGTH {
                     return Err(format!(
                         "Agent id is too long: {}, max length: {}, agent id: {}",
                         normalized.len(),
-                        Self::WORKER_ID_MAX_LENGTH,
+                        Self::AGENT_ID_MAX_LENGTH,
                         normalized,
                     ));
                 }
-                Ok(WorkerId {
+                Ok(AgentId {
                     component_id,
-                    worker_name: normalized,
+                    agent_id: normalized,
                 })
             }
             Err(_) => {
-                if id.len() > Self::WORKER_ID_MAX_LENGTH {
+                if id.len() > Self::AGENT_ID_MAX_LENGTH {
                     return Err(format!(
                         "Legacy worker id is too long: {}, max length: {}, worker id: {}",
                         id.len(),
-                        Self::WORKER_ID_MAX_LENGTH,
+                        Self::AGENT_ID_MAX_LENGTH,
                         id,
                     ));
                 }
@@ -178,9 +178,9 @@ impl WorkerId {
                         id,
                     ));
                 }
-                Ok(WorkerId {
+                Ok(AgentId {
                     component_id,
-                    worker_name: id.to_string(),
+                    agent_id: id.to_string(),
                 })
             }
         }
@@ -251,24 +251,24 @@ impl BinaryDeserializer for Timestamp {
     }
 }
 
-/// Associates a worker-id with its owner project
+/// Associates an agent-id with its owner project
 #[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 #[desert(evolution())]
-pub struct OwnedWorkerId {
+pub struct OwnedAgentId {
     pub environment_id: EnvironmentId,
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
 }
 
-impl OwnedWorkerId {
-    pub fn new(environment_id: EnvironmentId, worker_id: &WorkerId) -> Self {
+impl OwnedAgentId {
+    pub fn new(environment_id: EnvironmentId, agent_id: &AgentId) -> Self {
         Self {
             environment_id,
-            worker_id: worker_id.clone(),
+            agent_id: agent_id.clone(),
         }
     }
 
-    pub fn worker_id(&self) -> WorkerId {
-        self.worker_id.clone()
+    pub fn agent_id(&self) -> AgentId {
+        self.agent_id.clone()
     }
 
     pub fn environment_id(&self) -> EnvironmentId {
@@ -276,23 +276,23 @@ impl OwnedWorkerId {
     }
 
     pub fn component_id(&self) -> ComponentId {
-        self.worker_id.component_id
+        self.agent_id.component_id
     }
 
-    pub fn worker_name(&self) -> String {
-        self.worker_id.worker_name.clone()
+    pub fn agent_name(&self) -> String {
+        self.agent_id.agent_id.clone()
     }
 }
 
-impl Display for OwnedWorkerId {
+impl Display for OwnedAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.environment_id(), self.worker_id)
+        write!(f, "{}/{}", self.environment_id(), self.agent_id)
     }
 }
 
-impl AsRef<WorkerId> for OwnedWorkerId {
-    fn as_ref(&self) -> &WorkerId {
-        &self.worker_id
+impl AsRef<AgentId> for OwnedAgentId {
+    fn as_ref(&self) -> &AgentId {
+        &self.agent_id
     }
 }
 
@@ -311,7 +311,7 @@ pub enum ScheduledAction {
     /// a next action to archive the next layer.
     ArchiveOplog {
         account_id: AccountId,
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         last_oplog_index: OplogIndex,
         next_after: Duration,
     },
@@ -319,25 +319,21 @@ pub enum ScheduledAction {
     /// be persisted in the oplog when it's actually getting scheduled.
     Invoke {
         account_id: AccountId,
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         invocation: Box<AgentInvocation>,
     },
 }
 
 impl ScheduledAction {
-    pub fn owned_worker_id(&self) -> OwnedWorkerId {
+    pub fn owned_agent_id(&self) -> OwnedAgentId {
         match self {
             ScheduledAction::CompletePromise {
                 environment_id,
                 promise_id,
                 ..
-            } => OwnedWorkerId::new(*environment_id, &promise_id.worker_id),
-            ScheduledAction::ArchiveOplog {
-                owned_worker_id, ..
-            } => owned_worker_id.clone(),
-            ScheduledAction::Invoke {
-                owned_worker_id, ..
-            } => owned_worker_id.clone(),
+            } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
+            ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
+            ScheduledAction::Invoke { owned_agent_id, .. } => owned_agent_id.clone(),
         }
     }
 }
@@ -348,14 +344,10 @@ impl Display for ScheduledAction {
             ScheduledAction::CompletePromise { promise_id, .. } => {
                 write!(f, "complete[{promise_id}]")
             }
-            ScheduledAction::ArchiveOplog {
-                owned_worker_id, ..
-            } => {
-                write!(f, "archive[{owned_worker_id}]")
+            ScheduledAction::ArchiveOplog { owned_agent_id, .. } => {
+                write!(f, "archive[{owned_agent_id}]")
             }
-            ScheduledAction::Invoke {
-                owned_worker_id, ..
-            } => write!(f, "invoke[{owned_worker_id}]"),
+            ScheduledAction::Invoke { owned_agent_id, .. } => write!(f, "invoke[{owned_agent_id}]"),
         }
     }
 }
@@ -403,9 +395,9 @@ pub struct RoutingTable {
 }
 
 impl RoutingTable {
-    pub fn lookup(&self, worker_id: &WorkerId) -> Option<&Pod> {
-        self.shard_assignments.get(&ShardId::from_worker_id(
-            &worker_id.clone(),
+    pub fn lookup(&self, agent_id: &AgentId) -> Option<&Pod> {
+        self.shard_assignments.get(&ShardId::from_agent_id(
+            &agent_id.clone(),
             self.number_of_shards.value,
         ))
     }
@@ -489,27 +481,27 @@ impl Display for ShardAssignment {
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub struct WorkerMetadata {
-    pub worker_id: WorkerId,
+pub struct AgentMetadata {
+    pub agent_id: AgentId,
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub config_vars: BTreeMap<String, String>,
     pub local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
     pub created_at: Timestamp,
-    pub parent: Option<WorkerId>,
-    pub last_known_status: WorkerStatusRecord,
+    pub parent: Option<AgentId>,
+    pub last_known_status: AgentStatusRecord,
     pub original_phantom_id: Option<Uuid>,
 }
 
-impl WorkerMetadata {
+impl AgentMetadata {
     pub fn default(
-        worker_id: WorkerId,
+        agent_id: AgentId,
         created_by: AccountId,
         environment_id: EnvironmentId,
-    ) -> WorkerMetadata {
-        WorkerMetadata {
-            worker_id,
+    ) -> AgentMetadata {
+        AgentMetadata {
+            agent_id,
             env: vec![],
             environment_id,
             created_by,
@@ -517,27 +509,27 @@ impl WorkerMetadata {
             local_agent_config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
-            last_known_status: WorkerStatusRecord::default(),
+            last_known_status: AgentStatusRecord::default(),
             original_phantom_id: None,
         }
     }
 
-    pub fn owned_worker_id(&self) -> OwnedWorkerId {
-        OwnedWorkerId::new(self.environment_id, &self.worker_id)
+    pub fn owned_agent_id(&self) -> OwnedAgentId {
+        OwnedAgentId::new(self.environment_id, &self.agent_id)
     }
 }
 
-impl WorkerFilter {
-    pub fn matches(&self, metadata: &WorkerMetadata) -> bool {
+impl AgentFilter {
+    pub fn matches(&self, metadata: &AgentMetadata) -> bool {
         match self.clone() {
-            WorkerFilter::Name(WorkerNameFilter { comparator, value }) => {
-                comparator.matches(&metadata.worker_id.worker_name, &value)
+            AgentFilter::Name(AgentNameFilter { comparator, value }) => {
+                comparator.matches(&metadata.agent_id.agent_id, &value)
             }
-            WorkerFilter::Revision(WorkerRevisionFilter { comparator, value }) => {
+            AgentFilter::Revision(AgentRevisionFilter { comparator, value }) => {
                 let revision: ComponentRevision = metadata.last_known_status.component_revision;
                 comparator.matches(&revision, &value)
             }
-            WorkerFilter::Env(WorkerEnvFilter {
+            AgentFilter::Env(AgentEnvFilter {
                 name,
                 comparator,
                 value,
@@ -553,7 +545,7 @@ impl WorkerFilter {
                 }
                 result
             }
-            WorkerFilter::ConfigVars(WorkerConfigVarsFilter {
+            AgentFilter::ConfigVars(AgentConfigVarsFilter {
                 name,
                 comparator,
                 value,
@@ -563,14 +555,14 @@ impl WorkerFilter {
                     .map(|ev| comparator.matches(ev, &value))
                     .unwrap_or(false)
             }
-            WorkerFilter::CreatedAt(WorkerCreatedAtFilter { comparator, value }) => {
+            AgentFilter::CreatedAt(AgentCreatedAtFilter { comparator, value }) => {
                 comparator.matches(&metadata.created_at, &value)
             }
-            WorkerFilter::Status(WorkerStatusFilter { comparator, value }) => {
+            AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
                 comparator.matches(&metadata.last_known_status.status, &value)
             }
-            WorkerFilter::Not(WorkerNotFilter { filter }) => !filter.matches(metadata),
-            WorkerFilter::And(WorkerAndFilter { filters }) => {
+            AgentFilter::Not(AgentNotFilter { filter }) => !filter.matches(metadata),
+            AgentFilter::And(AgentAndFilter { filters }) => {
                 let mut result = true;
                 for filter in filters {
                     if !filter.matches(metadata) {
@@ -580,7 +572,7 @@ impl WorkerFilter {
                 }
                 result
             }
-            WorkerFilter::Or(WorkerOrFilter { filters }) => {
+            AgentFilter::Or(AgentOrFilter { filters }) => {
                 let mut result = true;
                 if !filters.is_empty() {
                     result = false;
@@ -682,8 +674,8 @@ impl SafeDisplay for RetryConfig {
 /// tail of the oplog to determine the actual status of the worker.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub struct WorkerStatusRecord {
-    pub status: WorkerStatus,
+pub struct AgentStatusRecord {
+    pub status: AgentStatus,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<TimestampedAgentInvocation>,
@@ -695,7 +687,7 @@ pub struct WorkerStatusRecord {
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
+    pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
     pub active_plugins: HashSet<PluginPriority>,
     pub deleted_regions: DeletedRegions,
@@ -708,10 +700,10 @@ pub struct WorkerStatusRecord {
     pub last_snapshot_index: Option<OplogIndex>,
 }
 
-impl Default for WorkerStatusRecord {
+impl Default for AgentStatusRecord {
     fn default() -> Self {
-        WorkerStatusRecord {
-            status: WorkerStatus::Idle,
+        AgentStatusRecord {
+            status: AgentStatus::Idle,
             skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
@@ -1161,7 +1153,7 @@ impl Display for LogLevel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum WorkerEvent {
+pub enum AgentEvent {
     StdOut {
         timestamp: Timestamp,
         bytes: Vec<u8>,
@@ -1191,24 +1183,24 @@ pub enum WorkerEvent {
     ClientLagged { number_of_missed_messages: u64 },
 }
 
-impl Display for WorkerEvent {
+impl Display for AgentEvent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerEvent::StdOut { bytes, .. } => {
+            AgentEvent::StdOut { bytes, .. } => {
                 write!(
                     f,
                     "<stdout> {}",
                     String::from_utf8(bytes.clone()).unwrap_or_default()
                 )
             }
-            WorkerEvent::StdErr { bytes, .. } => {
+            AgentEvent::StdErr { bytes, .. } => {
                 write!(
                     f,
                     "<stderr> {}",
                     String::from_utf8(bytes.clone()).unwrap_or_default()
                 )
             }
-            WorkerEvent::Log {
+            AgentEvent::Log {
                 level,
                 context,
                 message,
@@ -1216,21 +1208,21 @@ impl Display for WorkerEvent {
             } => {
                 write!(f, "<log> {level:?} {context} {message}")
             }
-            WorkerEvent::InvocationStart {
+            AgentEvent::InvocationStart {
                 function,
                 idempotency_key,
                 ..
             } => {
                 write!(f, "<invocation-start> {function} {idempotency_key}")
             }
-            WorkerEvent::InvocationFinished {
+            AgentEvent::InvocationFinished {
                 function,
                 idempotency_key,
                 ..
             } => {
                 write!(f, "<invocation-finished> {function} {idempotency_key}")
             }
-            WorkerEvent::ClientLagged {
+            AgentEvent::ClientLagged {
                 number_of_missed_messages,
             } => {
                 write!(f, "<client-lagged> {number_of_missed_messages}")
@@ -1288,20 +1280,20 @@ impl poem_openapi::types::ParseFromJSON for UntypedJsonBody {
     }
 }
 
-impl From<WorkerId> for golem_wasm::AgentId {
-    fn from(worker_id: WorkerId) -> Self {
+impl From<AgentId> for golem_wasm::AgentId {
+    fn from(agent_id: AgentId) -> Self {
         golem_wasm::AgentId {
-            component_id: worker_id.component_id.into(),
-            agent_id: worker_id.worker_name,
+            component_id: agent_id.component_id.into(),
+            agent_id: agent_id.agent_id,
         }
     }
 }
 
-impl From<golem_wasm::AgentId> for WorkerId {
+impl From<golem_wasm::AgentId> for AgentId {
     fn from(host: golem_wasm::AgentId) -> Self {
         Self {
             component_id: host.component_id.into(),
-            worker_name: host.agent_id,
+            agent_id: host.agent_id,
         }
     }
 }
@@ -1309,7 +1301,7 @@ impl From<golem_wasm::AgentId> for WorkerId {
 impl From<PromiseId> for golem_wasm::PromiseId {
     fn from(promise_id: PromiseId) -> Self {
         golem_wasm::PromiseId {
-            agent_id: promise_id.worker_id.into(),
+            agent_id: promise_id.agent_id.into(),
             oplog_idx: promise_id.oplog_idx.into(),
         }
     }
@@ -1318,7 +1310,7 @@ impl From<PromiseId> for golem_wasm::PromiseId {
 impl From<golem_wasm::PromiseId> for PromiseId {
     fn from(host: golem_wasm::PromiseId) -> Self {
         Self {
-            worker_id: host.agent_id.into(),
+            agent_id: host.agent_id.into(),
             oplog_idx: OplogIndex::from_u64(host.oplog_idx),
         }
     }

@@ -12,16 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { convertTypeNameToKebab } from './internal/mapping/types/stringFormat';
-
 export class AgentClassName {
   readonly value: string;
-  readonly asWit: string;
 
   constructor(agentClassName: string) {
     validateAgentClassName(agentClassName);
     this.value = agentClassName;
-    this.asWit = convertTypeNameToKebab(agentClassName);
   }
 }
 

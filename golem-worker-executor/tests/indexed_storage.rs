@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::component::ComponentId;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
@@ -184,15 +184,15 @@ struct IndexedStorageNamespaces {
 fn ns() -> IndexedStorageNamespaces {
     IndexedStorageNamespaces {
         ns: IndexedStorageNamespace::OpLog {
-            worker_id: WorkerId {
+            agent_id: AgentId {
                 component_id: ComponentId::new(),
-                worker_name: "test".to_string(),
+                agent_id: "test".to_string(),
             },
         },
         ns_other: IndexedStorageNamespace::OpLog {
-            worker_id: WorkerId {
+            agent_id: AgentId {
                 component_id: ComponentId::new(),
-                worker_name: "test2".to_string(),
+                agent_id: "test2".to_string(),
             },
         },
         meta: IndexedStorageMetaNamespace::Oplog,
@@ -203,16 +203,16 @@ fn ns() -> IndexedStorageNamespaces {
 fn ns2() -> IndexedStorageNamespaces {
     IndexedStorageNamespaces {
         ns: IndexedStorageNamespace::CompressedOpLog {
-            worker_id: WorkerId {
+            agent_id: AgentId {
                 component_id: ComponentId::new(),
-                worker_name: "test".to_string(),
+                agent_id: "test".to_string(),
             },
             level: 1,
         },
         ns_other: IndexedStorageNamespace::CompressedOpLog {
-            worker_id: WorkerId {
+            agent_id: AgentId {
                 component_id: ComponentId::new(),
-                worker_name: "test2".to_string(),
+                agent_id: "test2".to_string(),
             },
             level: 1,
         },

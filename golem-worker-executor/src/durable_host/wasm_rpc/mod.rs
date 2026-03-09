@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
@@ -45,7 +44,7 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
 use golem_common::model::{
-    AgentInvocation, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
+    AgentId, AgentInvocation, IdempotencyKey, OplogIndex, OwnedAgentId, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_wasm::{CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, WasmRpcEntry};
@@ -70,7 +69,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
-        crate::model::WorkerConfig::remove_dynamic_vars(&mut env);
+        crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let config_vars = self.state.config_vars.clone();
 
@@ -87,19 +86,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         )
         .map_err(|err| anyhow::anyhow!("Invalid constructor input: {err}"))?;
 
-        let agent_id = golem_common::model::agent::AgentId::new(
-            golem_common::model::agent::AgentTypeName(agent_type_name).to_wit_naming(),
+        let agent_id = golem_common::model::agent::ParsedAgentId::new(
+            golem_common::model::agent::AgentTypeName(agent_type_name),
             input,
             phantom_id.map(|id| id.into()),
-        );
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let component_id: golem_common::model::component::ComponentId =
             agent_type.implemented_by.into();
-        let remote_worker_id =
-            golem_common::model::WorkerId::from_agent_id(component_id, &agent_id)
-                .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let remote_agent_id = golem_common::model::AgentId::from_agent_id(component_id, &agent_id)
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
 
-        construct_wasm_rpc_resource(self, remote_worker_id, &env, config_vars).await
+        construct_wasm_rpc_resource(self, remote_agent_id, &env, config_vars).await
     }
 
     async fn invoke_and_await(
@@ -112,17 +111,17 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     > {
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
-        crate::model::WorkerConfig::remove_dynamic_vars(&mut env);
+        crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let config_vars = self.state.config_vars.clone();
-        let own_worker_id = self.owned_worker_id().clone();
+        let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let remote_worker_id = payload.remote_worker_id.clone();
+        let remote_agent_id = payload.remote_agent_id.clone();
         let connection_span_id = payload.span_id.clone();
 
-        if remote_worker_id == own_worker_id {
+        if remote_agent_id == own_agent_id {
             return Err(anyhow::anyhow!(
                 "RPC calls to the same agent are not supported"
             ));
@@ -149,7 +148,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let result = if durability.is_live() {
             let request = HostRequestGolemRpcInvoke {
-                remote_worker_id: remote_worker_id.worker_id(),
+                remote_agent_id: remote_agent_id.agent_id(),
                 idempotency_key: idempotency_key.clone(),
                 method_name: method_name.clone(),
                 input: input_untyped.clone(),
@@ -168,16 +167,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .create_await_interrupt_signal();
             let rpc = self.rpc();
             let created_by = self.created_by();
-            let worker_id = self.worker_id().clone();
+            let agent_id = self.agent_id().clone();
 
             let either_result = futures::future::select(
                 rpc.invoke_and_await(
-                    &remote_worker_id,
+                    &remote_agent_id,
                     Some(idempotency_key),
                     method_name,
                     input_untyped,
                     created_by,
-                    &worker_id,
+                    &agent_id,
                     &env,
                     config_vars,
                     stack,
@@ -230,17 +229,17 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), RpcError>> {
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
-        crate::model::WorkerConfig::remove_dynamic_vars(&mut env);
+        crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let config_vars = self.state.config_vars.clone();
-        let own_worker_id = self.owned_worker_id().clone();
+        let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let remote_worker_id = payload.remote_worker_id.clone();
+        let remote_agent_id = payload.remote_agent_id.clone();
         let connection_span_id = payload.span_id.clone();
 
-        if remote_worker_id == own_worker_id {
+        if remote_agent_id == own_agent_id {
             return Err(anyhow::anyhow!(
                 "RPC calls to the same agent are not supported"
             ));
@@ -265,7 +264,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let result = if durability.is_live() {
             let request = HostRequestGolemRpcInvoke {
-                remote_worker_id: remote_worker_id.worker_id(),
+                remote_agent_id: remote_agent_id.agent_id(),
                 idempotency_key: idempotency_key.clone(),
                 method_name: method_name.clone(),
                 input: input_untyped.clone(),
@@ -279,12 +278,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let result = self
                 .rpc()
                 .invoke(
-                    &remote_worker_id,
+                    &remote_agent_id,
                     Some(idempotency_key),
                     method_name,
                     input_untyped,
                     self.created_by(),
-                    self.worker_id(),
+                    self.agent_id(),
                     &env,
                     config_vars,
                     stack,
@@ -320,10 +319,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         let mut env =
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
-        crate::model::WorkerConfig::remove_dynamic_vars(&mut env);
+        crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
         let config_vars = self.state.config_vars.clone();
-        let own_worker_id = self.owned_worker_id().clone();
+        let own_agent_id = self.owned_agent_id().clone();
 
         let begin_index = self
             .begin_function(&DurableFunctionType::WriteRemote)
@@ -331,10 +330,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-        let remote_worker_id = payload.remote_worker_id.clone();
+        let remote_agent_id = payload.remote_agent_id.clone();
         let connection_span_id = payload.span_id.clone();
 
-        if remote_worker_id == own_worker_id {
+        if remote_agent_id == own_agent_id {
             return Err(anyhow::anyhow!(
                 "RPC calls to the same agent are not supported"
             ));
@@ -353,10 +352,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let input_untyped: UntypedDataValue = input.into();
 
-        let worker_id = self.worker_id().clone();
+        let agent_id = self.agent_id().clone();
         let created_by = self.created_by();
         let request = HostRequestGolemRpcInvoke {
-            remote_worker_id: remote_worker_id.worker_id(),
+            remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
             method_name: method_name.clone(),
             input: input_untyped.clone(),
@@ -374,12 +373,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 async move {
                     Ok(rpc
                         .invoke_and_await(
-                            &remote_worker_id,
+                            &remote_agent_id,
                             Some(idempotency_key),
                             method_name,
                             input_untyped,
                             created_by,
-                            &worker_id,
+                            &agent_id,
                             &env,
                             config_vars,
                             stack,
@@ -401,8 +400,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         } else {
             let fut = self.table().push(FutureInvokeResultEntry {
                 payload: Box::new(FutureInvokeResultState::Deferred {
-                    remote_worker_id,
-                    self_worker_id: worker_id,
+                    remote_agent_id,
+                    self_agent_id: agent_id,
                     self_created_by: created_by,
                     env,
                     wasi_config_vars: config_vars,
@@ -454,7 +453,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let result = if durability.is_live() {
             let entry = self.table().get(&this)?;
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
-            let remote_worker_id = payload.remote_worker_id.clone();
+            let remote_agent_id = payload.remote_agent_id.clone();
 
             let input_untyped: UntypedDataValue = input.into();
 
@@ -469,7 +468,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
 
             let request = HostRequestGolemRpcScheduledInvocation {
-                remote_worker_id: remote_worker_id.worker_id(),
+                remote_agent_id: remote_agent_id.agent_id(),
                 idempotency_key: idempotency_key.clone(),
                 method_name: method_name.clone(),
                 input: input_untyped.clone(),
@@ -485,7 +484,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
             let action = ScheduledAction::Invoke {
                 account_id: self.created_by(),
-                owned_worker_id: remote_worker_id,
+                owned_agent_id: remote_agent_id,
                 invocation: Box::new(AgentInvocation::AgentMethod {
                     idempotency_key,
                     method_name,
@@ -674,8 +673,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         async move {
                             let request = rx.await.map_err(|err| anyhow::anyhow!(err))?;
                             let FutureInvokeResultState::Deferred {
-                                remote_worker_id,
-                                self_worker_id,
+                                remote_agent_id,
+                                self_agent_id,
                                 self_created_by,
                                 env,
                                 wasi_config_vars: config_vars,
@@ -691,12 +690,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             };
                             Ok(rpc
                                 .invoke_and_await(
-                                    &remote_worker_id,
+                                    &remote_agent_id,
                                     Some(idempotency_key),
                                     method_name,
                                     method_parameters,
                                     self_created_by,
-                                    &self_worker_id,
+                                    &self_agent_id,
                                     &env,
                                     config_vars,
                                     stack,
@@ -706,7 +705,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         .in_current_span(),
                     );
                     let FutureInvokeResultState::Deferred {
-                        remote_worker_id,
+                        remote_agent_id,
                         method_name,
                         method_parameters,
                         idempotency_key,
@@ -717,7 +716,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         return Err(anyhow::anyhow!("unexpected state entry".to_string()));
                     };
                     let request = HostRequestGolemRpcInvoke {
-                        remote_worker_id: remote_worker_id.worker_id(),
+                        remote_agent_id: remote_agent_id.agent_id(),
                         idempotency_key: idempotency_key.clone(),
                         method_name: method_name.clone(),
                         input: method_parameters.clone(),
@@ -928,25 +927,24 @@ impl<Ctx: WorkerCtx> golem_wasm::Host for DurableWorkerCtx<Ctx> {
 
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_worker_id: WorkerId,
+    remote_agent_id: AgentId,
     env: &[(String, String)],
     config: std::collections::BTreeMap<String, String>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
+    let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
 
     let stack = ctx
         .state
         .invocation_context
         .clone_as_inherited_stack(span.span_id());
 
-    let remote_worker_id =
-        OwnedWorkerId::new(ctx.owned_worker_id.environment_id, &remote_worker_id);
+    let remote_agent_id = OwnedAgentId::new(ctx.owned_agent_id.environment_id, &remote_agent_id);
     let demand = ctx
         .rpc()
         .create_demand(
-            &remote_worker_id,
+            &remote_agent_id,
             ctx.created_by(),
-            ctx.worker_id(),
+            ctx.agent_id(),
             env,
             config,
             stack,
@@ -955,7 +953,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             demand,
-            remote_worker_id,
+            remote_agent_id,
             span_id: span.span_id().clone(),
         }),
     })?;
@@ -965,21 +963,21 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 pub struct WasmRpcEntryPayload {
     #[allow(dead_code)]
     pub demand: Box<dyn RpcDemand>,
-    pub remote_worker_id: OwnedWorkerId,
+    pub remote_agent_id: OwnedAgentId,
     pub span_id: SpanId,
 }
 
 impl Debug for WasmRpcEntryPayload {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WasmRpcEntryPayload")
-            .field("remote_worker_id", &self.remote_worker_id)
+            .field("remote_agent_id", &self.remote_agent_id)
             .finish()
     }
 }
 
 pub async fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
     ctx: &mut Ctx,
-    target_worker_id: &WorkerId,
+    target_agent_id: &AgentId,
 ) -> anyhow::Result<Arc<InvocationContextSpan>> {
     Ok(ctx
         .start_span(
@@ -989,8 +987,8 @@ pub async fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
                     AttributeValue::String("rpc-connection".to_string()),
                 ),
                 (
-                    "target_worker_id".to_string(),
-                    AttributeValue::String(target_worker_id.to_string()),
+                    "target_agent_id".to_string(),
+                    AttributeValue::String(target_agent_id.to_string()),
                 ),
             ],
             false,
@@ -1040,8 +1038,8 @@ enum FutureInvokeResultState {
         begin_index: OplogIndex,
     },
     Deferred {
-        remote_worker_id: OwnedWorkerId,
-        self_worker_id: WorkerId,
+        remote_agent_id: OwnedAgentId,
+        self_agent_id: AgentId,
         self_created_by: AccountId,
         env: Vec<(String, String)>,
         wasi_config_vars: BTreeMap<String, String>,

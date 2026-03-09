@@ -18,7 +18,7 @@ use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::SafeDisplay;
 use golem_common::model::RetryConfig;
-use golem_common::model::{Pod, ShardId, WorkerId};
+use golem_common::model::{AgentId, Pod, ShardId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -33,7 +33,7 @@ use tokio::time::{Instant, sleep};
 use tonic::Status;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{Instrument, debug, info, trace, warn};
 
 #[async_trait]
 pub trait RoutingLogic {
@@ -86,7 +86,7 @@ pub trait CallOnExecutor<Out: Send + 'static> {
 }
 
 #[async_trait]
-impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
+impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
     type ResultOut = Out;
 
     async fn call_on_worker_executor<F>(
@@ -135,7 +135,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
     }
 
     fn tracing_kind(&self) -> &'static str {
-        "WorkerId"
+        "AgentId"
     }
 }
 
@@ -297,8 +297,8 @@ impl From<WorkerExecutorError> for ResponseMapResult {
                 shard_ids: HashSet::from_iter(shard_ids),
             },
             WorkerExecutorError::ShardingNotReady => ResponseMapResult::ShardingNotReady,
-            WorkerExecutorError::WorkerNotFound { .. }
-            | WorkerExecutorError::WorkerAlreadyExists { .. } => {
+            WorkerExecutorError::AgentNotFound { .. }
+            | WorkerExecutorError::AgentAlreadyExists { .. } => {
                 ResponseMapResult::Expected(error.into())
             }
             other => ResponseMapResult::Other(other.into()),
@@ -560,7 +560,7 @@ impl<'a> RetryState<'a> {
         error: WorkerServiceError,
         pod: &Option<Pod>,
     ) -> Result<Option<T>, WorkerServiceError> {
-        error!(
+        info!(
             error = error.to_string(),
             pod = format_pod(pod),
             op = self.op,

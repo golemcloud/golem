@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use golem_common::model::ScanCursor;
-use golem_common::model::worker::WorkerMetadataDto;
+use golem_common::model::worker::AgentMetadataDto;
 use poem_openapi::Object;
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 pub struct WorkersMetadataResponse {
-    pub workers: Vec<WorkerMetadataDto>,
+    pub workers: Vec<AgentMetadataDto>,
     pub cursor: Option<ScanCursor>,
 }
