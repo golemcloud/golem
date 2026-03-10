@@ -9,8 +9,8 @@
 app: agent-self-rpc
 
 includes:
-- common-*/golem.yaml
 - components-*/*/golem.yaml
+- ../golem-test-components-common.yaml
 
 environments:
   local:
