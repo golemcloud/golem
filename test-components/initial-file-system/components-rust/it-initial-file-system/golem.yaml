@@ -8,4 +8,4 @@
 
 components:
   it:initial-file-system:
-    templates: rust
+    templates: rust, rust-test-component
