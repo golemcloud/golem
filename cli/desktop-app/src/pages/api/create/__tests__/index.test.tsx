@@ -367,9 +367,12 @@ describe("CreateAPI", () => {
       renderCreateAPI();
       const user = userEvent.setup();
 
-      // Manually set the form data to what the test expects
-      sharedFormData.apiName = "test_api";
-      sharedFormData.version = "1.0.0";
+      // Use userEvent.type to fill the form to avoid race conditions
+      // with sharedFormData on Windows CI
+      const apiNameInput = screen.getByPlaceholderText(
+        "Must be unique per project",
+      );
+      await user.type(apiNameInput, "test_api");
 
       const submitButton = screen.getByText("Create API");
       await user.click(submitButton);
