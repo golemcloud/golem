@@ -585,11 +585,6 @@ impl WorkerCommandHandler {
             .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
         let agent_name = RawAgentId(agent_id.to_string());
 
-        let agent_name_match = self.match_agent_name(agent_name).await?;
-        let (_component, agent_name) = self
-            .component_by_agent_name_match(&agent_name_match)
-            .await?;
-
         let connection = WorkerConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
