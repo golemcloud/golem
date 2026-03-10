@@ -1,6 +1,6 @@
 {
   "name": "golemcloud/golem_sdk_example1",
-  "version": "1.4.0",
+  "version": "0.4.0",
   "readme": "README.mbt.md",
   "repository": "",
   "license": "Apache-2.0",
@@ -8,9 +8,9 @@
   "description": "",
   "preferred-target": "wasm",
   "deps": {
-    "golemcloud/golem_sdk": "1.4.0"
+    "golemcloud/golem_sdk": "0.4.0"
   },
   "bin-deps": {
-    "golemcloud/golem_sdk_tools": "1.4.0"
+    "golemcloud/golem_sdk_tools": "0.4.0"
   }
 }

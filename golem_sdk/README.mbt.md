@@ -38,7 +38,7 @@ Copy the [`golem_sdk_example1`](https://github.com/golemcloud/moonbit-sdk/tree/m
 
 After these changes, run `moon install` to download dependencies, then `golem build` to build.
 
-**The MoonBit Golem SDK 1.4.0 is ONLY compatible with Golem 1.4.2**
+**The MoonBit Golem SDK 0.4.x is ONLY compatible with Golem 1.4.x**
 
 ### 1. Define an agent
 
