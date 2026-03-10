@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
+    DurabilityHost, DurableWorkerCtx, HttpOutputStreamState, HttpRequestCloseOwner,
+    HttpRequestState,
 };
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use golem_common::model::invocation_context::AttributeValue;
@@ -114,6 +115,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         }
 
+        let request_rep = request.rep();
+
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
 
         match &result {
@@ -133,11 +136,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     HttpRequestState {
                         close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
                         begin_index,
-                        request,
+                        request: request.clone(),
                         span_id: span.span_id().clone(),
                         body_handle: None,
                     },
                 );
+
+                // Track the outgoing body for durable output stream operations.
+                // outgoing_request::body() recorded request_rep → body_rep;
+                // now we resolve body_rep and associate it with begin_index + request.
+                if let Some(body_rep) = self
+                    .state
+                    .pending_http_outgoing_request_body
+                    .remove(&request_rep)
+                {
+                    self.state.pending_http_outgoing_body.insert(
+                        body_rep,
+                        HttpOutputStreamState {
+                            begin_index,
+                            request,
+                        },
+                    );
+                }
             }
             Err(err) => {
                 tracing::error!("!!! ERROR FROM handle(): {err:?}");

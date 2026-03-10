@@ -497,18 +497,16 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     );
 
     let http_connection_pool = match &golem_config.http_client {
-        HttpClientConfig::Enabled(config) => {
-            Some(wasmtime_wasi_http::HttpConnectionPool::new(
-                wasmtime_wasi_http::HttpConnectionPoolConfig {
-                    max_idle_per_host: config.max_idle_per_host,
-                    idle_timeout: config.idle_timeout,
-                    connect_timeout: config.connect_timeout,
-                    max_connections_per_host: config.max_connections_per_host,
-                    max_total_connections: config.max_total_connections,
-                    max_host_entries: config.max_host_entries,
-                },
-            ))
-        }
+        HttpClientConfig::Enabled(config) => Some(wasmtime_wasi_http::HttpConnectionPool::new(
+            wasmtime_wasi_http::HttpConnectionPoolConfig {
+                max_idle_per_host: config.max_idle_per_host,
+                idle_timeout: config.idle_timeout,
+                connect_timeout: config.connect_timeout,
+                max_connections_per_host: config.max_connections_per_host,
+                max_total_connections: config.max_total_connections,
+                max_host_entries: config.max_host_entries,
+            },
+        )),
         HttpClientConfig::Disabled(_) => None,
     };
     let golem_config = Arc::new(golem_config);

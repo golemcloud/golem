@@ -178,7 +178,15 @@ impl<Ctx: WorkerCtx> HostOutgoingRequest for DurableWorkerCtx<Ctx> {
         self_: Resource<OutgoingRequest>,
     ) -> wasmtime::Result<Result<Resource<OutgoingBody>, ()>> {
         self.observe_function_call("http::types::outgoing_request", "body");
-        HostOutgoingRequest::body(&mut self.as_wasi_http_view(), self_)
+        let request_rep = self_.rep();
+        let result = HostOutgoingRequest::body(&mut self.as_wasi_http_view(), self_);
+        if let Ok(Ok(ref body)) = result {
+            let body_rep = body.rep();
+            self.state
+                .pending_http_outgoing_request_body
+                .insert(request_rep, body_rep);
+        }
+        result
     }
 
     fn method(&mut self, self_: Resource<OutgoingRequest>) -> wasmtime::Result<Method> {
@@ -495,11 +503,13 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                 let (to_serialize, for_retry) = match &result {
                     Ok(Some(Ok(Ok(None)))) => (Ok(Some(Ok(Ok(None)))), Ok(())),
                     Ok(Some(Ok(Ok(Some(trailers))))) => {
-                        let mut serialized_trailers = HashMap::new();
+                        let mut serialized_trailers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
 
                         for (key, value) in get_fields(self.table(), trailers)?.as_ref().iter() {
                             serialized_trailers
-                                .insert(key.as_str().to_string(), value.as_bytes().to_vec());
+                                .entry(key.as_str().to_string())
+                                .or_default()
+                                .push(value.as_bytes().to_vec());
                         }
                         (Ok(Some(Ok(Ok(Some(serialized_trailers))))), Ok(()))
                     }
@@ -543,9 +553,11 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
                     Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
                         let mut header_map = http::HeaderMap::new();
-                        for (key, value) in serialized_trailers {
-                            header_map
-                                .insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
+                        for (key, values) in serialized_trailers {
+                            let name = HeaderName::from_str(&key)?;
+                            for value in values {
+                                header_map.append(name.clone(), HeaderValue::try_from(value)?);
+                            }
                         }
                         let field_size_limit = {
                             let mut view = self.as_wasi_http_view();
@@ -641,7 +653,17 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         self_: Resource<OutgoingBody>,
     ) -> wasmtime::Result<Result<Resource<OutputStream>, ()>> {
         self.observe_function_call("http::types::outgoing_body", "write");
-        HostOutgoingBody::write(&mut self.as_wasi_http_view(), self_)
+        let body_rep = self_.rep();
+        let result = HostOutgoingBody::write(&mut self.as_wasi_http_view(), self_);
+        if let Ok(Ok(ref stream)) = result {
+            if let Some(output_state) = self.state.pending_http_outgoing_body.remove(&body_rep) {
+                let stream_rep = stream.rep();
+                self.state
+                    .open_http_output_streams
+                    .insert(stream_rep, output_state);
+            }
+        }
+        result
     }
 
     fn finish(
@@ -650,11 +672,15 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         trailers: Option<Resource<Trailers>>,
     ) -> HttpResult<()> {
         self.observe_function_call("http::types::outgoing_body", "finish");
+        let body_rep = this.rep();
+        self.state.pending_http_outgoing_body.remove(&body_rep);
         HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers)
     }
 
     fn drop(&mut self, rep: Resource<OutgoingBody>) -> wasmtime::Result<()> {
         self.observe_function_call("http::types::outgoing_body", "drop");
+        let body_rep = rep.rep();
+        self.state.pending_http_outgoing_body.remove(&body_rep);
         HostOutgoingBody::drop(&mut self.as_wasi_http_view(), rep)
     }
 }

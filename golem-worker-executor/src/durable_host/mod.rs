@@ -2830,6 +2830,14 @@ struct HttpRequestState {
     pub body_handle: Option<u32>,
 }
 
+/// State associated with an HTTP outgoing body output stream, tracking the
+/// begin_index and request info for durable persistence of stream operations.
+#[derive(Debug, Clone)]
+pub(crate) struct HttpOutputStreamState {
+    pub begin_index: OplogIndex,
+    pub request: HostRequestHttpRequest,
+}
+
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -2860,6 +2868,16 @@ struct PrivateDurableWorkerState {
 
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
+
+    /// State of ongoing http outgoing body output streams, keyed by the output stream resource handle.
+    /// Tracks begin_index and request info for durable persistence of output stream operations.
+    open_http_output_streams: HashMap<u32, HttpOutputStreamState>,
+
+    /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
+    pending_http_outgoing_request_body: HashMap<u32, u32>,
+
+    /// Maps outgoing body rep → (begin_index, request), set during outgoing_handler::handle()
+    pending_http_outgoing_body: HashMap<u32, HttpOutputStreamState>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -2995,6 +3013,9 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
+            open_http_output_streams: HashMap::new(),
+            pending_http_outgoing_request_body: HashMap::new(),
+            pending_http_outgoing_body: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,
             total_linear_memory_size,
@@ -3568,6 +3589,7 @@ macro_rules! get_oplog_entry {
                     break Ok((oplog_index, oplog_entry));
                 })+
                 _ => {
+                    tracing::error!("Unexpected oplog entry - expected {}, got {:?}", stringify!($($cases |)+), oplog_entry);
                     break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
                         stringify!($($cases |)+),
                         format!("{:?}", oplog_entry),

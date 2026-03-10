@@ -17,6 +17,7 @@ golem-rust = { path = "../../sdks/rust/golem-rust", features = [
 golem-wasi-http = { version = "0.2.0", features = ["json"] }
 
 futures-concurrency = "7.6.3"
+futures-util = "0.3"
 wasi = { version = "=0.14.7+wasi-0.2.4" }
 log = { version = "0.4.29", features = ["kv"] }
 rand = "0.9.0"

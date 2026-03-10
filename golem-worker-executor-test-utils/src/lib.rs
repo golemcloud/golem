@@ -87,7 +87,7 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
-    EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
+    EngineConfig, GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
@@ -390,7 +390,7 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None).await
+    start_customized(deps, context, None, None, None, None).await
 }
 
 pub async fn start_with_snapshot_policy(
@@ -398,7 +398,15 @@ pub async fn start_with_snapshot_policy(
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, Some(snapshot_policy)).await
+    start_customized(deps, context, None, None, Some(snapshot_policy), None).await
+}
+
+pub async fn start_with_http_client_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    http_client: HttpClientConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_customized(deps, context, None, None, None, Some(http_client)).await
 }
 
 pub async fn start_customized(
@@ -407,6 +415,7 @@ pub async fn start_customized(
     system_memory_override: Option<u64>,
     retry_override: Option<RetryConfig>,
     snapshot_policy_override: Option<SnapshotPolicy>,
+    http_client_override: Option<HttpClientConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
     let redis_monitor = deps.redis_monitor.clone();
@@ -452,6 +461,9 @@ pub async fn start_customized(
     }
     if let Some(snapshot_policy) = snapshot_policy_override {
         config.oplog.default_snapshotting = snapshot_policy;
+    }
+    if let Some(http_client) = http_client_override {
+        config.http_client = http_client;
     }
 
     let handle = Handle::current();
