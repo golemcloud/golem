@@ -3508,11 +3508,11 @@ async fn http_connection_pool_contention_between_agents(
 
     let agent_id_slow = {
         use golem_common::phantom_agent_id;
-        phantom_agent_id!("streaming-client", uuid::Uuid::now_v7())
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
     };
     let agent_id_fast = {
         use golem_common::phantom_agent_id;
-        phantom_agent_id!("streaming-client", uuid::Uuid::now_v7())
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
     };
 
     let mut env = HashMap::new();
@@ -3688,11 +3688,11 @@ async fn http_connection_pool_contention_with_restart(
 
     let agent_id_slow = {
         use golem_common::phantom_agent_id;
-        phantom_agent_id!("streaming-client", uuid::Uuid::now_v7())
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
     };
     let agent_id_fast = {
         use golem_common::phantom_agent_id;
-        phantom_agent_id!("streaming-client", uuid::Uuid::now_v7())
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
     };
 
     let mut env = HashMap::new();
@@ -3878,7 +3878,7 @@ async fn http_timeout_and_restart(
 
     let agent_id = {
         use golem_common::phantom_agent_id;
-        phantom_agent_id!("streaming-client", uuid::Uuid::now_v7())
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
     };
 
     let mut env = HashMap::new();
