@@ -218,7 +218,7 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
 
         let config = IndexedStoragePostgresConfig {
             postgres,
-            drop_prefix_delete_batch_size: 1000,
+            drop_prefix_delete_batch_size: 1024,
         };
 
         let storage = PostgresIndexedStorage::configured(&config)

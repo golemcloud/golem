@@ -15,11 +15,13 @@
 use super::{IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor};
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
+use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_service_base::db::postgres::PostgresPool;
-use golem_service_base::db::{LabelledPoolTransaction, Pool};
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
+use sqlx::{Postgres, QueryBuilder};
 use std::time::Duration;
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
@@ -32,6 +34,13 @@ pub struct PostgresIndexedStorage {
 
 impl PostgresIndexedStorage {
     pub async fn configured(config: &IndexedStoragePostgresConfig) -> Result<Self, String> {
+        if config.drop_prefix_delete_batch_size == 0 {
+            return Err(
+                "Postgres indexed storage drop_prefix_delete_batch_size must be greater than 0"
+                    .to_string(),
+            );
+        }
+
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
         golem_service_base::db::postgres::migrate(
             &config.postgres,
@@ -76,6 +85,28 @@ impl PostgresIndexedStorage {
             }
         }
     }
+
+    fn to_i64(value: u64, field_name: &'static str) -> Result<i64, String> {
+        i64::try_from(value).map_err(|_| {
+            format!("Postgres indexed storage cannot represent {field_name}={value} as i64")
+        })
+    }
+
+    fn to_like_pattern(pattern: &str) -> String {
+        let mut result = String::with_capacity(pattern.len());
+        for ch in pattern.chars() {
+            match ch {
+                '*' => result.push('%'),
+                '?' => result.push('_'),
+                '%' | '_' | '\\' => {
+                    result.push('\\');
+                    result.push(ch);
+                }
+                _ => result.push(ch),
+            }
+        }
+        result
+    }
 }
 
 #[async_trait]
@@ -113,9 +144,9 @@ impl IndexedStorage for PostgresIndexedStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_optional_as(query)
+            .fetch_one_as(query)
             .await
-            .map(|row| row.unwrap_or((false,)).0)
+            .map(|row| row.0)
             .map_err(|err| err.to_safe_string())
     }
 
@@ -128,14 +159,16 @@ impl IndexedStorage for PostgresIndexedStorage {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
-        let key = pattern.replace('*', "%").replace('?', "_");
+        let key = Self::to_like_pattern(pattern);
+        let count_i64 = Self::to_i64(count, "count")?;
+        let cursor_i64 = Self::to_i64(cursor, "cursor")?;
         let query = sqlx::query_as::<_, (String,)>(
-            "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key LIKE $2 ORDER BY key LIMIT $3 OFFSET $4;",
+            "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key LIKE $2 ESCAPE '\\' ORDER BY key LIMIT $3 OFFSET $4;",
         )
         .bind(Self::meta_namespace(namespace))
         .bind(&key)
-        .bind(count as i64)
-        .bind(cursor as i64);
+        .bind(count_i64)
+        .bind(cursor_i64);
 
         let keys = self
             .pool
@@ -148,7 +181,9 @@ impl IndexedStorage for PostgresIndexedStorage {
         let new_cursor = if keys.len() < count as usize {
             0
         } else {
-            cursor + count
+            cursor
+                .checked_add(count)
+                .ok_or_else(|| "Postgres indexed storage scan cursor overflow".to_string())?
         };
 
         Ok((new_cursor, keys))
@@ -164,12 +199,13 @@ impl IndexedStorage for PostgresIndexedStorage {
         id: u64,
         value: Vec<u8>,
     ) -> Result<(), String> {
+        let id = Self::to_i64(id, "id")?;
         let query = sqlx::query(
             "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
         )
         .bind(Self::namespace(namespace))
         .bind(key)
-        .bind(id as i64)
+        .bind(id)
         .bind(value);
 
         self.pool
@@ -193,28 +229,36 @@ impl IndexedStorage for PostgresIndexedStorage {
             return Ok(());
         }
 
-        let mut tx = self
-            .pool
-            .with_rw(svc_name, api_name)
-            .begin()
-            .await
-            .map_err(|err| err.to_safe_string())?;
-
+        let namespace = Self::namespace(namespace);
+        let key = key.to_string();
+        let mut converted_pairs = Vec::with_capacity(pairs.len());
         for (id, value) in pairs {
-            let query = sqlx::query(
-                "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
-            )
-            .bind(Self::namespace(namespace.clone()))
-            .bind(key)
-            .bind(id as i64)
-            .bind(value);
-
-            tx.execute(query)
-                .await
-                .map_err(|err| err.to_safe_string())?;
+            converted_pairs.push((Self::to_i64(id, "id")?, value));
         }
 
-        tx.commit().await.map_err(|err| err.to_safe_string())
+        self.pool
+            .with_tx(svc_name, api_name, |tx| {
+                async move {
+                    let mut query_builder = QueryBuilder::<Postgres>::new(
+                        "INSERT INTO index_storage (namespace, key, id, value) ",
+                    );
+
+                    query_builder.push_values(converted_pairs, |mut builder, (id, value)| {
+                        builder
+                            .push_bind(namespace.clone())
+                            .push_bind(key.clone())
+                            .push_bind(id)
+                            .push_bind(value);
+                    });
+
+                    let query = query_builder.build();
+                    tx.execute(query).await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn length(
@@ -232,9 +276,9 @@ impl IndexedStorage for PostgresIndexedStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_optional_as(query)
+            .fetch_one_as(query)
             .await
-            .map(|row| row.map(|r| r.0 as u64).unwrap_or(0))
+            .map(|row| row.0 as u64)
             .map_err(|err| err.to_safe_string())
     }
 
@@ -267,13 +311,15 @@ impl IndexedStorage for PostgresIndexedStorage {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+        let start_id = Self::to_i64(start_id, "start_id")?;
+        let end_id = Self::to_i64(end_id, "end_id")?;
         let query = sqlx::query_as::<_, DBIdValue>(
             "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 AND id BETWEEN $3 AND $4 ORDER BY id ASC;",
         )
         .bind(Self::namespace(namespace))
         .bind(key)
-        .bind(start_id as i64)
-        .bind(end_id as i64);
+        .bind(start_id)
+        .bind(end_id);
 
         self.pool
             .with_ro(svc_name, api_name)
@@ -336,12 +382,13 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, Vec<u8>)>, String> {
+        let id = Self::to_i64(id, "id")?;
         let query = sqlx::query_as::<_, DBIdValue>(
             "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 AND id >= $3 ORDER BY id ASC LIMIT 1;",
         )
         .bind(Self::namespace(namespace))
         .bind(key)
-        .bind(id as i64);
+        .bind(id);
 
         self.pool
             .with_ro(svc_name, api_name)
@@ -360,16 +407,22 @@ impl IndexedStorage for PostgresIndexedStorage {
         last_dropped_id: u64,
     ) -> Result<(), String> {
         let namespace = Self::namespace(namespace);
+        let key = key.to_string();
+        let last_dropped_id = Self::to_i64(last_dropped_id, "last_dropped_id")?;
+        let batch_size_i64 = Self::to_i64(
+            self.drop_prefix_delete_batch_size,
+            "drop_prefix_delete_batch_size",
+        )?;
         let mut deleted_rows = self.drop_prefix_delete_batch_size;
 
         while deleted_rows >= self.drop_prefix_delete_batch_size {
             let query = sqlx::query(
-                "DELETE FROM index_storage WHERE ctid IN (SELECT ctid FROM index_storage WHERE namespace = $1 AND key = $2 AND id <= $3 LIMIT $4);",
+                "WITH rows AS (SELECT ctid FROM index_storage WHERE namespace = $1 AND key = $2 AND id <= $3 ORDER BY id LIMIT $4) DELETE FROM index_storage t USING rows WHERE t.ctid = rows.ctid;",
             )
             .bind(&namespace)
-            .bind(key)
-            .bind(last_dropped_id as i64)
-            .bind(self.drop_prefix_delete_batch_size as i64);
+            .bind(&key)
+            .bind(last_dropped_id)
+            .bind(batch_size_i64);
 
             deleted_rows = self
                 .pool
