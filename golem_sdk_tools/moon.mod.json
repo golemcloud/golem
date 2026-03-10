@@ -5,7 +5,7 @@
     "justjavac/case": "0.1.5",
     "moonbitlang/x": "0.4.39",
     "moonbitlang/parser": "0.2.2",
-    "moonbitlang/formatter": { "path": "../../moonbit-formatter" }
+    "moonbitlang/formatter": "0.1.4"
   },
   "readme": "README.mbt.md",
   "repository": "https://github.com/golemcloud/moonbit-sdk",
