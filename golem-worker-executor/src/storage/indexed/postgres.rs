@@ -24,7 +24,8 @@ use include_dir::include_dir;
 use sqlx::{Postgres, QueryBuilder};
 use std::time::Duration;
 
-static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
+static DB_MIGRATIONS: include_dir::Dir =
+    include_dir!("$CARGO_MANIFEST_DIR/db/migration/postgres/indexed");
 
 #[derive(Debug, Clone)]
 pub struct PostgresIndexedStorage {

@@ -14,6 +14,7 @@
 
 pub mod memory;
 pub mod multi_sqlite;
+pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 

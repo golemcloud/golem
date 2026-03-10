@@ -71,6 +71,7 @@ use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
+use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
@@ -355,6 +356,14 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
                 Arc::new(RedisKeyValueStorage::new(pool.clone()));
             (Some(pool), None, key_value_storage)
+        }
+        KeyValueStorageConfig::Postgres(postgres) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                PostgresKeyValueStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            (None, None, key_value_storage)
         }
         KeyValueStorageConfig::InMemory(_) => {
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))

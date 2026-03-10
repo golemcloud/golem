@@ -546,6 +546,7 @@ impl SafeDisplay for OplogConfig {
 #[serde(tag = "type", content = "config")]
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
+    Postgres(KeyValueStoragePostgresConfig),
     Sqlite(DbSqliteConfig),
     MultiSqlite(KeyValueStorageMultiSqliteConfig),
     InMemory(KeyValueStorageInMemoryConfig),
@@ -557,6 +558,10 @@ impl SafeDisplay for KeyValueStorageConfig {
         match self {
             KeyValueStorageConfig::Redis(inner) => {
                 let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             KeyValueStorageConfig::Sqlite(inner) => {
@@ -573,6 +578,18 @@ impl SafeDisplay for KeyValueStorageConfig {
             }
         }
         result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KeyValueStoragePostgresConfig {
+    #[serde(flatten)]
+    pub postgres: DbPostgresConfig,
+}
+
+impl SafeDisplay for KeyValueStoragePostgresConfig {
+    fn to_safe_string(&self) -> String {
+        self.postgres.to_safe_string()
     }
 }
 

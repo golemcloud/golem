@@ -14,15 +14,19 @@
 
 use crate::WorkerExecutorTestDependencies;
 use async_trait::async_trait;
+use golem_common::config::DbPostgresConfig;
 use golem_common::config::RedisConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::AgentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::redis::Redis;
+use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
 use golem_worker_executor::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
@@ -32,6 +36,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
+use url::Url;
 use uuid::{uuid, Uuid};
 
 #[async_trait]
@@ -172,6 +177,63 @@ async fn multi_sqlite_storage(
     Arc::new(MultiSqliteKeyValueStorageWrapper::new())
 }
 
+struct PostgresKeyValueStorageWrapper {
+    postgres: DockerPostgresRdb,
+}
+
+impl Debug for PostgresKeyValueStorageWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PostgresKeyValueStorageWrapper")
+    }
+}
+
+#[async_trait]
+impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
+    async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        let db_name = format!("kv_{}", Uuid::new_v4().simple());
+
+        let admin_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&self.postgres.public_connection_string())
+            .await
+            .expect("Cannot create postgres admin pool");
+
+        sqlx::query(&format!("CREATE DATABASE \"{db_name}\";"))
+            .execute(&admin_pool)
+            .await
+            .expect("Cannot create postgres test database");
+
+        let postgres = DbPostgresConfig {
+            host: "localhost".to_string(),
+            database: db_name,
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            port: Url::parse(&self.postgres.public_connection_string())
+                .expect("Invalid postgres connection string")
+                .port()
+                .expect("Postgres connection string missing port"),
+            max_connections: 10,
+            schema: None,
+        };
+
+        let config = KeyValueStoragePostgresConfig { postgres };
+
+        let kvs = PostgresKeyValueStorage::configured(&config)
+            .await
+            .expect("Cannot create postgres key value storage");
+        Arc::new(kvs)
+    }
+}
+
+#[test_dep(tagged_as = "postgres")]
+async fn postgres_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
+    let unique_network_id = Uuid::new_v4().to_string();
+    let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
+    Arc::new(PostgresKeyValueStorageWrapper { postgres })
+}
+
 #[derive(Debug)]
 struct Namespaces {
     pub ns: KeyValueStorageNamespace,
@@ -212,7 +274,7 @@ fn ns2() -> Namespaces {
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite");
+define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
 define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
 
 #[test]
