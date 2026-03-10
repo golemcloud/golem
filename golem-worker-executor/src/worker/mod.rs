@@ -2163,14 +2163,16 @@ impl RunningWorker {
             );
 
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
-        let mut last_snapshot_index = worker_metadata.last_known_status.last_manual_snapshot_index;
+        let mut last_snapshot_index = worker_metadata
+            .last_known_status
+            .last_manual_update_snapshot_index;
 
+        // automatic snapshots are only considered until the first failure.
+        // additionally, if there are updates, the automatic snapshot is temporarily ignored to catch issues earlier
         if let Some(snapshot_idx) = worker_metadata
             .last_known_status
             .last_automatic_snapshot_index
         {
-            // automatic snapshots are only considered until the first failure
-            // if there are updates, ignore the automatic snapshot temporarily to catch issues earlier
             if pending_update.is_none()
                 && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
             {

@@ -699,7 +699,7 @@ pub struct AgentStatusRecord {
     pub current_retry_count: HashMap<OplogIndex, u32>,
     /// Index of the last manual update snapshot index. Agent will call load_snapshot
     /// on this payload before starting replay.
-    pub last_manual_snapshot_index: Option<OplogIndex>,
+    pub last_manual_update_snapshot_index: Option<OplogIndex>,
     /// Index of the last automatic snapshot index. Must be >= last_manual_snapshot_index.
     /// Agent will call load_snapshot on this payload before starting replay. If the load_snapshot
     /// fails this will be ignored and a full replay from last_manual_snapshot_index will performed.
@@ -727,7 +727,7 @@ impl Default for AgentStatusRecord {
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_count: HashMap::new(),
-            last_manual_snapshot_index: None,
+            last_manual_update_snapshot_index: None,
             last_automatic_snapshot_index: None,
         }
     }

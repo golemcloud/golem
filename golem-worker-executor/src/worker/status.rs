@@ -153,7 +153,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         component_revision,
         component_size,
         component_revision_for_replay,
-        last_manual_snapshot_index,
+        last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
     ) = calculate_update_fields(
         last_known.pending_updates,
@@ -162,7 +162,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         last_known.component_revision,
         last_known.component_size,
         last_known.component_revision_for_replay,
-        last_known.last_manual_snapshot_index,
+        last_known.last_manual_update_snapshot_index,
         last_known.last_automatic_snapshot_index,
         &deleted_regions,
         &new_entries,
@@ -209,7 +209,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         deleted_regions,
         component_revision_for_replay,
         current_retry_count,
-        last_manual_snapshot_index,
+        last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
     };
 
@@ -594,7 +594,7 @@ fn calculate_update_fields(
     initial_revision: ComponentRevision,
     initial_component_size: u64,
     initial_component_revision_for_replay: ComponentRevision,
-    initial_last_manual_snapshot_index: Option<OplogIndex>,
+    initial_last_manual_update_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_index: Option<OplogIndex>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
@@ -614,7 +614,7 @@ fn calculate_update_fields(
     let mut revision = initial_revision;
     let mut size = initial_component_size;
     let mut component_revision_for_replay = initial_component_revision_for_replay;
-    let mut last_manual_snapshot_index = initial_last_manual_snapshot_index;
+    let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
     let mut last_automatic_snapshot_index = initial_last_automatic_snapshot_index;
 
     for (oplog_idx, entry) in entries {
@@ -676,7 +676,7 @@ fn calculate_update_fields(
                 }) = pending_updates.pop_front()
                 {
                     component_revision_for_replay = *target_revision;
-                    last_manual_snapshot_index = Some(applied_update_oplog_index);
+                    last_manual_update_snapshot_index = Some(applied_update_oplog_index);
                     last_automatic_snapshot_index = None;
                 }
             }
@@ -693,7 +693,7 @@ fn calculate_update_fields(
         revision,
         size,
         component_revision_for_replay,
-        last_manual_snapshot_index,
+        last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
     )
 }
@@ -1667,7 +1667,8 @@ mod test {
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
                 status.component_revision_for_replay = old_status.component_revision_for_replay;
-                status.last_manual_snapshot_index = old_status.last_manual_snapshot_index;
+                status.last_manual_update_snapshot_index =
+                    old_status.last_manual_update_snapshot_index;
                 status.last_automatic_snapshot_index = old_status.last_automatic_snapshot_index;
 
                 status
@@ -1772,7 +1773,8 @@ mod test {
                 } = update_description
                 {
                     status.component_revision_for_replay = target_revision;
-                    status.last_manual_snapshot_index = applied_update.map(|au| au.oplog_index);
+                    status.last_manual_update_snapshot_index =
+                        applied_update.map(|au| au.oplog_index);
                     status.last_automatic_snapshot_index = None;
                 };
 
