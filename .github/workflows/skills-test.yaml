@@ -3,11 +3,11 @@ name: Skills Test Harness
 on:
   push:
     paths:
-      - 'golem/skills/**'
+      - 'skills/**'
       - 'tests/harness/**'
   pull_request:
     paths:
-      - 'golem/skills/**'
+      - 'skills/**'
       - 'tests/harness/**'
   schedule:
     - cron: '0 6 * * 1' # Weekly Monday 6am UTC
@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, gemini]
+        agent: [claude-code, gemini, opencode]
         language: [ts]
         exclude:
           - agent: claude-code
@@ -97,10 +97,11 @@ jobs:
 
       - name: Install Gemini CLI
         if: matrix.agent == 'gemini'
-        run: |
-          # Gemini CLI installation TBD
-          # npm install -g @google/gemini-cli
-          echo "Gemini CLI installation placeholder"
+        run: npm install -g @google/gemini-cli
+
+      - name: Install OpenCode
+        if: matrix.agent == 'opencode'
+        run: npm install -g opencode-ai
 
       - name: Install Harness Dependencies
         run: |
