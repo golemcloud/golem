@@ -15,16 +15,16 @@
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::invoke::agent_method_input::get_agent_method_input;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
-use crate::mcp::invoke::response_mapping::{element_value_to_mcp_json};
+use crate::mcp::invoke::response_mapping::element_value_to_mcp_json;
 use crate::service::worker::WorkerService;
+use base64::Engine;
 use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{CallToolResult, Content, JsonObject};
 use serde_json::json;
 use std::sync::Arc;
-use base64::Engine;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 pub async fn invoke_tool(
     args_map: JsonObject,
@@ -133,9 +133,7 @@ pub fn map_agent_response_to_tool_result(
                     "name": named.name,
                     "value": value_json,
                 }));
-                contents.push(
-                    element_value_to_content(named.value)?,
-                );
+                contents.push(element_value_to_content(named.value)?);
             }
 
             let structured = json!({ "parts" : parts });

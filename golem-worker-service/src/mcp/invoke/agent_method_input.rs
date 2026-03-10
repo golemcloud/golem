@@ -22,7 +22,7 @@ pub fn get_agent_method_input(
             let parts_array = mcp_args
                 .get("parts")
                 .and_then(|v| v.as_array())
-                .ok_or_else(|| { "Multimodal input requires a parts array field"})?;
+                .ok_or_else(|| "Multimodal input requires a parts array field")?;
 
             let schema_map: std::collections::HashMap<&str, &ElementSchema> = named_schemas
                 .elements

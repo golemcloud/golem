@@ -14,16 +14,16 @@
 
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, ConstructorParam};
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
-use crate::mcp::invoke::response_mapping::{element_value_to_mcp_json};
+use crate::mcp::invoke::response_mapping::element_value_to_mcp_json;
 use crate::service::worker::WorkerService;
+use base64::Engine;
 use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
 use serde_json::json;
 use std::sync::Arc;
-use base64::Engine;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 pub async fn invoke_resource(
     worker_service: &Arc<WorkerService>,
@@ -147,7 +147,6 @@ fn interpret_agent_response(
     }
 }
 
-
 // Map a DataValue returned by an agent method to the JSON format expected by MCP responses.
 // This is used for both tool and resource invocation responses, as well as for agent method responses when the agent is invoked directly (e.g. from a workflow).
 fn map_data_value_to_resource(typed_value: DataValue) -> Result<serde_json::Value, ErrorData> {
@@ -164,17 +163,17 @@ fn map_data_value_to_resource(typed_value: DataValue) -> Result<serde_json::Valu
                         )
                     }),
                     ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                                                       value, ..
-                                                   }) => match value {
+                        value, ..
+                    }) => match value {
                         TextReference::Inline(TextSource { data, .. }) => {
                             Ok(serde_json::Value::String(data))
                         }
                         TextReference::Url(url) => Ok(serde_json::Value::String(url.value)),
                     },
                     ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                                                         value,
-                                                         ..
-                                                     }) => match value {
+                        value,
+                        ..
+                    }) => match value {
                         BinaryReference::Inline(BinarySource { data, binary_type }) => {
                             let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
                             Ok(json!({

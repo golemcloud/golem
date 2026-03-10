@@ -62,7 +62,8 @@ impl McpSchema {
                     analysed_type_to_json_schema(element_type)
                 }
                 ElementSchema::UnstructuredText(descriptor) => {
-                    required.push(s.name.clone());
+                    required.push(s.name.to_string());
+
                     let language_code_description = match &descriptor.restrictions {
                         Some(types) if !types.is_empty() => {
                             let codes: Vec<&str> =
