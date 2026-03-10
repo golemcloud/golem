@@ -4547,6 +4547,7 @@ dependencies = [
  "humansize",
  "humantime-serde",
  "hyper 1.8.1",
+ "include_dir",
  "itertools 0.14.0",
  "lazy_static",
  "log",
