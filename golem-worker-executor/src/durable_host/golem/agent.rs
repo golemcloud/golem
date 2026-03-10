@@ -43,7 +43,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         expected_type: &AnalysedType,
         local_decl: &ConfigValueTypeLocal,
     ) -> anyhow::Result<WitValue> {
-        let config_value = self.state.local_agent_config.get(key);
+        let config_value = self.state.agent_config.get(key);
 
         if local_decl.value != *expected_type {
             return Err(anyhow!(

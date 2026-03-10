@@ -17,8 +17,8 @@ use anyhow::anyhow;
 use assert2::let_assert;
 use golem_client::api::WorkerError;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::LocalAgentConfigEntry;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::component::AgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -35,7 +35,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn agent_with_only_component_local_agent_config(
+async fn agent_with_only_component_agent_config(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -44,30 +44,30 @@ async fn agent_with_only_component_local_agent_config(
     let component = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_local_agent_config(vec![
-            LocalAgentConfigEntry {
+        .with_agent_config(vec![
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["foo".to_string()],
+                path: vec!["foo".to_string()],
                 value: json!(1),
             },
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["bar".to_string()],
+                path: vec!["bar".to_string()],
                 value: json!("bar"),
             },
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["nested".to_string(), "a".to_string()],
+                path: vec!["nested".to_string(), "a".to_string()],
                 value: json!(true),
             },
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["nested".to_string(), "b".to_string()],
+                path: vec!["nested".to_string(), "b".to_string()],
                 value: json!([1, 2]),
             },
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["aliasedNested".to_string(), "c".to_string()],
+                path: vec!["aliasedNested".to_string(), "c".to_string()],
                 value: json!(3),
             },
         ])
@@ -108,7 +108,7 @@ async fn agent_with_only_component_local_agent_config(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn agent_with_only_worker_local_agent_config(
+async fn agent_with_only_worker_agent_config(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -127,24 +127,24 @@ async fn agent_with_only_worker_local_agent_config(
         HashMap::new(),
         HashMap::new(),
         vec![
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["foo".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["foo".to_string()],
                 value: json!(1),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["bar".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["bar".to_string()],
                 value: json!("bar"),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["nested".to_string(), "a".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["nested".to_string(), "a".to_string()],
                 value: json!(true),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["nested".to_string(), "b".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["nested".to_string(), "b".to_string()],
                 value: json!([1, 2]),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["aliasedNested".to_string(), "c".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["aliasedNested".to_string(), "c".to_string()],
                 value: json!(3),
             },
         ],
@@ -182,24 +182,22 @@ async fn agent_with_only_worker_local_agent_config(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn agent_with_mixed_local_agent_config(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
+async fn agent_with_mixed_agent_config(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
     let component = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_local_agent_config(vec![
-            LocalAgentConfigEntry {
+        .with_agent_config(vec![
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["foo".to_string()],
+                path: vec!["foo".to_string()],
                 value: json!(1),
             },
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["bar".to_string()],
+                path: vec!["bar".to_string()],
                 value: json!("bar"),
             },
         ])
@@ -213,20 +211,20 @@ async fn agent_with_mixed_local_agent_config(
         HashMap::new(),
         HashMap::new(),
         vec![
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["foo".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["foo".to_string()],
                 value: json!(2),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["nested".to_string(), "a".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["nested".to_string(), "a".to_string()],
                 value: json!(true),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["nested".to_string(), "b".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["nested".to_string(), "b".to_string()],
                 value: json!([1, 2]),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["aliasedNested".to_string(), "c".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["aliasedNested".to_string(), "c".to_string()],
                 value: json!(3),
             },
         ],
@@ -264,7 +262,7 @@ async fn agent_with_mixed_local_agent_config(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn agent_with_mixed_local_agent_config_update(
+async fn agent_with_mixed_agent_config_update(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -273,15 +271,15 @@ async fn agent_with_mixed_local_agent_config_update(
     let component = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_local_agent_config(vec![
-            LocalAgentConfigEntry {
+        .with_agent_config(vec![
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["foo".to_string()],
+                path: vec!["foo".to_string()],
                 value: json!(1),
             },
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("LocalConfigAgent".to_string()),
-                key: vec!["bar".to_string()],
+                path: vec!["bar".to_string()],
                 value: json!("bar"),
             },
         ])
@@ -297,20 +295,20 @@ async fn agent_with_mixed_local_agent_config_update(
             HashMap::new(),
             HashMap::new(),
             vec![
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["foo".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["foo".to_string()],
                     value: json!(2),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["nested".to_string(), "a".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["nested".to_string(), "a".to_string()],
                     value: json!(true),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["nested".to_string(), "b".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["nested".to_string(), "b".to_string()],
                     value: json!([1, 2]),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["aliasedNested".to_string(), "c".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["aliasedNested".to_string(), "c".to_string()],
                     value: json!(3),
                 },
             ],
@@ -327,14 +325,14 @@ async fn agent_with_mixed_local_agent_config_update(
             None,
             None,
             Some(vec![
-                LocalAgentConfigEntry {
+                AgentConfigEntry {
                     agent: AgentTypeName("LocalConfigAgent".to_string()),
-                    key: vec!["foo".to_string()],
+                    path: vec!["foo".to_string()],
                     value: json!(3),
                 },
-                LocalAgentConfigEntry {
+                AgentConfigEntry {
                     agent: AgentTypeName("LocalConfigAgent".to_string()),
-                    key: vec!["bar".to_string()],
+                    path: vec!["bar".to_string()],
                     value: json!("baz"),
                 },
             ]),
@@ -375,7 +373,7 @@ async fn agent_with_mixed_local_agent_config_update(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn missing_local_agent_config_key(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn missing_agent_config_key(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
@@ -394,20 +392,20 @@ async fn missing_local_agent_config_key(deps: &EnvBasedTestDependencies) -> anyh
             HashMap::new(),
             HashMap::new(),
             vec![
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["bar".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["bar".to_string()],
                     value: json!("bar"),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["nested".to_string(), "a".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["nested".to_string(), "a".to_string()],
                     value: json!(true),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["nested".to_string(), "b".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["nested".to_string(), "b".to_string()],
                     value: json!([1, 2]),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["aliasedNested".to_string(), "c".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["aliasedNested".to_string(), "c".to_string()],
                     value: json!(3),
                 },
             ],
@@ -426,7 +424,7 @@ async fn missing_local_agent_config_key(deps: &EnvBasedTestDependencies) -> anyh
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn mistyped_local_agent_config_key(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn mistyped_agent_config_key(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
@@ -445,24 +443,24 @@ async fn mistyped_local_agent_config_key(deps: &EnvBasedTestDependencies) -> any
             HashMap::new(),
             HashMap::new(),
             vec![
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["foo".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["foo".to_string()],
                     value: json!("foo"),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["bar".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["bar".to_string()],
                     value: json!("bar"),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["nested".to_string(), "a".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["nested".to_string(), "a".to_string()],
                     value: json!(true),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["nested".to_string(), "b".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["nested".to_string(), "b".to_string()],
                     value: json!([1, 2]),
                 },
-                WorkerCreationLocalAgentConfigEntry {
-                    key: vec!["aliasedNested".to_string(), "c".to_string()],
+                WorkerAgentConfigEntry {
+                    path: vec!["aliasedNested".to_string(), "c".to_string()],
                     value: json!(3),
                 },
             ],
@@ -481,7 +479,7 @@ async fn mistyped_local_agent_config_key(deps: &EnvBasedTestDependencies) -> any
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn optional_local_agent_config_does_not_need_to_be_provided(
+async fn optional_agent_config_does_not_need_to_be_provided(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
@@ -500,20 +498,20 @@ async fn optional_local_agent_config_does_not_need_to_be_provided(
         HashMap::new(),
         HashMap::new(),
         vec![
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["foo".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["foo".to_string()],
                 value: json!(1),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["bar".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["bar".to_string()],
                 value: json!("bar"),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["nested".to_string(), "a".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["nested".to_string(), "a".to_string()],
                 value: json!(true),
             },
-            WorkerCreationLocalAgentConfigEntry {
-                key: vec!["nested".to_string(), "b".to_string()],
+            WorkerAgentConfigEntry {
+                path: vec!["nested".to_string(), "b".to_string()],
                 value: json!([1, 2]),
             },
         ],

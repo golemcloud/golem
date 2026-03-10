@@ -18,7 +18,7 @@ mod invocation_loop;
 pub mod status;
 
 use self::agent_config::{
-    ensure_required_agent_secrets_are_configured, parse_worker_creation_local_agent_config,
+    ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
 use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
@@ -53,7 +53,7 @@ use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
+use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
@@ -145,7 +145,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -161,7 +161,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 account_id,
                 worker_env,
                 worker_config_vars,
-                worker_local_agent_config,
+                worker_agent_config,
                 component_revision,
                 parent,
                 invocation_context_stack,
@@ -177,7 +177,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -192,7 +192,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_agent_id,
             worker_env,
             worker_config_vars,
-            worker_local_agent_config,
+            worker_agent_config,
             component_revision,
             parent,
             invocation_context_stack,
@@ -237,7 +237,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -257,7 +257,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             worker_env,
             worker_config,
-            worker_local_agent_config,
+            worker_agent_config,
             parent,
         )
         .await?;
@@ -1514,7 +1514,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         parent: Option<AgentId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_agent_id.component_id();
@@ -1633,8 +1633,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )?
                 };
 
-                let initial_local_agent_config = parse_worker_creation_local_agent_config(
-                    worker_local_agent_config,
+                let initial_agent_config = parse_worker_creation_agent_config(
+                    worker_agent_config,
                     agent_id.as_ref(),
                     &component,
                 )?;
@@ -1669,7 +1669,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // the new effective set as the component revision changes otherwise.
                     env: worker_env,
                     config_vars: worker_config_vars.unwrap_or_default(),
-                    local_agent_config: initial_local_agent_config,
+                    agent_config: initial_agent_config,
                     environment_id: owned_agent_id.environment_id(),
                     created_by: *account_id,
                     created_at,
@@ -1698,7 +1698,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .clone(),
                     initial_worker_metadata.config_vars.clone(),
                     initial_worker_metadata
-                        .local_agent_config
+                        .agent_config
                         .iter()
                         .cloned()
                         .map(Into::into)
@@ -2234,7 +2234,7 @@ impl RunningWorker {
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.config_vars,
-                worker_metadata.local_agent_config,
+                worker_metadata.agent_config,
                 last_snapshot_index,
             ),
             parent.execution_status.clone(),
