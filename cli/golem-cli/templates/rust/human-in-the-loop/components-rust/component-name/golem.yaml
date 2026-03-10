@@ -5,8 +5,8 @@ httpApi:
     local:
     - domain: app-name.localhost:9006
       agents:
-        workflow-agent: {}
-        human-agent: {}
+        WorkflowAgent: {}
+        HumanAgent: {}
 
 components:
   componentname:

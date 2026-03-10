@@ -25,11 +25,11 @@ use golem_common::model::oplog::public_oplog_entry::{
     LogParams, PublicAgentInvocationResult, RawSnapshotData,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
+    AgentError, DurableFunctionType, OplogEntry, OplogIndex, OplogPayload,
 };
 use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry, PublicSnapshotData};
 use golem_common::model::{
-    AgentInvocationResult, OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata,
+    AgentId, AgentInvocationResult, AgentMetadata, OwnedAgentId, RetryConfig,
 };
 use golem_wasm::wasmtime::ResourceTypeId;
 use serde::Serialize;
@@ -134,7 +134,7 @@ impl DebugSessions for DebugSessionsDefault {
 
 #[derive(Clone)]
 pub struct DebugSessionData {
-    pub worker_metadata: WorkerMetadata,
+    pub worker_metadata: AgentMetadata,
     pub target_oplog_index: Option<OplogIndex>,
     pub playback_overrides: PlaybackOverridesInternal,
     // The current status of the oplog index being replayed and possibly
@@ -175,7 +175,7 @@ impl PlaybackOverridesInternal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DebugSessionId(WorkerId);
+pub struct DebugSessionId(AgentId);
 
 impl Serialize for DebugSessionId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -187,11 +187,11 @@ impl Serialize for DebugSessionId {
 }
 
 impl DebugSessionId {
-    pub fn new(worker_id: OwnedWorkerId) -> Self {
-        DebugSessionId(worker_id.worker_id)
+    pub fn new(agent_id: OwnedAgentId) -> Self {
+        DebugSessionId(agent_id.agent_id)
     }
 
-    pub fn worker_id(&self) -> WorkerId {
+    pub fn agent_id(&self) -> AgentId {
         self.0.clone()
     }
 }
@@ -204,12 +204,12 @@ impl Display for DebugSessionId {
 #[derive(Clone)]
 pub struct ActiveSessionData {
     // pub cloud_namespace: Namespace,
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
 }
 
 impl ActiveSessionData {
-    pub fn new(worker_id: WorkerId) -> Self {
-        Self { worker_id }
+    pub fn new(agent_id: AgentId) -> Self {
+        Self { agent_id }
     }
 }
 
@@ -234,12 +234,13 @@ fn get_oplog_entry_from_public_oplog_entry(
 
         PublicOplogEntry::Create(CreateParams {
             timestamp,
-            worker_id,
+            agent_id,
             component_revision,
             env,
             environment_id,
             created_by,
             config_vars,
+            local_agent_config,
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -247,12 +248,13 @@ fn get_oplog_entry_from_public_oplog_entry(
             original_phantom_id,
         }) => Ok(OplogEntry::Create {
             timestamp,
-            worker_id,
+            agent_id,
             component_revision,
             env: env.into_iter().collect(),
             environment_id,
             created_by,
             config_vars,
+            local_agent_config: local_agent_config.into_iter().map(Into::into).collect(),
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -309,7 +311,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         }),
         PublicOplogEntry::Error(error) => Ok(OplogEntry::Error {
             timestamp: error.timestamp,
-            error: WorkerError::Unknown(error.error),
+            error: AgentError::Unknown(error.error),
             retry_from: error.retry_from,
         }),
         PublicOplogEntry::NoOp(timestamp_parameter) => Ok(OplogEntry::NoOp {

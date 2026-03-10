@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "512"]
+
 use anyhow::anyhow;
 use clap_verbosity_flag::Verbosity;
 use golem_common::tracing::directive;
@@ -24,6 +26,7 @@ use std::process::ExitCode;
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
+pub mod agent_id_display;
 pub mod app;
 pub mod auth;
 pub mod bridge_gen;

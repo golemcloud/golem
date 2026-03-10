@@ -72,11 +72,11 @@ impl FileSystemBlobStorage {
             }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
-                worker_id,
+                agent_id,
             } => {
                 result.push("oplog_payload");
                 result.push(environment_id.to_string());
-                result.push(worker_id.to_string());
+                result.push(agent_id.to_string());
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,

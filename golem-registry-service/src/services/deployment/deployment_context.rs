@@ -24,14 +24,14 @@ use crate::services::deployment::route_compilation::{
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
-use golem_service_base::model::Component;
+use golem_service_base::model::component::Component;
+use heck::ToKebabCase;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug)]
@@ -115,7 +115,7 @@ impl DeploymentContext {
 
         for component in self.components.values() {
             for agent_type in component.metadata.agent_types() {
-                let agent_type_name = agent_type.type_name.to_wit_naming();
+                let agent_type_name = agent_type.type_name.clone();
                 let implementer = RegisteredAgentTypeImplementer {
                     component_id: component.id,
                     component_revision: component.revision,
@@ -146,9 +146,11 @@ impl DeploymentContext {
                         .insert(agent_type_name, registered_agent_type)
                         .is_some()
                     {
-                        Err(DeployValidationError::AmbiguousAgentTypeName(
-                            agent_type.type_name.clone(),
-                        ))
+                        Err(DeployValidationError::ConflictingAgentTypeNames {
+                            name1: agent_type.type_name.clone(),
+                            name2: agent_type.type_name.clone(),
+                            normalized: agent_type.type_name.0.to_kebab_case(),
+                        })
                     } else {
                         Ok(())
                     },
@@ -156,6 +158,26 @@ impl DeploymentContext {
                 )
             }
         }
+
+        // Check for kebab-case collisions
+        let mut kebab_map: BTreeMap<String, AgentTypeName> = BTreeMap::new();
+        for agent_type_name in agent_types.keys() {
+            let kebab = agent_type_name.0.to_kebab_case();
+            if let Some(existing) = kebab_map.get(&kebab) {
+                errors.push(DeployValidationError::ConflictingAgentTypeNames {
+                    name1: existing.clone(),
+                    name2: agent_type_name.clone(),
+                    normalized: kebab.clone(),
+                });
+            } else {
+                kebab_map.insert(kebab, agent_type_name.clone());
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+        }
+
         Ok(agent_types)
     }
 

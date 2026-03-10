@@ -30,15 +30,15 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
         deps,
         vec![
             (
-                AgentTypeName("http-agent".to_string()),
+                AgentTypeName("HttpAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("cors-agent".to_string()),
+                AgentTypeName("CorsAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("webhook-agent".to_string()),
+                AgentTypeName("WebhookAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ],

@@ -25,13 +25,14 @@ use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPrior
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationRequest, WorkerMetadataDto};
-use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::worker::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
+use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{
     AuthCtx, EnvironmentAction, GolemSecurityScheme, WrappedGolemSecuritySchema,
 };
+use golem_service_base::model::component::Component;
 use golem_service_base::model::*;
 use poem::Body;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
@@ -84,7 +85,7 @@ impl WorkerApi {
     async fn launch_new_worker(
         &self,
         component_id: Path<ComponentId>,
-        request: Json<WorkerCreationRequest>,
+        request: Json<AgentCreationRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkerCreationResponse>> {
         let record = recorded_http_api_request!(
@@ -104,28 +105,30 @@ impl WorkerApi {
     async fn launch_new_worker_internal(
         &self,
         component_id: ComponentId,
-        request: WorkerCreationRequest,
+        request: AgentCreationRequest,
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkerCreationResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let WorkerCreationRequest {
+        let AgentCreationRequest {
             name,
             env,
             config_vars,
+            ..
         } = request;
 
-        let (worker_id, component) = self
-            .normalize_worker_id_by_latest_version(component_id, &name)
+        let (agent_id, component) = self
+            .normalize_agent_id_by_latest_version(component_id, &name)
             .await?;
 
         let component_revision = self
             .worker_service
             .create_with_component(
-                &worker_id,
+                &agent_id,
                 component,
                 env,
                 config_vars,
+                request.local_agent_config,
                 false,
                 auth,
                 None,
@@ -134,7 +137,7 @@ impl WorkerApi {
             .await?;
 
         Ok(Json(WorkerCreationResponse {
-            worker_id,
+            agent_id,
             component_revision,
         }))
     }
@@ -143,27 +146,26 @@ impl WorkerApi {
     ///
     /// Interrupts and deletes an existing worker.
     #[oai(
-        path = "/:component_id/workers/:worker_name",
+        path = "/:component_id/workers/:agent_name",
         method = "delete",
         operation_id = "delete_worker"
     )]
     async fn delete_worker(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteWorkerResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
-        let record =
-            recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
+        let record = recorded_http_api_request!("delete_worker", agent_id = agent_id.to_string(),);
 
         let response = self
-            .delete_worker_internal(worker_id, auth)
+            .delete_worker_internal(agent_id, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -172,10 +174,10 @@ impl WorkerApi {
 
     async fn delete_worker_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         auth: AuthCtx,
     ) -> Result<Json<DeleteWorkerResponse>> {
-        self.worker_service.delete(&worker_id, auth).await?;
+        self.worker_service.delete(&agent_id, auth).await?;
         Ok(Json(DeleteWorkerResponse {}))
     }
 
@@ -185,28 +187,28 @@ impl WorkerApi {
     /// The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
     /// The data field is sent back to the worker, and it has no predefined meaning.
     #[oai(
-        path = "/:component_id/workers/:worker_name/complete",
+        path = "/:component_id/workers/:agent_name/complete",
         method = "post",
         operation_id = "complete_promise"
     )]
     async fn complete_promise(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         params: Json<CompleteParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<bool>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
         let record =
-            recorded_http_api_request!("complete_promise", worker_id = worker_id.to_string());
+            recorded_http_api_request!("complete_promise", agent_id = agent_id.to_string());
 
         let response = self
-            .complete_promise_internal(worker_id, params.0, auth)
+            .complete_promise_internal(agent_id, params.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -215,7 +217,7 @@ impl WorkerApi {
 
     async fn complete_promise_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         params: CompleteParameters,
         auth: AuthCtx,
     ) -> Result<Json<bool>> {
@@ -223,7 +225,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .complete_promise(&worker_id, oplog_idx, data, auth)
+            .complete_promise(&agent_id, oplog_idx, data, auth)
             .await?;
 
         Ok(Json(response))
@@ -236,14 +238,14 @@ impl WorkerApi {
     /// An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
     /// For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
     #[oai(
-        path = "/:component_id/workers/:worker_name/interrupt",
+        path = "/:component_id/workers/:agent_name/interrupt",
         method = "post",
         operation_id = "interrupt_worker"
     )]
     async fn interrupt_worker(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         /// if true will simulate a worker recovery. Defaults to false.
         #[oai(name = "recovery-immediately")]
         recover_immediately: Query<Option<bool>>,
@@ -251,15 +253,15 @@ impl WorkerApi {
     ) -> Result<Json<InterruptResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
         let record =
-            recorded_http_api_request!("interrupt_worker", worker_id = worker_id.to_string());
+            recorded_http_api_request!("interrupt_worker", agent_id = agent_id.to_string());
 
         let response = self
-            .interrupt_worker_internal(worker_id, recover_immediately.0, auth)
+            .interrupt_worker_internal(agent_id, recover_immediately.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -268,12 +270,12 @@ impl WorkerApi {
 
     async fn interrupt_worker_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         recover_immediately: Option<bool>,
         auth: AuthCtx,
     ) -> Result<Json<InterruptResponse>> {
         self.worker_service
-            .interrupt(&worker_id, recover_immediately.unwrap_or(false), auth)
+            .interrupt(&agent_id, recover_immediately.unwrap_or(false), auth)
             .await?;
 
         Ok(Json(InterruptResponse {}))
@@ -297,27 +299,27 @@ impl WorkerApi {
     ///     - `Failed` if the worker failed and there are no more retries scheduled for it
     ///     - `Exited` if the worker explicitly exited using the exit WASI function
     #[oai(
-        path = "/:component_id/workers/:worker_name",
+        path = "/:component_id/workers/:agent_name",
         method = "get",
         operation_id = "get_worker_metadata"
     )]
     async fn get_worker_metadata(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<WorkerMetadataDto>> {
+    ) -> Result<Json<AgentMetadataDto>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
         let record =
-            recorded_http_api_request!("get_worker_metadata", worker_id = worker_id.to_string());
+            recorded_http_api_request!("get_worker_metadata", agent_id = agent_id.to_string());
 
         let response = self
-            .get_worker_metadata_internal(worker_id, auth)
+            .get_worker_metadata_internal(agent_id, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -326,10 +328,10 @@ impl WorkerApi {
 
     async fn get_worker_metadata_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         auth: AuthCtx,
-    ) -> Result<Json<WorkerMetadataDto>> {
-        let response = self.worker_service.get_metadata(&worker_id, auth).await?;
+    ) -> Result<Json<AgentMetadataDto>> {
+        let response = self.worker_service.get_metadata(&agent_id, auth).await?;
 
         Ok(Json(response))
     }
@@ -406,7 +408,7 @@ impl WorkerApi {
     ) -> Result<Json<model::WorkersMetadataResponse>> {
         let filter = match filter {
             Some(filters) if !filters.is_empty() => {
-                Some(WorkerFilter::from(filters).map_err(|e| {
+                Some(AgentFilter::from(filters).map_err(|e| {
                     ApiEndpointError::BadRequest(Json(ErrorsBody {
                         errors: vec![e],
                         cause: None,
@@ -511,26 +513,26 @@ impl WorkerApi {
 
     /// Resume a worker
     #[oai(
-        path = "/:component_id/workers/:worker_name/resume",
+        path = "/:component_id/workers/:agent_name/resume",
         method = "post",
         operation_id = "resume_worker"
     )]
     async fn resume_worker(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ResumeResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
-        let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
+        let record = recorded_http_api_request!("resume_worker", agent_id = agent_id.to_string());
 
         let response = self
-            .resume_worker_internal(worker_id, auth)
+            .resume_worker_internal(agent_id, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -539,37 +541,37 @@ impl WorkerApi {
 
     async fn resume_worker_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         auth: AuthCtx,
     ) -> Result<Json<ResumeResponse>> {
-        self.worker_service.resume(&worker_id, false, auth).await?;
+        self.worker_service.resume(&agent_id, false, auth).await?;
 
         Ok(Json(ResumeResponse {}))
     }
 
     /// Update a worker
     #[oai(
-        path = "/:component_id/workers/:worker_name/update",
+        path = "/:component_id/workers/:agent_name/update",
         method = "post",
         operation_id = "update_worker"
     )]
     async fn update_worker(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         params: Json<UpdateWorkerRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateWorkerResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
-        let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
+        let record = recorded_http_api_request!("update_worker", agent_id = agent_id.to_string());
 
         let response = self
-            .update_worker_internal(worker_id, params.0, auth)
+            .update_worker_internal(agent_id, params.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -578,13 +580,13 @@ impl WorkerApi {
 
     async fn update_worker_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         params: UpdateWorkerRequest,
         auth: AuthCtx,
     ) -> Result<Json<UpdateWorkerResponse>> {
         self.worker_service
             .update(
-                &worker_id,
+                &agent_id,
                 params.mode,
                 params.target_revision,
                 params.disable_wakeup,
@@ -597,14 +599,14 @@ impl WorkerApi {
 
     /// Get the oplog of a worker
     #[oai(
-        path = "/:component_id/workers/:worker_name/oplog",
+        path = "/:component_id/workers/:agent_name/oplog",
         method = "get",
         operation_id = "get_oplog"
     )]
     async fn get_oplog(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         from: Query<Option<u64>>,
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
@@ -613,14 +615,14 @@ impl WorkerApi {
     ) -> Result<Json<GetOplogResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
-        let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
+        let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
 
         let response = self
-            .get_oplog_internal(worker_id, from.0, count.0, cursor.0, query.0, auth)
+            .get_oplog_internal(agent_id, from.0, count.0, cursor.0, query.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -629,7 +631,7 @@ impl WorkerApi {
 
     async fn get_oplog_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         from: Option<u64>,
         count: u64,
         cursor: Option<OplogCursor>,
@@ -647,17 +649,17 @@ impl WorkerApi {
             }
             (Some(from), None) => {
                 self.worker_service
-                    .get_oplog(&worker_id, OplogIndex::from_u64(from), cursor, count, auth)
+                    .get_oplog(&agent_id, OplogIndex::from_u64(from), cursor, count, auth)
                     .await?
             }
             (None, Some(query)) => {
                 self.worker_service
-                    .search_oplog(&worker_id, cursor, count, query, auth)
+                    .search_oplog(&agent_id, cursor, count, query, auth)
                     .await?
             }
             (None, None) => {
                 self.worker_service
-                    .get_oplog(&worker_id, OplogIndex::INITIAL, cursor, count, auth)
+                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, auth)
                     .await?
             }
         };
@@ -667,27 +669,27 @@ impl WorkerApi {
 
     /// List files in a worker
     #[oai(
-        path = "/:component_id/workers/:worker_name/files/:file_name",
+        path = "/:component_id/workers/:agent_name/files/:file_name",
         method = "get",
         operation_id = "get_files"
     )]
     async fn get_file(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         file_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetFilesResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
-        let record = recorded_http_api_request!("get_file", worker_id = worker_id.to_string());
+        let record = recorded_http_api_request!("get_file", agent_id = agent_id.to_string());
 
         let response = self
-            .get_file_internal(worker_id, file_name.0, auth)
+            .get_file_internal(agent_id, file_name.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -696,7 +698,7 @@ impl WorkerApi {
 
     async fn get_file_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         file_name: String,
         auth: AuthCtx,
     ) -> Result<Json<GetFilesResponse>> {
@@ -704,7 +706,7 @@ impl WorkerApi {
 
         let nodes = self
             .worker_service
-            .get_file_system_node(&worker_id, path, auth)
+            .get_file_system_node(&agent_id, path, auth)
             .await?;
 
         Ok(Json(GetFilesResponse {
@@ -714,27 +716,27 @@ impl WorkerApi {
 
     /// Get contents of a file in a worker
     #[oai(
-        path = "/:component_id/workers/:worker_name/file-contents/:file_name",
+        path = "/:component_id/workers/:agent_name/file-contents/:file_name",
         method = "get",
         operation_id = "get_file_content"
     )]
     async fn get_file_content(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         file_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
-        let record = recorded_http_api_request!("get_files", worker_id = worker_id.to_string());
+        let record = recorded_http_api_request!("get_files", agent_id = agent_id.to_string());
 
         let response = self
-            .get_file_content_internal(worker_id, file_name.0, auth)
+            .get_file_content_internal(agent_id, file_name.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -743,7 +745,7 @@ impl WorkerApi {
 
     async fn get_file_content_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         file_name: String,
         auth: AuthCtx,
     ) -> Result<Binary<Body>> {
@@ -751,7 +753,7 @@ impl WorkerApi {
 
         let component = self
             .component_service
-            .get_latest_by_id(worker_id.component_id)
+            .get_latest_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -764,7 +766,7 @@ impl WorkerApi {
 
         let bytes = self
             .worker_service
-            .get_file_contents(&worker_id, path, auth)
+            .get_file_contents(&agent_id, path, auth)
             .await?;
 
         Ok(Binary(Body::from_bytes_stream(
@@ -776,31 +778,31 @@ impl WorkerApi {
     ///
     /// The plugin must be one of the installed plugins for the worker's current component version.
     #[oai(
-        path = "/:component_id/workers/:worker_name/activate-plugin",
+        path = "/:component_id/workers/:agent_name/activate-plugin",
         method = "post",
         operation_id = "activate_plugin"
     )]
     async fn activate_plugin(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         #[oai(name = "plugin-priority")] plugin_installation_id: Query<PluginPriority>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ActivatePluginResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!(
             "activate_plugin",
-            worker_id = worker_id.to_string(),
+            agent_id = agent_id.to_string(),
             plugin_installation_id = plugin_installation_id.to_string()
         );
 
         let response = self
-            .activate_plugin_internal(worker_id, plugin_installation_id.0, auth)
+            .activate_plugin_internal(agent_id, plugin_installation_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -809,13 +811,13 @@ impl WorkerApi {
 
     async fn activate_plugin_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         plugin_priority: PluginPriority,
         auth: AuthCtx,
     ) -> Result<Json<ActivatePluginResponse>> {
         let component = self
             .component_service
-            .get_latest_by_id(worker_id.component_id)
+            .get_latest_by_id(agent_id.component_id)
             .await?;
 
         self.auth_service
@@ -827,7 +829,7 @@ impl WorkerApi {
             .await?;
 
         self.worker_service
-            .activate_plugin(&worker_id, plugin_priority, auth)
+            .activate_plugin(&agent_id, plugin_priority, auth)
             .await?;
 
         Ok(Json(ActivatePluginResponse {}))
@@ -837,31 +839,31 @@ impl WorkerApi {
     ///
     /// The plugin must be one of the installed plugins for the worker's current component version.
     #[oai(
-        path = "/:component_id/workers/:worker_name/deactivate-plugin",
+        path = "/:component_id/workers/:agent_name/deactivate-plugin",
         method = "post",
         operation_id = "deactivate_plugin"
     )]
     async fn deactivate_plugin(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         #[oai(name = "plugin-priority")] plugin_priority: Query<PluginPriority>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeactivatePluginResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!(
             "activate_plugin",
-            worker_id = worker_id.to_string(),
+            agent_id = agent_id.to_string(),
             plugin_priority = plugin_priority.to_string()
         );
 
         let response = self
-            .deactivate_plugin_internal(worker_id, plugin_priority.0, auth)
+            .deactivate_plugin_internal(agent_id, plugin_priority.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -870,12 +872,12 @@ impl WorkerApi {
 
     async fn deactivate_plugin_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         plugin_priority: PluginPriority,
         auth: AuthCtx,
     ) -> Result<Json<DeactivatePluginResponse>> {
         self.worker_service
-            .deactivate_plugin(&worker_id, plugin_priority, auth)
+            .deactivate_plugin(&agent_id, plugin_priority, auth)
             .await?;
 
         Ok(Json(DeactivatePluginResponse {}))
@@ -885,28 +887,27 @@ impl WorkerApi {
     ///
     /// Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
     #[oai(
-        path = "/:component_id/workers/:worker_name/revert",
+        path = "/:component_id/workers/:agent_name/revert",
         method = "post",
         operation_id = "revert_worker"
     )]
     async fn revert_worker(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         target: Json<RevertWorkerTarget>,
         token: GolemSecurityScheme,
     ) -> Result<Json<RevertWorkerResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
-        let record =
-            recorded_http_api_request!("revert_worker", worker_id = worker_id.to_string(),);
+        let record = recorded_http_api_request!("revert_worker", agent_id = agent_id.to_string(),);
 
         let response = self
-            .revert_worker_internal(worker_id, target.0, auth)
+            .revert_worker_internal(agent_id, target.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -915,12 +916,12 @@ impl WorkerApi {
 
     async fn revert_worker_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         target: RevertWorkerTarget,
         auth: AuthCtx,
     ) -> Result<Json<RevertWorkerResponse>> {
         self.worker_service
-            .revert_worker(&worker_id, target, auth)
+            .revert_worker(&agent_id, target, auth)
             .await?;
 
         Ok(Json(RevertWorkerResponse {}))
@@ -930,28 +931,27 @@ impl WorkerApi {
     ///
     /// Fork a worker by creating a new worker with the oplog up to the provided index
     #[oai(
-        path = "/:component_id/workers/:worker_name/fork",
+        path = "/:component_id/workers/:agent_name/fork",
         method = "post",
         operation_id = "fork_worker"
     )]
     async fn fork_worker(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         request: Json<ForkWorkerRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ForkWorkerResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
-        let record =
-            recorded_http_api_request!("revert_worker", worker_id = worker_id.to_string(),);
+        let record = recorded_http_api_request!("revert_worker", agent_id = agent_id.to_string(),);
 
         let response = self
-            .fork_worker_internal(worker_id, request.0, auth)
+            .fork_worker_internal(agent_id, request.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -960,14 +960,14 @@ impl WorkerApi {
 
     async fn fork_worker_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         request: ForkWorkerRequest,
         auth: AuthCtx,
     ) -> Result<Json<ForkWorkerResponse>> {
         self.worker_service
             .fork_worker(
-                &worker_id,
-                &request.target_worker_id,
+                &agent_id,
+                &request.target_agent_id,
                 request.oplog_index_cutoff,
                 auth,
             )
@@ -980,31 +980,31 @@ impl WorkerApi {
     ///
     /// The invocation to be cancelled is identified by the idempotency key passed to the invoke API.
     #[oai(
-        path = "/:component_id/workers/:worker_name/invocations/:idempotency_key",
+        path = "/:component_id/workers/:agent_name/invocations/:idempotency_key",
         method = "delete",
         operation_id = "cancel_invocation"
     )]
     async fn cancel_invocation(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         idempotency_key: Path<IdempotencyKey>,
         token: GolemSecurityScheme,
     ) -> Result<Json<CancelInvocationResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!(
             "cancel_invocation",
-            worker_id = worker_id.to_string(),
+            agent_id = agent_id.to_string(),
             idempotency_key = idempotency_key.0.to_string(),
         );
 
         let response = self
-            .cancel_invocation_internal(worker_id, idempotency_key.0, auth)
+            .cancel_invocation_internal(agent_id, idempotency_key.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -1013,13 +1013,13 @@ impl WorkerApi {
 
     async fn cancel_invocation_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         idempotency_key: IdempotencyKey,
         auth: AuthCtx,
     ) -> Result<Json<CancelInvocationResponse>> {
         let canceled = self
             .worker_service
-            .cancel_invocation(&worker_id, &idempotency_key, auth)
+            .cancel_invocation(&agent_id, &idempotency_key, auth)
             .await?;
 
         Ok(Json(CancelInvocationResponse { canceled }))
@@ -1027,26 +1027,26 @@ impl WorkerApi {
 
     /// Connect to a worker using a websocket and stream events
     #[oai(
-        path = "/:component_id/workers/:worker_name/connect",
+        path = "/:component_id/workers/:agent_name/connect",
         method = "get",
         operation_id = "worker_connect"
     )]
     pub async fn worker_connect(
         &self,
         component_id: Path<ComponentId>,
-        worker_name: Path<String>,
+        agent_name: Path<String>,
         websocket: WebSocket,
         token: WrappedGolemSecuritySchema,
     ) -> Result<BoxWebSocketUpgraded> {
-        let (worker_id, worker_stream) = self
-            .connect_to_worker(component_id.0, worker_name.0, token.0.secret())
+        let (agent_id, worker_stream) = self
+            .connect_to_worker(component_id.0, agent_name.0, token.0.secret())
             .await?;
 
         let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
             Box::pin(async move {
                 let (sink, stream) = socket_stream.split();
                 let _ = proxy_worker_connection(
-                    worker_id,
+                    agent_id,
                     worker_stream,
                     sink,
                     stream,
@@ -1063,41 +1063,40 @@ impl WorkerApi {
     async fn connect_to_worker(
         &self,
         component_id: ComponentId,
-        worker_name: String,
+        agent_name: String,
         token: TokenSecret,
-    ) -> Result<(WorkerId, ConnectWorkerStream)> {
+    ) -> Result<(AgentId, ConnectWorkerStream)> {
         let auth = self.auth_service.authenticate_token(token).await?;
 
-        let worker_id = self
-            .normalize_worker_id(component_id, worker_name.as_str())
+        let agent_id = self
+            .normalize_agent_id(component_id, agent_name.as_str())
             .await?;
 
-        let record =
-            recorded_http_api_request!("connect_worker", worker_id = worker_id.to_string());
+        let record = recorded_http_api_request!("connect_worker", agent_id = agent_id.to_string());
 
         let response = self
-            .connect_to_worker_internal(worker_id.clone(), auth)
+            .connect_to_worker_internal(agent_id.clone(), auth)
             .instrument(record.span.clone())
             .await
-            .map(|stream| (worker_id, stream));
+            .map(|stream| (agent_id, stream));
 
         record.result(response)
     }
 
     async fn connect_to_worker_internal(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         auth: AuthCtx,
     ) -> Result<ConnectWorkerStream> {
-        let stream = self.worker_service.connect(&worker_id, auth).await?;
+        let stream = self.worker_service.connect(&agent_id, auth).await?;
         Ok(stream)
     }
 
-    async fn normalize_worker_id_by_latest_version(
+    async fn normalize_agent_id_by_latest_version(
         &self,
         component_id: ComponentId,
-        worker_id: &str,
-    ) -> Result<(WorkerId, Component)> {
+        agent_id: &str,
+    ) -> Result<(AgentId, Component)> {
         let latest_component = self
             .component_service
             .get_latest_by_id_uncached(component_id)
@@ -1113,22 +1112,22 @@ impl WorkerApi {
                 }))
             })?;
 
-        let worker_id =
-            WorkerId::from_worker_name_string(component_id, worker_id).map_err(|error| {
+        let agent_id =
+            AgentId::from_agent_name_string(component_id, agent_id).map_err(|error| {
                 ApiEndpointError::BadRequest(Json(ErrorsBody {
                     errors: vec![format!("Invalid worker id: {error}")],
                     cause: None,
                 }))
             })?;
-        Ok((worker_id, latest_component))
+        Ok((agent_id, latest_component))
     }
 
-    async fn normalize_worker_id(
+    async fn normalize_agent_id(
         &self,
         component_id: ComponentId,
-        worker_id: &str,
-    ) -> Result<WorkerId> {
-        WorkerId::from_worker_name_string(component_id, worker_id).map_err(|error| {
+        agent_id: &str,
+    ) -> Result<AgentId> {
+        AgentId::from_agent_name_string(component_id, agent_id).map_err(|error| {
             ApiEndpointError::BadRequest(Json(ErrorsBody {
                 errors: vec![format!("Invalid worker id: {error}")],
                 cause: None,

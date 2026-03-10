@@ -65,7 +65,7 @@ async fn get_oplog_1(
         .store()
         .await?;
 
-    let agent_id = agent_id!("golem-host-api", "getoplog1");
+    let agent_id = agent_id!("GolemHostApi", "getoplog1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -149,7 +149,7 @@ async fn search_oplog_1(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "search-oplog-1");
+    let repo_id = agent_id!("Repository", "search-oplog-1");
     let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     executor
@@ -239,7 +239,7 @@ async fn get_oplog_with_api_changing_updates(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -310,7 +310,7 @@ async fn get_oplog_starting_with_updated_component(
         updated_component.revision
     );
 
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -384,9 +384,15 @@ async fn invocation_context_test(
         .store()
         .await?;
 
-    let agent_id = agent_id!("invocation-context", "w1");
+    let agent_id = agent_id!("InvocationContext", "w1");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor

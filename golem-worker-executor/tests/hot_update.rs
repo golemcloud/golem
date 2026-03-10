@@ -18,7 +18,7 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::WorkerStatus;
+use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{update_counts, TestDsl};
 
@@ -168,9 +168,15 @@ async fn auto_update_on_running(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -245,7 +251,7 @@ async fn auto_update_on_idle(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -301,9 +307,15 @@ async fn failing_auto_update_on_idle(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -361,7 +373,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -427,9 +439,15 @@ async fn failing_auto_update_on_running(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -514,9 +532,15 @@ async fn manual_update_on_idle(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -582,9 +606,15 @@ async fn manual_update_on_idle_without_save_snapshot(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -646,9 +676,15 @@ async fn auto_update_on_running_followed_by_manual(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -744,9 +780,15 @@ async fn manual_update_on_idle_with_failing_load(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -807,9 +849,15 @@ async fn manual_update_on_idle_using_v11(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -875,9 +923,15 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -939,7 +993,7 @@ async fn auto_update_on_idle_to_non_existing(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1003,7 +1057,7 @@ async fn update_component_revision_environment_variable(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("revision-env-agent");
+    let agent_id = agent_id!("RevisionEnvAgent");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1047,7 +1101,7 @@ async fn update_component_revision_environment_variable(
 
     // agent created on the new version sees correct component version
     {
-        let agent_id_2 = phantom_agent_id!("revision-env-agent", uuid::Uuid::new_v4());
+        let agent_id_2 = phantom_agent_id!("RevisionEnvAgent", uuid::Uuid::new_v4());
         let _worker2 = executor
             .start_agent(&component.id, agent_id_2.clone())
             .await?;
@@ -1109,9 +1163,15 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -1147,7 +1207,7 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
     executor
         .wait_for_status(
             &worker_id,
-            WorkerStatus::Interrupted,
+            AgentStatus::Interrupted,
             Duration::from_secs(10),
         )
         .await?;
@@ -1178,7 +1238,7 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
     http_server.abort();
 
     // The worker should still be interrupted since disable_wakeup was true
-    assert_eq!(metadata.status, WorkerStatus::Interrupted);
+    assert_eq!(metadata.status, AgentStatus::Interrupted);
     // The update should be pending, not yet applied
     assert_eq!(update_counts(&metadata), (1, 0, 0));
 

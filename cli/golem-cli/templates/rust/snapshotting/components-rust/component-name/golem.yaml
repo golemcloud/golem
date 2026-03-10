@@ -12,7 +12,7 @@
 #             __cn__: componentname
 #             response: |
 #               let name: string = request.path.name;
-#               let agent = counter-agent(name);
+#               let agent = CounterAgent(name);
 #               let new-value = agent.increment();
 #               { status: 200, body: { result: "incremented ${name}, new value is ${new-value}" } }
 

@@ -58,7 +58,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -79,7 +79,7 @@
         ],
         "type": "Tuple"
       },
-      "name": "BarAgent",
+      "name": null,
       "promptHint": "Enter the following parameters: optionalStringType, optionalUnionType"
     },
     "dependencies": [],
@@ -137,7 +137,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -146,19 +146,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -180,18 +180,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -201,7 +201,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -229,10 +229,10 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
@@ -250,7 +250,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -285,11 +285,11 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
@@ -307,7 +307,7 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
@@ -322,12 +322,12 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     }
                   ],
-                  "name": "object-complex-type",
+                  "name": "ObjectComplexType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -339,19 +339,19 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-type1",
+                      "name": "UnionType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-type2",
+                      "name": "UnionType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-type3",
+                      "name": "UnionType3",
                       "typ": {
                         "fields": [
                           {
@@ -373,18 +373,18 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-type4",
+                      "name": "UnionType4",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-type",
+                  "name": "UnionType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -396,19 +396,19 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-complex-type1",
+                      "name": "UnionComplexType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-complex-type2",
+                      "name": "UnionComplexType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-complex-type3",
+                      "name": "UnionComplexType3",
                       "typ": {
                         "fields": [
                           {
@@ -452,7 +452,7 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
@@ -461,19 +461,19 @@
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "union-type1",
+                                  "name": "UnionType1",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "union-type2",
+                                  "name": "UnionType2",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "union-type3",
+                                  "name": "UnionType3",
                                   "typ": {
                                     "fields": [
                                       {
@@ -495,18 +495,18 @@
                                         }
                                       }
                                     ],
-                                    "name": "object-type",
+                                    "name": "ObjectType",
                                     "type": "Record"
                                   }
                                 },
                                 {
-                                  "name": "union-type4",
+                                  "name": "UnionType4",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 }
                               ],
-                              "name": "union-type",
+                              "name": "UnionType",
                               "type": "Variant"
                             }
                           },
@@ -516,7 +516,7 @@
                               "inner": {
                                 "type": "Str"
                               },
-                              "name": "list-type",
+                              "name": "ListType",
                               "type": "List"
                             }
                           },
@@ -544,10 +544,10 @@
                                     }
                                   }
                                 ],
-                                "name": "object-type",
+                                "name": "ObjectType",
                                 "type": "Record"
                               },
-                              "name": "list-complex-type",
+                              "name": "ListComplexType",
                               "type": "List"
                             }
                           },
@@ -565,7 +565,7 @@
                                   "type": "Bool"
                                 }
                               ],
-                              "name": "tuple-type",
+                              "name": "TupleType",
                               "type": "Tuple"
                             }
                           },
@@ -600,11 +600,11 @@
                                       }
                                     }
                                   ],
-                                  "name": "object-type",
+                                  "name": "ObjectType",
                                   "type": "Record"
                                 }
                               ],
-                              "name": "tuple-complex-type",
+                              "name": "TupleComplexType",
                               "type": "Tuple"
                             }
                           },
@@ -622,7 +622,7 @@
                                 ],
                                 "type": "Tuple"
                               },
-                              "name": "map-type",
+                              "name": "MapType",
                               "type": "List"
                             }
                           },
@@ -637,17 +637,17 @@
                                   }
                                 }
                               ],
-                              "name": "simple-interface-type",
+                              "name": "SimpleInterfaceType",
                               "type": "Record"
                             }
                           }
                         ],
-                        "name": "object-complex-type",
+                        "name": "ObjectComplexType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type4",
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -669,22 +669,22 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type5",
+                      "name": "UnionComplexType5",
                       "typ": {
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type6",
+                      "name": "UnionComplexType6",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -707,15 +707,15 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type7",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -728,12 +728,12 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type8",
+                      "name": "UnionComplexType8",
                       "typ": {
                         "items": [
                           {
@@ -763,16 +763,16 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type9",
+                      "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
                           "items": [
@@ -785,12 +785,12 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type10",
+                      "name": "UnionComplexType10",
                       "typ": {
                         "fields": [
                           {
@@ -800,18 +800,18 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type11",
+                      "name": "UnionComplexType11",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-complex-type",
+                  "name": "UnionComplexType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -859,7 +859,7 @@
                     ],
                     "type": "Tuple"
                   },
-                  "name": "map-type",
+                  "name": "MapType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -897,11 +897,11 @@
                           }
                         }
                       ],
-                      "name": "object-type",
+                      "name": "ObjectType",
                       "type": "Record"
                     }
                   ],
-                  "name": "tuple-complex-type",
+                  "name": "TupleComplexType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -922,7 +922,7 @@
                       "type": "Bool"
                     }
                   ],
-                  "name": "tuple-type",
+                  "name": "TupleType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -953,10 +953,10 @@
                         }
                       }
                     ],
-                    "name": "object-type",
+                    "name": "ObjectType",
                     "type": "Record"
                   },
-                  "name": "list-complex-type",
+                  "name": "ListComplexType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -986,7 +986,7 @@
                       }
                     }
                   ],
-                  "name": "object-type",
+                  "name": "ObjectType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1013,7 +1013,7 @@
                       }
                     }
                   ],
-                  "name": "result-like",
+                  "name": "ResultLike",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -1043,7 +1043,7 @@
                       }
                     }
                   ],
-                  "name": "result-like-with-no-tag",
+                  "name": "ResultLikeWithNoTag",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1090,7 +1090,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined1",
+                  "name": "ObjectWithUnionWithUndefined1",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1125,7 +1125,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined2",
+                  "name": "ObjectWithUnionWithUndefined2",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1160,7 +1160,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined3",
+                  "name": "ObjectWithUnionWithUndefined3",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1181,7 +1181,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined4",
+                  "name": "ObjectWithUnionWithUndefined4",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1240,7 +1240,7 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         }
                       },
@@ -1286,19 +1286,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -1320,18 +1320,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -1358,7 +1358,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -1368,7 +1368,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -1386,7 +1386,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -1401,7 +1401,7 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
@@ -1414,7 +1414,7 @@
                       "typ": null
                     }
                   ],
-                  "name": "tagged-union",
+                  "name": "TaggedUnion",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -1427,7 +1427,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -1485,7 +1485,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Bool"
@@ -1525,7 +1525,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": {
@@ -1569,7 +1569,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": null,
@@ -1611,7 +1611,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": {
@@ -1658,10 +1658,10 @@
                         }
                       }
                     ],
-                    "name": "object-type",
+                    "name": "ObjectType",
                     "type": "Record"
                   },
-                  "name": "list-complex-type",
+                  "name": "ListComplexType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -1674,7 +1674,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -1698,10 +1698,10 @@
                         }
                       }
                     ],
-                    "name": "object-type",
+                    "name": "ObjectType",
                     "type": "Record"
                   },
-                  "name": "list-complex-type",
+                  "name": "ListComplexType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -1883,7 +1883,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "F64"
@@ -1947,7 +1947,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -1956,19 +1956,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -1990,18 +1990,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -2011,7 +2011,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -2039,10 +2039,10 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
@@ -2060,7 +2060,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -2095,11 +2095,11 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
@@ -2117,7 +2117,7 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
@@ -2132,12 +2132,12 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     }
                   ],
-                  "name": "object-complex-type",
+                  "name": "ObjectComplexType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2150,7 +2150,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -2195,7 +2195,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -2204,19 +2204,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -2238,18 +2238,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -2259,7 +2259,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -2287,10 +2287,10 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
@@ -2308,7 +2308,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -2343,11 +2343,11 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
@@ -2365,7 +2365,7 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
@@ -2380,12 +2380,12 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     }
                   ],
-                  "name": "object-complex-type",
+                  "name": "ObjectComplexType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2425,7 +2425,7 @@
                       }
                     }
                   ],
-                  "name": "object-type",
+                  "name": "ObjectType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2438,7 +2438,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -2461,7 +2461,7 @@
                       }
                     }
                   ],
-                  "name": "object-type",
+                  "name": "ObjectType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2518,7 +2518,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined1",
+                  "name": "ObjectWithUnionWithUndefined1",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2553,7 +2553,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined2",
+                  "name": "ObjectWithUnionWithUndefined2",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2588,7 +2588,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined3",
+                  "name": "ObjectWithUnionWithUndefined3",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2609,7 +2609,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined4",
+                  "name": "ObjectWithUnionWithUndefined4",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2668,7 +2668,7 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         }
                       },
@@ -2693,7 +2693,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -2833,7 +2833,7 @@
                                     }
                                   }
                                 ],
-                                "name": "object-type",
+                                "name": "ObjectType",
                                 "type": "Record"
                               }
                             },
@@ -2905,7 +2905,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -2956,7 +2956,7 @@
                   "err": {
                     "type": "Str"
                   },
-                  "name": "result-exact",
+                  "name": "ResultExact",
                   "ok": {
                     "type": "Str"
                   },
@@ -2972,13 +2972,13 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": {
                     "type": "Str"
                   },
-                  "name": "result-exact",
+                  "name": "ResultExact",
                   "ok": {
                     "type": "Str"
                   },
@@ -3018,7 +3018,7 @@
                       }
                     }
                   ],
-                  "name": "result-like",
+                  "name": "ResultLike",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -3031,7 +3031,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -3051,7 +3051,7 @@
                       }
                     }
                   ],
-                  "name": "result-like",
+                  "name": "ResultLike",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -3072,7 +3072,7 @@
               "schema": {
                 "elementType": {
                   "err": null,
-                  "name": "result-like-with-void",
+                  "name": "ResultLikeWithVoid",
                   "ok": null,
                   "type": "Result"
                 },
@@ -3086,11 +3086,11 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": null,
-                  "name": "result-like-with-void",
+                  "name": "ResultLikeWithVoid",
                   "ok": null,
                   "type": "Result"
                 },
@@ -3131,7 +3131,7 @@
                       }
                     }
                   ],
-                  "name": "result-like-with-no-tag",
+                  "name": "ResultLikeWithNoTag",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -3144,7 +3144,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -3167,7 +3167,7 @@
                       }
                     }
                   ],
-                  "name": "result-like-with-no-tag",
+                  "name": "ResultLikeWithNoTag",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -3199,7 +3199,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -3245,19 +3245,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -3279,18 +3279,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -3317,7 +3317,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -3327,7 +3327,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -3345,7 +3345,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -3360,7 +3360,7 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
@@ -3373,7 +3373,7 @@
                       "typ": null
                     }
                   ],
-                  "name": "tagged-union",
+                  "name": "TaggedUnion",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -3386,7 +3386,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -3413,19 +3413,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -3447,18 +3447,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -3485,7 +3485,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -3495,7 +3495,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -3513,7 +3513,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -3528,7 +3528,7 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
@@ -3541,7 +3541,7 @@
                       "typ": null
                     }
                   ],
-                  "name": "tagged-union",
+                  "name": "TaggedUnion",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -3572,7 +3572,7 @@
                     ],
                     "type": "Tuple"
                   },
-                  "name": "map-type",
+                  "name": "MapType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -3585,7 +3585,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -3599,7 +3599,7 @@
                     ],
                     "type": "Tuple"
                   },
-                  "name": "map-type",
+                  "name": "MapType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -3647,11 +3647,11 @@
                           }
                         }
                       ],
-                      "name": "object-type",
+                      "name": "ObjectType",
                       "type": "Record"
                     }
                   ],
-                  "name": "tuple-complex-type",
+                  "name": "TupleComplexType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -3664,7 +3664,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "items": [
@@ -3695,11 +3695,11 @@
                           }
                         }
                       ],
-                      "name": "object-type",
+                      "name": "ObjectType",
                       "type": "Record"
                     }
                   ],
-                  "name": "tuple-complex-type",
+                  "name": "TupleComplexType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -3730,7 +3730,7 @@
                       "type": "Bool"
                     }
                   ],
-                  "name": "tuple-type",
+                  "name": "TupleType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -3743,7 +3743,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "items": [
@@ -3757,7 +3757,7 @@
                       "type": "Bool"
                     }
                   ],
-                  "name": "tuple-type",
+                  "name": "TupleType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -3803,19 +3803,19 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-complex-type1",
+                      "name": "UnionComplexType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-complex-type2",
+                      "name": "UnionComplexType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-complex-type3",
+                      "name": "UnionComplexType3",
                       "typ": {
                         "fields": [
                           {
@@ -3859,7 +3859,7 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
@@ -3868,19 +3868,19 @@
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "union-type1",
+                                  "name": "UnionType1",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "union-type2",
+                                  "name": "UnionType2",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "union-type3",
+                                  "name": "UnionType3",
                                   "typ": {
                                     "fields": [
                                       {
@@ -3902,18 +3902,18 @@
                                         }
                                       }
                                     ],
-                                    "name": "object-type",
+                                    "name": "ObjectType",
                                     "type": "Record"
                                   }
                                 },
                                 {
-                                  "name": "union-type4",
+                                  "name": "UnionType4",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 }
                               ],
-                              "name": "union-type",
+                              "name": "UnionType",
                               "type": "Variant"
                             }
                           },
@@ -3923,7 +3923,7 @@
                               "inner": {
                                 "type": "Str"
                               },
-                              "name": "list-type",
+                              "name": "ListType",
                               "type": "List"
                             }
                           },
@@ -3951,10 +3951,10 @@
                                     }
                                   }
                                 ],
-                                "name": "object-type",
+                                "name": "ObjectType",
                                 "type": "Record"
                               },
-                              "name": "list-complex-type",
+                              "name": "ListComplexType",
                               "type": "List"
                             }
                           },
@@ -3972,7 +3972,7 @@
                                   "type": "Bool"
                                 }
                               ],
-                              "name": "tuple-type",
+                              "name": "TupleType",
                               "type": "Tuple"
                             }
                           },
@@ -4007,11 +4007,11 @@
                                       }
                                     }
                                   ],
-                                  "name": "object-type",
+                                  "name": "ObjectType",
                                   "type": "Record"
                                 }
                               ],
-                              "name": "tuple-complex-type",
+                              "name": "TupleComplexType",
                               "type": "Tuple"
                             }
                           },
@@ -4029,7 +4029,7 @@
                                 ],
                                 "type": "Tuple"
                               },
-                              "name": "map-type",
+                              "name": "MapType",
                               "type": "List"
                             }
                           },
@@ -4044,17 +4044,17 @@
                                   }
                                 }
                               ],
-                              "name": "simple-interface-type",
+                              "name": "SimpleInterfaceType",
                               "type": "Record"
                             }
                           }
                         ],
-                        "name": "object-complex-type",
+                        "name": "ObjectComplexType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type4",
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -4076,22 +4076,22 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type5",
+                      "name": "UnionComplexType5",
                       "typ": {
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type6",
+                      "name": "UnionComplexType6",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -4114,15 +4114,15 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type7",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -4135,12 +4135,12 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type8",
+                      "name": "UnionComplexType8",
                       "typ": {
                         "items": [
                           {
@@ -4170,16 +4170,16 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type9",
+                      "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
                           "items": [
@@ -4192,12 +4192,12 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type10",
+                      "name": "UnionComplexType10",
                       "typ": {
                         "fields": [
                           {
@@ -4207,18 +4207,18 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type11",
+                      "name": "UnionComplexType11",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-complex-type",
+                  "name": "UnionComplexType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4231,24 +4231,24 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-complex-type1",
+                      "name": "UnionComplexType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-complex-type2",
+                      "name": "UnionComplexType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-complex-type3",
+                      "name": "UnionComplexType3",
                       "typ": {
                         "fields": [
                           {
@@ -4292,7 +4292,7 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
@@ -4301,19 +4301,19 @@
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "union-type1",
+                                  "name": "UnionType1",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "union-type2",
+                                  "name": "UnionType2",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "union-type3",
+                                  "name": "UnionType3",
                                   "typ": {
                                     "fields": [
                                       {
@@ -4335,18 +4335,18 @@
                                         }
                                       }
                                     ],
-                                    "name": "object-type",
+                                    "name": "ObjectType",
                                     "type": "Record"
                                   }
                                 },
                                 {
-                                  "name": "union-type4",
+                                  "name": "UnionType4",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 }
                               ],
-                              "name": "union-type",
+                              "name": "UnionType",
                               "type": "Variant"
                             }
                           },
@@ -4356,7 +4356,7 @@
                               "inner": {
                                 "type": "Str"
                               },
-                              "name": "list-type",
+                              "name": "ListType",
                               "type": "List"
                             }
                           },
@@ -4384,10 +4384,10 @@
                                     }
                                   }
                                 ],
-                                "name": "object-type",
+                                "name": "ObjectType",
                                 "type": "Record"
                               },
-                              "name": "list-complex-type",
+                              "name": "ListComplexType",
                               "type": "List"
                             }
                           },
@@ -4405,7 +4405,7 @@
                                   "type": "Bool"
                                 }
                               ],
-                              "name": "tuple-type",
+                              "name": "TupleType",
                               "type": "Tuple"
                             }
                           },
@@ -4440,11 +4440,11 @@
                                       }
                                     }
                                   ],
-                                  "name": "object-type",
+                                  "name": "ObjectType",
                                   "type": "Record"
                                 }
                               ],
-                              "name": "tuple-complex-type",
+                              "name": "TupleComplexType",
                               "type": "Tuple"
                             }
                           },
@@ -4462,7 +4462,7 @@
                                 ],
                                 "type": "Tuple"
                               },
-                              "name": "map-type",
+                              "name": "MapType",
                               "type": "List"
                             }
                           },
@@ -4477,17 +4477,17 @@
                                   }
                                 }
                               ],
-                              "name": "simple-interface-type",
+                              "name": "SimpleInterfaceType",
                               "type": "Record"
                             }
                           }
                         ],
-                        "name": "object-complex-type",
+                        "name": "ObjectComplexType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type4",
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -4509,22 +4509,22 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type5",
+                      "name": "UnionComplexType5",
                       "typ": {
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type6",
+                      "name": "UnionComplexType6",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -4547,15 +4547,15 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type7",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -4568,12 +4568,12 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type8",
+                      "name": "UnionComplexType8",
                       "typ": {
                         "items": [
                           {
@@ -4603,16 +4603,16 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type9",
+                      "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
                           "items": [
@@ -4625,12 +4625,12 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type10",
+                      "name": "UnionComplexType10",
                       "typ": {
                         "fields": [
                           {
@@ -4640,18 +4640,18 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type11",
+                      "name": "UnionComplexType11",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-complex-type",
+                  "name": "UnionComplexType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4673,19 +4673,19 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-type1",
+                      "name": "UnionType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-type2",
+                      "name": "UnionType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-type3",
+                      "name": "UnionType3",
                       "typ": {
                         "fields": [
                           {
@@ -4707,18 +4707,18 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-type4",
+                      "name": "UnionType4",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-type",
+                  "name": "UnionType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4731,24 +4731,24 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-type1",
+                      "name": "UnionType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-type2",
+                      "name": "UnionType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-type3",
+                      "name": "UnionType3",
                       "typ": {
                         "fields": [
                           {
@@ -4770,18 +4770,18 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-type4",
+                      "name": "UnionType4",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-type",
+                  "name": "UnionType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4815,13 +4815,13 @@
                       "typ": null
                     },
                     {
-                      "name": "union-with-literals1",
+                      "name": "UnionWithLiterals1",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-with-literals",
+                  "name": "UnionWithLiterals",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4834,7 +4834,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -4851,13 +4851,13 @@
                       "typ": null
                     },
                     {
-                      "name": "union-with-literals1",
+                      "name": "UnionWithLiterals1",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-with-literals",
+                  "name": "UnionWithLiterals",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4882,7 +4882,7 @@
                     "bar",
                     "baz"
                   ],
-                  "name": "union-with-only-literals",
+                  "name": "UnionWithOnlyLiterals",
                   "type": "Enum"
                 },
                 "type": "ComponentModel"
@@ -4895,7 +4895,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -4903,7 +4903,7 @@
                     "bar",
                     "baz"
                   ],
-                  "name": "union-with-only-literals",
+                  "name": "UnionWithOnlyLiterals",
                   "type": "Enum"
                 },
                 "type": "ComponentModel"
@@ -4937,7 +4937,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -4969,7 +4969,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -5011,6 +5011,7 @@
     "snapshotting": {
       "type": "Disabled"
     },
+    "sourceLanguage": "typescript",
     "typeName": "BarAgent"
   },
   {
@@ -5031,7 +5032,7 @@
         ],
         "type": "Tuple"
       },
-      "name": "FooAgent",
+      "name": null,
       "promptHint": "Enter the following parameters: input"
     },
     "dependencies": [],
@@ -5089,7 +5090,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -5098,19 +5099,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -5132,18 +5133,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -5153,7 +5154,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -5181,10 +5182,10 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
@@ -5202,7 +5203,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -5237,11 +5238,11 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
@@ -5259,7 +5260,7 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
@@ -5274,12 +5275,12 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     }
                   ],
-                  "name": "object-complex-type",
+                  "name": "ObjectComplexType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -5291,19 +5292,19 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-type1",
+                      "name": "UnionType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-type2",
+                      "name": "UnionType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-type3",
+                      "name": "UnionType3",
                       "typ": {
                         "fields": [
                           {
@@ -5325,18 +5326,18 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-type4",
+                      "name": "UnionType4",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-type",
+                  "name": "UnionType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -5348,19 +5349,19 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-complex-type1",
+                      "name": "UnionComplexType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-complex-type2",
+                      "name": "UnionComplexType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-complex-type3",
+                      "name": "UnionComplexType3",
                       "typ": {
                         "fields": [
                           {
@@ -5404,7 +5405,7 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
@@ -5413,19 +5414,19 @@
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "union-type1",
+                                  "name": "UnionType1",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "union-type2",
+                                  "name": "UnionType2",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "union-type3",
+                                  "name": "UnionType3",
                                   "typ": {
                                     "fields": [
                                       {
@@ -5447,18 +5448,18 @@
                                         }
                                       }
                                     ],
-                                    "name": "object-type",
+                                    "name": "ObjectType",
                                     "type": "Record"
                                   }
                                 },
                                 {
-                                  "name": "union-type4",
+                                  "name": "UnionType4",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 }
                               ],
-                              "name": "union-type",
+                              "name": "UnionType",
                               "type": "Variant"
                             }
                           },
@@ -5468,7 +5469,7 @@
                               "inner": {
                                 "type": "Str"
                               },
-                              "name": "list-type",
+                              "name": "ListType",
                               "type": "List"
                             }
                           },
@@ -5496,10 +5497,10 @@
                                     }
                                   }
                                 ],
-                                "name": "object-type",
+                                "name": "ObjectType",
                                 "type": "Record"
                               },
-                              "name": "list-complex-type",
+                              "name": "ListComplexType",
                               "type": "List"
                             }
                           },
@@ -5517,7 +5518,7 @@
                                   "type": "Bool"
                                 }
                               ],
-                              "name": "tuple-type",
+                              "name": "TupleType",
                               "type": "Tuple"
                             }
                           },
@@ -5552,11 +5553,11 @@
                                       }
                                     }
                                   ],
-                                  "name": "object-type",
+                                  "name": "ObjectType",
                                   "type": "Record"
                                 }
                               ],
-                              "name": "tuple-complex-type",
+                              "name": "TupleComplexType",
                               "type": "Tuple"
                             }
                           },
@@ -5574,7 +5575,7 @@
                                 ],
                                 "type": "Tuple"
                               },
-                              "name": "map-type",
+                              "name": "MapType",
                               "type": "List"
                             }
                           },
@@ -5589,17 +5590,17 @@
                                   }
                                 }
                               ],
-                              "name": "simple-interface-type",
+                              "name": "SimpleInterfaceType",
                               "type": "Record"
                             }
                           }
                         ],
-                        "name": "object-complex-type",
+                        "name": "ObjectComplexType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type4",
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -5621,22 +5622,22 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type5",
+                      "name": "UnionComplexType5",
                       "typ": {
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type6",
+                      "name": "UnionComplexType6",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -5659,15 +5660,15 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type7",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -5680,12 +5681,12 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type8",
+                      "name": "UnionComplexType8",
                       "typ": {
                         "items": [
                           {
@@ -5715,16 +5716,16 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type9",
+                      "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
                           "items": [
@@ -5737,12 +5738,12 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type10",
+                      "name": "UnionComplexType10",
                       "typ": {
                         "fields": [
                           {
@@ -5752,18 +5753,18 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type11",
+                      "name": "UnionComplexType11",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-complex-type",
+                  "name": "UnionComplexType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -5811,7 +5812,7 @@
                     ],
                     "type": "Tuple"
                   },
-                  "name": "map-type",
+                  "name": "MapType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -5849,11 +5850,11 @@
                           }
                         }
                       ],
-                      "name": "object-type",
+                      "name": "ObjectType",
                       "type": "Record"
                     }
                   ],
-                  "name": "tuple-complex-type",
+                  "name": "TupleComplexType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -5874,7 +5875,7 @@
                       "type": "Bool"
                     }
                   ],
-                  "name": "tuple-type",
+                  "name": "TupleType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -5905,10 +5906,10 @@
                         }
                       }
                     ],
-                    "name": "object-type",
+                    "name": "ObjectType",
                     "type": "Record"
                   },
-                  "name": "list-complex-type",
+                  "name": "ListComplexType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -5938,7 +5939,7 @@
                       }
                     }
                   ],
-                  "name": "object-type",
+                  "name": "ObjectType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -5965,7 +5966,7 @@
                       }
                     }
                   ],
-                  "name": "result-like",
+                  "name": "ResultLike",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -5995,7 +5996,7 @@
                       }
                     }
                   ],
-                  "name": "result-like-with-no-tag",
+                  "name": "ResultLikeWithNoTag",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6042,7 +6043,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined1",
+                  "name": "ObjectWithUnionWithUndefined1",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6077,7 +6078,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined2",
+                  "name": "ObjectWithUnionWithUndefined2",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6112,7 +6113,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined3",
+                  "name": "ObjectWithUnionWithUndefined3",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6133,7 +6134,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined4",
+                  "name": "ObjectWithUnionWithUndefined4",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6192,7 +6193,7 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         }
                       },
@@ -6238,19 +6239,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -6272,18 +6273,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -6310,7 +6311,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -6320,7 +6321,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -6338,7 +6339,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -6353,7 +6354,7 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
@@ -6366,7 +6367,7 @@
                       "typ": null
                     }
                   ],
-                  "name": "tagged-union",
+                  "name": "TaggedUnion",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -6379,7 +6380,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -6437,7 +6438,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Bool"
@@ -6477,7 +6478,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": {
@@ -6521,7 +6522,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": null,
@@ -6563,7 +6564,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": {
@@ -6609,7 +6610,7 @@
                       }
                     }
                   ],
-                  "name": "result-like-with-no-tag",
+                  "name": "ResultLikeWithNoTag",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6622,7 +6623,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -6645,7 +6646,7 @@
                       }
                     }
                   ],
-                  "name": "result-like-with-no-tag",
+                  "name": "ResultLikeWithNoTag",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6686,10 +6687,10 @@
                         }
                       }
                     ],
-                    "name": "object-type",
+                    "name": "ObjectType",
                     "type": "Record"
                   },
-                  "name": "list-complex-type",
+                  "name": "ListComplexType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -6702,7 +6703,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -6726,10 +6727,10 @@
                         }
                       }
                     ],
-                    "name": "object-type",
+                    "name": "ObjectType",
                     "type": "Record"
                   },
-                  "name": "list-complex-type",
+                  "name": "ListComplexType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -6760,7 +6761,7 @@
                     ],
                     "type": "Tuple"
                   },
-                  "name": "map-type",
+                  "name": "MapType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -6773,7 +6774,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -6787,7 +6788,7 @@
                     ],
                     "type": "Tuple"
                   },
-                  "name": "map-type",
+                  "name": "MapType",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -6969,7 +6970,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "F64"
@@ -7033,7 +7034,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -7042,19 +7043,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -7076,18 +7077,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -7097,7 +7098,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -7125,10 +7126,10 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
@@ -7146,7 +7147,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -7181,11 +7182,11 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
@@ -7203,7 +7204,7 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
@@ -7218,12 +7219,12 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     }
                   ],
-                  "name": "object-complex-type",
+                  "name": "ObjectComplexType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7236,7 +7237,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -7281,7 +7282,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -7290,19 +7291,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -7324,18 +7325,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -7345,7 +7346,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -7373,10 +7374,10 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
@@ -7394,7 +7395,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -7429,11 +7430,11 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
@@ -7451,7 +7452,7 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
@@ -7466,12 +7467,12 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     }
                   ],
-                  "name": "object-complex-type",
+                  "name": "ObjectComplexType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7511,7 +7512,7 @@
                       }
                     }
                   ],
-                  "name": "object-type",
+                  "name": "ObjectType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7524,7 +7525,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -7547,7 +7548,7 @@
                       }
                     }
                   ],
-                  "name": "object-type",
+                  "name": "ObjectType",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7604,7 +7605,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined1",
+                  "name": "ObjectWithUnionWithUndefined1",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7639,7 +7640,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined2",
+                  "name": "ObjectWithUnionWithUndefined2",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7674,7 +7675,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined3",
+                  "name": "ObjectWithUnionWithUndefined3",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7695,7 +7696,7 @@
                       }
                     }
                   ],
-                  "name": "object-with-union-with-undefined4",
+                  "name": "ObjectWithUnionWithUndefined4",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7754,7 +7755,7 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         }
                       },
@@ -7779,7 +7780,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -7919,7 +7920,7 @@
                                     }
                                   }
                                 ],
-                                "name": "object-type",
+                                "name": "ObjectType",
                                 "type": "Record"
                               }
                             },
@@ -7991,7 +7992,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -8042,7 +8043,7 @@
                   "err": {
                     "type": "Str"
                   },
-                  "name": "result-exact",
+                  "name": "ResultExact",
                   "ok": {
                     "type": "Str"
                   },
@@ -8058,13 +8059,13 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": {
                     "type": "Str"
                   },
-                  "name": "result-exact",
+                  "name": "ResultExact",
                   "ok": {
                     "type": "Str"
                   },
@@ -8104,7 +8105,7 @@
                       }
                     }
                   ],
-                  "name": "result-like",
+                  "name": "ResultLike",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -8117,7 +8118,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -8137,7 +8138,7 @@
                       }
                     }
                   ],
-                  "name": "result-like",
+                  "name": "ResultLike",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -8158,7 +8159,7 @@
               "schema": {
                 "elementType": {
                   "err": null,
-                  "name": "result-like-with-void",
+                  "name": "ResultLikeWithVoid",
                   "ok": null,
                   "type": "Result"
                 },
@@ -8172,11 +8173,11 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "err": null,
-                  "name": "result-like-with-void",
+                  "name": "ResultLikeWithVoid",
                   "ok": null,
                   "type": "Result"
                 },
@@ -8209,7 +8210,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -8255,19 +8256,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -8289,18 +8290,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -8327,7 +8328,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -8337,7 +8338,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -8355,7 +8356,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -8370,7 +8371,7 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
@@ -8383,7 +8384,7 @@
                       "typ": null
                     }
                   ],
-                  "name": "tagged-union",
+                  "name": "TaggedUnion",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -8396,7 +8397,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -8423,19 +8424,19 @@
                       "typ": {
                         "cases": [
                           {
-                            "name": "union-type1",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "union-type2",
+                            "name": "UnionType2",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "union-type3",
+                            "name": "UnionType3",
                             "typ": {
                               "fields": [
                                 {
@@ -8457,18 +8458,18 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
                           {
-                            "name": "union-type4",
+                            "name": "UnionType4",
                             "typ": {
                               "type": "Bool"
                             }
                           }
                         ],
-                        "name": "union-type",
+                        "name": "UnionType",
                         "type": "Variant"
                       }
                     },
@@ -8495,7 +8496,7 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
@@ -8505,7 +8506,7 @@
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
@@ -8523,7 +8524,7 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
@@ -8538,7 +8539,7 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
@@ -8551,7 +8552,7 @@
                       "typ": null
                     }
                   ],
-                  "name": "tagged-union",
+                  "name": "TaggedUnion",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -8599,11 +8600,11 @@
                           }
                         }
                       ],
-                      "name": "object-type",
+                      "name": "ObjectType",
                       "type": "Record"
                     }
                   ],
-                  "name": "tuple-complex-type",
+                  "name": "TupleComplexType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -8616,7 +8617,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "items": [
@@ -8647,11 +8648,11 @@
                           }
                         }
                       ],
-                      "name": "object-type",
+                      "name": "ObjectType",
                       "type": "Record"
                     }
                   ],
-                  "name": "tuple-complex-type",
+                  "name": "TupleComplexType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -8682,7 +8683,7 @@
                       "type": "Bool"
                     }
                   ],
-                  "name": "tuple-type",
+                  "name": "TupleType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -8695,7 +8696,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "items": [
@@ -8709,7 +8710,7 @@
                       "type": "Bool"
                     }
                   ],
-                  "name": "tuple-type",
+                  "name": "TupleType",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -8755,19 +8756,19 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-complex-type1",
+                      "name": "UnionComplexType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-complex-type2",
+                      "name": "UnionComplexType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-complex-type3",
+                      "name": "UnionComplexType3",
                       "typ": {
                         "fields": [
                           {
@@ -8811,7 +8812,7 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
@@ -8820,19 +8821,19 @@
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "union-type1",
+                                  "name": "UnionType1",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "union-type2",
+                                  "name": "UnionType2",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "union-type3",
+                                  "name": "UnionType3",
                                   "typ": {
                                     "fields": [
                                       {
@@ -8854,18 +8855,18 @@
                                         }
                                       }
                                     ],
-                                    "name": "object-type",
+                                    "name": "ObjectType",
                                     "type": "Record"
                                   }
                                 },
                                 {
-                                  "name": "union-type4",
+                                  "name": "UnionType4",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 }
                               ],
-                              "name": "union-type",
+                              "name": "UnionType",
                               "type": "Variant"
                             }
                           },
@@ -8875,7 +8876,7 @@
                               "inner": {
                                 "type": "Str"
                               },
-                              "name": "list-type",
+                              "name": "ListType",
                               "type": "List"
                             }
                           },
@@ -8903,10 +8904,10 @@
                                     }
                                   }
                                 ],
-                                "name": "object-type",
+                                "name": "ObjectType",
                                 "type": "Record"
                               },
-                              "name": "list-complex-type",
+                              "name": "ListComplexType",
                               "type": "List"
                             }
                           },
@@ -8924,7 +8925,7 @@
                                   "type": "Bool"
                                 }
                               ],
-                              "name": "tuple-type",
+                              "name": "TupleType",
                               "type": "Tuple"
                             }
                           },
@@ -8959,11 +8960,11 @@
                                       }
                                     }
                                   ],
-                                  "name": "object-type",
+                                  "name": "ObjectType",
                                   "type": "Record"
                                 }
                               ],
-                              "name": "tuple-complex-type",
+                              "name": "TupleComplexType",
                               "type": "Tuple"
                             }
                           },
@@ -8981,7 +8982,7 @@
                                 ],
                                 "type": "Tuple"
                               },
-                              "name": "map-type",
+                              "name": "MapType",
                               "type": "List"
                             }
                           },
@@ -8996,17 +8997,17 @@
                                   }
                                 }
                               ],
-                              "name": "simple-interface-type",
+                              "name": "SimpleInterfaceType",
                               "type": "Record"
                             }
                           }
                         ],
-                        "name": "object-complex-type",
+                        "name": "ObjectComplexType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type4",
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -9028,22 +9029,22 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type5",
+                      "name": "UnionComplexType5",
                       "typ": {
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type6",
+                      "name": "UnionComplexType6",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -9066,15 +9067,15 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type7",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -9087,12 +9088,12 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type8",
+                      "name": "UnionComplexType8",
                       "typ": {
                         "items": [
                           {
@@ -9122,16 +9123,16 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type9",
+                      "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
                           "items": [
@@ -9144,12 +9145,12 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type10",
+                      "name": "UnionComplexType10",
                       "typ": {
                         "fields": [
                           {
@@ -9159,18 +9160,18 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type11",
+                      "name": "UnionComplexType11",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-complex-type",
+                  "name": "UnionComplexType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9183,24 +9184,24 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-complex-type1",
+                      "name": "UnionComplexType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-complex-type2",
+                      "name": "UnionComplexType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-complex-type3",
+                      "name": "UnionComplexType3",
                       "typ": {
                         "fields": [
                           {
@@ -9244,7 +9245,7 @@
                                   }
                                 }
                               ],
-                              "name": "object-type",
+                              "name": "ObjectType",
                               "type": "Record"
                             }
                           },
@@ -9253,19 +9254,19 @@
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "union-type1",
+                                  "name": "UnionType1",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "union-type2",
+                                  "name": "UnionType2",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "union-type3",
+                                  "name": "UnionType3",
                                   "typ": {
                                     "fields": [
                                       {
@@ -9287,18 +9288,18 @@
                                         }
                                       }
                                     ],
-                                    "name": "object-type",
+                                    "name": "ObjectType",
                                     "type": "Record"
                                   }
                                 },
                                 {
-                                  "name": "union-type4",
+                                  "name": "UnionType4",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 }
                               ],
-                              "name": "union-type",
+                              "name": "UnionType",
                               "type": "Variant"
                             }
                           },
@@ -9308,7 +9309,7 @@
                               "inner": {
                                 "type": "Str"
                               },
-                              "name": "list-type",
+                              "name": "ListType",
                               "type": "List"
                             }
                           },
@@ -9336,10 +9337,10 @@
                                     }
                                   }
                                 ],
-                                "name": "object-type",
+                                "name": "ObjectType",
                                 "type": "Record"
                               },
-                              "name": "list-complex-type",
+                              "name": "ListComplexType",
                               "type": "List"
                             }
                           },
@@ -9357,7 +9358,7 @@
                                   "type": "Bool"
                                 }
                               ],
-                              "name": "tuple-type",
+                              "name": "TupleType",
                               "type": "Tuple"
                             }
                           },
@@ -9392,11 +9393,11 @@
                                       }
                                     }
                                   ],
-                                  "name": "object-type",
+                                  "name": "ObjectType",
                                   "type": "Record"
                                 }
                               ],
-                              "name": "tuple-complex-type",
+                              "name": "TupleComplexType",
                               "type": "Tuple"
                             }
                           },
@@ -9414,7 +9415,7 @@
                                 ],
                                 "type": "Tuple"
                               },
-                              "name": "map-type",
+                              "name": "MapType",
                               "type": "List"
                             }
                           },
@@ -9429,17 +9430,17 @@
                                   }
                                 }
                               ],
-                              "name": "simple-interface-type",
+                              "name": "SimpleInterfaceType",
                               "type": "Record"
                             }
                           }
                         ],
-                        "name": "object-complex-type",
+                        "name": "ObjectComplexType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type4",
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -9461,22 +9462,22 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type5",
+                      "name": "UnionComplexType5",
                       "typ": {
                         "inner": {
                           "type": "Str"
                         },
-                        "name": "list-type",
+                        "name": "ListType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type6",
+                      "name": "UnionComplexType6",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -9499,15 +9500,15 @@
                               }
                             }
                           ],
-                          "name": "object-type",
+                          "name": "ObjectType",
                           "type": "Record"
                         },
-                        "name": "list-complex-type",
+                        "name": "ListComplexType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type7",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -9520,12 +9521,12 @@
                             "type": "Bool"
                           }
                         ],
-                        "name": "tuple-type",
+                        "name": "TupleType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type8",
+                      "name": "UnionComplexType8",
                       "typ": {
                         "items": [
                           {
@@ -9555,16 +9556,16 @@
                                 }
                               }
                             ],
-                            "name": "object-type",
+                            "name": "ObjectType",
                             "type": "Record"
                           }
                         ],
-                        "name": "tuple-complex-type",
+                        "name": "TupleComplexType",
                         "type": "Tuple"
                       }
                     },
                     {
-                      "name": "union-complex-type9",
+                      "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
                           "items": [
@@ -9577,12 +9578,12 @@
                           ],
                           "type": "Tuple"
                         },
-                        "name": "map-type",
+                        "name": "MapType",
                         "type": "List"
                       }
                     },
                     {
-                      "name": "union-complex-type10",
+                      "name": "UnionComplexType10",
                       "typ": {
                         "fields": [
                           {
@@ -9592,18 +9593,18 @@
                             }
                           }
                         ],
-                        "name": "simple-interface-type",
+                        "name": "SimpleInterfaceType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-complex-type11",
+                      "name": "UnionComplexType11",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-complex-type",
+                  "name": "UnionComplexType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9625,19 +9626,19 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-type1",
+                      "name": "UnionType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-type2",
+                      "name": "UnionType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-type3",
+                      "name": "UnionType3",
                       "typ": {
                         "fields": [
                           {
@@ -9659,18 +9660,18 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-type4",
+                      "name": "UnionType4",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-type",
+                  "name": "UnionType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9683,24 +9684,24 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
                     {
-                      "name": "union-type1",
+                      "name": "UnionType1",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "union-type2",
+                      "name": "UnionType2",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "union-type3",
+                      "name": "UnionType3",
                       "typ": {
                         "fields": [
                           {
@@ -9722,18 +9723,18 @@
                             }
                           }
                         ],
-                        "name": "object-type",
+                        "name": "ObjectType",
                         "type": "Record"
                       }
                     },
                     {
-                      "name": "union-type4",
+                      "name": "UnionType4",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-type",
+                  "name": "UnionType",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9767,13 +9768,13 @@
                       "typ": null
                     },
                     {
-                      "name": "union-with-literals1",
+                      "name": "UnionWithLiterals1",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-with-literals",
+                  "name": "UnionWithLiterals",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9786,7 +9787,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -9803,13 +9804,13 @@
                       "typ": null
                     },
                     {
-                      "name": "union-with-literals1",
+                      "name": "UnionWithLiterals1",
                       "typ": {
                         "type": "Bool"
                       }
                     }
                   ],
-                  "name": "union-with-literals",
+                  "name": "UnionWithLiterals",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9834,7 +9835,7 @@
                     "bar",
                     "baz"
                   ],
-                  "name": "union-with-only-literals",
+                  "name": "UnionWithOnlyLiterals",
                   "type": "Enum"
                 },
                 "type": "ComponentModel"
@@ -9847,7 +9848,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -9855,7 +9856,7 @@
                     "bar",
                     "baz"
                   ],
-                  "name": "union-with-only-literals",
+                  "name": "UnionWithOnlyLiterals",
                   "type": "Enum"
                 },
                 "type": "ComponentModel"
@@ -9889,7 +9890,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -9921,7 +9922,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "returnValue",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -9963,6 +9964,7 @@
     "snapshotting": {
       "type": "Disabled"
     },
+    "sourceLanguage": "typescript",
     "typeName": "FooAgent"
   }
 ]

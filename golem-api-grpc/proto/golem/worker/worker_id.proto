@@ -4,7 +4,7 @@ package golem.worker;
 
 import "golem/component/component_id.proto";
 
-message WorkerId {
+message AgentId {
   golem.component.ComponentId component_id = 1;
   string name = 2;
 }

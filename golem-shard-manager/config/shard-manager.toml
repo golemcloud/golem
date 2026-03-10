@@ -29,6 +29,7 @@ host = "localhost"
 key_prefix = ""
 pool_size = 8
 port = 6380
+tls = false
 tracing = false
 
 [persistence.config.retries]
@@ -147,6 +148,7 @@ type = "Disabled"
 # key_prefix = ""
 # pool_size = 8
 # port = 6380
+# tls = false
 # tracing = false
 # 
 # [persistence.config.retries]

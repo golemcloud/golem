@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
@@ -52,7 +52,7 @@ async fn agent_self_rpc_is_not_allowed(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let agent_id = agent_id!("self-rpc-agent", "worker-name");
+    let agent_id = agent_id!("SelfRpcAgent", "worker-name");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -86,7 +86,7 @@ async fn agent_await_parallel_rpc_calls(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!("test-agent", unique_id);
+    let agent_id = agent_id!("TestAgent", unique_id);
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -121,14 +121,20 @@ async fn agent_env_inheritance(
         .store()
         .await?;
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!("test-agent", unique_id);
+    let agent_id = agent_id!("TestAgent", unique_id);
 
     let mut env = HashMap::new();
     env.insert("ENV2".to_string(), "22".to_string());
     env.insert("ENV3".to_string(), "33".to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -137,9 +143,9 @@ async fn agent_env_inheritance(
         .invoke_and_await_agent(&component, &agent_id, "envVarTest", data_value!())
         .await;
 
-    let child_worker_id = WorkerId {
+    let child_worker_id = AgentId {
         component_id: worker_id.component_id,
-        worker_name: "child-agent(0)".to_string(),
+        agent_id: "ChildAgent(0.0)".to_string(),
     };
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -185,7 +191,7 @@ async fn agent_env_inheritance(
             ("ENV3".to_string(), Value::String("33".to_string())),
             (
                 "GOLEM_AGENT_ID".to_string(),
-                Value::String(worker_id.worker_name.to_string())
+                Value::String(worker_id.agent_id.to_string())
             ),
             (
                 "GOLEM_AGENT_TYPE".to_string(),
@@ -201,7 +207,7 @@ async fn agent_env_inheritance(
             ),
             (
                 "GOLEM_WORKER_NAME".to_string(),
-                Value::String(worker_id.worker_name.to_string())
+                Value::String(worker_id.agent_id.to_string())
             ),
         ]
     );
@@ -213,7 +219,7 @@ async fn agent_env_inheritance(
             ("ENV3".to_string(), Value::String("33".to_string())),
             (
                 "GOLEM_AGENT_ID".to_string(),
-                Value::String(child_worker_id.worker_name.to_string())
+                Value::String(child_worker_id.agent_id.to_string())
             ),
             (
                 "GOLEM_AGENT_TYPE".to_string(),
@@ -229,7 +235,7 @@ async fn agent_env_inheritance(
             ),
             (
                 "GOLEM_WORKER_NAME".to_string(),
-                Value::String(child_worker_id.worker_name.to_string())
+                Value::String(child_worker_id.agent_id.to_string())
             ),
         ]
     );
@@ -265,12 +271,12 @@ async fn ephemeral_agent_works(
         .store()
         .await?;
 
-    let agent_id1 = agent_id!("ephemeral-echo-agent", "param1");
+    let agent_id1 = agent_id!("EphemeralEchoAgent", "param1");
     let worker_id1 = executor
         .start_agent(&component.id, agent_id1.clone())
         .await?;
 
-    let agent_id2 = agent_id!("ephemeral-echo-agent", "param2");
+    let agent_id2 = agent_id!("EphemeralEchoAgent", "param2");
     let worker_id2 = executor
         .start_agent(&component.id, agent_id2.clone())
         .await?;

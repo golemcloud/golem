@@ -5,7 +5,7 @@ httpApi:
     local:
     - domain: app-name.localhost:9006
       agents:
-        chat-agent: {}
+        ChatAgent: {}
 
 components:
   componentname:

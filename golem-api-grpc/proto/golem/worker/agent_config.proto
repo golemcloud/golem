@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "wasm/rpc/value_and_type.proto";
+
+message LocalAgentConfigEntry {
+  repeated string key = 1;
+  // json encoded value
+  string value = 2;
+}
+
+message ParsedLocalAgentConfigEntry {
+  repeated string key = 1;
+  wasm.rpc.ValueAndType value = 2;
+}

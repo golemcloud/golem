@@ -33,7 +33,7 @@ use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
-use crate::model::worker::{AgentUpdateMode, WorkerName};
+use crate::model::worker::{AgentUpdateMode, RawAgentId};
 use crate::model::GuestLanguage;
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
@@ -519,8 +519,8 @@ impl GolemCliCommand {
                 found_positional_args: vec!["agent_id"],
                 missing_positional_arg: "function_name",
                 to_partial_match: |args| {
-                    GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName {
-                        worker_name: args[0].clone().into(),
+                    GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName {
+                        agent_name: args[0].clone().into(),
                     }
                 },
             },
@@ -622,7 +622,7 @@ pub enum GolemCliCommandPartialMatch {
     ComponentHelp,
     ComponentMissingSubcommandHelp,
     AgentHelp,
-    WorkerInvokeMissingFunctionName { worker_name: WorkerName },
+    AgentInvokeMissingFunctionName { agent_name: RawAgentId },
     WorkerInvokeMissingWorkerName,
     ProfileSwitchMissingProfileName,
 }
@@ -798,7 +798,7 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
-    use crate::model::worker::{AgentUpdateMode, WorkerName};
+    use crate::model::worker::{AgentUpdateMode, RawAgentId};
     use crate::model::GuestLanguage;
     use clap::Args;
     use golem_common::model::account::AccountId;
@@ -859,7 +859,7 @@ pub mod shared_args {
         ///   - <PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         #[arg(verbatim_doc_comment)]
-        pub agent_id: WorkerName,
+        pub agent_id: RawAgentId,
     }
 
     #[derive(Debug, Args)]
@@ -1250,7 +1250,7 @@ pub mod worker {
         /// List files in a worker's directory
         Files {
             #[command(flatten)]
-            worker_name: AgentIdArgs,
+            agent_name: AgentIdArgs,
             /// Path to the directory to list files from
             #[arg(default_value = "/")]
             path: String,
@@ -1258,7 +1258,7 @@ pub mod worker {
         /// Get contents of a file in a worker
         FileContents {
             #[command(flatten)]
-            worker_name: AgentIdArgs,
+            agent_name: AgentIdArgs,
             /// Path to the file to get contents from
             path: String,
             /// Local path (including filename) to save the file contents. Optional.

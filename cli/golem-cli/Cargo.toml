@@ -123,9 +123,11 @@ openssl-sys = { workspace = true }
 [dev-dependencies]
 axum = { workspace = true }
 goldenfile = { workspace = true }
+golem-wasm = { workspace = true, features = ["proptest"] }
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
+proptest = { workspace = true }
 reqwest = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }

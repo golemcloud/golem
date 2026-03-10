@@ -56,6 +56,7 @@ use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
@@ -1088,6 +1089,23 @@ impl AppCommandHandler {
                 }
                 let _indent = self.ctx.log_handler().nested_text_view_indent();
                 self.ctx.log_handler().log_view(&deploy_diff.diff)
+            }
+        }
+
+        // Emit schema evolution warnings
+        for (component_name, new_props) in &deploy_diff.deployable_components {
+            if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
+                let warnings = validate_schema_evolution(old_agent_types, &new_props.agent_types);
+                for w in &warnings {
+                    log_warn_action(
+                        "Schema evolution",
+                        format!(
+                            "component {}: {}",
+                            component_name.0.log_color_highlight(),
+                            w
+                        ),
+                    );
+                }
             }
         }
 
