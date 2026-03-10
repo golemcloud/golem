@@ -69,9 +69,9 @@ vi.mock("@/service", () => ({
   },
 }));
 
-// Mock store service
+// Mock settings service
 vi.mock("@/lib/settings.ts", () => ({
-  storeService: {
+  settingsService: {
     getAppById: vi.fn(),
     updateAppLastOpened: vi.fn(),
   },
@@ -171,11 +171,11 @@ vi.mock("@/lib/utils", () => ({
 
 // Import mocked modules for test access
 import { API } from "@/service";
-import { storeService } from "@/lib/settings.ts";
+import { settingsService } from "@/lib/settings.ts";
 import { toast } from "@/hooks/use-toast";
 
 const mockAPI = vi.mocked(API);
-const mockStoreService = vi.mocked(storeService);
+const mockSettingsService = vi.mocked(settingsService);
 const mockToast = vi.mocked(toast);
 
 // Test wrapper component
@@ -246,8 +246,8 @@ describe("Dashboard", () => {
     mockShowLog.mockClear();
 
     // Setup default mock implementations
-    vi.mocked(mockStoreService.getAppById).mockResolvedValue(sampleApp);
-    vi.mocked(mockStoreService.updateAppLastOpened).mockResolvedValue(true);
+    vi.mocked(mockSettingsService.getAppById).mockResolvedValue(sampleApp);
+    vi.mocked(mockSettingsService.updateAppLastOpened).mockResolvedValue(true);
     vi.mocked(mockAPI.componentService.getComponentByIdAsKey).mockResolvedValue(
       sampleComponents,
     );
@@ -502,15 +502,15 @@ describe("Dashboard", () => {
     );
 
     await waitFor(() => {
-      expect(mockStoreService.getAppById).toHaveBeenCalledWith(mockAppId);
-      expect(mockStoreService.updateAppLastOpened).toHaveBeenCalledWith(
+      expect(mockSettingsService.getAppById).toHaveBeenCalledWith(mockAppId);
+      expect(mockSettingsService.updateAppLastOpened).toHaveBeenCalledWith(
         mockAppId,
       );
     });
   });
 
   it("displays default app name when app name is not available", async () => {
-    vi.mocked(mockStoreService.getAppById).mockResolvedValue({
+    vi.mocked(mockSettingsService.getAppById).mockResolvedValue({
       id: mockAppId,
       name: "",
       folderLocation: "/test/path",

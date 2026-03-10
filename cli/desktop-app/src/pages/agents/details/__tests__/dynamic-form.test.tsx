@@ -96,7 +96,7 @@ import {
 } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { DynamicForm, nonStringPrimitives } from "../dynamic-form";
+import { DynamicForm } from "../dynamic-form";
 import { ComponentExportFunction } from "@/types/component";
 
 // Mock dependencies
@@ -241,23 +241,6 @@ describe("DynamicForm", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  describe("nonStringPrimitives constant", () => {
-    it("should contain expected primitive types", () => {
-      expect(nonStringPrimitives).toEqual([
-        "S64",
-        "S32",
-        "S16",
-        "S8",
-        "U64",
-        "U32",
-        "U16",
-        "U8",
-        "Bool",
-        "Enum",
-      ]);
-    });
   });
 
   describe("Component rendering", () => {

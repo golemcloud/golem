@@ -1,7 +1,7 @@
 import { parseErrorMessage } from "@/lib/utils.ts";
 import { toast } from "@/hooks/use-toast.ts";
 
-export type ErrorResponse = {
+type ErrorResponse = {
   code?: string;
   title: string;
   description: string;

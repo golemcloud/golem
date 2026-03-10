@@ -2,7 +2,7 @@ import { toast } from "@/hooks/use-toast";
 import { Profile } from "@/types/index";
 import { invoke } from "@tauri-apps/api/core";
 
-export class ProfileService {
+class ProfileService {
   /**
    * Get all available CLI profiles
    */

@@ -2,7 +2,7 @@ import { type LucideIcon } from "lucide-react";
 import { Sidebar, SidebarContent, SidebarRail } from "@/components/ui/sidebar";
 import { NavMain, SidebarMenuProps } from "@/components/nav-main.tsx";
 
-export interface SidebarProps {
+interface SidebarProps {
   headers?: SidebarHeaderProps[];
   menus: SidebarMenuProps[];
   footer?: { name: string; url: string }[];
@@ -16,7 +16,7 @@ export interface SidebarProps {
   children?: React.ReactNode;
 }
 
-export interface SidebarHeaderProps {
+interface SidebarHeaderProps {
   name?: string;
   logo?: LucideIcon;
   plan?: string;

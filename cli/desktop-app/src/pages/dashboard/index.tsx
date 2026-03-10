@@ -8,7 +8,7 @@ import { EnvironmentSection } from "@/pages/dashboard/environmentSection.tsx";
 import { useEffect, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { storeService } from "@/lib/settings.ts";
+import { settingsService } from "@/lib/settings.ts";
 import { API } from "@/service";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -43,14 +43,14 @@ export const Dashboard = () => {
     if (!appId) {
       navigate("/");
     } else {
-      // Get app name from storeService
-      storeService.getAppById(appId).then(app => {
+      // Get app name from settingsService
+      settingsService.getAppById(appId).then(app => {
         if (app && app.name) {
           setAppName(app.name);
         }
       });
       (async () => {
-        await storeService.updateAppLastOpened(appId);
+        await settingsService.updateAppLastOpened(appId);
       })();
     }
   }, [appId, navigate]);

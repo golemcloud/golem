@@ -1,10 +1,13 @@
 import { CLIService } from "./cli-service";
+import { ManifestService } from "./manifest-service";
 
 export class AppService {
   private cliService: CLIService;
+  private manifestService: ManifestService;
 
-  constructor(cliService: CLIService) {
+  constructor(cliService: CLIService, manifestService: ManifestService) {
     this.cliService = cliService;
+    this.manifestService = manifestService;
   }
 
   public buildApp = async (appId: string, componentNames?: string[]) => {
@@ -35,6 +38,7 @@ export class AppService {
   };
 
   public deployAgents = async (appId: string, updateAgents?: boolean) => {
+    await this.manifestService.migrateDeploymentSchema(appId);
     const subcommands: string[] = [];
     if (updateAgents) {
       subcommands.push("--update-agents");
