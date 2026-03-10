@@ -16,35 +16,31 @@ golem new <APPLICATION_NAME> <LANGUAGE>
 For example, to create a TypeScript project:
 
 ```shell
-golem new my-app ts
+golem new my-app typescript
 ```
 
 Use the `-Y` flag for non-interactive mode (accepts all defaults):
 
 ```shell
-golem new my-app ts -Y
+golem new my-app typescript -Y
 ```
 
 ### Supported Languages
 
-Common language identifiers: `ts` (TypeScript), `rust`, `go`, `python`, `js` (JavaScript), `zig`, `c`, `csharp`.
+Supported language identifiers: `typescript`, `rust`
 
 ## Step 2: Verify Project Structure
 
 After running `golem new`, verify the following:
 
 1. A `golem.yaml` file exists in the project root
-2. The project directory contains the expected language-specific source files
-3. Component directories are created under `src/`
+2. A folder named common-{ts|rust} exists in the project root
 
 ## Step 3: Build the Project
 
 ```shell
 golem build
 ```
-
-This compiles all components defined in `golem.yaml` and produces the WASM artifacts.
-
 ## Checklist
 
 1. `golem new <name> <language>` executed successfully

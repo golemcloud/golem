@@ -209,9 +209,11 @@ export class ScenarioExecutor {
     }
     await fs.mkdir(this.workspace, { recursive: true });
     await this.driver.setup(this.workspace, this.skillsDir);
-    // Watch workspace .claude/skills/ too — agents read skills from there
-    const workspaceSkillsDir = path.join(this.workspace, '.claude', 'skills');
-    this.watcher.addWatchDir(workspaceSkillsDir);
+    // Watch all agent skill directories — each agent reads skills from its own location
+    const agentSkillsDirs = ['.claude/skills', '.gemini/skills', '.agents/skills'];
+    for (const rel of agentSkillsDirs) {
+      this.watcher.addWatchDir(path.join(this.workspace, rel));
+    }
     await this.verifyGolemConnectivity(spec);
     await this.watcher.start();
 
@@ -361,24 +363,19 @@ export class ScenarioExecutor {
           }
         }
 
-        // Verify skills activation — merge fswatch events + atime changes + presence check
-        const watcherSkills = this.watcher.getActivatedSkillsSince(stepBaseline);
-        const atimeSkills = await this.watcher.getSkillsWithChangedAtime();
-        const activatedSet = new Set([...watcherSkills, ...atimeSkills]);
-
-        // Fallback: if no filesystem-level detection succeeded, check which expected
-        // skills have their SKILL.md present in the workspace .claude/skills/ directory.
-        if (activatedSet.size === 0 && step.expectedSkills && step.expectedSkills.length > 0) {
-          const presenceSkills = await this.detectSkillsByPresence(step.expectedSkills);
-          if (presenceSkills.length > 0) {
-            console.log(`Step ${step.id ?? '(unnamed)'}: filesystem skill detection unavailable, using presence check`);
-            for (const skill of presenceSkills) {
-              activatedSet.add(skill);
-            }
-          }
+        // Verify skills activation — merge fswatch events + atime changes
+        const watcherEvents = this.watcher.getActivatedEventsSince(stepBaseline);
+        const atimeResults = await this.watcher.getSkillsWithChangedAtime();
+        for (const evt of watcherEvents) {
+          console.log(`Step ${step.id ?? '(unnamed)'}: fswatch detected "${evt.skillName}" via ${evt.path}`);
         }
-
-        const activatedSkills = Array.from(activatedSet);
+        for (const res of atimeResults) {
+          console.log(`Step ${step.id ?? '(unnamed)'}: atime detected "${res.skillName}" via ${res.path}`);
+        }
+        const activatedSkills = Array.from(new Set([
+          ...watcherEvents.map(e => e.skillName),
+          ...atimeResults.map(r => r.skillName),
+        ]));
         console.log(`Step ${step.id ?? '(unnamed)'}: activated skills [${activatedSkills.join(', ')}]`);
         const assertionError = this.assertSkillActivation(step, activatedSkills);
         if (assertionError) {
@@ -527,21 +524,6 @@ export class ScenarioExecutor {
     if (!serverCheck.success) {
       throw new Error(`Failed to connect to local Golem server on localhost:${routerPort}: ${serverCheck.output}`);
     }
-  }
-
-  private async detectSkillsByPresence(expectedSkills: string[]): Promise<string[]> {
-    const workspaceSkillsDir = path.join(this.workspace, '.claude', 'skills');
-    const found: string[] = [];
-    for (const skillName of expectedSkills) {
-      const skillFile = path.join(workspaceSkillsDir, skillName, 'SKILL.md');
-      try {
-        await fs.access(skillFile);
-        found.push(skillName);
-      } catch {
-        // Skill file not present
-      }
-    }
-    return found;
   }
 
   private async findGolemProjectDir(): Promise<string> {

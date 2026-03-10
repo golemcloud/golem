@@ -36,9 +36,9 @@ describe('SkillWatcher', () => {
       assert.equal(watcher.markBaseline(), 0);
     });
 
-    it('getActivatedSkillsSince returns empty for fresh watcher', () => {
+    it('getActivatedEventsSince returns empty for fresh watcher', () => {
       const baseline = watcher.markBaseline();
-      assert.deepEqual(watcher.getActivatedSkillsSince(baseline), []);
+      assert.deepEqual(watcher.getActivatedEventsSince(baseline), []);
     });
 
     it('getActivatedSkills returns empty initially', () => {

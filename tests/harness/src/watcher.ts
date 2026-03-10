@@ -63,9 +63,7 @@ export class SkillWatcher {
         '-m', '-r', '-e', 'access', '--format', '%w%f', dir
       ]);
     } else if (platform === 'darwin') {
-      // fswatch on macOS doesn't support 'Access' event type.
-      // Watch for all events and filter by SKILL.md filename in pathToSkillName.
-      return spawn('fswatch', ['-0', dir]);
+      return spawn('fswatch', ['-0', '-a', '-L', dir]);
     }
     console.warn(`SkillWatcher: Unsupported platform ${platform}, activation tracking disabled.`);
     return null;
@@ -102,13 +100,13 @@ export class SkillWatcher {
    * Compare current atimes against the snapshot.
    * Returns skill names whose SKILL.md files had atime updated since the snapshot.
    */
-  async getSkillsWithChangedAtime(): Promise<string[]> {
-    const changed: string[] = [];
+  async getSkillsWithChangedAtime(): Promise<{ skillName: string; path: string }[]> {
+    const changed: { skillName: string; path: string }[] = [];
     for (const [filePath, baseline] of this.atimeBaselines) {
       try {
         const stat = await fs.stat(filePath);
         if (stat.atimeMs > baseline.atimeMs) {
-          changed.push(baseline.skillName);
+          changed.push({ skillName: baseline.skillName, path: filePath });
         }
       } catch {
         // File may have been removed
@@ -117,12 +115,8 @@ export class SkillWatcher {
     return changed;
   }
 
-  getActivatedSkillsSince(baseline: number): string[] {
-    const skills = new Set<string>();
-    for (const event of this.activatedEvents.slice(baseline)) {
-      skills.add(event.skillName);
-    }
-    return Array.from(skills);
+  getActivatedEventsSince(baseline: number): WatcherEvent[] {
+    return this.activatedEvents.slice(baseline);
   }
 
   clearActivatedSkills(): void {
@@ -145,9 +139,13 @@ export class SkillWatcher {
         const skillFile = path.join(dir, entry.name, 'SKILL.md');
         try {
           const stat = await fs.stat(skillFile);
+          // On macOS APFS, atime only updates when atime <= mtime (relatime).
+          // Reset atime to before mtime so the next read triggers an update.
+          const oldAtime = new Date(stat.mtimeMs - 1000);
+          await fs.utimes(skillFile, oldAtime, stat.mtime);
           this.atimeBaselines.set(skillFile, {
             skillName: entry.name,
-            atimeMs: stat.atimeMs,
+            atimeMs: stat.mtimeMs - 1000,
           });
         } catch {
           // No SKILL.md in this directory
