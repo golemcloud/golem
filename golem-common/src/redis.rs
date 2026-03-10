@@ -21,6 +21,7 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use fred::clients::Transaction;
 use fred::cmd;
 use fred::prelude::{Pool as FredRedisPool, *};
+use fred::types::config::TlsConnector;
 use fred::types::{InfoKind, Limit, Map, MultipleKeys, MultipleValues};
 use tracing::{debug, Level};
 
@@ -56,6 +57,10 @@ impl RedisPool {
         redis_config.tracing.default_tracing_level = Level::DEBUG;
         redis_config.username.clone_from(&config.username);
         redis_config.password.clone_from(&config.password);
+
+        if config.tls {
+            redis_config.tls = Some(TlsConnector::default_rustls()?.into());
+        }
 
         // NOTE: jitter setting is not converted, using the default fred jitter settings
         let policy = ReconnectPolicy::new_exponential(
