@@ -144,9 +144,7 @@ impl EnvironmentShareService {
             return Err(EnvironmentShareError::ConcurrentModification);
         };
 
-        let current_revision = environment_share.revision;
-
-        environment_share.revision = current_revision.next()?;
+        environment_share.revision = environment_share.revision.next()?;
         environment_share.roles = update.roles;
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -38,8 +38,8 @@ pub struct MultiSqliteKeyValueStorage {
 }
 
 struct HashCache {
-    hash_per_worker_id: HashMap<WorkerId, String>,
-    worker_id_per_hash: HashMap<String, WorkerId>,
+    hash_per_agent_id: HashMap<AgentId, String>,
+    agent_id_per_hash: HashMap<String, AgentId>,
 }
 
 impl MultiSqliteKeyValueStorage {
@@ -59,8 +59,8 @@ impl MultiSqliteKeyValueStorage {
                 "multi-sqlite-kvs",
             ),
             hash_cache: Arc::new(Mutex::new(HashCache {
-                hash_per_worker_id: HashMap::new(),
-                worker_id_per_hash: HashMap::new(),
+                hash_per_agent_id: HashMap::new(),
+                agent_id_per_hash: HashMap::new(),
             })),
             root_dir: root_dir.to_path_buf(),
             max_connections,
@@ -102,29 +102,29 @@ impl MultiSqliteKeyValueStorage {
     async fn namespace_to_db(&self, namespace: &KeyValueStorageNamespace) -> String {
         match namespace {
             KeyValueStorageNamespace::RunningWorkers => "kv-running_workers".to_string(),
-            KeyValueStorageNamespace::Worker { worker_id } => {
-                format!("kv-worker-{}.db", self.worker_id_hash(worker_id).await)
+            KeyValueStorageNamespace::Worker { agent_id } => {
+                format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
-            KeyValueStorageNamespace::Promise { worker_id } => {
-                format!("kv-worker-{}.db", self.worker_id_hash(worker_id).await)
+            KeyValueStorageNamespace::Promise { agent_id } => {
+                format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
             KeyValueStorageNamespace::Schedule => "kv-schedule.db".to_string(),
             KeyValueStorageNamespace::UserDefined { .. } => "kv-user-defined.db".to_string(),
         }
     }
 
-    async fn worker_id_hash(&self, worker_id: &WorkerId) -> String {
+    async fn agent_id_hash(&self, agent_id: &AgentId) -> String {
         let mut hash_cache = self.hash_cache.lock().await;
-        match hash_cache.hash_per_worker_id.get(worker_id) {
+        match hash_cache.hash_per_agent_id.get(agent_id) {
             Some(hash) => hash.clone(),
             None => {
-                let hash = format!("{}", blake3::hash(worker_id.to_string().as_bytes()));
+                let hash = format!("{}", blake3::hash(agent_id.to_string().as_bytes()));
                 hash_cache
-                    .hash_per_worker_id
-                    .insert(worker_id.clone(), hash.clone());
+                    .hash_per_agent_id
+                    .insert(agent_id.clone(), hash.clone());
                 hash_cache
-                    .worker_id_per_hash
-                    .insert(hash.clone(), worker_id.clone());
+                    .agent_id_per_hash
+                    .insert(hash.clone(), agent_id.clone());
                 hash
             }
         }

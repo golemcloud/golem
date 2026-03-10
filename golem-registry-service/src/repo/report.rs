@@ -23,26 +23,26 @@ use indoc::indoc;
 use tracing::{Instrument, info_span};
 
 #[async_trait]
-pub trait ReportsRepo: Send + Sync {
+pub trait ReportRepo: Send + Sync {
     async fn list_account_summaries(&self) -> RepoResult<Vec<AccountSummaryRecord>>;
 
     async fn get_account_counts(&self) -> RepoResult<AccountCountsRecord>;
 }
 
-pub struct LoggedReportsRepo<Repo: ReportsRepo> {
+pub struct LoggedReportRepo<Repo: ReportRepo> {
     repo: Repo,
 }
 
 static SPAN_NAME: &str = "reports repository";
 
-impl<Repo: ReportsRepo> LoggedReportsRepo<Repo> {
+impl<Repo: ReportRepo> LoggedReportRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
     }
 }
 
 #[async_trait]
-impl<Repo: ReportsRepo> ReportsRepo for LoggedReportsRepo<Repo> {
+impl<Repo: ReportRepo> ReportRepo for LoggedReportRepo<Repo> {
     async fn list_account_summaries(&self) -> RepoResult<Vec<AccountSummaryRecord>> {
         self.repo
             .list_account_summaries()
@@ -58,24 +58,24 @@ impl<Repo: ReportsRepo> ReportsRepo for LoggedReportsRepo<Repo> {
     }
 }
 
-pub struct DbReportsRepo<DBP: Pool> {
+pub struct DbReportRepo<DBP: Pool> {
     db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "reports";
 
-impl<DBP: Pool> DbReportsRepo<DBP> {
+impl<DBP: Pool> DbReportRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self {
             db_pool: db_pool.clone(),
         }
     }
 
-    pub fn logged(db_pool: DBP) -> LoggedReportsRepo<Self>
+    pub fn logged(db_pool: DBP) -> LoggedReportRepo<Self>
     where
-        Self: ReportsRepo,
+        Self: ReportRepo,
     {
-        LoggedReportsRepo::new(Self::new(db_pool))
+        LoggedReportRepo::new(Self::new(db_pool))
     }
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
@@ -85,7 +85,7 @@ impl<DBP: Pool> DbReportsRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
-impl ReportsRepo for DbReportsRepo<PostgresPool> {
+impl ReportRepo for DbReportRepo<PostgresPool> {
     async fn list_account_summaries(&self) -> RepoResult<Vec<AccountSummaryRecord>> {
         let result = self
             .with_ro("list_account_summaries")

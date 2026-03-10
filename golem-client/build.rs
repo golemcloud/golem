@@ -87,6 +87,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "ApplicationUpdate",
                 "golem_common::model::application::ApplicationUpdate",
             ),
+            // agent secret
+            (
+                "AgentSecretDto",
+                "golem_common::model::agent_secret::AgentSecretDto",
+            ),
+            (
+                "AgentSecretCreation",
+                "golem_common::model::agent_secret::AgentSecretCreation",
+            ),
+            (
+                "AgentSecretUpdate",
+                "golem_common::model::agent_secret::AgentSecretUpdate",
+            ),
             // auth
             ("Token", "golem_common::model::auth::Token"),
             ("TokenCreation", "golem_common::model::auth::TokenCreation"),
@@ -202,6 +215,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "OAuth2WebflowData",
                 "golem_common::model::login::OAuth2WebflowData",
             ),
+            // mcp deployment
+            (
+                "McpDeployment",
+                "golem_common::model::mcp_deployment::McpDeployment",
+            ),
+            (
+                "McpDeploymentCreation",
+                "golem_common::model::mcp_deployment::McpDeploymentCreation",
+            ),
+            (
+                "McpDeploymentUpdate",
+                "golem_common::model::mcp_deployment::McpDeploymentUpdate",
+            ),
             // plan
             ("Plan", "golem_common::model::plan::Plan"),
             // plugin_registration
@@ -254,15 +280,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             (
                 "WorkerCreationRequest",
-                "golem_common::model::worker::WorkerCreationRequest",
+                "golem_common::model::worker::AgentCreationRequest",
             ),
             (
-                "WorkerMetadataDto",
-                "golem_common::model::worker::WorkerMetadataDto",
+                "WorkerCreationLocalAgentConfigEntry",
+                "golem_common::model::worker::WorkerCreationLocalAgentConfigEntry",
             ),
             (
-                "WorkerUpdateMode",
-                "golem_common::model::worker::WorkerUpdateMode",
+                "AgentMetadataDto",
+                "golem_common::model::worker::AgentMetadataDto",
+            ),
+            (
+                "AgentUpdateMode",
+                "golem_common::model::worker::AgentUpdateMode",
             ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
@@ -287,18 +317,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "HttpApiDeploymentUpdate",
                 "golem_common::model::http_api_deployment::HttpApiDeploymentUpdate",
             ),
-            (
-                "McpDeployment",
-                "golem_common::model::mcp_deployment::McpDeployment",
-            ),
-            (
-                "McpDeploymentCreation",
-                "golem_common::model::mcp_deployment::McpDeploymentCreation",
-            ),
-            (
-                "McpDeploymentUpdate",
-                "golem_common::model::mcp_deployment::McpDeploymentUpdate",
-            ),
             // common
             ("Empty", "golem_common::model::Empty"),
             ("ErrorBody", "golem_common::model::error::ErrorBody"),
@@ -306,13 +324,13 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("ScanCursor", "golem_common::model::ScanCursor"),
             ("UntypedJsonBody", "golem_common::model::UntypedJsonBody"),
             ("VersionInfo", "golem_common::model::VersionInfo"),
-            ("WorkerFilter", "golem_common::model::WorkerFilter"),
-            ("WorkerId", "golem_common::model::WorkerId"),
+            ("AgentFilter", "golem_common::model::AgentFilter"),
+            ("AgentId", "golem_common::model::AgentId"),
             (
-                "WorkerResourceDescription",
-                "golem_common::model::WorkerResourceDescription",
+                "AgentResourceDescription",
+                "golem_common::model::AgentResourceDescription",
             ),
-            ("WorkerStatus", "golem_common::model::WorkerStatus"),
+            ("AgentStatus", "golem_common::model::AgentStatus"),
             // golem_wasm
             ("AnalysedExport", "golem_wasm::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm::analysis::AnalysedType"),
@@ -322,7 +340,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("ValueAndType", "golem_wasm::ValueAndType"),
         ],
-        &["/v1/components/{component_id}/workers/{worker_name}/connect"],
+        &["/v1/components/{component_id}/workers/{agent_name}/connect"],
     )
     .expect("Failed to generate client code from OpenAPI spec.");
 }

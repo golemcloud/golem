@@ -21,7 +21,7 @@ use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
 };
 use crate::durable_host::recover_stderr_logs;
-use crate::model::{ExecutionStatus, LookupResult, ReadFileResult, TrapType, WorkerConfig};
+use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -39,19 +39,24 @@ use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use chrono::Utc;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig};
+use golem_common::model::agent::{
+    AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
+};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
+use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
-    Timestamp, TimestampedAgentInvocation, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, AgentMetadata,
+    AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
+    TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -88,8 +93,8 @@ use wasmtime::{Store, UpdateDeadline};
 ///
 /// Every worker invocation should be done through this service.
 pub struct Worker<Ctx: WorkerCtx> {
-    owned_worker_id: OwnedWorkerId,
-    agent_id: Option<AgentId>,
+    owned_agent_id: OwnedAgentId,
+    parsed_agent_id: Option<ParsedAgentId>,
 
     oplog: Arc<dyn Oplog>,
     worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -100,12 +105,12 @@ pub struct Worker<Ctx: WorkerCtx> {
     external_invocation_spans: Arc<RwLock<HashMap<IdempotencyKey, Span>>>,
 
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
-    initial_worker_metadata: WorkerMetadata,
-    last_known_status: Arc<tokio::sync::RwLock<WorkerStatusRecord>>,
+    initial_worker_metadata: AgentMetadata,
+    last_known_status: Arc<RwLock<AgentStatusRecord>>,
     last_known_status_detached: AtomicBool,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    update_state_lock: tokio::sync::Mutex<()>,
+    update_state_lock: Mutex<()>,
     worker_estimate_coefficient: f64,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
@@ -136,12 +141,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_or_create_suspended<T>(
         deps: &T,
         account_id: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
         worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -151,7 +156,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps.active_workers()
             .get_or_add(
                 deps,
-                owned_worker_id,
+                owned_agent_id,
                 account_id,
                 worker_env,
                 worker_config_vars,
@@ -168,12 +173,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_or_create_running<T>(
         deps: &T,
         account_id: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
         worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -183,7 +188,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let worker = Self::get_or_create_suspended(
             deps,
             account_id,
-            owned_worker_id,
+            owned_agent_id,
             worker_env,
             worker_config_vars,
             worker_local_agent_config,
@@ -199,19 +204,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn get_latest_metadata<T: HasAll<Ctx>>(
         deps: &T,
-        owned_worker_id: &OwnedWorkerId,
-    ) -> Option<WorkerMetadata> {
-        if let Some(worker) = deps.active_workers().try_get(owned_worker_id).await {
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<AgentMetadata> {
+        if let Some(worker) = deps.active_workers().try_get(owned_agent_id).await {
             Some(worker.get_latest_worker_metadata().await)
         } else if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = deps.worker_service().get(owned_worker_id).await
+        }) = deps.worker_service().get(owned_agent_id).await
         {
             // update with latest data from oplog
             let last_known_status = calculate_last_known_status(
                 deps,
-                owned_worker_id,
+                owned_agent_id,
                 last_known_status,
             )
             .await
@@ -228,12 +233,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
         account_id: &AccountId,
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
         worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Self, WorkerExecutorError> {
@@ -247,7 +252,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } = Self::get_or_create_worker_metadata(
             deps,
             account_id,
-            &owned_worker_id,
+            &owned_agent_id,
             component_revision,
             worker_env,
             worker_config,
@@ -288,8 +293,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }));
 
         let worker = Worker {
-            owned_worker_id,
-            agent_id: agent_id.clone(),
+            owned_agent_id,
+            parsed_agent_id: agent_id.clone(),
             oplog,
             worker_event_service: Arc::new(WorkerEventServiceDefault::new(
                 deps.config().limits.event_broadcast_capacity,
@@ -320,7 +325,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(agent_id) = &agent_id {
             if last_oplog_idx <= OplogIndex::from_u64(2) {
                 let init_idempotency_key =
-                    IdempotencyKey::new(format!("init-{}", worker.worker_id()));
+                    IdempotencyKey::new(format!("init-{}", worker.agent_id()));
                 worker
                     .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
                         idempotency_key: init_idempotency_key,
@@ -337,8 +342,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(worker)
     }
 
-    pub fn worker_id(&self) -> WorkerId {
-        self.owned_worker_id.worker_id()
+    pub fn agent_id(&self) -> AgentId {
+        self.owned_agent_id.agent_id()
     }
 
     pub fn oom_retry_config(&self) -> &RetryConfig {
@@ -409,7 +414,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut instance_guard = self.lock_non_stopping_worker().await;
         let stop_result = match &*instance_guard {
             WorkerInstance::Running(running) => {
-                if is_running_worker_idle(running).await {
+                if is_running_agent_idle(running).await {
                     let stop_result = self
                         .stop_internal_locked(&mut instance_guard, false, None)
                         .await;
@@ -473,14 +478,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
     }
 
-    pub fn get_initial_worker_metadata(&self) -> WorkerMetadata {
+    pub fn get_initial_worker_metadata(&self) -> AgentMetadata {
         self.initial_worker_metadata.clone()
     }
 
-    pub async fn get_latest_worker_metadata(&self) -> WorkerMetadata {
+    pub async fn get_latest_worker_metadata(&self) -> AgentMetadata {
         let updated_status = self.last_known_status.read().await.clone();
         let result = self.get_initial_worker_metadata();
-        WorkerMetadata {
+        AgentMetadata {
             last_known_status: updated_status,
             ..result
         }
@@ -489,7 +494,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
     // This just has an additional assert built in for when decisions need to be sure that they are fully up to date on the oplog.
     // _NEVER_ call this from outside the invocation loop, as that is the only place that can reason about whether the status is detached or not.
-    pub async fn get_non_detached_last_known_status(&self) -> WorkerStatusRecord {
+    pub async fn get_non_detached_last_known_status(&self) -> AgentStatusRecord {
         // hold the update lock so we know that the atomic bool and state are consistent
         let update_state_lock_guard = self.update_state_lock.lock().await;
 
@@ -687,7 +692,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         );
         debug!("Stored invocation success for {key}");
         self.events().publish(Event::InvocationCompleted {
-            worker_id: self.owned_worker_id.worker_id(),
+            agent_id: self.owned_agent_id.agent_id(),
             idempotency_key: key.clone(),
             result: Ok(output),
         });
@@ -719,7 +724,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let golem_error = trap_type.as_golem_error(&stderr);
             if let Some(golem_error) = golem_error {
                 self.events().publish(Event::InvocationCompleted {
-                    worker_id: self.owned_worker_id.worker_id(),
+                    agent_id: self.owned_agent_id.agent_id(),
                     idempotency_key: key.clone(),
                     result: Err(golem_error),
                 });
@@ -756,20 +761,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
                 let has_invocations = !self.pending_invocations().await.is_empty();
-                debug!("Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}", self.owned_worker_id);
+                debug!("Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}", self.owned_agent_id);
                 waiting_for_command && !has_invocations
             }
             WorkerInstance::WaitingForPermit(_) => {
                 debug!(
                     "Worker {} is waiting for permit, cannot be used to free up memory",
-                    self.owned_worker_id
+                    self.owned_agent_id
                 );
                 false
             }
             WorkerInstance::Unloaded { .. } => {
                 debug!(
                     "Worker {} is unloaded, cannot be used to free up memory",
-                    self.owned_worker_id
+                    self.owned_agent_id
                 );
                 false
             }
@@ -777,7 +782,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Stopping(_) => {
                 debug!(
                     "Worker {} is stopping, cannot be used to free up memory",
-                    self.owned_worker_id
+                    self.owned_agent_id
                 );
                 false
             }
@@ -785,7 +790,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Deleting => {
                 debug!(
                     "Worker {} is deleting, cannot be used to free up memory",
-                    self.owned_worker_id
+                    self.owned_agent_id
                 );
                 false
             }
@@ -1212,10 +1217,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let wait_result = subscription
                         .wait_for(|event| match event {
                             Event::InvocationCompleted {
-                                worker_id,
+                                agent_id,
                                 idempotency_key,
                                 result,
-                            } if *worker_id == self.owned_worker_id.worker_id
+                            } if *agent_id == self.owned_agent_id.agent_id
                                 && idempotency_key == key =>
                             {
                                 Some(LookupResult::Complete(result.clone()))
@@ -1240,7 +1245,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
-            result.cache(&self.owned_worker_id, self).await;
+            result.cache(&self.owned_agent_id, self).await;
             match result {
                 InvocationResult::Cached {
                     result: Ok(values), ..
@@ -1439,7 +1444,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         for invocation in &status.pending_invocations {
             if let Some(idempotency_key) = invocation.invocation.idempotency_key() {
                 self.events().publish(Event::InvocationCompleted {
-                    worker_id: self.owned_worker_id.worker_id(),
+                    agent_id: self.owned_agent_id.agent_id(),
                     idempotency_key: idempotency_key.clone(),
                     result: Err(error.clone()),
                 });
@@ -1499,17 +1504,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     >(
         this: &T,
         account_id: &AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
         worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
-        let component_id = owned_worker_id.component_id();
+        let component_id = owned_agent_id.component_id();
 
         // Note: this also checks the oplog for the existence of the create entry, which is the main thing we are interested in here.
-        let existing_worker_metadata = this.worker_service().get(owned_worker_id).await;
+        let existing_worker_metadata = this.worker_service().get(owned_agent_id).await;
 
         match existing_worker_metadata {
             Some(GetWorkerMetadataResult {
@@ -1519,7 +1524,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // make sure we are fully up to date on the oplog
                 let current_status = calculate_last_known_status_for_existing_worker(
                     this,
-                    owned_worker_id,
+                    owned_agent_id,
                     last_known_status,
                 )
                 .await;
@@ -1532,11 +1537,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await?;
 
-                let current_status = Arc::new(tokio::sync::RwLock::new(current_status));
+                let current_status = Arc::new(RwLock::new(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
-                    let agent_id = AgentId::parse(
-                        &owned_worker_id.worker_id.worker_name,
+                    let agent_id = ParsedAgentId::parse(
+                        &owned_agent_id.agent_id.agent_id,
                         &initial_component.metadata,
                     )
                     .map_err(|err| {
@@ -1561,7 +1566,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let oplog = this
                     .oplog_service()
                     .open(
-                        owned_worker_id,
+                        owned_agent_id,
                         None,
                         initial_worker_metadata.clone(),
                         read_only_lock::tokio::ReadOnlyLock::new(current_status.clone()),
@@ -1586,14 +1591,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
-                    let agent_id =
-                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
-                            .map_err(|err| {
-                                WorkerExecutorError::invalid_request(format!(
-                                    "Invalid agent id: {}",
-                                    err
-                                ))
-                            })?;
+                    let agent_id = ParsedAgentId::parse(
+                        &owned_agent_id.agent_id.agent_id,
+                        &component.metadata,
+                    )
+                    .map_err(|err| {
+                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {}", err))
+                    })?;
                     Some(agent_id)
                 } else {
                     None
@@ -1620,7 +1624,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let created_at = Timestamp::now_utc();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
-                let initial_status = WorkerStatusRecord {
+                let initial_status = AgentStatusRecord {
                     component_revision: component.revision,
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
@@ -1638,15 +1642,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ..Default::default()
                 };
 
-                let initial_worker_metadata = WorkerMetadata {
-                    worker_id: owned_worker_id.worker_id(),
+                let initial_worker_metadata = AgentMetadata {
+                    agent_id: owned_agent_id.agent_id(),
                     // TODO: these environment variables already contain the component level values,
                     // but we should only have the worker-level overrides here as we can't compute
                     // the new effective set as the component revision changes otherwise.
                     env: worker_env,
                     config_vars: worker_config_vars.unwrap_or_default(),
                     local_agent_config: initial_local_agent_config,
-                    environment_id: owned_worker_id.environment_id(),
+                    environment_id: owned_agent_id.environment_id(),
                     created_by: *account_id,
                     created_at,
                     parent,
@@ -1658,7 +1662,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // both options are equivalent here, this is just cheaper.
 
                 let initial_oplog_entry = OplogEntry::create(
-                    initial_worker_metadata.worker_id.clone(),
+                    initial_worker_metadata.agent_id.clone(),
                     initial_worker_metadata.last_known_status.component_revision,
                     initial_worker_metadata.env.clone(),
                     initial_worker_metadata.environment_id,
@@ -1688,7 +1692,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let oplog = this
                     .oplog_service()
                     .create(
-                        owned_worker_id,
+                        owned_agent_id,
                         initial_oplog_entry,
                         initial_worker_metadata.clone(),
                         read_only_lock::tokio::ReadOnlyLock::new(initial_status.clone()),
@@ -1699,11 +1703,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 initial_status.write().await.oplog_idx = oplog.current_oplog_index().await;
 
                 this.worker_service()
-                    .update_cached_status(
-                        owned_worker_id,
-                        &*initial_status.read().await,
-                        agent_mode,
-                    )
+                    .update_cached_status(owned_agent_id, &*initial_status.read().await, agent_mode)
                     .await;
 
                 Ok(GetOrCreateWorkerResult {
@@ -1732,12 +1732,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             // reload status from scratch
             let worker_status =
-                calculate_last_known_status_for_existing_worker(self, &self.owned_worker_id, None)
+                calculate_last_known_status_for_existing_worker(self, &self.owned_agent_id, None)
                     .await;
 
             *self.last_known_status.write().await = worker_status.clone();
             self.worker_service()
-                .update_cached_status(&self.owned_worker_id, &worker_status, self.agent_mode())
+                .update_cached_status(&self.owned_agent_id, &worker_status, self.agent_mode())
                 .await;
 
             // ensure we hold mutex for the full duration
@@ -1758,7 +1758,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             let updated_status = update_status_with_new_entries(
                 self,
-                &self.owned_worker_id,
+                &self.owned_agent_id,
                 old_status.clone(),
                 new_entries,
                 &self.config().retry,
@@ -1771,10 +1771,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // TODO: We should do this in the background on a timer instead of on every commit.
                     self.worker_service()
                         .update_cached_status(
-                            &self.owned_worker_id,
+                            &self.owned_agent_id,
                             &updated_status,
                             self.agent_mode(),
                         )
+                        .await;
+
+                    self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                         .await;
 
                     true
@@ -1794,6 +1797,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    async fn schedule_oplog_archive_if_needed(
+        &self,
+        old_status: &AgentStatusRecord,
+        new_status: &AgentStatusRecord,
+    ) {
+        if old_status.status != new_status.status
+            && matches!(
+                new_status.status,
+                AgentStatus::Idle | AgentStatus::Failed | AgentStatus::Exited
+            )
+        {
+            let archive_interval = self.config().oplog.archive_interval;
+            let last_oplog_index = new_status.oplog_idx;
+            let account_id = self.initial_worker_metadata.created_by;
+
+            debug!(
+                worker_id = %self.owned_agent_id,
+                new_status = ?new_status.status,
+                "Scheduling ArchiveOplog after status transition"
+            );
+
+            self.scheduler_service()
+                .schedule(
+                    Utc::now() + archive_interval,
+                    ScheduledAction::ArchiveOplog {
+                        account_id,
+                        owned_agent_id: self.owned_agent_id.clone(),
+                        last_oplog_index,
+                        next_after: archive_interval,
+                    },
+                )
+                .await;
+        }
+    }
+
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
@@ -1807,7 +1845,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 *instance_guard = WorkerInstance::Running(
                     RunningWorker::new(
-                        this.owned_worker_id.clone(),
+                        this.owned_agent_id.clone(),
                         this.queue.clone(),
                         this.clone(),
                         permit,
@@ -1889,9 +1927,9 @@ impl WaitingWorker {
             parent: None,
             Level::INFO,
             "waiting-for-permits",
-            worker_id = parent.owned_worker_id.worker_id.to_string(),
+            agent_id = parent.owned_agent_id.agent_id.to_string(),
             agent_type = parent
-                .agent_id
+                .parsed_agent_id
                 .as_ref()
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -1937,7 +1975,7 @@ impl Drop for RunningWorker {
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
-    queue: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
@@ -1946,8 +1984,8 @@ struct RunningWorker {
 
 impl RunningWorker {
     pub async fn new<Ctx: WorkerCtx>(
-        owned_worker_id: OwnedWorkerId,
-        queue: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
+        owned_agent_id: OwnedAgentId,
+        queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
         oom_retry_count: u32,
@@ -1956,7 +1994,7 @@ impl RunningWorker {
         sender.send(WorkerCommand::Unblock).unwrap();
 
         let active_clone = queue.clone();
-        let owned_worker_id_clone = owned_worker_id.clone();
+        let owned_agent_id_clone = owned_agent_id.clone();
         let waiting_for_command = Arc::new(AtomicBool::new(false));
         let waiting_for_command_clone = waiting_for_command.clone();
         let interrupt_signal = Arc::new(async_lock::Mutex::new(None));
@@ -1966,9 +2004,9 @@ impl RunningWorker {
             parent: None,
             Level::INFO,
             "invocation-loop",
-            worker_id = parent.owned_worker_id.worker_id.to_string(),
+            agent_id = parent.owned_agent_id.agent_id.to_string(),
             agent_type = parent
-                .agent_id
+                .parsed_agent_id
                 .as_ref()
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -1982,7 +2020,7 @@ impl RunningWorker {
                 RunningWorker::invocation_loop(
                     receiver,
                     active_clone,
-                    owned_worker_id_clone,
+                    owned_agent_id_clone,
                     parent,
                     waiting_for_command_clone,
                     interrupt_signal_clone,
@@ -2046,7 +2084,7 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
     ) -> Result<(Instance, async_lock::Mutex<Store<Ctx>>), WorkerExecutorError> {
-        let component_id = parent.owned_worker_id.component_id();
+        let component_id = parent.owned_agent_id.component_id();
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
         parent.reattach_worker_status().await;
@@ -2126,8 +2164,8 @@ impl RunningWorker {
 
         let context = Ctx::create(
             worker_metadata.created_by,
-            OwnedWorkerId::new(worker_metadata.environment_id, &worker_metadata.worker_id),
-            parent.agent_id.clone(),
+            OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
+            parent.parsed_agent_id.clone(),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),
@@ -2145,7 +2183,7 @@ impl RunningWorker {
             parent.component_service(),
             parent.extra_deps(),
             parent.config(),
-            WorkerConfig::new(
+            AgentConfig::new(
                 worker_metadata.last_known_status.skipped_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
@@ -2168,7 +2206,7 @@ impl RunningWorker {
             parent.agent_webhooks(),
             parent.shard_service(),
             pending_update,
-            None,
+            worker_metadata.original_phantom_id,
         )
         .await?;
 
@@ -2202,10 +2240,10 @@ impl RunningWorker {
 
         let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
             WorkerExecutorError::worker_creation_failed(
-                parent.owned_worker_id.worker_id(),
+                parent.owned_agent_id.agent_id(),
                 format!(
                     "Failed to pre-instantiate worker {}: {e}",
-                    parent.owned_worker_id
+                    parent.owned_agent_id
                 ),
             )
         })?;
@@ -2215,10 +2253,10 @@ impl RunningWorker {
             .await
             .map_err(|e| {
                 WorkerExecutorError::worker_creation_failed(
-                    parent.owned_worker_id.worker_id(),
+                    parent.owned_agent_id.agent_id(),
                     format!(
                         "Failed to instantiate worker {}: {e}",
-                        parent.owned_worker_id
+                        parent.owned_agent_id
                     ),
                 )
             })?;
@@ -2229,7 +2267,7 @@ impl RunningWorker {
     async fn invocation_loop<Ctx: WorkerCtx>(
         receiver: UnboundedReceiver<WorkerCommand>,
         active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
         waiting_for_command: Arc<AtomicBool>,
         interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
@@ -2238,7 +2276,7 @@ impl RunningWorker {
         let mut invocation_loop = InvocationLoop {
             receiver,
             active,
-            owned_worker_id,
+            owned_agent_id,
             parent,
             waiting_for_command,
             interrupt_signal,
@@ -2272,7 +2310,7 @@ enum InvocationResult {
 impl InvocationResult {
     pub async fn cache<T: HasOplog + HasOplogService + HasConfig>(
         &mut self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         services: &T,
     ) {
         if let Self::Lazy { oplog_idx } = self {
@@ -2290,12 +2328,12 @@ impl InvocationResult {
                     })
                 }
                 OplogEntry::Error { error, retry_from, .. } => {
-                    let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
+                    let stderr = recover_stderr_logs(services, owned_agent_id, oplog_idx).await;
                     Err(FailedInvocationResult { trap_type: TrapType::Error { error, retry_from }, stderr })
                 }
                 OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())), stderr: "".to_string() }),
                 OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string() }),
-                _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_worker_id:?}")
+                _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_agent_id:?}")
             };
 
             *self = Self::Cached { result }
@@ -2325,7 +2363,7 @@ struct ResolvedAgentProperties {
 
 fn resolve_agent_properties<T: HasConfig>(
     deps: &T,
-    agent_id: Option<&AgentId>,
+    agent_id: Option<&ParsedAgentId>,
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
     let resolved_agent_type =
@@ -2381,7 +2419,7 @@ enum WorkerCommand {
     ResumeReplay,
 }
 
-async fn is_running_worker_idle(running: &RunningWorker) -> bool {
+async fn is_running_agent_idle(running: &RunningWorker) -> bool {
     running.waiting_for_command.load(Ordering::Acquire) && running.queue.read().await.is_empty()
 }
 
@@ -2412,10 +2450,10 @@ pub enum ResultOrSubscription {
 }
 
 struct GetOrCreateWorkerResult {
-    initial_worker_metadata: WorkerMetadata,
-    current_status: Arc<tokio::sync::RwLock<WorkerStatusRecord>>,
+    initial_worker_metadata: AgentMetadata,
+    current_status: Arc<RwLock<AgentStatusRecord>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    agent_id: Option<AgentId>,
+    agent_id: Option<ParsedAgentId>,
     snapshot_policy: SnapshotPolicy,
     oplog: Arc<dyn Oplog>,
 }

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { convertOptionalTypeNameToKebab } from './stringFormat';
 import { TaggedTypeMetadata } from './taggedUnion';
 
 export interface NameTypePair {
@@ -295,7 +294,7 @@ export function list(
     typedArray: typedArrayKind,
     mapType,
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       inner,
     },
@@ -311,7 +310,7 @@ export function option(
     kind: 'option',
     emptyType,
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       inner,
     },
@@ -327,7 +326,7 @@ export function tuple(
     kind: 'tuple',
     emptyType,
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       items,
     },
@@ -338,7 +337,7 @@ export function record(name: string | undefined, fields: NameTypePair[]): Analys
   return {
     kind: 'record',
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       fields,
     },
@@ -349,7 +348,7 @@ export function flags(name: string | undefined, names: string[]): AnalysedType {
   return {
     kind: 'flags',
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       names,
     },
@@ -360,7 +359,7 @@ export function enum_(name: string | undefined, cases: string[]): AnalysedType {
   return {
     kind: 'enum',
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       cases,
     },
@@ -376,7 +375,7 @@ export function variant(
     kind: 'variant',
     taggedTypes,
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       cases,
     },
@@ -393,7 +392,7 @@ export function result(
     kind: 'result',
     resultType,
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       ok,
       err,
@@ -409,7 +408,7 @@ export function handle(
   return {
     kind: 'handle',
     value: {
-      name: convertOptionalTypeNameToKebab(name),
+      name,
       owner: undefined,
       resourceId,
       mode,
