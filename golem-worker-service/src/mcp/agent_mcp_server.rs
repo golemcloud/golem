@@ -140,7 +140,7 @@ pub async fn get_agent_capabilities(
                 let component_id = registered_agent_type.implemented_by.component_id;
 
                 for method in &agent_type.methods {
-                    let agent_method_mcp = McpAgentCapability::from(
+                    let agent_method_mcp = McpAgentCapability::from_agent_method(
                         &account_id,
                         &environment_id,
                         &agent_type.type_name,
@@ -154,7 +154,7 @@ pub async fn get_agent_capabilities(
                             tools.push(*agent_mcp_tool);
                         }
                         McpAgentCapability::Resource(agent_mcp_resource) => {
-                            resources.push(agent_mcp_resource);
+                            resources.push(*agent_mcp_resource);
                         }
                     }
                 }

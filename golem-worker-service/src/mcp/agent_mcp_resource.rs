@@ -70,7 +70,7 @@ impl McpResourceUri {
         let mut segments: Vec<String> = path
             .split('/')
             .filter(|s| !s.is_empty())
-            .map(|s| percent_decode(s))
+            .map(percent_decode)
             .collect();
 
         if segments.is_empty() {
@@ -94,11 +94,11 @@ fn percent_decode(s: &str) -> String {
         if b == b'%' {
             let hi = chars.next();
             let lo = chars.next();
-            if let (Some(hi), Some(lo)) = (hi, lo) {
-                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", hi as char, lo as char), 16) {
-                    result.push(byte as char);
-                    continue;
-                }
+            if let (Some(hi), Some(lo)) = (hi, lo)
+                && let Ok(byte) = u8::from_str_radix(&format!("{}{}", hi as char, lo as char), 16)
+            {
+                result.push(byte as char);
+                continue;
             }
             result.push('%');
         } else {
@@ -176,18 +176,17 @@ impl ResourceRegistry {
             constructor_param_names,
             ..
         } = &resource.kind
+            && uri.tail_segments.len() == constructor_param_names.len()
         {
-            if uri.tail_segments.len() == constructor_param_names.len() {
-                let params = constructor_param_names
-                    .iter()
-                    .zip(uri.tail_segments.iter())
-                    .map(|(name, value)| ConstructorParam {
-                        name: name.clone(),
-                        value: value.clone(),
-                    })
-                    .collect();
-                return Some((resource, params));
-            }
+            let params = constructor_param_names
+                .iter()
+                .zip(uri.tail_segments.iter())
+                .map(|(name, value)| ConstructorParam {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
+                .collect();
+            return Some((resource, params));
         }
         None
     }

@@ -42,20 +42,20 @@ pub fn extract_multimodal_element_value(
 
             let language_code = obj.get("languageCode").and_then(|v| v.as_str());
 
-            if let Some(code) = language_code {
-                if let Some(allowed) = &descriptor.restrictions {
-                    if !allowed.is_empty() && !allowed.iter().any(|t| t.language_code == code) {
-                        let expected: Vec<&str> =
-                            allowed.iter().map(|t| t.language_code.as_str()).collect();
-                        return Err(format!(
-                            "parts[{}] '{}': language code '{}' is not allowed. Expected one of: {}",
-                            index,
-                            name,
-                            code,
-                            expected.join(", ")
-                        ));
-                    }
-                }
+            if let Some(code) = language_code
+                && let Some(allowed) = &descriptor.restrictions
+                && !allowed.is_empty()
+                && !allowed.iter().any(|t| t.language_code == code)
+            {
+                let expected: Vec<&str> =
+                    allowed.iter().map(|t| t.language_code.as_str()).collect();
+                return Err(format!(
+                    "parts[{}] '{}': language code '{}' is not allowed. Expected one of: {}",
+                    index,
+                    name,
+                    code,
+                    expected.join(", ")
+                ));
             }
 
             let text_type = language_code.map(|code| TextType {
@@ -88,18 +88,18 @@ pub fn extract_multimodal_element_value(
                     )
                 })?;
 
-            if let Some(allowed) = &descriptor.restrictions {
-                if !allowed.is_empty() && !allowed.iter().any(|t| t.mime_type == mime_type) {
-                    let expected: Vec<&str> =
-                        allowed.iter().map(|t| t.mime_type.as_str()).collect();
-                    return Err(format!(
-                        "parts[{}] '{}': MIME type '{}' is not allowed. Expected one of: {}",
-                        index,
-                        name,
-                        mime_type,
-                        expected.join(", ")
-                    ));
-                }
+            if let Some(allowed) = &descriptor.restrictions
+                && !allowed.is_empty()
+                && !allowed.iter().any(|t| t.mime_type == mime_type)
+            {
+                let expected: Vec<&str> = allowed.iter().map(|t| t.mime_type.as_str()).collect();
+                return Err(format!(
+                    "parts[{}] '{}': MIME type '{}' is not allowed. Expected one of: {}",
+                    index,
+                    name,
+                    mime_type,
+                    expected.join(", ")
+                ));
             }
 
             let data = base64::engine::general_purpose::STANDARD

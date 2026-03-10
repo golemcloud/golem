@@ -27,11 +27,11 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub enum McpAgentCapability {
     Tool(Box<AgentMcpTool>),
-    Resource(AgentMcpResource),
+    Resource(Box<AgentMcpResource>),
 }
 
 impl McpAgentCapability {
-    pub fn from(
+    pub fn from_agent_method(
         account_id: &AccountId,
         environment_id: &EnvironmentId,
         agent_type_name: &AgentTypeName,
@@ -128,7 +128,7 @@ impl McpAgentCapability {
                 }
             };
 
-            Self::Resource(AgentMcpResource {
+            Self::Resource(Box::new(AgentMcpResource {
                 kind,
                 environment_id: *environment_id,
                 account_id: *account_id,
@@ -136,7 +136,7 @@ impl McpAgentCapability {
                 raw_method: method.clone(),
                 component_id,
                 agent_type_name: agent_type_name.clone(),
-            })
+            }))
         }
     }
 }

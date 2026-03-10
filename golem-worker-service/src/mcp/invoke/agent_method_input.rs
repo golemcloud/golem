@@ -22,7 +22,7 @@ pub fn get_agent_method_input(
             let parts_array = mcp_args
                 .get("parts")
                 .and_then(|v| v.as_array())
-                .ok_or_else(|| "Multimodal input requires a parts array field")?;
+                .ok_or("Multimodal input requires a parts array field")?;
 
             let schema_map: std::collections::HashMap<&str, &ElementSchema> = named_schemas
                 .elements
@@ -125,19 +125,19 @@ fn extract_single_element_value(
 
             let language_code = obj.get("languageCode").and_then(|v| v.as_str());
 
-            if let Some(code) = language_code {
-                if let Some(allowed) = &descriptor.restrictions {
-                    if !allowed.is_empty() && !allowed.iter().any(|t| t.language_code == code) {
-                        let expected: Vec<&str> =
-                            allowed.iter().map(|t| t.language_code.as_str()).collect();
-                        return Err(format!(
-                            "Parameter '{}': language code '{}' is not allowed. Expected one of: {}",
-                            name,
-                            code,
-                            expected.join(", ")
-                        ));
-                    }
-                }
+            if let Some(code) = language_code
+                && let Some(allowed) = &descriptor.restrictions
+                && !allowed.is_empty()
+                && !allowed.iter().any(|t| t.language_code == code)
+            {
+                let expected: Vec<&str> =
+                    allowed.iter().map(|t| t.language_code.as_str()).collect();
+                return Err(format!(
+                    "Parameter '{}': language code '{}' is not allowed. Expected one of: {}",
+                    name,
+                    code,
+                    expected.join(", ")
+                ));
             }
 
             let text_type = language_code.map(|code| TextType {
@@ -172,17 +172,17 @@ fn extract_single_element_value(
                     format!("Parameter '{}' is missing 'mimeType' string field", name)
                 })?;
 
-            if let Some(allowed) = &descriptor.restrictions {
-                if !allowed.is_empty() && !allowed.iter().any(|t| t.mime_type == mime_type) {
-                    let expected: Vec<&str> =
-                        allowed.iter().map(|t| t.mime_type.as_str()).collect();
-                    return Err(format!(
-                        "Parameter '{}': MIME type '{}' is not allowed. Expected one of: {}",
-                        name,
-                        mime_type,
-                        expected.join(", ")
-                    ));
-                }
+            if let Some(allowed) = &descriptor.restrictions
+                && !allowed.is_empty()
+                && !allowed.iter().any(|t| t.mime_type == mime_type)
+            {
+                let expected: Vec<&str> = allowed.iter().map(|t| t.mime_type.as_str()).collect();
+                return Err(format!(
+                    "Parameter '{}': MIME type '{}' is not allowed. Expected one of: {}",
+                    name,
+                    mime_type,
+                    expected.join(", ")
+                ));
             }
 
             let data = base64::engine::general_purpose::STANDARD
