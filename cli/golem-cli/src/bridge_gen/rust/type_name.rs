@@ -56,7 +56,13 @@ impl TypeName for RustTypeName {
         None
     }
 
-    fn from_owner_and_name(owner: Option<impl AsRef<str>>, name: impl AsRef<str>) -> Self {
+    fn from_owner_and_name(
+        owner: Option<impl AsRef<str>>,
+        name: impl AsRef<str>,
+        _same_language: bool,
+    ) -> Self {
+        // WIT type names are always kebab-case regardless of source language,
+        // so we always need to convert to UpperCamelCase for Rust.
         Self::Derived(match owner {
             Some(owner) => format!(
                 "{}{}",
@@ -67,7 +73,12 @@ impl TypeName for RustTypeName {
         })
     }
 
-    fn from_segments(segments: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+    fn from_segments(
+        segments: impl IntoIterator<Item = impl AsRef<str>>,
+        _same_language: bool,
+    ) -> Self {
+        // WIT type names are always kebab-case regardless of source language,
+        // so we always need to convert to UpperCamelCase for Rust.
         segments
             .into_iter()
             .map(|segment| segment.as_ref().to_upper_camel_case())

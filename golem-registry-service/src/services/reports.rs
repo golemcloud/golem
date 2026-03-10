@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::reports::ReportsRepo;
+use crate::repo::report::ReportRepo;
 use golem_common::model::reports::{AccountCountsReport, AccountSummaryReport};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::GlobalAction;
@@ -41,11 +41,11 @@ impl SafeDisplay for ReportsError {
 error_forwarding!(ReportsError, RepoError);
 
 pub struct ReportsService {
-    reports_repo: Arc<dyn ReportsRepo>,
+    reports_repo: Arc<dyn ReportRepo>,
 }
 
 impl ReportsService {
-    pub fn new(reports_repo: Arc<dyn ReportsRepo>) -> Self {
+    pub fn new(reports_repo: Arc<dyn ReportRepo>) -> Self {
         Self { reports_repo }
     }
 }

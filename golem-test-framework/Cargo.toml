@@ -29,6 +29,7 @@ clap = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
 futures = { workspace = true }
+heck = { workspace = true }
 humantime-serde = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }

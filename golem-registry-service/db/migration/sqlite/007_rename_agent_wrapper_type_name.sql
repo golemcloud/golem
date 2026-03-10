@@ -1,0 +1,4 @@
+ALTER TABLE deployment_registered_agent_types RENAME COLUMN agent_wrapper_type_name TO canonical_agent_type_name;
+DROP INDEX IF EXISTS deployment_registered_agent_types_agent_type_wrapper_idx;
+CREATE UNIQUE INDEX deployment_registered_agent_types_canonical_agent_type_idx
+    ON deployment_registered_agent_types (environment_id, deployment_revision_id, canonical_agent_type_name);

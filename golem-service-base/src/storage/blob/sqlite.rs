@@ -64,8 +64,8 @@ impl SqliteBlobStorage {
             }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
-                worker_id,
-            } => format!("oplog_payload-{environment_id}-{}", worker_id.worker_name),
+                agent_id,
+            } => format!("oplog_payload-{environment_id}-{}", agent_id.agent_id),
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
                 component_id,

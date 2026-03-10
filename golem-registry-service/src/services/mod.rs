@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod account_usage;
+pub mod agent_secret;
 pub mod application;
 pub mod auth;
 pub mod component;
