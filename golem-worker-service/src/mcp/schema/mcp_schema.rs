@@ -18,8 +18,6 @@ use golem_common::base_model::agent::{
 use golem_wasm::analysis::AnalysedType;
 use serde_json::{Map, Value, json};
 
-pub const MULTIMODAL_PARTS_FIELD: &str = "parts";
-
 #[derive(Default)]
 pub struct McpSchema {
     pub properties: Map<FieldName, JsonTypeDescription>,
@@ -137,11 +135,11 @@ impl McpSchema {
         });
 
         let mut properties: Map<String, JsonTypeDescription> = Map::new();
-        properties.insert(MULTIMODAL_PARTS_FIELD.to_string(), array_schema);
+        properties.insert("parts".to_string(), array_schema);
 
         McpSchema {
             properties,
-            required: vec![MULTIMODAL_PARTS_FIELD.to_string()],
+            required: vec!["parts".to_string()],
         }
     }
 

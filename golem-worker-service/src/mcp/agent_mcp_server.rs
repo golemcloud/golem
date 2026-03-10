@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::McpCapabilityLookup;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, McpResourceUri, ResourceRegistry};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::invoke::{invoke_resource, invoke_tool};
+use crate::mcp::{McpCapabilityLookup, invoke};
 use crate::service::worker::WorkerService;
 use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
@@ -60,7 +59,7 @@ impl GolemAgentMcpServer {
         args_map: JsonObject,
         mcp_tool: &AgentMcpTool,
     ) -> Result<CallToolResult, ErrorData> {
-        invoke_tool(&self.worker_service, args_map, mcp_tool).await
+        invoke::tool::invoke_tool(args_map, mcp_tool, &self.worker_service).await
     }
 
     async fn build_capabilities(
@@ -290,19 +289,26 @@ impl ServerHandler for GolemAgentMcpServer {
         ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        let registry = self.resources.read().await;
+        let resource_registry = self.resources.read().await;
 
-        if let Some(resource) = registry.get_static(&uri) {
-            return invoke_resource(&self.worker_service, resource, &uri, None).await;
+        if let Some(resource) = resource_registry.get_static(&uri) {
+            return invoke::resource::invoke_resource(&self.worker_service, resource, &uri, None)
+                .await;
         }
 
         let parsed_resource_uri = McpResourceUri::parse(&uri)
             .map_err(|e| McpError::invalid_params(format!("Invalid resource URI: {e}"), None))?;
 
         if let Some((resource, params)) =
-            registry.extract_mcp_resource_with_input(&parsed_resource_uri)
+            resource_registry.extract_mcp_resource_with_input(&parsed_resource_uri)
         {
-            return invoke_resource(&self.worker_service, resource, &uri, Some(params)).await;
+            return invoke::resource::invoke_resource(
+                &self.worker_service,
+                resource,
+                &uri,
+                Some(params),
+            )
+            .await;
         }
 
         Err(McpError::invalid_params(
