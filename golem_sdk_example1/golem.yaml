@@ -19,10 +19,8 @@ componentTemplates:
       debug:
         default: true
         build:
-          - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/{{ component_name | to_snake_case }}
-            dir: ../golem_sdk_tools
-          - command: moon run cmd -- agents ../golem_sdk_example1/{{ component_name | to_snake_case }}
-            dir: ../golem_sdk_tools
+          - command: moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd -- reexports .mooncakes/golemcloud/golem_sdk {{ component_name | to_snake_case }}
+          - command: moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd -- agents {{ component_name | to_snake_case }}
           - command: moon build --target wasm --release
           - command: mkdir -p _build/wasm/debug
           - command: wasm-tools component embed wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm
@@ -38,10 +36,8 @@ componentTemplates:
         linkedWasm: golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
       release:
         build:
-          - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/{{ component_name | to_snake_case }}
-            dir: ../golem_sdk_tools
-          - command: moon run cmd -- agents ../golem_sdk_example1/{{ component_name | to_snake_case }}
-            dir: ../golem_sdk_tools
+          - command: moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd -- reexports .mooncakes/golemcloud/golem_sdk {{ component_name | to_snake_case }}
+          - command: moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd -- agents {{ component_name | to_snake_case }}
           - command: moon build --target wasm --release
           - command: wasm-tools component embed wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm
           - command: wasm-tools component new _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm --output _build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm
