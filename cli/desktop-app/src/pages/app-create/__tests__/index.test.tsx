@@ -10,7 +10,7 @@ import {
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { CreateApplication } from "../index";
+import CreateApplication from "../index";
 
 // Mock dependencies
 const mockNavigate = vi.fn();
@@ -359,8 +359,8 @@ describe("CreateApplication", () => {
 
       await waitFor(() => {
         expect(invoke).toHaveBeenCalledWith("call_golem_command", {
-          command: "root",
-          subcommands: ["new", "test-app", "ts"],
+          command: "new",
+          subcommands: ["test-app", "ts"],
           folderPath: "/path/to/folder",
         });
         expect(toast).toHaveBeenCalledWith({

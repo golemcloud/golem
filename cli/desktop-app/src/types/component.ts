@@ -54,22 +54,22 @@ export interface Export {
   functions: Function[];
 }
 
-export interface Memory {
+interface Memory {
   initial: number;
   maximum: number | null;
 }
 
-export interface Value {
+interface Value {
   name: string;
   version: string;
 }
 
-export interface FieldProducer {
+interface FieldProducer {
   name: string;
   values: Value[];
 }
 
-export interface Producer {
+interface Producer {
   fields: FieldProducer[];
 }
 
@@ -77,11 +77,6 @@ export interface Metadata {
   exports: string[];
   memories: Memory[];
   producers: Producer[];
-}
-
-export interface VersionedComponentId {
-  componentId?: string;
-  version?: number;
 }
 
 export enum ComponentType {

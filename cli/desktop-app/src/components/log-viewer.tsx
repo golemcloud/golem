@@ -31,8 +31,9 @@ export function LogViewer({
   const [isCopied, setIsCopied] = useState(false);
 
   const handleCopy = async () => {
+    const textToCopy = logs || title || "No output available";
     try {
-      await navigator.clipboard.writeText(logs);
+      await navigator.clipboard.writeText(textToCopy);
       setIsCopied(true);
       toast({
         title: "Copied to clipboard",

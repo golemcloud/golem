@@ -34,7 +34,7 @@ const LANGUAGE_OPTIONS = [
   { value: "ts", label: "TypeScript" },
 ];
 
-export const CreateApplication = () => {
+const CreateApplication = () => {
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
   const [formData, setFormData] = useState({
@@ -116,8 +116,8 @@ export const CreateApplication = () => {
       // Call the Rust function to create the application
       // v1.4.2: 'new' is now a root-level command
       const result = await invoke("call_golem_command", {
-        command: "root",
-        subcommands: ["new", formData.appName, formData.language],
+        command: "new",
+        subcommands: [formData.appName, formData.language],
         folderPath: formData.folderPath,
       });
 

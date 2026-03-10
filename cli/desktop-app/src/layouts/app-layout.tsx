@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import ErrorBoundary from "@/components/errorBoundary";
 import Navbar from "@/components/navbar.tsx";
 
-export const AppLayout = () => {
+const AppLayout = () => {
   const { id } = useParams();
 
   return (

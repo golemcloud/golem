@@ -11,8 +11,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import React from "react";
-import { Home } from "@/pages/home";
-import { AppLayout } from "@/layouts/app-layout";
+import Home from "@/pages/home";
+import AppLayout from "@/layouts/app-layout";
 import { Service } from "@/service/client";
 
 // Mock all dependencies
