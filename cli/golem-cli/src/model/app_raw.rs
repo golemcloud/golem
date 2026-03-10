@@ -222,6 +222,8 @@ impl Application {
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Marker>,
     #[serde(flatten)]
     pub component_properties: ComponentLayerProperties,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -233,6 +235,8 @@ pub struct ComponentTemplate {
 pub struct Component {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
     #[serde(flatten)]
     pub component_properties: ComponentLayerProperties,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -413,8 +417,6 @@ pub struct InitialComponentFile {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentLayerProperties {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<Marker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_wit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

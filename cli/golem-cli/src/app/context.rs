@@ -280,7 +280,7 @@ impl ApplicationContext {
                                 .filter(|component_name| {
                                     self.application
                                         .component(component_name)
-                                        .source_dir()
+                                        .component_dir()
                                         .starts_with(self.calling_working_dir.as_path())
                                 })
                                 .cloned()

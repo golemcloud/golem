@@ -41,7 +41,7 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
 
             for component_name in &component_names {
                 let component = ctx.application().component(component_name);
-                let component_source_dir = component.source_dir();
+                let component_source_dir = component.component_dir();
 
                 paths.insert(("generated wit", component.generated_wit()));
                 paths.insert(("component wasm", component.wasm()));

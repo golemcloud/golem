@@ -41,7 +41,7 @@ pub async fn execute_build_command(
     let base_build_dir = ctx
         .application()
         .component(component_name)
-        .source_dir()
+        .component_dir()
         .to_path_buf();
     match command {
         app_raw::BuildCommand::External(external_command) => {
@@ -172,7 +172,7 @@ pub async fn execute_custom_command(
 
             for step in custom_command {
                 if let Err(error) =
-                    execute_external_command(ctx, component.source_dir(), step).await
+                    execute_external_command(ctx, component.component_dir(), step).await
                 {
                     return Err(CustomCommandError::CommandError { error });
                 }

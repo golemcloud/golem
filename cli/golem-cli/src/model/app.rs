@@ -560,7 +560,10 @@ struct PartitionedComponentPresets {
 }
 
 impl PartitionedComponentPresets {
-    fn new(presets: IndexMap<String, app_raw::ComponentLayerProperties>) -> Self {
+    fn new(
+        presets: IndexMap<String, app_raw::ComponentLayerProperties>,
+        default: Option<app_raw::Marker>,
+    ) -> Self {
         let mut default_custom_preset = None;
         let mut custom_presets = IndexMap::new();
         let mut env_presets = IndexMap::new();
@@ -571,9 +574,7 @@ impl PartitionedComponentPresets {
                     env_presets.insert(env_name.to_string(), properties.into());
                 }
                 None => {
-                    if properties.default == Some(app_raw::Marker)
-                        || default_custom_preset.is_none()
-                    {
+                    if default == Some(app_raw::Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
                     custom_presets.insert(preset_name, properties.into());
@@ -1023,7 +1024,7 @@ impl<'a> Component<'a> {
         self.layer_properties().applied_layers.as_slice()
     }
 
-    pub fn source_dir(&self) -> &Path {
+    pub fn component_dir(&self) -> &Path {
         let parent = self.source().parent().unwrap_or_else(|| {
             panic!(
                 "Failed to get parent for component, source: {}",
@@ -1050,7 +1051,7 @@ impl<'a> Component<'a> {
     }
 
     pub fn source_wit(&self) -> PathBuf {
-        self.source_dir().join(&self.properties().source_wit)
+        self.component_dir().join(&self.properties().source_wit)
     }
 
     pub fn generated_base_wit(&self) -> PathBuf {
@@ -1073,12 +1074,12 @@ impl<'a> Component<'a> {
     }
 
     pub fn generated_wit(&self) -> PathBuf {
-        self.source_dir()
+        self.component_dir()
             .join(self.properties().generated_wit.clone())
     }
 
     pub fn wasm(&self) -> PathBuf {
-        self.source_dir()
+        self.component_dir()
             .join(self.properties().component_wasm.clone())
     }
 
@@ -1087,7 +1088,7 @@ impl<'a> Component<'a> {
         self.properties()
             .output_wasm
             .as_ref()
-            .map(|output_wasm| self.source_dir().join(output_wasm))
+            .map(|output_wasm| self.component_dir().join(output_wasm))
             .unwrap_or_else(|| {
                 self.temp_dir
                     .join("final-wasm")
@@ -1243,6 +1244,8 @@ impl ComponentLayerProperties {
 
 #[derive(Clone, Debug)]
 pub struct ComponentProperties {
+    pub dir: Option<PathBuf>, // Relative path starting from the defining golem.yaml
+    pub component_dir: PathBuf, // Resolved canonical component path
     pub source_wit: String,
     pub generated_wit: String,
     pub component_wasm: String,
@@ -1261,6 +1264,8 @@ impl ComponentProperties {
     fn from_merged(
         validation: &mut ValidationBuilder,
         source: &Path,
+        dir: Option<PathBuf>,
+        component_dir: PathBuf,
         merged: &ComponentLayerProperties,
     ) -> Self {
         let files =
@@ -1269,6 +1274,8 @@ impl ComponentProperties {
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
 
         let properties = Self {
+            dir,
+            component_dir,
             source_wit: merged.source_wit.value().clone().unwrap_or_default(),
             generated_wit: merged.generated_wit.value().clone().unwrap_or_default(),
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
@@ -1603,7 +1610,7 @@ mod app_builder {
         clean: Vec<WithSource<String>>,
 
         raw_component_names: HashSet<String>,
-        component_names_to_source: BTreeMap<ComponentName, PathBuf>,
+        component_names_to_source_and_dir: BTreeMap<ComponentName, (PathBuf, Option<PathBuf>)>,
         component_custom_presets: BTreeSet<ComponentPresetName>,
         component_layer_store: Store<ComponentLayer>,
 
@@ -1789,8 +1796,8 @@ mod app_builder {
                             UniqueSourceCheckedEntityKey::Component(component_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
                             self.raw_component_names.insert(component_name.0.clone());
-                            self.component_names_to_source
-                                .insert(component_name.clone(), app.source.clone());
+                            self.component_names_to_source_and_dir
+                                .insert(component_name.clone(), (app.source.clone(), component.dir.as_ref().map(PathBuf::from)));
                             self.add_component(validation, component_name, component);
                         }
                     }
@@ -2000,7 +2007,8 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
-                    let presets = PartitionedComponentPresets::new(template.presets);
+                    let presets =
+                        PartitionedComponentPresets::new(template.presets, template.default);
 
                     if let Some(err) = self
                         .component_layer_store
@@ -2075,7 +2083,7 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
-                    let presets = PartitionedComponentPresets::new(component.presets);
+                    let presets = PartitionedComponentPresets::new(component.presets, None);
 
                     presets.custom_presets.keys().for_each(|preset_name| {
                         self.component_custom_presets
@@ -2157,7 +2165,7 @@ mod app_builder {
             validation: &mut ValidationBuilder,
             component_presets: &ComponentPresetSelector,
         ) {
-            for (component_name, source) in self.component_names_to_source.clone() {
+            for (component_name, (source, dir)) in self.component_names_to_source_and_dir.clone() {
                 validation.with_context(
                     vec![
                         ("source", source.to_string_lossy().to_string()),
@@ -2168,6 +2176,7 @@ mod app_builder {
                             validation,
                             component_presets,
                             source,
+                            dir,
                             component_name,
                         );
                     },
@@ -2180,11 +2189,12 @@ mod app_builder {
             validation: &mut ValidationBuilder,
             component_presets: &ComponentPresetSelector,
             source: PathBuf,
+            dir: Option<PathBuf>,
             component_name: ComponentName,
         ) {
             let component_dir = match fs::parent_or_err(&source)
                 .and_then(fs::canonicalize_path)
-                .and_then(|path| fs::path_to_str(&path).map(|path| path.to_string()))
+                .map(|path| dir.as_ref().map(|dir| path.join(dir)).unwrap_or(path))
             {
                 Ok(path) => path,
                 Err(err) => {
@@ -2193,11 +2203,20 @@ mod app_builder {
                 }
             };
 
+            let component_dir_str =
+                match fs::path_to_str(&component_dir).map(|path| path.to_string()) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        validation.add_error(err.to_string());
+                        return;
+                    }
+                };
+
             let ctx = ComponentLayerApplyContext::new(
                 Some(component_name.clone()),
                 Some(self.app_root_dir_str.clone()),
                 Some(self.golem_temp_dir_str.clone()),
-                Some(component_dir),
+                Some(component_dir_str),
             );
 
             match self.component_layer_store.value(
@@ -2209,6 +2228,8 @@ mod app_builder {
                     let component_properties = ComponentProperties::from_merged(
                         validation,
                         &source,
+                        dir,
+                        component_dir,
                         &component_layer_properties,
                     );
                     self.components.insert(
