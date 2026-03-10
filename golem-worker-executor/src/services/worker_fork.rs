@@ -489,7 +489,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             environment_id,
             env: initial_source_worker_metadata.env,
             config_vars: initial_source_worker_metadata.config_vars,
-            local_agent_config: initial_source_worker_metadata.local_agent_config,
+            agent_config: initial_source_worker_metadata.agent_config,
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),

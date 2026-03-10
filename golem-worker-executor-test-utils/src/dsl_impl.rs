@@ -30,14 +30,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::agent::{AgentId, DataValue, UntypedDataValue};
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
-    InitialComponentFile, LocalAgentConfigEntry, PluginInstallation,
+    AgentConfigEntry, ComponentDto, ComponentFilePath, ComponentId, ComponentName,
+    ComponentRevision, InitialComponentFile, PluginInstallation,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{FlatComponentFileSystemNode, WorkerMetadataDto};
-use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
+use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
 use golem_common::model::PromiseId;
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter};
 use golem_common::model::{OplogIndex, WorkerId};
@@ -73,12 +73,12 @@ impl TestDsl for TestWorkerExecutor {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<LocalAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
-        if !local_agent_config.is_empty() {
+        if !agent_config.is_empty() {
             return Err(anyhow!(
-                "Local agent config isn't supported in worker executor tests"
+                "Agent config isn't supported in worker executor tests"
             ));
         }
 
@@ -209,11 +209,11 @@ impl TestDsl for TestWorkerExecutor {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
-        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        agent_config: Option<Vec<AgentConfigEntry>>,
     ) -> anyhow::Result<ComponentDto> {
-        if local_agent_config.is_some() {
+        if agent_config.is_some() {
             return Err(anyhow!(
-                "Local agent config isn't supported in worker executor tests"
+                "Agent config isn't supported in worker executor tests"
             ));
         }
 
@@ -289,7 +289,7 @@ impl TestDsl for TestWorkerExecutor {
         id: AgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
@@ -307,10 +307,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
                 config_vars,
-                local_agent_config: local_agent_config
-                    .into_iter()
-                    .map(|lac| lac.into())
-                    .collect(),
+                agent_config: agent_config.into_iter().map(|lac| lac.into()).collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,

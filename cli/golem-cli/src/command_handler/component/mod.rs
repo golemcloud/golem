@@ -52,7 +52,7 @@ use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
-use golem_common::model::diff;
+use golem_common::model::diff::{self, VecDiffable};
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -883,6 +883,7 @@ impl ComponentCommandHandler {
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
         let config_vars = component.config_vars().clone();
+        let agent_config = component.agent_config().clone();
 
         Ok(ComponentDeployProperties {
             wasm_path,
@@ -891,6 +892,7 @@ impl ComponentCommandHandler {
             plugins,
             env,
             config_vars,
+            agent_config,
         })
     }
 
@@ -997,8 +999,16 @@ impl ComponentCommandHandler {
             wasm_hash: component_binary_hash.into(),
             files_by_path,
             plugins_by_grant_id,
-            // FIXME: agent-config
-            local_agent_config_ordered_by_agent_and_key: Vec::new(),
+            ordered_agent_config: properties
+                .agent_config
+                .iter()
+                .map(|lac| diff::AgentConfigEntry {
+                    agent: lac.agent.0.clone(),
+                    path: lac.path.clone(),
+                    value: diff::into_normalized_json(lac.value.clone()),
+                })
+                .sorted_by(|v1, v2| v1.ordering_key().cmp(&v2.ordering_key()))
+                .collect(),
         })
     }
 
@@ -1045,8 +1055,7 @@ impl ComponentCommandHandler {
                         .unwrap_or_default(),
                     env: component_stager.env(),
                     config_vars: component_stager.config_vars(),
-                    // FIXME: agent-config
-                    local_agent_config: Vec::new(),
+                    agent_config: component_stager.agent_config(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
@@ -1141,8 +1150,7 @@ impl ComponentCommandHandler {
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
                     config_vars: component_stager.config_vars_if_changed(),
-                    // FIXME: agent-config
-                    local_agent_config: None,
+                    agent_config: component_stager.agent_config_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),

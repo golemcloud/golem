@@ -1,5 +1,5 @@
 ALTER TABLE component_revisions
-    ADD local_agent_config BYTEA NOT NULL;
+    ADD agent_config BYTEA NOT NULL;
 
 ALTER TABLE component_revisions
     DROP COLUMN original_env;

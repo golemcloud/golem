@@ -776,9 +776,7 @@ fn normalized_diff_deployment(
                             wasm_hash: component.wasm_hash,
                             files_by_path: component.files_by_path.clone(),
                             plugins_by_grant_id: component.plugins_by_grant_id.clone(),
-                            local_agent_config_ordered_by_agent_and_key: component
-                                .local_agent_config_ordered_by_agent_and_key
-                                .clone(),
+                            ordered_agent_config: component.ordered_agent_config.clone(),
                         }
                         .into(),
                         None => component.hash().into(),

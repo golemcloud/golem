@@ -70,7 +70,9 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
+use golem_common::model::worker::{
+    RevertLastInvocations, RevertToOplogIndex, UpdateRecord, WorkerAgentConfigEntry,
+};
 use golem_common::model::{IdempotencyKey, OplogIndex};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{parse_value_and_type, ValueAndType};
@@ -106,7 +108,11 @@ impl WorkerCommandHandler {
                     agent_id: worker_name,
                     env,
                     config_vars,
-                } => self.cmd_new(worker_name, env, config_vars).await,
+                    agent_config,
+                } => {
+                    self.cmd_new(worker_name, env, config_vars, agent_config)
+                        .await
+                }
                 AgentSubcommand::Invoke {
                     agent_id: worker_name,
                     function_name,
@@ -237,6 +243,7 @@ impl WorkerCommandHandler {
         worker_name: AgentIdArgs,
         env: Vec<(String, String)>,
         config_vars: Vec<(String, String)>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -268,6 +275,7 @@ impl WorkerCommandHandler {
             worker_name_match.worker_name.0.clone(),
             env.into_iter().collect(),
             BTreeMap::from_iter(config_vars),
+            agent_config,
         )
         .await?;
 
@@ -1240,6 +1248,7 @@ impl WorkerCommandHandler {
         worker_name: String,
         env: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
@@ -1251,8 +1260,7 @@ impl WorkerCommandHandler {
                     name: worker_name,
                     env,
                     config_vars,
-                    // FIXME: agent-config
-                    local_agent_config: Vec::new(),
+                    agent_config,
                 },
             )
             .await
@@ -1636,6 +1644,7 @@ impl WorkerCommandHandler {
             worker_metadata.worker_id.worker_name,
             worker_metadata.env,
             worker_metadata.config_vars,
+            worker_metadata.agent_config,
         )
         .await?;
         log_action("Recreated", "agent");

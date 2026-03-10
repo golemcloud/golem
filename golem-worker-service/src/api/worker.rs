@@ -128,7 +128,7 @@ impl WorkerApi {
                 component,
                 env,
                 config_vars,
-                request.local_agent_config,
+                request.agent_config,
                 false,
                 auth,
                 None,

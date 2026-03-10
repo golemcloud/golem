@@ -26,7 +26,7 @@ use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionReference};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_common::model::worker::UpdateRecord;
+use golem_common::model::worker::{UpdateRecord, WorkerAgentConfigEntry};
 use golem_common::model::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
 use golem_wasm::analysis::AnalysedExport;
 use serde_derive::{Deserialize, Serialize};
@@ -148,6 +148,7 @@ pub struct WorkerMetadata {
     pub created_by: AccountId,
     pub env: HashMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
+    pub agent_config: Vec<WorkerAgentConfigEntry>,
     pub status: WorkerStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
@@ -172,6 +173,7 @@ impl WorkerMetadata {
             environment_id: value.environment_id,
             env: value.env,
             config_vars: value.config_vars,
+            agent_config: value.agent_config.into_iter().map(Into::into).collect(),
             status: value.status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,

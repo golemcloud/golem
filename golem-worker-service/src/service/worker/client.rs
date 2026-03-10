@@ -38,7 +38,7 @@ use golem_common::model::component::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
 use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
@@ -64,7 +64,7 @@ pub trait WorkerClient: Send + Sync {
         worker_id: &WorkerId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -404,7 +404,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         worker_id: &WorkerId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -424,10 +424,10 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         worker_id: Some(worker_id.into()),
                         env: environment_variables.clone(),
                         config_vars: config_vars.clone().into_iter().collect(),
-                        local_agent_config: local_agent_config
+                        agent_config: agent_config
                             .clone()
                             .into_iter()
-                            .map(golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry::from)
+                            .map(golem_api_grpc::proto::golem::worker::AgentConfigEntry::from)
                             .collect(),
                         component_owner_account_id: Some(account_id_clone.into()),
                         environment_id: Some(environment_id.into()),

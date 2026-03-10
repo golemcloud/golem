@@ -117,7 +117,7 @@ message CreateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   map<string, string> env = 2;
   map<string, string> config_vars = 3;
-  repeated golem.worker.LocalAgentConfigEntry local_agent_config = 4;
+  repeated golem.worker.AgentConfigEntry agent_config = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 5;
   // Component's owner environment

@@ -591,7 +591,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             files: value.files,
             installed_plugins: vec![],
             env: value.env,
-            local_agent_config: Vec::new(),
+            agent_config: Vec::new(),
             config_vars: value.config_vars,
             wasm_hash: value.wasm_hash,
             hash: value.final_hash,

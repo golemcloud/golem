@@ -21,7 +21,7 @@ use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
 use golem_common::model::component::{
-    ComponentDto, ComponentId, ComponentRevision, InstalledPlugin,
+    AgentConfigEntry, ComponentDto, ComponentId, ComponentRevision, InstalledPlugin,
 };
 use golem_common::model::component::{ComponentName, InitialComponentFile};
 
@@ -181,6 +181,7 @@ pub struct ComponentDeployProperties {
     pub plugins: Vec<crate::model::app::PluginInstallation>,
     pub env: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
+    pub agent_config: Vec<AgentConfigEntry>,
 }
 
 impl TrimDateTime for ComponentView {

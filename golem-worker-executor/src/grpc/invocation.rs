@@ -16,7 +16,7 @@ use golem_common::base_model::agent::Principal;
 use golem_common::base_model::WorkerId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
@@ -27,7 +27,7 @@ pub trait CanStartWorker {
     fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError>;
     fn env(&self) -> Option<Vec<(String, String)>>;
     fn config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
-    fn local_agent_config(&self) -> Vec<WorkerCreationLocalAgentConfigEntry>;
+    fn agent_config(&self) -> Vec<WorkerAgentConfigEntry>;
     fn parent(&self) -> Option<WorkerId>;
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
@@ -81,7 +81,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
         }
     }
 
-    fn local_agent_config(&self) -> Vec<WorkerCreationLocalAgentConfigEntry> {
+    fn agent_config(&self) -> Vec<WorkerAgentConfigEntry> {
         Vec::new()
     }
 
