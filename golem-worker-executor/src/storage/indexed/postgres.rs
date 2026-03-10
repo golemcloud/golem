@@ -34,6 +34,8 @@ pub struct PostgresIndexedStorage {
 }
 
 impl PostgresIndexedStorage {
+    const APPEND_MANY_CHUNK_SIZE: usize = 1024;
+
     pub async fn configured(config: &IndexedStoragePostgresConfig) -> Result<Self, String> {
         if config.drop_prefix_delete_batch_size == 0 {
             return Err(
@@ -240,20 +242,23 @@ impl IndexedStorage for PostgresIndexedStorage {
         self.pool
             .with_tx(svc_name, api_name, |tx| {
                 async move {
-                    let mut query_builder = QueryBuilder::<Postgres>::new(
-                        "INSERT INTO index_storage (namespace, key, id, value) ",
-                    );
+                    for chunk in converted_pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
+                        let mut query_builder = QueryBuilder::<Postgres>::new(
+                            "INSERT INTO index_storage (namespace, key, id, value) ",
+                        );
 
-                    query_builder.push_values(converted_pairs, |mut builder, (id, value)| {
-                        builder
-                            .push_bind(namespace.clone())
-                            .push_bind(key.clone())
-                            .push_bind(id)
-                            .push_bind(value);
-                    });
+                        query_builder.push_values(chunk.iter(), |mut builder, (id, value)| {
+                            builder
+                                .push_bind(namespace.clone())
+                                .push_bind(key.clone())
+                                .push_bind(*id)
+                                .push_bind(value);
+                        });
 
-                    let query = query_builder.build();
-                    tx.execute(query).await?;
+                        let query = query_builder.build();
+                        tx.execute(query).await?;
+                    }
+
                     Ok(())
                 }
                 .boxed()
@@ -414,27 +419,30 @@ impl IndexedStorage for PostgresIndexedStorage {
             self.drop_prefix_delete_batch_size,
             "drop_prefix_delete_batch_size",
         )?;
-        let mut deleted_rows = self.drop_prefix_delete_batch_size;
+        let delete_batch_size = self.drop_prefix_delete_batch_size;
+        self.pool
+            .with_tx(svc_name, api_name, |tx| {
+                async move {
+                    let mut deleted_rows = delete_batch_size;
 
-        while deleted_rows >= self.drop_prefix_delete_batch_size {
-            let query = sqlx::query(
-                "WITH rows AS (SELECT ctid FROM index_storage WHERE namespace = $1 AND key = $2 AND id <= $3 ORDER BY id LIMIT $4) DELETE FROM index_storage t USING rows WHERE t.ctid = rows.ctid;",
-            )
-            .bind(&namespace)
-            .bind(&key)
-            .bind(last_dropped_id)
-            .bind(batch_size_i64);
+                    while deleted_rows >= delete_batch_size {
+                        let query = sqlx::query(
+                            "WITH rows AS (SELECT ctid FROM index_storage WHERE namespace = $1 AND key = $2 AND id <= $3 ORDER BY id LIMIT $4) DELETE FROM index_storage t USING rows WHERE t.ctid = rows.ctid;",
+                        )
+                        .bind(&namespace)
+                        .bind(&key)
+                        .bind(last_dropped_id)
+                        .bind(batch_size_i64);
 
-            deleted_rows = self
-                .pool
-                .with_rw(svc_name, api_name)
-                .execute(query)
-                .await
-                .map_err(|err| err.to_safe_string())?
-                .rows_affected();
-        }
+                        deleted_rows = tx.execute(query).await?.rows_affected();
+                    }
 
-        Ok(())
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|err| err.to_safe_string())
     }
 }
 

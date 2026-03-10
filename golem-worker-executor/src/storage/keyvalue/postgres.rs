@@ -16,6 +16,7 @@ use crate::services::golem_config::KeyValueStoragePostgresConfig;
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
@@ -113,27 +114,36 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         }
 
         let namespace = Self::namespace(namespace);
+        let pairs: Vec<(String, Vec<u8>)> = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_vec()))
+            .collect();
 
-        for chunk in pairs.chunks(Self::SET_MANY_CHUNK_SIZE) {
-            let mut query_builder =
-                QueryBuilder::<Postgres>::new("INSERT INTO kv_storage (namespace, key, value) ");
-            query_builder.push_values(chunk.iter(), |mut builder, (key, value)| {
-                builder
-                    .push_bind(namespace.clone())
-                    .push_bind(*key)
-                    .push_bind(*value);
-            });
-            query_builder
-                .push(" ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;");
+        self.pool
+            .with_tx(svc_name, api_name, |tx| {
+                async move {
+                    for chunk in pairs.chunks(Self::SET_MANY_CHUNK_SIZE) {
+                        let mut query_builder = QueryBuilder::<Postgres>::new(
+                            "INSERT INTO kv_storage (namespace, key, value) ",
+                        );
+                        query_builder.push_values(chunk.iter(), |mut builder, (key, value)| {
+                            builder
+                                .push_bind(namespace.clone())
+                                .push_bind(key)
+                                .push_bind(value);
+                        });
+                        query_builder.push(
+                            " ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;",
+                        );
 
-            self.pool
-                .with_rw(svc_name, api_name)
-                .execute(query_builder.build())
-                .await
-                .map_err(|err| err.to_safe_string())?;
-        }
-
-        Ok(())
+                        tx.execute(query_builder.build()).await?;
+                    }
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn set_if_not_exists(
@@ -251,20 +261,24 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         }
 
         let namespace = Self::namespace(namespace);
-        for chunk in keys.chunks(Self::MANY_KEYS_CHUNK_SIZE) {
-            let query =
-                sqlx::query("DELETE FROM kv_storage WHERE namespace = $1 AND key = ANY($2);")
-                    .bind(namespace.clone())
-                    .bind(chunk);
+        self.pool
+            .with_tx(svc_name, api_name, |tx| {
+                async move {
+                    for chunk in keys.chunks(Self::MANY_KEYS_CHUNK_SIZE) {
+                        let query = sqlx::query(
+                            "DELETE FROM kv_storage WHERE namespace = $1 AND key = ANY($2);",
+                        )
+                        .bind(namespace.clone())
+                        .bind(chunk);
 
-            self.pool
-                .with_rw(svc_name, api_name)
-                .execute(query)
-                .await
-                .map_err(|err| err.to_safe_string())?;
-        }
-
-        Ok(())
+                        tx.execute(query).await?;
+                    }
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn exists(
