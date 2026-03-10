@@ -18,20 +18,21 @@ use crate::mcp::agent_mcp_resource::{AgentMcpResource, McpResourceUri, ResourceR
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::invoke::{invoke_resource, invoke_tool};
 use crate::service::worker::WorkerService;
+use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
 use poem::http;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
     model::*, service::RequestContext, task_handler, task_manager::OperationProcessor,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
 #[derive(Clone)]
 pub struct GolemAgentMcpServer {
     processor: Arc<Mutex<OperationProcessor>>,
-    tools: Arc<RwLock<Option<ToolRegistry>>>,
+    tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
+    tools: Arc<DashMap<String, Tool>>,
     resources: Arc<RwLock<ResourceRegistry>>,
     domain: Arc<RwLock<Option<Domain>>>,
     mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
@@ -44,7 +45,8 @@ impl GolemAgentMcpServer {
         worker_service: Arc<WorkerService>,
     ) -> Self {
         Self {
-            tools: Arc::new(RwLock::new(None)),
+            tool_router: Arc::new(RwLock::new(None)),
+            tools: Arc::new(DashMap::new()),
             resources: Arc::new(RwLock::new(ResourceRegistry::default())),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
             domain: Arc::new(RwLock::new(None)),
@@ -75,11 +77,6 @@ impl GolemAgentMcpServer {
 
         (router, capabilities.resources)
     }
-}
-
-struct ToolRegistry {
-    tools_by_name: HashMap<String, Tool>,
-    router: ToolRouter<GolemAgentMcpServer>,
 }
 
 pub struct AgentCapabilities {
@@ -204,8 +201,7 @@ impl ServerHandler for GolemAgentMcpServer {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        let tools = self.tools.blocking_read();
-        tools.as_ref()?.tools_by_name.get(name).cloned()
+        self.tools.get(name).map(|ref_multi| ref_multi.clone())
     }
 
     async fn list_tools(
@@ -213,13 +209,13 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let tools = self.tools.read().await;
+        let tool_router = self.tool_router.read().await;
 
-        if let Some(registry) = tools.as_ref() {
-            tracing::info!("Listing tools: {:?}", registry.router.list_all());
+        if let Some(tool_router) = tool_router.as_ref() {
+            tracing::info!("Listing tools: {:?}", tool_router.list_all());
 
             Ok(ListToolsResult {
-                tools: registry.router.list_all(),
+                tools: tool_router.list_all(),
                 meta: Some(Meta(object(::serde_json::Value::Object({
                     let mut object = ::serde_json::Map::new();
                     let _ = object.insert(
@@ -243,10 +239,10 @@ impl ServerHandler for GolemAgentMcpServer {
         request: CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let tools = self.tools.read().await;
+        let tool_router = self.tool_router.read().await;
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        if let Some(registry) = tools.as_ref() {
-            registry.router.call(tcc).await
+        if let Some(tool_router) = tool_router.as_ref() {
+            tool_router.call(tcc).await
         } else {
             Err(McpError::invalid_params(
                 "tool router not initialized",
@@ -342,16 +338,9 @@ impl ServerHandler for GolemAgentMcpServer {
                 let domain = Domain(host.to_str().unwrap().to_string());
                 let (router, agent_resources) = self.build_capabilities(&domain).await;
 
-                let tools_by_name = router
-                    .list_all()
-                    .into_iter()
-                    .map(|t| (t.name.to_string(), t))
-                    .collect();
-
-                *self.tools.write().await = Some(ToolRegistry {
-                    tools_by_name,
-                    router,
-                });
+                for tool in router.list_all() {
+                    self.tools.insert(tool.name.to_string(), tool);
+                }
 
                 let mut resources = self.resources.write().await;
                 for resource in agent_resources {
@@ -359,6 +348,7 @@ impl ServerHandler for GolemAgentMcpServer {
                 }
 
                 *self.domain.write().await = Some(domain);
+                *self.tool_router.write().await = Some(router);
             }
         }
 

@@ -2608,6 +2608,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "7.0.0-rc2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4a1e35a65fe0538a60167f0ada6e195ad5d477f6ddae273943596d4a1a5730b"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "equivalent",
+ "hashbrown 0.15.5",
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4562,6 +4576,7 @@ dependencies = [
  "chrono",
  "cookie",
  "criterion",
+ "dashmap 7.0.0-rc2",
  "derive_more",
  "desert_rust",
  "fastrand",
@@ -8103,7 +8118,7 @@ version = "0.0.295"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "15f4bf02d615730c6a651b808c48fa58649b037175e4c4e978d058a688d0c01b"
 dependencies = [
- "dashmap",
+ "dashmap 6.1.0",
  "indexmap 2.13.0",
  "la-arena",
  "ra_ap_cfg",
@@ -8412,7 +8427,7 @@ version = "0.0.295"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60757258a7451954a11c3b54388608e67b0cc4e9b5a89ba11f4c1368a0ad91b"
 dependencies = [
- "dashmap",
+ "dashmap 6.1.0",
  "hashbrown 0.14.5",
  "rustc-hash 2.1.1",
  "triomphe",

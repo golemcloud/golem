@@ -162,11 +162,55 @@ fn map_agent_response_to_contents(
             )),
         },
         DataValue::Multimodal(NamedElementValues { elements }) => {
-            let contents = elements
-                .into_iter()
-                .map(|named| element_value_to_content(named.value))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(CallToolResult::success(contents))
+            let mut parts = Vec::new();
+            let mut contents = Vec::new();
+
+            for named in elements {
+                let value_json = element_value_to_json(&named.value)?;
+                parts.push(json!({
+                    "name": named.name,
+                    "value": value_json,
+                }));
+                contents.push(element_value_to_content(named.value)?);
+            }
+
+            let structured = json!({ MULTIMODAL_PARTS_FIELD: parts });
+
+            Ok(CallToolResult {
+                content: contents,
+                structured_content: Some(structured),
+                is_error: Some(false),
+                meta: None,
+            })
+        }
+    }
+}
+
+fn element_value_to_json(element: &ElementValue) -> Result<serde_json::Value, ErrorData> {
+    match element {
+        ElementValue::ComponentModel(component_model_value) => {
+            component_model_value.value.to_json_value().map_err(|e| {
+                ErrorData::internal_error(
+                    format!("Failed to serialize component model response: {e}"),
+                    None,
+                )
+            })
+        }
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
+            TextReference::Inline(TextSource { data, .. }) => Ok(json!({ "data": data })),
+            TextReference::Url(url) => Ok(json!({ "data": url.value })),
+        },
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            match value {
+                BinaryReference::Inline(BinarySource { data, binary_type }) => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+                    Ok(json!({
+                        "data": b64,
+                        "mimeType": binary_type.mime_type,
+                    }))
+                }
+                BinaryReference::Url(url) => Ok(json!({ "data": url.value })),
+            }
         }
     }
 }
@@ -240,40 +284,18 @@ fn map_data_value_to_json(typed_value: DataValue) -> Result<serde_json::Value, E
             )),
         },
         DataValue::Multimodal(NamedElementValues { elements }) => {
-            let mut result = serde_json::Map::new();
-            for named in elements {
-                let value = match named.value {
-                    ElementValue::ComponentModel(v) => v.value.to_json_value().map_err(|e| {
-                        ErrorData::internal_error(
-                            format!("Failed to serialize component model response: {e}"),
-                            None,
-                        )
-                    })?,
-                    ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                        value, ..
-                    }) => match value {
-                        TextReference::Inline(TextSource { data, .. }) => {
-                            serde_json::Value::String(data)
-                        }
-                        TextReference::Url(url) => serde_json::Value::String(url.value),
-                    },
-                    ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                        value,
-                        ..
-                    }) => match value {
-                        BinaryReference::Inline(BinarySource { data, binary_type }) => {
-                            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                            json!({
-                                "data": b64,
-                                "mimeType": binary_type.mime_type,
-                            })
-                        }
-                        BinaryReference::Url(url) => serde_json::Value::String(url.value),
-                    },
-                };
-                result.insert(named.name, value);
-            }
-            Ok(serde_json::Value::Object(result))
+            let parts: Vec<serde_json::Value> = elements
+                .iter()
+                .map(|named| {
+                    let value_json = element_value_to_json(&named.value)?;
+                    Ok(json!({
+                        "name": named.name,
+                        "value": value_json,
+                    }))
+                })
+                .collect::<Result<Vec<_>, ErrorData>>()?;
+
+            Ok(json!({ MULTIMODAL_PARTS_FIELD: parts }))
         }
     }
 }
@@ -727,9 +749,16 @@ fn extract_constructor_input_values(
                             value: value_and_type,
                         });
                     }
-                    _ => {
+                    ElementSchema::UnstructuredText(_) => {
                         return Err(format!(
-                            "Unsupported element schema type for constructor parameter '{}'",
+                            "MCP cannot support unstructured-text constructor parameters like '{}'",
+                            name
+                        ));
+                    }
+
+                    ElementSchema::UnstructuredBinary(_) => {
+                        return Err(format!(
+                            "MCP cannot support unstructured-binary constructor parameters like '{}'",
                             name
                         ));
                     }
@@ -739,7 +768,7 @@ fn extract_constructor_input_values(
             Ok(params)
         }
         DataSchema::Multimodal(_) => {
-            Err("Multimodal constructor parameters not yet supported".to_string())
+            Err("MCP does not support multimodal constructor schemas".to_string())
         }
     }
 }

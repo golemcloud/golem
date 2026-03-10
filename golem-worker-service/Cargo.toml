@@ -44,6 +44,7 @@ bigdecimal = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cookie = { workspace = true }
+dashmap = { workspace = true }
 derive_more = { workspace = true }
 desert_rust = { workspace = true }
 figment = { workspace = true }
