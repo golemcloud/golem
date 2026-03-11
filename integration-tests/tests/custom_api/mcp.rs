@@ -673,17 +673,15 @@ async fn list_prompts(ctx: &McpTestContext) -> anyhow::Result<()> {
         .filter_map(|p| p["name"].as_str().map(String::from))
         .collect();
 
-    // Constructor prompt on WeatherAgent
     assert!(
         prompt_names.contains(&"WeatherAgent".to_string()),
-        "Expected WeatherAgent constructor prompt in {:?}",
+        "Expected WeatherAgent prompt in {:?}",
         prompt_names
     );
 
-    // Method prompt on WeatherAgent-get_weather_report_for_city
     assert!(
         prompt_names.contains(&"WeatherAgent-get_weather_report_for_city".to_string()),
-        "Expected WeatherAgent-get_weather_report_for_city method prompt in {:?}",
+        "Expected WeatherAgent-get_weather_report_for_city prompt in {:?}",
         prompt_names
     );
 
@@ -692,7 +690,7 @@ async fn list_prompts(ctx: &McpTestContext) -> anyhow::Result<()> {
 
 #[test]
 #[tracing::instrument]
-async fn get_prompt_constructor(ctx: &McpTestContext) -> anyhow::Result<()> {
+async fn get_prompt_agent_level(ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
 
     let result = client.get_prompt("WeatherAgent").await?;
@@ -702,10 +700,9 @@ async fn get_prompt_constructor(ctx: &McpTestContext) -> anyhow::Result<()> {
     assert_eq!(messages[0]["role"].as_str(), Some("user"));
 
     let text = messages[0]["content"]["text"].as_str().unwrap();
-    assert!(
-        text.contains("weather agent"),
-        "Expected constructor prompt hint in text, got: {}",
-        text
+    assert_eq!(
+        text,
+        "You are a weather agent. Help the user get weather information for cities."
     );
 
     Ok(())
@@ -725,16 +722,13 @@ async fn get_prompt_method(ctx: &McpTestContext) -> anyhow::Result<()> {
     assert_eq!(messages[0]["role"].as_str(), Some("user"));
 
     let text = messages[0]["content"]["text"].as_str().unwrap();
-    assert!(
-        text.contains("weather report"),
-        "Expected method prompt hint in text, got: {}",
-        text
-    );
-    // Method prompt should include input arguments (constructor args + method args)
-    assert!(
-        text.contains("name") && text.contains("city"),
-        "Expected input argument names in prompt text, got: {}",
-        text
+    let expected = "Get a weather report for a specific city\n\n\
+                    Expected JSON input properties: name, city\n\n\
+                    Output: result: Str";
+    assert_eq!(
+        text, expected,
+        "Method prompt text mismatch.\nGot: {}\nExpected: {}",
+        text, expected
     );
 
     Ok(())
