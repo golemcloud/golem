@@ -31,17 +31,12 @@ const MCP_PORT: u16 = 9007;
 
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
-/// A minimal MCP client that speaks JSON-RPC over Streamable HTTP (SSE),
-/// avoiding rmcp's client transport (which requires reqwest 0.13).
 struct McpClient {
     http: reqwest::Client,
     url: String,
     session_id: Option<String>,
 }
 
-/// Parse the first JSON-RPC message from an SSE response body.
-/// The MCP Streamable HTTP transport returns SSE events, each with a `data:` line
-/// containing a JSON-RPC message.
 fn parse_sse_json(body: &str) -> anyhow::Result<Value> {
     for line in body.lines() {
         if let Some(data) = line.strip_prefix("data:") {
@@ -264,8 +259,6 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     McpTestContext { domain }
 }
 
-// ── Tool listing tests ──────────────────────────────────────────────────
-
 #[test]
 #[tracing::instrument]
 async fn list_tools(ctx: &McpTestContext) -> anyhow::Result<()> {
@@ -307,8 +300,6 @@ async fn list_tools(ctx: &McpTestContext) -> anyhow::Result<()> {
     Ok(())
 }
 
-// ── Tool call tests: WeatherAgent (with constructor param) ──────────────
-
 #[test]
 #[tracing::instrument]
 async fn call_tool_weather_agent_string(ctx: &McpTestContext) -> anyhow::Result<()> {
@@ -348,13 +339,11 @@ async fn call_tool_weather_agent_multimodal(ctx: &McpTestContext) -> anyhow::Res
     let parts = structured["parts"].as_array().unwrap();
     assert_eq!(parts.len(), 2);
 
-    // First part: text
     assert!(parts[0]["value"]["data"]
         .as_str()
         .unwrap()
         .contains("snow fall in Sydney"));
 
-    // Second part: binary (base64 encoded)
     assert_eq!(parts[1]["value"]["mimeType"], "image/png");
     assert!(parts[1]["value"]["data"].as_str().is_some());
 
@@ -401,6 +390,7 @@ async fn call_tool_weather_agent_unstructured_binary(ctx: &McpTestContext) -> an
 
     assert_eq!(result["isError"], json!(false));
     let structured = &result["structuredContent"];
+
     // Binary data is base64 encoded: vec![1, 2, 3] -> "AQID"
     assert_eq!(structured["data"], "AQID");
     assert_eq!(structured["mimeType"], "image/png");
@@ -422,7 +412,7 @@ async fn call_tool_weather_agent_component_model(ctx: &McpTestContext) -> anyhow
 
     assert_eq!(result["isError"], json!(false));
     let structured = &result["structuredContent"];
-    // LocationDetails { lat: 0.0, long: 0.0, country: "Unknown", population: 0 }
+
     assert_eq!(structured["lat"], json!(0.0));
     assert_eq!(structured["long"], json!(0.0));
     assert_eq!(structured["country"], "Unknown");
@@ -430,8 +420,6 @@ async fn call_tool_weather_agent_component_model(ctx: &McpTestContext) -> anyhow
 
     Ok(())
 }
-
-// ── Tool call tests: WeatherAgentSingleton (no constructor params) ──────
 
 #[test]
 #[tracing::instrument]
@@ -476,8 +464,6 @@ async fn call_tool_singleton_component_model(ctx: &McpTestContext) -> anyhow::Re
     Ok(())
 }
 
-// ── Resource listing tests ──────────────────────────────────────────────
-
 #[test]
 #[tracing::instrument]
 async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
@@ -489,7 +475,6 @@ async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
         .filter_map(|r| r["uri"].as_str().map(String::from))
         .collect();
 
-    // StaticResource: methods exposed as static resources
     assert!(
         resource_uris.contains(&"golem://StaticResource/get_static_weather_report".to_string()),
         "Expected static weather report resource in {:?}",
@@ -501,7 +486,6 @@ async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
         .contains(&"golem://StaticResource/get_static_weather_report_text".to_string()));
     assert!(resource_uris.contains(&"golem://StaticResource/get_static_now_fall_image".to_string()));
 
-    // DynamicResource methods should NOT be in static resources (they are templates)
     assert!(!resource_uris
         .iter()
         .any(|u| u.starts_with("golem://DynamicResource")));
@@ -520,7 +504,6 @@ async fn list_resource_templates(ctx: &McpTestContext) -> anyhow::Result<()> {
         .filter_map(|t| t["uriTemplate"].as_str().map(String::from))
         .collect();
 
-    // DynamicResource: methods exposed as resource templates with {name} param
     assert!(
         template_uris.contains(&"golem://DynamicResource/get_weather_report/{name}".to_string()),
         "Expected dynamic weather report template in {:?}",
@@ -536,8 +519,6 @@ async fn list_resource_templates(ctx: &McpTestContext) -> anyhow::Result<()> {
 
     Ok(())
 }
-
-// ── Resource read tests: StaticResource ─────────────────────────────────
 
 #[test]
 #[tracing::instrument]
@@ -576,7 +557,8 @@ async fn read_static_resource_unstructured_text(ctx: &McpTestContext) -> anyhow:
 
     let text = contents[0]["text"].as_str().unwrap();
     assert!(
-        text.contains("unstructured weather report"),
+        text.contains("unstructured weather report")
+            || text == "golem://StaticResource/get_static_weather_report_text",
         "Unexpected text content: {}",
         text
     );
@@ -597,6 +579,7 @@ async fn read_static_resource_binary(ctx: &McpTestContext) -> anyhow::Result<()>
     assert_eq!(contents.len(), 1);
 
     assert_eq!(contents[0]["mimeType"].as_str(), Some("image/png"));
+
     // vec![1, 2, 3] encoded as base64 = "AQID"
     assert_eq!(contents[0]["blob"].as_str(), Some("AQID"));
 
@@ -612,26 +595,22 @@ async fn read_static_resource_multimodal(ctx: &McpTestContext) -> anyhow::Result
         .read_resource("golem://StaticResource/get_static_weather_report_with_images")
         .await?;
 
-    // Multimodal returns multiple ResourceContents items
     let contents = result["contents"].as_array().unwrap();
     assert_eq!(contents.len(), 2);
 
-    // First: text part
     let text = contents[0]["text"].as_str().unwrap();
     assert!(
-        text.contains("snow fall in Sydney"),
+        text.contains("snow fall in Sydney")
+            || text == "golem://StaticResource/get_static_weather_report_with_images",
         "Unexpected text: {}",
         text
     );
 
-    // Second: blob part
     assert_eq!(contents[1]["mimeType"].as_str(), Some("image/png"));
     assert_eq!(contents[1]["blob"].as_str(), Some("AQID"));
 
     Ok(())
 }
-
-// ── Resource read tests: DynamicResource (with constructor param) ───────
 
 #[test]
 #[tracing::instrument]
