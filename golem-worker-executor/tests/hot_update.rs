@@ -1244,3 +1244,62 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
 
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v2)
+        .unique()
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("UpdateTest");
+
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor.log_output(&worker_id).await?;
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+
+    executor
+        .manual_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    // restart and force the agent to reload the last snapshot
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(result, data_value!(0u64));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    Ok(())
+}
