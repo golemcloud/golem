@@ -134,10 +134,7 @@ impl McpClient {
 
     async fn list_tools(&self) -> anyhow::Result<Vec<Value>> {
         let result = self.request("tools/list", json!({})).await?;
-        Ok(result["tools"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default())
+        Ok(result["tools"].as_array().cloned().unwrap_or_default())
     }
 
     async fn call_tool(&self, name: &str, arguments: Value) -> anyhow::Result<Value> {
@@ -153,16 +150,11 @@ impl McpClient {
 
     async fn list_resources(&self) -> anyhow::Result<Vec<Value>> {
         let result = self.request("resources/list", json!({})).await?;
-        Ok(result["resources"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default())
+        Ok(result["resources"].as_array().cloned().unwrap_or_default())
     }
 
     async fn list_resource_templates(&self) -> anyhow::Result<Vec<Value>> {
-        let result = self
-            .request("resources/templates/list", json!({}))
-            .await?;
+        let result = self.request("resources/templates/list", json!({})).await?;
         Ok(result["resourceTemplates"]
             .as_array()
             .cloned()
@@ -281,17 +273,13 @@ async fn list_tools(ctx: &McpTestContext) -> anyhow::Result<()> {
     assert!(tool_names.contains(&"WeatherAgent-get_lat_long_for_city".to_string()));
 
     // WeatherAgentSingleton tools (no constructor params)
-    assert!(
-        tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city".to_string())
-    );
+    assert!(tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city".to_string()));
     assert!(tool_names
         .contains(&"WeatherAgentSingleton-get_weather_report_for_city_with_images".to_string()));
     assert!(
         tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city_text".to_string())
     );
-    assert!(
-        tool_names.contains(&"WeatherAgentSingleton-get_snow_fall_image_for_city".to_string())
-    );
+    assert!(tool_names.contains(&"WeatherAgentSingleton-get_snow_fall_image_for_city".to_string()));
     assert!(tool_names.contains(&"WeatherAgentSingleton-get_lat_long_for_city".to_string()));
 
     // StaticResource and DynamicResource methods have no input params -> exposed as resources, not tools
@@ -493,9 +481,7 @@ async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
         .contains(&"golem://StaticResource/get_static_weather_report_with_images".to_string()));
     assert!(resource_uris
         .contains(&"golem://StaticResource/get_static_weather_report_text".to_string()));
-    assert!(
-        resource_uris.contains(&"golem://StaticResource/get_static_now_fall_image".to_string())
-    );
+    assert!(resource_uris.contains(&"golem://StaticResource/get_static_now_fall_image".to_string()));
 
     // DynamicResource methods should NOT be in static resources (they are templates)
     assert!(!resource_uris
@@ -547,10 +533,7 @@ async fn read_static_resource_string(ctx: &McpTestContext) -> anyhow::Result<()>
     let contents = result["contents"].as_array().unwrap();
     assert_eq!(contents.len(), 1);
 
-    assert_eq!(
-        contents[0]["mimeType"].as_str(),
-        Some("application/json")
-    );
+    assert_eq!(contents[0]["mimeType"].as_str(), Some("application/json"));
     let text = contents[0]["text"].as_str().unwrap();
     let json_value: Value = serde_json::from_str(text)?;
     assert_eq!(
@@ -649,10 +632,7 @@ async fn read_dynamic_resource_string(ctx: &McpTestContext) -> anyhow::Result<()
     let contents = result["contents"].as_array().unwrap();
     assert_eq!(contents.len(), 1);
 
-    assert_eq!(
-        contents[0]["mimeType"].as_str(),
-        Some("application/json")
-    );
+    assert_eq!(contents[0]["mimeType"].as_str(), Some("application/json"));
     let text = contents[0]["text"].as_str().unwrap();
     let json_value: Value = serde_json::from_str(text)?;
     assert_eq!(

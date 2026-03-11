@@ -17,8 +17,9 @@ use crate::mcp::invoke::agent_method_input::get_agent_method_input;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
 use crate::service::worker::WorkerService;
 use base64::Engine;
-use golem_common::base_model::WorkerId;
+use golem_common::base_model::AgentId;
 use golem_common::base_model::agent::*;
+use golem_common::model::agent::ParsedAgentId;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{CallToolResult, JsonObject};
@@ -41,16 +42,20 @@ pub async fn invoke_tool(
             },
         )?;
 
-    let agent_id = AgentId::new(
+    let parsed_agent_id = ParsedAgentId::new(
         mcp_tool.agent_type_name.clone(),
         DataValue::Tuple(ElementValues {
             elements: constructor_params
                 .into_iter()
-                .map(golem_common::model::agent::ElementValue::ComponentModel)
+                .map(ElementValue::ComponentModel)
                 .collect(),
         }),
         None,
-    );
+    )
+    .map_err(|e| {
+        tracing::error!("Failed to parse agent id: {}", e);
+        ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
+    })?;
 
     let method_params_data_value =
         get_agent_method_input(&args_map, &mcp_tool.raw_method.input_schema).map_err(|e| {
@@ -64,16 +69,16 @@ pub async fn invoke_tool(
     let principal = Principal::anonymous();
     let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
 
-    let worker_id = WorkerId {
+    let agent_id = AgentId {
         component_id: mcp_tool.component_id,
-        worker_name: agent_id.to_string(),
+        agent_id: parsed_agent_id.to_string(),
     };
 
     let auth_ctx = golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_tool.account_id);
 
     let agent_output = worker_service
         .invoke_agent(
-            &worker_id,
+            &agent_id,
             mcp_tool.raw_method.name.clone(),
             proto_method_parameters,
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32,
