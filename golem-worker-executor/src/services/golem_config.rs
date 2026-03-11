@@ -16,7 +16,7 @@ use anyhow::Context;
 use figment::providers::{Format, Toml};
 use figment::Figment;
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
+    ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::RetryConfig;
@@ -616,6 +616,7 @@ impl SafeDisplay for KeyValueStorageInMemoryConfig {
 pub enum IndexedStorageConfig {
     KVStoreRedis(IndexedStorageKVStoreRedisConfig),
     Redis(RedisConfig),
+    Postgres(IndexedStoragePostgresConfig),
     KVStoreSqlite(IndexedStorageKVStoreSqliteConfig),
     KVStoreMultiSqlite(IndexedStorageKVStoreMultiSqliteConfig),
     Sqlite(DbSqliteConfig),
@@ -633,6 +634,10 @@ impl SafeDisplay for IndexedStorageConfig {
             }
             IndexedStorageConfig::Redis(inner) => {
                 let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            IndexedStorageConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             IndexedStorageConfig::KVStoreSqlite(inner) => {
@@ -711,6 +716,31 @@ impl SafeDisplay for IndexedStorageInMemoryConfig {
     fn to_safe_string(&self) -> String {
         "".to_string()
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndexedStoragePostgresConfig {
+    #[serde(flatten)]
+    pub postgres: DbPostgresConfig,
+    #[serde(default = "default_indexed_storage_postgres_drop_prefix_delete_batch_size")]
+    pub drop_prefix_delete_batch_size: u64,
+}
+
+impl SafeDisplay for IndexedStoragePostgresConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "{}", self.postgres.to_safe_string_indented());
+        let _ = writeln!(
+            &mut result,
+            "drop prefix delete batch size: {}",
+            self.drop_prefix_delete_batch_size
+        );
+        result
+    }
+}
+
+fn default_indexed_storage_postgres_drop_prefix_delete_batch_size() -> u64 {
+    1024
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
