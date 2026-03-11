@@ -35,7 +35,7 @@ jobs:
           version: latest
 
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
 
       - name: Install wasm-rquickjs
         run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION

@@ -352,13 +352,15 @@ pub struct RedisConfig {
     pub key_prefix: String,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub tls: bool,
 }
 
 impl RedisConfig {
     pub fn url(&self) -> Url {
+        let scheme = if self.tls { "rediss" } else { "redis" };
         Url::parse(&format!(
-            "redis://{}:{}/{}",
-            self.host, self.port, self.database
+            "{}://{}:{}/{}",
+            scheme, self.host, self.port, self.database
         ))
         .expect("Failed to parse Redis URL")
     }
@@ -372,6 +374,7 @@ impl SafeDisplay for RedisConfig {
         let _ = writeln!(&mut result, "database: {}", self.database);
         let _ = writeln!(&mut result, "tracing: {}", self.tracing);
         let _ = writeln!(&mut result, "pool size: {}", self.pool_size);
+        let _ = writeln!(&mut result, "tls: {}", self.tls);
         if !self.key_prefix.is_empty() {
             let _ = writeln!(&mut result, "key prefix: {}", self.key_prefix);
         }
@@ -397,6 +400,7 @@ impl Default for RedisConfig {
             key_prefix: "".to_string(),
             username: None,
             password: None,
+            tls: false,
         }
     }
 }
