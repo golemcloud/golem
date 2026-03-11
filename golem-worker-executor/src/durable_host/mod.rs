@@ -134,7 +134,8 @@ use wasmtime_wasi::{
 };
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
-    default_send_request_with_pool, HostFutureIncomingResponse, OutgoingRequestConfig,
+    default_send_request_with_pool, BodyCompletionReceiver, HostFutureIncomingResponse,
+    OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpConnectionPool, HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
@@ -3368,6 +3369,7 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
         &mut self,
         request: hyper::Request<HyperOutgoingBody>,
         config: OutgoingRequestConfig,
+        body_completion: Option<BodyCompletionReceiver>,
     ) -> HttpResult<HostFutureIncomingResponse>
     where
         Self: Sized,
@@ -3377,11 +3379,20 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
             // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
             // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
             // or poll the response future.
-            Ok(HostFutureIncomingResponse::deferred(request, config))
+            let connection_pool = self.0.wasi_http.connection_pool.clone();
+            Ok(HostFutureIncomingResponse::deferred(Box::new(move || {
+                Ok(default_send_request_with_pool(
+                    request,
+                    config,
+                    body_completion,
+                    connection_pool,
+                ))
+            })))
         } else {
             Ok(default_send_request_with_pool(
                 request,
                 config,
+                body_completion,
                 self.0.wasi_http.connection_pool.clone(),
             ))
         }

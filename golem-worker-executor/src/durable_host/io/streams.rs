@@ -236,7 +236,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
         if is_incoming_http_body_stream(self, &rep) {
             let handle = rep.rep();
-            let tracking_info = self.state.open_http_requests.get(&handle).map(|s| (s.close_owner.clone(), s.begin_index, s.body_handle));
+            let tracking_info = self
+                .state
+                .open_http_requests
+                .get(&handle)
+                .map(|s| (s.close_owner.clone(), s.begin_index, s.body_handle));
             debug!(
                 worker_id = %self.owned_agent_id.agent_id,
                 handle,
@@ -326,79 +330,73 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
-        if !contents.is_empty() {
-            let rep = self_.rep();
+        let rep = self_.rep();
 
-            if is_outgoing_http_body_stream(self, rep) {
-                let state = get_http_output_stream_state(self, rep)?;
+        if is_outgoing_http_body_stream(self, rep) {
+            let state = get_http_output_stream_state(self, rep)?;
+            debug!(
+                worker_id = %self.owned_agent_id.agent_id,
+                stream_rep = rep,
+                begin_index = %state.begin_index,
+                is_live = self.state.is_live(),
+                content_len = contents.len(),
+                "OutputStream::write (http body stream) - enter"
+            );
+            let durability = Durability::<HttpTypesOutgoingBodyStreamWrite>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let result = HostOutputStream::write(self.table(), self_, contents).await;
                 debug!(
                     worker_id = %self.owned_agent_id.agent_id,
                     stream_rep = rep,
-                    begin_index = %state.begin_index,
-                    is_live = self.state.is_live(),
-                    content_len = contents.len(),
-                    "OutputStream::write (http body stream) - enter"
+                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
+                    "OutputStream::write (http body stream) - live result"
                 );
-                let durability = Durability::<HttpTypesOutgoingBodyStreamWrite>::new(
-                    self,
-                    DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
-                )
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamWriteResult {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
                     .await
-                    .map_err(StreamError::from)?;
-
-                let result = if durability.is_live() {
-                    let result = HostOutputStream::write(self.table(), self_, contents).await;
-                    debug!(
-                        worker_id = %self.owned_agent_id.agent_id,
-                        stream_rep = rep,
-                        result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                        "OutputStream::write (http body stream) - live result"
-                    );
-                    durability
-                        .persist(
-                            self,
-                            state.request,
-                            HostResponseStreamWriteResult {
-                                result: result.map_err(SerializableStreamError::from),
-                            },
-                        )
-                        .await
-                } else {
-                    let result = durability.replay(self).await;
-                    debug!(
-                        worker_id = %self.owned_agent_id.agent_id,
-                        stream_rep = rep,
-                        result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                        "OutputStream::write (http body stream) - replay result"
-                    );
-                    result
-                }
-                    .map_err(StreamError::from)?;
-
-                result.result.map_err(StreamError::from)
             } else {
-                self.observe_function_call("io::streams::output_stream", "write");
-
-                let output = self.table().get(&self_)?;
-                let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-                    Some(InternalWorkerEvent::stdout(contents.clone()))
-                } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-                    Some(InternalWorkerEvent::stderr(contents.clone()))
-                } else {
-                    None
-                };
-
-                if let Some(event) = event {
-                    self.emit_log_event(event).await;
-                    Ok::<(), StreamError>(())
-                } else {
-                    HostOutputStream::write(self.table(), self_, contents).await
-                }
+                let result = durability.replay(self).await;
+                debug!(
+                    worker_id = %self.owned_agent_id.agent_id,
+                    stream_rep = rep,
+                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
+                    "OutputStream::write (http body stream) - replay result"
+                );
+                result
             }
+            .map_err(StreamError::from)?;
+
+            result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "write");
 
-            Ok(())
+            let output = self.table().get(&self_)?;
+            let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
+                Some(InternalWorkerEvent::stdout(contents.clone()))
+            } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
+                Some(InternalWorkerEvent::stderr(contents.clone()))
+            } else {
+                None
+            };
+
+            if let Some(event) = event {
+                self.emit_log_event(event).await;
+                Ok::<(), StreamError>(())
+            } else {
+                HostOutputStream::write(self.table(), self_, contents).await
+            }
         }
     }
 
@@ -746,12 +744,13 @@ fn get_http_output_stream_state<Ctx: WorkerCtx>(
     ctx.state
         .find_request_handle_by_output_stream(stream_rep)
         .and_then(|handle| {
-            ctx.state.open_http_requests.get(&handle).map(|state| {
-                HttpOutputStreamState {
+            ctx.state
+                .open_http_requests
+                .get(&handle)
+                .map(|state| HttpOutputStreamState {
                     begin_index: state.begin_index,
                     request: state.request.clone(),
-                }
-            })
+                })
         })
         .ok_or_else(|| {
             StreamError::Trap(wasmtime::Error::msg(
