@@ -330,13 +330,11 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        let value_hash = Self::value_hash(value);
         let query = sqlx::query(
-            "INSERT INTO set_storage (namespace, key, value_hash, value) VALUES ($1, $2, $3, $4) ON CONFLICT (namespace, key, value_hash) DO NOTHING;",
+            "INSERT INTO set_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key, value) DO NOTHING;",
         )
         .bind(Self::namespace(namespace))
         .bind(key)
-        .bind(value_hash)
         .bind(value);
 
         self.pool
@@ -356,13 +354,11 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        let value_hash = Self::value_hash(value);
         let query = sqlx::query(
-            "DELETE FROM set_storage WHERE namespace = $1 AND key = $2 AND value_hash = $3 AND value = $4;",
+            "DELETE FROM set_storage WHERE namespace = $1 AND key = $2 AND value = $3;",
         )
                 .bind(Self::namespace(namespace))
                 .bind(key)
-                .bind(value_hash)
                 .bind(value);
 
         self.pool

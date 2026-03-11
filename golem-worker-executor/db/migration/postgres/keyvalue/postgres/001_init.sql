@@ -8,9 +8,8 @@ CREATE TABLE kv_storage (
 CREATE TABLE set_storage (
     namespace TEXT NOT NULL,
     key TEXT NOT NULL,
-    value_hash BYTEA NOT NULL,
     value BYTEA NOT NULL,
-    PRIMARY KEY (namespace, key, value_hash)
+    PRIMARY KEY (namespace, key, value)
 );
 
 CREATE TABLE sorted_set_storage (
