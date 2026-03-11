@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::TestContext;
 use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
 use golem_client::api::{AgentError, RegistryServiceClient, WorkerError};
 use golem_client::model::AgentSecretCreation;
-use golem_common::model::agent_secret::AgentSecretUpdate;
+use golem_common::model::agent_secret::{AgentSecretPath, AgentSecretUpdate};
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::{agent_id, data_value};
@@ -28,30 +29,42 @@ use golem_wasm::Value;
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_matches;
 use serde_json::json;
-use test_r::{inherit_test_dep, test, timeout};
+use std::sync::Arc;
+use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(
+    #[tagged_as("ts")]
+    Arc<dyn TestContext>
+);
+inherit_test_dep!(
+    #[tagged_as("rust")]
+    Arc<dyn TestContext>
+);
+
+define_matrix_dimension!(lang: Arc<dyn TestContext> -> "ts", "rust");
 
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
 async fn agent_reads_secret_created_from_default(
     deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let (_, env) = user.app_and_env().await?;
 
     let component = user
-        .component(&env.id, "golem_it_agent_sdk_ts")
-        .name("golem-it:agent-sdk-ts")
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
         .store()
         .await?;
 
     user.deploy_environment_with(
         env.id,
         vec![DeploymentAgentSecretDefault {
-            path: vec!["secret".into()],
+            path: AgentSecretPath(vec!["secret".into()]),
             secret_value: json!("foo"),
         }],
     )
@@ -62,7 +75,12 @@ async fn agent_reads_secret_created_from_default(
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
-        .invoke_and_await_agent(&component, &agent_id, "echoLocalConfig", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -86,14 +104,15 @@ async fn agent_reads_secret_created_from_default(
 #[timeout("4m")]
 async fn agent_reads_secret_updated_from_default(
     deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let (_, env) = user.app_and_env().await?;
     let client = deps.registry_service().client(&user.token).await;
 
     let component = user
-        .component(&env.id, "golem_it_agent_sdk_ts")
-        .name("golem-it:agent-sdk-ts")
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
         .store()
         .await?;
 
@@ -101,7 +120,7 @@ async fn agent_reads_secret_updated_from_default(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
-                path: vec!["secret".into()],
+                path: AgentSecretPath(vec!["secret".into()]),
                 secret_type: analysed_type::str(),
                 secret_value: None,
             },
@@ -111,7 +130,7 @@ async fn agent_reads_secret_updated_from_default(
     user.deploy_environment_with(
         env.id,
         vec![DeploymentAgentSecretDefault {
-            path: vec!["secret".into()],
+            path: AgentSecretPath(vec!["secret".into()]),
             secret_value: json!("foo"),
         }],
     )
@@ -122,7 +141,12 @@ async fn agent_reads_secret_updated_from_default(
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
-        .invoke_and_await_agent(&component, &agent_id, "echoLocalConfig", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -146,14 +170,15 @@ async fn agent_reads_secret_updated_from_default(
 #[timeout("4m")]
 async fn agent_reads_updated_environment_secret(
     deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let (_, env) = user.app_and_env().await?;
     let client = deps.registry_service().client(&user.token).await;
 
     let component = user
-        .component(&env.id, "golem_it_agent_sdk_ts")
-        .name("golem-it:agent-sdk-ts")
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
         .store()
         .await?;
 
@@ -162,7 +187,7 @@ async fn agent_reads_updated_environment_secret(
     user.deploy_environment_with(
         env.id,
         vec![DeploymentAgentSecretDefault {
-            path: secret_path.clone(),
+            path: AgentSecretPath(secret_path.clone()),
             secret_value: json!("foo"),
         }],
     )
@@ -173,7 +198,12 @@ async fn agent_reads_updated_environment_secret(
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
-        .invoke_and_await_agent(&component, &agent_id, "echoLocalConfig", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -187,7 +217,7 @@ async fn agent_reads_updated_environment_secret(
     let secret = secrets
         .values
         .iter()
-        .find(|sec| sec.path == secret_path)
+        .find(|sec| sec.path.0 == secret_path)
         .unwrap();
 
     client
@@ -201,7 +231,12 @@ async fn agent_reads_updated_environment_secret(
         .await?;
 
     let response = user
-        .invoke_and_await_agent(&component, &agent_id, "echoLocalConfig", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -219,13 +254,14 @@ async fn agent_reads_updated_environment_secret(
 #[timeout("4m")]
 async fn agent_fails_on_missing_environment_secret_value(
     deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let (_, env) = user.app_and_env().await?;
 
     let component = user
-        .component(&env.id, "golem_it_agent_sdk_ts")
-        .name("golem-it:agent-sdk-ts")
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
         .store()
         .await?;
 
@@ -250,14 +286,15 @@ async fn agent_fails_on_missing_environment_secret_value(
 #[timeout("4m")]
 async fn agent_fails_on_deleted_environment_secret(
     deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let (_, env) = user.app_and_env().await?;
     let client = deps.registry_service().client(&user.token).await;
 
     let component = user
-        .component(&env.id, "golem_it_agent_sdk_ts")
-        .name("golem-it:agent-sdk-ts")
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
         .store()
         .await?;
 
@@ -266,7 +303,7 @@ async fn agent_fails_on_deleted_environment_secret(
     user.deploy_environment_with(
         env.id,
         vec![DeploymentAgentSecretDefault {
-            path: secret_path.clone(),
+            path: AgentSecretPath(secret_path.clone()),
             secret_value: json!("foo"),
         }],
     )
@@ -277,7 +314,12 @@ async fn agent_fails_on_deleted_environment_secret(
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
-        .invoke_and_await_agent(&component, &agent_id, "echoLocalConfig", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -290,7 +332,7 @@ async fn agent_fails_on_deleted_environment_secret(
     let secret = secrets
         .values
         .iter()
-        .find(|sec| sec.path == secret_path)
+        .find(|sec| sec.path.0 == secret_path)
         .unwrap();
 
     client
@@ -298,7 +340,12 @@ async fn agent_fails_on_deleted_environment_secret(
         .await?;
 
     let response = user
-        .invoke_and_await_agent(&component, &agent_id, "echoLocalConfig", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
         .await;
 
     let Err(error) = response else {
@@ -320,14 +367,15 @@ async fn agent_fails_on_deleted_environment_secret(
 #[timeout("4m")]
 async fn agent_reads_recreated_environment_secret(
     deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let (_, env) = user.app_and_env().await?;
     let client = deps.registry_service().client(&user.token).await;
 
     let component = user
-        .component(&env.id, "golem_it_agent_sdk_ts")
-        .name("golem-it:agent-sdk-ts")
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
         .store()
         .await?;
 
@@ -336,7 +384,7 @@ async fn agent_reads_recreated_environment_secret(
     user.deploy_environment_with(
         env.id,
         vec![DeploymentAgentSecretDefault {
-            path: secret_path.clone(),
+            path: AgentSecretPath(secret_path.clone()),
             secret_value: json!("foo"),
         }],
     )
@@ -350,7 +398,7 @@ async fn agent_reads_recreated_environment_secret(
     let secret = secrets
         .values
         .iter()
-        .find(|sec| sec.path == secret_path)
+        .find(|sec| sec.path.0 == secret_path)
         .unwrap();
 
     client
@@ -361,7 +409,7 @@ async fn agent_reads_recreated_environment_secret(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
-                path: secret_path.clone(),
+                path: AgentSecretPath(secret_path.clone()),
                 secret_type: analysed_type::str(),
                 secret_value: Some(json!("bar")),
             },
@@ -369,7 +417,12 @@ async fn agent_reads_recreated_environment_secret(
         .await?;
 
     let response = user
-        .invoke_and_await_agent(&component, &agent_id, "echoLocalConfig", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -381,6 +434,188 @@ async fn agent_reads_recreated_environment_secret(
         parsed,
         json!({
             "secret": "bar"
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn agent_reads_secret_with_different_casing(
+    deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
+        .store()
+        .await?;
+
+    user.deploy_environment_with(
+        env.id,
+        vec![DeploymentAgentSecretDefault {
+            path: AgentSecretPath(vec!["secret_path".into()]),
+            secret_value: json!("foo"),
+        }],
+    )
+    .await?;
+
+    let agent_id = agent_id!("local-casing-shared-config-agent", "test-agent");
+
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let response = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let_assert!(Value::String(config) = response);
+
+    let parsed: serde_json::Value = serde_json::from_str(&config)?;
+
+    assert_eq!(
+        parsed,
+        json!({
+            "secretPath": "foo"
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn agent_reads_secret_with_mixed_case_path(
+    deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
+        .store()
+        .await?;
+
+    user.deploy_environment_with(
+        env.id,
+        vec![DeploymentAgentSecretDefault {
+            path: AgentSecretPath(vec!["SecretPath".into()]),
+            secret_value: json!("foo"),
+        }],
+    )
+    .await?;
+
+    let agent_id = agent_id!("local-casing-shared-config-agent", "test-agent");
+
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let response = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let_assert!(Value::String(config) = response);
+
+    let parsed: serde_json::Value = serde_json::from_str(&config)?;
+
+    assert_eq!(
+        parsed,
+        json!({
+            "secretPath": "foo"
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn agent_reads_secret_after_canonicalized_update(
+    deps: &EnvBasedTestDependencies,
+    #[dimension(lang)] ctx: &Arc<dyn TestContext>,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    let component = user
+        .component(&env.id, ctx.test_component_file())
+        .name(ctx.test_component_name())
+        .store()
+        .await?;
+
+    let secret_path = vec!["secret_path".to_string()];
+
+    user.deploy_environment_with(
+        env.id,
+        vec![DeploymentAgentSecretDefault {
+            path: AgentSecretPath(secret_path.clone()),
+            secret_value: json!("foo"),
+        }],
+    )
+    .await?;
+
+    let agent_id = agent_id!("local-casing-shared-config-agent", "test-agent");
+
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secret = secrets
+        .values
+        .iter()
+        .find(|sec| sec.path.0 == vec!["secretPath".to_string()])
+        .unwrap();
+
+    client
+        .update_agent_secret(
+            &secret.id.0,
+            &AgentSecretUpdate {
+                current_revision: secret.revision,
+                secret_value: OptionalFieldUpdate::Set(json!("bar")),
+            },
+        )
+        .await?;
+
+    let response = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            ctx.agent_method_name(),
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let_assert!(Value::String(config) = response);
+
+    let parsed: serde_json::Value = serde_json::from_str(&config)?;
+
+    assert_eq!(
+        parsed,
+        json!({
+            "secretPath": "bar"
         })
     );
 

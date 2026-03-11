@@ -78,7 +78,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .get_agent_secrets(self.state.component_metadata.environment_id)
                 .await?;
 
-            let agent_secret = agent_secrets.get(&key);
+            let canonical_agent_secret_path =
+                CanonicalAgentSecretPath::from_path_in_unknown_casing(&key);
+            let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
 
             let agent_secret_type = agent_secret.map(|sec| &sec.secret_type);
             let agent_secret_value = agent_secret.and_then(|sec| sec.secret_value.as_ref());

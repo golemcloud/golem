@@ -31,6 +31,6 @@ impl<T: ConfigSchema> AutoInjectable for Config<T> {
     }
 
     fn autoinject() -> Result<Self, String> {
-        T::load(&[]).map(Config)
+        Ok(Config::new())
     }
 }
