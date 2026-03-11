@@ -105,8 +105,11 @@ pub async fn invoke_resource(
         _ => None,
     };
 
-    let contents =
-        map_agent_response_to_resource_contents(agent_result, &mcp_resource.raw_method.output_schema, uri)?;
+    let contents = map_agent_response_to_resource_contents(
+        agent_result,
+        &mcp_resource.raw_method.output_schema,
+        uri,
+    )?;
 
     Ok(ReadResourceResult { contents })
 }
@@ -118,15 +121,13 @@ fn map_agent_response_to_resource_contents(
 ) -> Result<Vec<ResourceContents>, ErrorData> {
     match invoke_result {
         Some(untyped_data_value) => {
-            let typed_value =
-                DataValue::try_from_untyped(untyped_data_value, expected_type.clone()).map_err(
-                    |error| {
-                        ErrorData::internal_error(
-                            format!("Agent response type mismatch: {error}"),
-                            None,
-                        )
-                    },
-                )?;
+            let typed_value = DataValue::try_from_untyped(
+                untyped_data_value,
+                expected_type.clone(),
+            )
+            .map_err(|error| {
+                ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
+            })?;
 
             data_value_to_resource_contents(typed_value, uri)
         }
@@ -192,8 +193,11 @@ fn convert_to_resource_content(
                     // This cannot be possible according to MCP spec
                     // A resource content must respond with either an actual text or blob
                     // https://modelcontextprotocol.info/docs/concepts/resources/#reading-resources
-                   Err(ErrorData::internal_error(
-                        format!("Received URL text reference, which cannot be part of resource output: {}", url.value),
+                    Err(ErrorData::internal_error(
+                        format!(
+                            "Received URL text reference, which cannot be part of resource output: {}",
+                            url.value
+                        ),
                         None,
                     ))
                 }
@@ -211,12 +215,11 @@ fn convert_to_resource_content(
                         meta: None,
                     })
                 }
-                BinaryReference::Url(_) => {
-                    Err(ErrorData::internal_error(
-                        "Received URL binary reference, which cannot be part of resource output".to_string(),
-                        None,
-                    ))
-                },
+                BinaryReference::Url(_) => Err(ErrorData::internal_error(
+                    "Received URL binary reference, which cannot be part of resource output"
+                        .to_string(),
+                    None,
+                )),
             }
         }
     }

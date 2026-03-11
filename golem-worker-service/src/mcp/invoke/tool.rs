@@ -16,14 +16,14 @@ use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::invoke::agent_method_input::get_agent_method_input;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
 use crate::service::worker::WorkerService;
+use base64::Engine;
 use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{CallToolResult, JsonObject};
 use serde_json::json;
 use std::sync::Arc;
-use base64::Engine;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 pub async fn invoke_tool(
     args_map: JsonObject,
@@ -158,7 +158,9 @@ pub fn map_agent_response_to_tool_result(
 // (based on the schema they learned from initialization)
 // This is used only for tools, and not for resources.
 // Any changes in this mapping should be carefully tested with actual MCP clients
-fn convert_elem_value_to_mcp_tool_response(element: &ElementValue) -> Result<serde_json::Value, ErrorData> {
+fn convert_elem_value_to_mcp_tool_response(
+    element: &ElementValue,
+) -> Result<serde_json::Value, ErrorData> {
     match element {
         ElementValue::ComponentModel(component_model_value) => {
             component_model_value.value.to_json_value().map_err(|e| {
@@ -177,12 +179,10 @@ fn convert_elem_value_to_mcp_tool_response(element: &ElementValue) -> Result<ser
                 }
                 Ok(serde_json::Value::Object(obj))
             }
-            TextReference::Url(_) => {
-                Err(ErrorData::internal_error(
-                    "A text reference URL can only be part of tool input and not output".to_string(),
-                    None,
-                ))
-            }
+            TextReference::Url(_) => Err(ErrorData::internal_error(
+                "A text reference URL can only be part of tool input and not output".to_string(),
+                None,
+            )),
         },
         ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
             match value {
@@ -201,12 +201,11 @@ fn convert_elem_value_to_mcp_tool_response(element: &ElementValue) -> Result<ser
                         "mimeType": binary_type.mime_type,
                     }))
                 }
-                BinaryReference::Url(_) => {
-                    Err(ErrorData::internal_error(
-                        "A binary reference URL can only be part of tool input and not output".to_string(),
-                        None,
-                    ))
-                }
+                BinaryReference::Url(_) => Err(ErrorData::internal_error(
+                    "A binary reference URL can only be part of tool input and not output"
+                        .to_string(),
+                    None,
+                )),
             }
         }
     }
