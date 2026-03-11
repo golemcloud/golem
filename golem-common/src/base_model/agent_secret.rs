@@ -16,7 +16,6 @@ use super::optional_field_update::OptionalFieldUpdate;
 use crate::base_model::environment::EnvironmentId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use golem_wasm::analysis::AnalysedType;
-use heck::ToLowerCamelCase;
 
 newtype_uuid!(
     AgentSecretId,
@@ -28,21 +27,24 @@ declare_revision!(AgentSecretRevision);
 declare_transparent_newtypes! {
     /// Agent secret path in any casing. All agent secret paths
     /// are converted to the same casing internally to allow easier cross-language use.
-    #[oai(to_header = false)]
+    #[cfg_attr(feature = "full", oai(to_header = false))]
     pub struct AgentSecretPath(pub Vec<String>);
 
     /// Canonical representation of an agent secret path (segments are each camelCase)
     #[derive(Eq, Hash)]
-    #[oai(to_header = false)]
+    #[cfg_attr(feature = "full", oai(to_header = false))]
     pub struct CanonicalAgentSecretPath(pub Vec<String>);
 }
 
 impl CanonicalAgentSecretPath {
+    #[cfg(feature = "full")]
     pub fn from_path_in_unknown_casing(value: &[String]) -> Self {
+        use heck::ToLowerCamelCase;
         Self(value.iter().map(|s| s.to_lower_camel_case()).collect())
     }
 }
 
+#[cfg(feature = "full")]
 impl From<AgentSecretPath> for CanonicalAgentSecretPath {
     fn from(value: AgentSecretPath) -> Self {
         Self::from_path_in_unknown_casing(&value.0)
