@@ -327,22 +327,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// first pending_updates, then pending_invocations
     async fn drain_pending_from_status(&mut self) -> CommandOutcome {
         loop {
-            let status = self.parent.last_known_status.read().await.clone();
+            let status = self.parent.get_non_detached_last_known_status().await;
 
             // First, try to process a pending update
-            if let Some(update) = status.pending_updates.front() {
-                let target_revision = *update.description.target_revision();
-                let mut store = self.store.lock().await;
-                let mut invocation = Invocation {
-                    owned_agent_id: self.owned_agent_id.clone(),
-                    parent: self.parent.clone(),
-                    instance: self.instance,
-                    store: store.deref_mut(),
-                };
-                match invocation.manual_update(target_revision).await {
-                    CommandOutcome::Continue => continue,
-                    other => break other,
-                }
+            if status.pending_updates.front().is_some() {
+                // if the update made it to pending_updates (instead of pending invocations), it is ready
+                // to be processed on next restart. So just restart here and let the recovery logic take over
+                break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
             }
 
             // Then, try to process a pending invocation

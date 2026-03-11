@@ -30,10 +30,10 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
-    HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    UsesAllDeps,
+    HasHttpConnectionPool, HasKeyValueService, HasOplog, HasOplogService, HasPromiseService,
+    HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService,
+    HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
+    HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -49,7 +49,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
-use golem_common::model::regions::OplogRegion;
+use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
@@ -2162,6 +2162,31 @@ impl RunningWorker {
                     .component_revision_for_replay,
             );
 
+        let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
+        let mut last_snapshot_index = worker_metadata
+            .last_known_status
+            .last_manual_update_snapshot_index;
+
+        // automatic snapshots are only considered until the first failure.
+        // additionally, if there are updates, the automatic snapshot is temporarily ignored to catch issues earlier
+        if let Some(snapshot_idx) = worker_metadata
+            .last_known_status
+            .last_automatic_snapshot_index
+        {
+            if pending_update.is_none()
+                && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
+            {
+                let snapshot_skip =
+                    DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=snapshot_idx,
+                    )])
+                    .build();
+                skipped_regions.set_override(snapshot_skip);
+
+                last_snapshot_index = Some(snapshot_idx);
+            }
+        }
+
         let context = Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
@@ -2184,19 +2209,13 @@ impl RunningWorker {
             parent.extra_deps(),
             parent.config(),
             AgentConfig::new(
-                worker_metadata.last_known_status.skipped_regions,
+                skipped_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.config_vars,
                 worker_metadata.local_agent_config,
-                if pending_update.is_none()
-                    && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
-                {
-                    worker_metadata.last_known_status.last_snapshot_index
-                } else {
-                    None
-                },
+                last_snapshot_index,
             ),
             parent.execution_status.clone(),
             parent.file_loader(),
@@ -2205,6 +2224,7 @@ impl RunningWorker {
             parent.agent_types(),
             parent.agent_webhooks(),
             parent.shard_service(),
+            parent.http_connection_pool(),
             pending_update,
             worker_metadata.original_phantom_id,
         )
