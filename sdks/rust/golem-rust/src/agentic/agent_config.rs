@@ -31,12 +31,15 @@ use std::time::Duration;
 
 pub struct Config<T>(PhantomData<T>);
 
-impl <T> Config<T> {
+impl<T> Config<T> {
     pub(crate) fn new() -> Self {
         Self(PhantomData)
     }
 
-    pub fn get(&self) -> T where T: ConfigSchema {
+    pub fn get(&self) -> T
+    where
+        T: ConfigSchema,
+    {
         T::load(&[])
     }
 }
@@ -65,7 +68,8 @@ impl<T> Secret<T> {
     {
         let typ = T::get_type();
         let value = get_config_value(&self.path, &typ);
-        T::from_value_and_type(ValueAndType { value, typ }).expect("failed deserializing secret value")
+        T::from_value_and_type(ValueAndType { value, typ })
+            .expect("failed deserializing secret value")
     }
 }
 
@@ -136,7 +140,8 @@ impl<T: ComponentModelConfigLeaf> ConfigField for T {
     fn load(path: &[String]) -> Self {
         let typ = <Self as IntoValue>::get_type();
         let value = get_config_value(path, &typ);
-        <Self as FromValueAndType>::from_value_and_type(ValueAndType { value, typ }).expect("failed deserializing config value")
+        <Self as FromValueAndType>::from_value_and_type(ValueAndType { value, typ })
+            .expect("failed deserializing config value")
     }
 }
 
