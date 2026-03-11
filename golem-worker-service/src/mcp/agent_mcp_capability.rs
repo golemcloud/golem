@@ -16,7 +16,9 @@ use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::schema::{McpToolSchema, get_mcp_schema, get_mcp_tool_schema};
 use golem_common::base_model::account::AccountId;
-use golem_common::base_model::agent::{AgentMethod, AgentTypeName, DataSchema};
+use golem_common::base_model::agent::{
+    AgentMethod, AgentTypeName, DataSchema, ElementSchema, NamedElementSchemas,
+};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::model::agent::AgentConstructor;
@@ -91,6 +93,8 @@ impl McpAgentCapability {
             let constructor_param_names = AgentMcpResource::constructor_param_names(constructor);
             let name = AgentMcpResource::resource_name(agent_type_name, method);
 
+            let mime_type = resource_mime_type(&method.output_schema);
+
             let kind = if constructor_param_names.is_empty() {
                 let uri = AgentMcpResource::static_uri(agent_type_name, method);
                 AgentMcpResourceKind::Static(Annotated::new(
@@ -99,7 +103,7 @@ impl McpAgentCapability {
                         name,
                         title: None,
                         description: Some(method.description.clone()),
-                        mime_type: Some("application/json".to_string()),
+                        mime_type,
                         size: None,
                         icons: None,
                         meta: None,
@@ -119,7 +123,7 @@ impl McpAgentCapability {
                             name,
                             title: None,
                             description: Some(method.description.clone()),
-                            mime_type: Some("application/json".to_string()),
+                            mime_type,
                             icons: None,
                         },
                         None,
@@ -143,4 +147,22 @@ impl McpAgentCapability {
 
 fn get_tool_name(agent_type_name: &AgentTypeName, method: &AgentMethod) -> String {
     format!("{}-{}", agent_type_name.0, method.name)
+}
+
+fn resource_mime_type(output_schema: &DataSchema) -> Option<String> {
+    match output_schema {
+        DataSchema::Tuple(NamedElementSchemas { elements }) => match elements.as_slice() {
+            [single] => match &single.schema {
+                ElementSchema::ComponentModel(_) => Some("application/json".to_string()),
+                ElementSchema::UnstructuredText(_) => Some("text/plain".to_string()),
+                ElementSchema::UnstructuredBinary(descriptor) => descriptor
+                    .restrictions
+                    .as_ref()
+                    .and_then(|r| r.first())
+                    .map(|bt| bt.mime_type.clone()),
+            },
+            _ => Some("application/json".to_string()),
+        },
+        DataSchema::Multimodal(_) => Some("application/json".to_string()),
+    }
 }

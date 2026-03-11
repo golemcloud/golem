@@ -16,5 +16,4 @@ mod agent_method_input;
 mod constructor_param_extraction;
 mod multimodal_params_extraction;
 pub mod resource;
-mod response_mapping;
 pub mod tool;

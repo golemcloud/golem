@@ -14,7 +14,6 @@
 
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, ConstructorParam};
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
-use crate::mcp::invoke::response_mapping::element_value_to_mcp_json;
 use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::WorkerId;
@@ -22,7 +21,6 @@ use golem_common::base_model::agent::*;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
-use serde_json::json;
 use std::sync::Arc;
 
 pub async fn invoke_resource(
@@ -107,102 +105,119 @@ pub async fn invoke_resource(
         _ => None,
     };
 
-    let json_value =
-        interpret_agent_response(agent_result, &mcp_resource.raw_method.output_schema)?;
+    let contents =
+        map_agent_response_to_resource_contents(agent_result, &mcp_resource.raw_method.output_schema, uri)?;
 
-    Ok(ReadResourceResult {
-        contents: vec![ResourceContents::text(json_value.to_string(), uri)],
-    })
+    Ok(ReadResourceResult { contents })
 }
 
-fn interpret_agent_response(
+fn map_agent_response_to_resource_contents(
     invoke_result: Option<UntypedDataValue>,
     expected_type: &DataSchema,
-) -> Result<serde_json::Value, ErrorData> {
+    uri: &str,
+) -> Result<Vec<ResourceContents>, ErrorData> {
     match invoke_result {
         Some(untyped_data_value) => {
-            let typed_value = DataValue::try_from_untyped(
-                untyped_data_value,
-                expected_type.clone(),
-            )
-            .map_err(|error| {
-                ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
-            })?;
+            let typed_value =
+                DataValue::try_from_untyped(untyped_data_value, expected_type.clone()).map_err(
+                    |error| {
+                        ErrorData::internal_error(
+                            format!("Agent response type mismatch: {error}"),
+                            None,
+                        )
+                    },
+                )?;
 
-            map_data_value_to_resource(typed_value)
-                .map(|json_value| {
-                    json!({
-                        "return-value": json_value,
-                    })
-                })
-                .map_err(|e| {
-                    tracing::error!("Failed to map successful agent response: {}", e);
-                    ErrorData::internal_error(
-                        format!("Failed to map successful agent response: {}", e),
-                        None,
-                    )
-                })
+            data_value_to_resource_contents(typed_value, uri)
         }
-        None => Ok(json!({})),
+        None => Ok(vec![]),
     }
 }
 
-// Map a DataValue returned by an agent method to the JSON format expected by MCP responses.
-// This is used for both tool and resource invocation responses, as well as for agent method responses when the agent is invoked directly (e.g. from a workflow).
-fn map_data_value_to_resource(typed_value: DataValue) -> Result<serde_json::Value, ErrorData> {
+fn data_value_to_resource_contents(
+    typed_value: DataValue,
+    uri: &str,
+) -> Result<Vec<ResourceContents>, ErrorData> {
     match typed_value {
         DataValue::Tuple(ElementValues { elements }) => match elements.len() {
-            0 => Ok(json!({})),
+            0 => Ok(vec![]),
             1 => {
                 let element = elements.into_iter().next().unwrap();
-                match element {
-                    ElementValue::ComponentModel(v) => v.value.to_json_value().map_err(|e| {
-                        ErrorData::internal_error(
-                            format!("Failed to serialize component model response: {e}"),
-                            None,
-                        )
-                    }),
-                    ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                        value, ..
-                    }) => match value {
-                        TextReference::Inline(TextSource { data, .. }) => {
-                            Ok(serde_json::Value::String(data))
-                        }
-                        TextReference::Url(url) => Ok(serde_json::Value::String(url.value)),
-                    },
-                    ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                        value,
-                        ..
-                    }) => match value {
-                        BinaryReference::Inline(BinarySource { data, binary_type }) => {
-                            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                            Ok(json!({
-                                "data": b64,
-                                "mimeType": binary_type.mime_type,
-                            }))
-                        }
-                        BinaryReference::Url(url) => Ok(serde_json::Value::String(url.value)),
-                    },
-                }
+                convert_to_resource_content(element, uri).map(|c| vec![c])
             }
             _ => Err(ErrorData::internal_error(
                 "Unexpected number of response tuple elements".to_string(),
                 None,
             )),
         },
-        DataValue::Multimodal(NamedElementValues { elements }) => {
-            let parts: Vec<serde_json::Value> = elements
-                .iter()
-                .map(|named| {
-                    let value_json = element_value_to_mcp_json(&named.value)?;
-                    Ok(json!({
-                        "name": named.name,
-                        "value": value_json,
-                    }))
-                })
-                .collect::<Result<Vec<_>, ErrorData>>()?;
+        DataValue::Multimodal(NamedElementValues { elements }) => elements
+            .into_iter()
+            .map(|named| convert_to_resource_content(named.value, uri))
+            .collect(),
+    }
+}
 
-            Ok(json!({ "parts" : parts }))
+fn convert_to_resource_content(
+    element: ElementValue,
+    uri: &str,
+) -> Result<ResourceContents, ErrorData> {
+    match element {
+        ElementValue::ComponentModel(v) => {
+            let json_value = v.value.to_json_value().map_err(|e| {
+                ErrorData::internal_error(
+                    format!("Failed to serialize component model response: {e}"),
+                    None,
+                )
+            })?;
+            Ok(ResourceContents::TextResourceContents {
+                uri: uri.to_string(),
+                mime_type: Some("application/json".to_string()),
+                text: json_value.to_string(),
+                meta: None,
+            })
+        }
+
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+            match value {
+                TextReference::Inline(TextSource { data, .. }) => {
+                    Ok(ResourceContents::TextResourceContents {
+                        // Note that languageCode cannot be encoded in the output to MCP clients when they act as resources
+                        uri: uri.to_string(), // This is not the text-reference uri, but rather the original uri of the resource
+                        mime_type: Some("text/plain".to_string()),
+                        text: data.to_string(),
+                        meta: None,
+                    })
+                }
+                TextReference::Url(url) => {
+                    // This cannot be possible according to MCP spec
+                    // A resource content must respond with either an actual text or blob
+                    // https://modelcontextprotocol.info/docs/concepts/resources/#reading-resources
+                   Err(ErrorData::internal_error(
+                        format!("Received URL text reference, which cannot be part of resource output: {}", url.value),
+                        None,
+                    ))
+                }
+            }
+        }
+
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            match value {
+                BinaryReference::Inline(BinarySource { data, binary_type }) => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                    Ok(ResourceContents::BlobResourceContents {
+                        uri: uri.to_string(),
+                        mime_type: Some(binary_type.mime_type),
+                        blob: b64,
+                        meta: None,
+                    })
+                }
+                BinaryReference::Url(_) => {
+                    Err(ErrorData::internal_error(
+                        "Received URL binary reference, which cannot be part of resource output".to_string(),
+                        None,
+                    ))
+                },
+            }
         }
     }
 }

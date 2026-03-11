@@ -15,7 +15,6 @@
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::invoke::agent_method_input::get_agent_method_input;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
-use crate::mcp::invoke::response_mapping::element_value_to_mcp_json;
 use crate::service::worker::WorkerService;
 use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
@@ -23,6 +22,8 @@ use rmcp::ErrorData;
 use rmcp::model::{CallToolResult, JsonObject};
 use serde_json::json;
 use std::sync::Arc;
+use base64::Engine;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 pub async fn invoke_tool(
     args_map: JsonObject,
@@ -122,7 +123,7 @@ pub fn map_agent_response_to_tool_result(
             0 => Ok(CallToolResult::success(vec![])),
             1 => {
                 let element = elements.into_iter().next().unwrap();
-                let json_value = element_value_to_mcp_json(&element)?;
+                let json_value = convert_elem_value_to_mcp_tool_response(&element)?;
                 Ok(CallToolResult::structured(json_value))
             }
             _ => Err(ErrorData::internal_error(
@@ -134,7 +135,7 @@ pub fn map_agent_response_to_tool_result(
             let mut parts = Vec::new();
 
             for named in elements {
-                let value_json = element_value_to_mcp_json(&named.value)?;
+                let value_json = convert_elem_value_to_mcp_tool_response(&named.value)?;
                 parts.push(json!({
                     "name": named.name,
                     "value": value_json,
@@ -149,6 +150,64 @@ pub fn map_agent_response_to_tool_result(
                 is_error: Some(false),
                 meta: None,
             })
+        }
+    }
+}
+
+// Mapping from ElementValue to the JSON format expected by MCP clients
+// (based on the schema they learned from initialization)
+// This is used only for tools, and not for resources.
+// Any changes in this mapping should be carefully tested with actual MCP clients
+fn convert_elem_value_to_mcp_tool_response(element: &ElementValue) -> Result<serde_json::Value, ErrorData> {
+    match element {
+        ElementValue::ComponentModel(component_model_value) => {
+            component_model_value.value.to_json_value().map_err(|e| {
+                ErrorData::internal_error(
+                    format!("Failed to serialize component model response: {e}"),
+                    None,
+                )
+            })
+        }
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
+            TextReference::Inline(TextSource { data, text_type }) => {
+                let mut obj = serde_json::Map::new();
+                obj.insert("data".to_string(), json!(data));
+                if let Some(tt) = text_type {
+                    obj.insert("languageCode".to_string(), json!(tt.language_code));
+                }
+                Ok(serde_json::Value::Object(obj))
+            }
+            TextReference::Url(_) => {
+                Err(ErrorData::internal_error(
+                    "A text reference URL can only be part of tool input and not output".to_string(),
+                    None,
+                ))
+            }
+        },
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            match value {
+                BinaryReference::Inline(BinarySource { data, binary_type }) => {
+                    // https://modelcontextprotocol.info/docs/concepts/resources/#binary-resources
+                    // Binary resources contain raw binary data encoded in base64.
+                    // Note that when unstructured-binary response is part of a `tool`, we simply `normalize` to the way
+                    // component-model behaves, but the schema information has explicit descriptions around the base64 encoding.
+                    // This is the best approximation we can make to expose a method as a mcp tool that returns binary data.
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+
+                    // Also for tools, we don't use `ResourceContents` and it's impossible. So for tools, we will
+                    // strictly stick on `JsonObject` output schema (and that's the only way to do it)
+                    Ok(json!({
+                        "data": b64,
+                        "mimeType": binary_type.mime_type,
+                    }))
+                }
+                BinaryReference::Url(_) => {
+                    Err(ErrorData::internal_error(
+                        "A binary reference URL can only be part of tool input and not output".to_string(),
+                        None,
+                    ))
+                }
+            }
         }
     }
 }

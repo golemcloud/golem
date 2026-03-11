@@ -198,6 +198,9 @@ impl AgentMcpResource {
     }
 
     pub fn static_uri(agent_type_name: &AgentTypeName, method: &AgentMethod) -> String {
+        // https://modelcontextprotocol.info/docs/concepts/resources
+        // The protocol and path structure is defined by the MCP server implementation.
+        // Servers can define their own custom URI schemes.
         format!("golem://{}/{}", agent_type_name.0, method.name)
     }
 
@@ -206,6 +209,9 @@ impl AgentMcpResource {
         method: &AgentMethod,
         param_names: &[String],
     ) -> String {
+        // https://modelcontextprotocol.info/docs/concepts/resources
+        // The protocol and path structure is defined by the MCP server implementation.
+        // Servers can define their own custom URI schemes.
         let base = format!("golem://{}/{}", agent_type_name.0, method.name);
         let placeholders: Vec<String> = param_names.iter().map(|n| format!("{{{}}}", n)).collect();
         format!("{}/{}", base, placeholders.join("/"))
