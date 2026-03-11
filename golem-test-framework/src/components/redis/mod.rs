@@ -19,6 +19,7 @@ use tracing::info;
 
 pub mod provided;
 pub mod spawned;
+pub mod spawned_tls;
 
 #[async_trait]
 pub trait Redis: Send + Sync {

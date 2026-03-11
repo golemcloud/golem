@@ -16,7 +16,7 @@ use crate::Tracing;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
-use golem_common::model::{OplogIndex, WorkerStatus};
+use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::Value;
@@ -60,13 +60,13 @@ async fn revert_successful_invocations(
         .store()
         .await?;
 
-    let agent_id1 = agent_id!("rpc-counter", "counter1");
+    let agent_id1 = agent_id!("RpcCounter", "counter1");
     let worker_id1 = executor
         .start_agent(&component.id, agent_id1.clone())
         .await?;
     executor.log_output(&worker_id1).await?;
 
-    let agent_id2 = agent_id!("rpc-counter", "counter2");
+    let agent_id2 = agent_id!("RpcCounter", "counter2");
     let worker_id2 = executor
         .start_agent(&component.id, agent_id2.clone())
         .await?;
@@ -149,7 +149,7 @@ async fn revert_failed_worker(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("failing-counter", "revert_failed_worker");
+    let agent_id = agent_id!("FailingCounter", "revert_failed_worker");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -210,7 +210,7 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("failing-counter", "revert_failed_worker");
+    let agent_id = agent_id!("FailingCounter", "revert_failed_worker");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -285,7 +285,7 @@ async fn revert_auto_update(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -295,7 +295,7 @@ async fn revert_auto_update(
     executor
         .wait_for_status(
             &worker_id,
-            WorkerStatus::Idle,
+            AgentStatus::Idle,
             std::time::Duration::from_secs(10),
         )
         .await?;

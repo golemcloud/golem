@@ -60,6 +60,7 @@ host = "localhost"
 key_prefix = ""
 pool_size = 8
 port = 6380
+tls = false
 tracing = false
 
 [key_value_storage.config.retries]
@@ -280,6 +281,7 @@ without_time = false
 # key_prefix = ""
 # pool_size = 8
 # port = 6380
+# tls = false
 # tracing = false
 # 
 # [key_value_storage.config.retries]

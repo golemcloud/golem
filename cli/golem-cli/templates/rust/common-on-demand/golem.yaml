@@ -6,33 +6,33 @@ componentTemplates:
       debug:
         default: true
         build:
-        - command: cargo-component build
+        - command: cargo build --target wasm32-wasip2
           sources:
           - src
           - ../../common-rust
           - Cargo.toml
           - ../../Cargo.toml
           targets:
-          - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+          - ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
         sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+        componentWasm: ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
         outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
         clean:
         - src/bindings.rs
       release:
         build:
-        - command: cargo-component build --release
+        - command: cargo build --target wasm32-wasip2 --release
           sources:
           - src
           - ../../common-rust
           - Cargo.toml
           - ../../Cargo.toml
           targets:
-          - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+          - ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
         sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+        componentWasm: ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
         outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
         clean:
         - src/bindings.rs

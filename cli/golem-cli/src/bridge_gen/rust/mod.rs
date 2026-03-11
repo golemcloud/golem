@@ -18,7 +18,6 @@ use crate::bridge_gen::type_naming::TypeNaming;
 use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, NamedElementSchemas, TextType,
 };
@@ -42,6 +41,7 @@ pub struct RustBridgeGenerator {
     target_path: Utf8PathBuf,
     agent_type: AgentType,
     testing: bool,
+    same_language: bool,
 
     type_naming: TypeNaming<RustTypeName>,
     // TODO: we should integrate these names with type naming to avoid collisions
@@ -52,12 +52,14 @@ pub struct RustBridgeGenerator {
 
 impl BridgeGenerator for RustBridgeGenerator {
     fn new(agent_type: AgentType, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
-        let type_naming = TypeNaming::new(&agent_type)?;
+        let same_language = agent_type.source_language.eq_ignore_ascii_case("rust");
+        let type_naming = TypeNaming::new(&agent_type, same_language)?;
 
         Ok(Self {
             target_path: target_path.to_path_buf(),
             agent_type,
             testing,
+            same_language,
 
             type_naming,
             generated_language_enums: BTreeMap::new(),
@@ -190,8 +192,7 @@ impl RustBridgeGenerator {
     /// Generates the TokenStream for lib.rs content
     fn generate_lib_rs_tokens(&mut self) -> anyhow::Result<TokenStream> {
         let agent_type_name = &self.agent_type.type_name.0;
-        let agent_type_name_kebab = self.agent_type.type_name.to_wit_naming().0;
-        let agent_type_name_lit = Lit::Str(LitStr::new(&agent_type_name_kebab, Span::call_site()));
+        let agent_type_name_lit = Lit::Str(LitStr::new(agent_type_name, Span::call_site()));
         let client_struct_name = Ident::new(agent_type_name, Span::call_site());
 
         let input_schema = self.agent_type.constructor.input_schema.clone();
@@ -326,7 +327,7 @@ impl RustBridgeGenerator {
             DataSchema::Tuple(elements) => {
                 let mut result = Vec::new();
                 for element in &elements.elements {
-                    let name = Ident::new(&to_rust_ident(&element.name), Span::call_site());
+                    let name = Ident::new(&self.to_rust_ident(&element.name), Span::call_site());
                     let typ = self.element_schema_to_typeref(&element.schema)?;
                     result.push(quote! {#name: #typ});
                 }
@@ -349,7 +350,7 @@ impl RustBridgeGenerator {
             DataSchema::Tuple(elements) => {
                 let mut result = Vec::new();
                 for element in &elements.elements {
-                    let name = Ident::new(&to_rust_ident(&element.name), Span::call_site());
+                    let name = Ident::new(&self.to_rust_ident(&element.name), Span::call_site());
                     result.push(quote! {#name});
                 }
                 result
@@ -440,10 +441,8 @@ impl RustBridgeGenerator {
                 let mut case_type_tokens = Vec::new();
 
                 for (idx, case) in variant.cases.iter().enumerate() {
-                    let case_ident = Ident::new(
-                        &to_rust_ident(&case.name).to_upper_camel_case(),
-                        Span::call_site(),
-                    );
+                    let case_ident =
+                        Ident::new(&self.to_rust_case_name(&case.name), Span::call_site());
                     let idx_u32 = idx as u32;
                     case_names_lit.push(case.name.clone());
 
@@ -562,10 +561,7 @@ impl RustBridgeGenerator {
                 let mut case_names_lit = Vec::new();
 
                 for (idx, case) in r#enum.cases.iter().enumerate() {
-                    let case_ident = Ident::new(
-                        &to_rust_ident(case).to_upper_camel_case(),
-                        Span::call_site(),
-                    );
+                    let case_ident = Ident::new(&self.to_rust_case_name(case), Span::call_site());
                     cases.push(quote! { #case_ident });
                     case_names_lit.push(case.clone());
 
@@ -630,7 +626,8 @@ impl RustBridgeGenerator {
                 let mut from_value_fields = Vec::new();
 
                 for field in &record.fields {
-                    let field_ident = Ident::new(&to_rust_ident(&field.name), Span::call_site());
+                    let field_ident =
+                        Ident::new(&self.to_rust_ident(&field.name), Span::call_site());
                     let field_type = self.wit_type_to_typeref(&field.typ)?;
 
                     fields.push(quote! { pub #field_ident: #field_type });
@@ -804,7 +801,7 @@ impl RustBridgeGenerator {
                     .iter()
                     .map(|named_element| {
                         let name =
-                            Ident::new(&to_rust_ident(&named_element.name), Span::call_site());
+                            Ident::new(&self.to_rust_ident(&named_element.name), Span::call_site());
                         match &named_element.schema {
                             ElementSchema::ComponentModel(_) => {
                                 quote! { golem_common::model::agent::ElementValue::ComponentModel(golem_common::model::agent::ComponentModelElementValue { value: #name.into_value_and_type() }) }
@@ -874,22 +871,22 @@ impl RustBridgeGenerator {
     }
 
     fn await_method_name(&self, method: &AgentMethod) -> Ident {
-        let base_name = to_rust_ident(&method.name);
+        let base_name = self.to_rust_ident(&method.name);
         Ident::new(&base_name, Span::call_site())
     }
 
     fn trigger_method_name(&self, method: &AgentMethod) -> Ident {
-        let base_name = to_rust_ident(&method.name);
+        let base_name = self.to_rust_ident(&method.name);
         Ident::new(&format!("trigger_{}", base_name), Span::call_site())
     }
 
     fn schedule_method_name(&self, method: &AgentMethod) -> Ident {
-        let base_name = to_rust_ident(&method.name);
+        let base_name = self.to_rust_ident(&method.name);
         Ident::new(&format!("schedule_{}", base_name), Span::call_site())
     }
 
     fn internal_method_name(&self, method: &AgentMethod) -> Ident {
-        let base_name = to_rust_ident(&method.name);
+        let base_name = self.to_rust_ident(&method.name);
         Ident::new(&format!("__{}", base_name), Span::call_site())
     }
 
@@ -1701,7 +1698,7 @@ impl RustBridgeGenerator {
                     let case_name_lit =
                         Lit::Str(LitStr::new(&named_element.name, Span::call_site()));
                     let case_name = Ident::new(
-                        &to_rust_ident(&named_element.name).to_upper_camel_case(),
+                        &self.to_rust_case_name(&named_element.name),
                         Span::call_site(),
                     );
                     let case_type = self.element_schema_to_typeref(&named_element.schema)?;
@@ -1721,7 +1718,8 @@ impl RustBridgeGenerator {
                     to_named_element_value_cases.push(quote! {
                         Self::#case_name(value) => golem_common::model::agent::NamedElementValue {
                             name: #case_name_lit.to_string(),
-                            value: #encode_value
+                            value: #encode_value,
+                            schema_index: 0,
                         },
                     });
 
@@ -1886,7 +1884,7 @@ impl RustBridgeGenerator {
 
                 for typ in types {
                     let ident = Ident::new(
-                        &to_rust_ident(&typ.language_code).to_upper_camel_case(),
+                        &to_rust_ident(&typ.language_code, false).to_upper_camel_case(),
                         Span::call_site(),
                     );
                     let lit = Lit::Str(LitStr::new(&typ.language_code, Span::call_site()));
@@ -1950,7 +1948,7 @@ impl RustBridgeGenerator {
 
                 for typ in types {
                     let enum_variant_ident = Ident::new(
-                        &to_rust_ident(&typ.mime_type).to_upper_camel_case(),
+                        &to_rust_ident(&typ.mime_type, false).to_upper_camel_case(),
                         Span::call_site(),
                     );
                     let lit = Lit::Str(LitStr::new(&typ.mime_type, Span::call_site()));
@@ -2009,6 +2007,18 @@ impl RustBridgeGenerator {
         Ok(quote! {
             #(#type_definitions)*
         })
+    }
+
+    fn to_rust_ident(&self, name: &str) -> String {
+        to_rust_ident(name, self.same_language)
+    }
+
+    fn to_rust_case_name(&self, name: &str) -> String {
+        if self.same_language {
+            to_rust_ident(name, true)
+        } else {
+            to_rust_ident(name, false).to_upper_camel_case()
+        }
     }
 
     fn package_name(&self) -> String {

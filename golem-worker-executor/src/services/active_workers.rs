@@ -29,12 +29,12 @@ use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
-use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::model::{AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
-    workers: Cache<WorkerId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     worker_memory: Arc<Semaphore>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
@@ -59,32 +59,32 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub async fn get_or_add<T>(
         &self,
         deps: &T,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         account_id: AccountId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
         worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        let worker_id = owned_worker_id.worker_id();
+        let agent_id = owned_agent_id.agent_id();
 
-        let owned_worker_id = owned_worker_id.clone();
+        let owned_agent_id = owned_agent_id.clone();
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
         self.workers
-            .get_or_insert_simple(&worker_id, || {
+            .get_or_insert_simple(&agent_id, || {
                 Box::pin(async move {
                     Ok(Arc::new(
                         Worker::new(
                             &deps,
                             &account_id,
-                            owned_worker_id,
+                            owned_agent_id,
                             worker_env,
                             worker_config_vars,
                             worker_local_agent_config,
@@ -101,16 +101,16 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .await
     }
 
-    pub async fn try_get(&self, owned_worker_id: &OwnedWorkerId) -> Option<Arc<Worker<Ctx>>> {
-        let worker_id = owned_worker_id.worker_id();
-        self.workers.get(&worker_id).await
+    pub async fn try_get(&self, owned_agent_id: &OwnedAgentId) -> Option<Arc<Worker<Ctx>>> {
+        let agent_id = owned_agent_id.agent_id();
+        self.workers.get(&agent_id).await
     }
 
-    pub async fn remove(&self, worker_id: &WorkerId) {
-        self.workers.remove(worker_id).await;
+    pub async fn remove(&self, agent_id: &AgentId) {
+        self.workers.remove(agent_id).await;
     }
 
-    pub async fn snapshot(&self) -> Vec<(WorkerId, Arc<Worker<Ctx>>)> {
+    pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {
         self.workers.iter().await
     }
 
@@ -204,29 +204,29 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             debug!("Collecting possibilities");
             // Collecting the workers which are currently idle but loaded into memory
             let pairs = self.workers.iter().await;
-            for (worker_id, worker) in pairs {
+            for (agent_id, worker) in pairs {
                 if worker.is_currently_idle_but_running().await {
                     if let Ok(mem) = worker.memory_requirement().await {
                         let last_changed = worker.last_execution_state_change();
-                        possibilities.push((worker_id, worker, mem, last_changed));
+                        possibilities.push((agent_id, worker, mem, last_changed));
                     }
                 }
             }
 
             // Sorting them by last time they changed their status - newest first
             possibilities
-                .sort_by_key(|(_worker_id, _worker, _mem, last_changed)| last_changed.to_millis());
+                .sort_by_key(|(_agent_id, _worker, _mem, last_changed)| last_changed.to_millis());
             possibilities.reverse();
 
             let mut freed = 0;
 
             // Dropping the oldest ones until we have enough memory available - rechecking the idle status before
             while freed < needed && !possibilities.is_empty() {
-                let (worker_id, worker, mem, _) = possibilities.pop().unwrap();
+                let (agent_id, worker, mem, _) = possibilities.pop().unwrap();
 
-                debug!("Trying to stop {worker_id} to free up memory");
+                debug!("Trying to stop {agent_id} to free up memory");
                 if worker.stop_if_idle().await {
-                    debug!("Stopped {worker_id} to free up {mem} memory");
+                    debug!("Stopped {agent_id} to free up {mem} memory");
                     freed += mem;
                 }
             }

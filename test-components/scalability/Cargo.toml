@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["components-rust/*", "common-rust/*"]
+members = ["components-rust/*"]
 
 [profile.release]
 opt-level = "s"

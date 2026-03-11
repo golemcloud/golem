@@ -17,11 +17,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::serialization::{deserialize, serialize};
 
 pub mod memory;
 pub mod multi_sqlite;
+pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 
@@ -605,8 +606,8 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 /// Various namespaces for indexed storage
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
-    OpLog { worker_id: WorkerId },
-    CompressedOpLog { worker_id: WorkerId, level: usize },
+    OpLog { agent_id: AgentId },
+    CompressedOpLog { agent_id: AgentId, level: usize },
 }
 
 /// Various namespaces for operations working on multiple indexed storage namespaces such as scan

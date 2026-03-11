@@ -45,6 +45,8 @@ wit-parser = { workspace = true, optional = true }
 wasip2 = { version = "1.0.2", optional = true }
 wstd = { version = "=0.6.5", optional = true }
 
+proptest = { workspace = true, optional = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }

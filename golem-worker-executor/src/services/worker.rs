@@ -23,10 +23,10 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -34,26 +34,26 @@ use tracing::debug;
 #[derive(Debug, Clone)]
 pub struct GetWorkerMetadataResult {
     // Status of the worker at the time of the create oplog entry
-    pub initial_worker_metadata: WorkerMetadata,
+    pub initial_worker_metadata: AgentMetadata,
     // Last known cached status of the worker. Might be outdated
-    pub last_known_status: Option<WorkerStatusRecord>,
+    pub last_known_status: Option<AgentStatusRecord>,
 }
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
 pub trait WorkerService: Send + Sync {
-    async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<GetWorkerMetadataResult>;
+    async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult>;
 
     async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult>;
 
-    async fn remove(&self, owned_worker_id: &OwnedWorkerId);
+    async fn remove(&self, owned_agent_id: &OwnedAgentId);
 
-    async fn remove_cached_status(&self, owned_worker_id: &OwnedWorkerId);
+    async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
 
     async fn update_cached_status(
         &self,
-        owned_worker_id: &OwnedWorkerId,
-        status_value: &WorkerStatusRecord,
+        owned_agent_id: &OwnedAgentId,
+        status_value: &AgentStatusRecord,
         agent_mode: AgentMode,
     );
 }
@@ -87,18 +87,18 @@ impl DefaultWorkerService {
     async fn enum_workers_at_key(&self, key: &str) -> Vec<GetWorkerMetadataResult> {
         record_worker_call("enum");
 
-        let value: Vec<OwnedWorkerId> = self
+        let value: Vec<OwnedAgentId> = self
             .key_value_storage
-            .with_entity("worker", "enum", "worker_id")
+            .with_entity("worker", "enum", "agent_id")
             .members_of_set(KeyValueStorageNamespace::RunningWorkers, key)
             .await
             .unwrap_or_else(|err| panic!("failed to get worker ids from KV storage: {err}"));
 
         let mut workers = Vec::new();
 
-        for owned_worker_id in value {
+        for owned_agent_id in value {
             let metadata = self
-                .get(&owned_worker_id)
+                .get(&owned_agent_id)
                 .await
                 .unwrap_or_else(|| panic!("failed to get worker metadata from KV storage"));
             workers.push(metadata);
@@ -107,8 +107,8 @@ impl DefaultWorkerService {
         workers
     }
 
-    fn status_key(worker_id: &WorkerId) -> String {
-        format!("worker:status:{}", worker_id.to_redis_key())
+    fn status_key(agent_id: &AgentId) -> String {
+        format!("worker:status:{}", agent_id.to_redis_key())
     }
 
     fn running_in_shard_key(shard_id: &ShardId) -> String {
@@ -118,12 +118,12 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
-    async fn get(&self, owned_worker_id: &OwnedWorkerId) -> Option<GetWorkerMetadataResult> {
+    async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 
         let initial_oplog_entry = self
             .oplog_service
-            .read(owned_worker_id, OplogIndex::INITIAL, 1)
+            .read(owned_agent_id, OplogIndex::INITIAL, 1)
             .await
             .into_iter()
             .next();
@@ -135,7 +135,7 @@ impl WorkerService for DefaultWorkerService {
             Some((
                 _,
                 OplogEntry::Create {
-                    worker_id,
+                    agent_id,
                     component_revision,
                     env,
                     environment_id,
@@ -150,13 +150,13 @@ impl WorkerService for DefaultWorkerService {
                     original_phantom_id,
                 },
             )) => {
-                let agent_type_name = AgentId::parse_agent_type_name(&worker_id.worker_name).ok();
+                let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
                 let component_metadata = self
                     .component_service
-                    .get_metadata(worker_id.component_id, Some(component_revision))
+                    .get_metadata(agent_id.component_id, Some(component_revision))
                     .await
                     .unwrap_or_else(|err| {
-                        panic!("failed to get component metadata for {owned_worker_id}: {err}")
+                        panic!("failed to get component metadata for {owned_agent_id}: {err}")
                     });
 
                 let local_agent_config = local_agent_config
@@ -166,11 +166,11 @@ impl WorkerService for DefaultWorkerService {
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap_or_else(|err| {
-                        panic!("failed enriching local agent config for {owned_worker_id}: {err}")
+                        panic!("failed enriching local agent config for {owned_agent_id}: {err}")
                     });
 
-                let initial_worker_metadata = WorkerMetadata {
-                    worker_id,
+                let initial_worker_metadata = AgentMetadata {
+                    agent_id,
                     env,
                     config_vars,
                     local_agent_config,
@@ -178,27 +178,27 @@ impl WorkerService for DefaultWorkerService {
                     created_by,
                     created_at: timestamp,
                     parent,
-                    last_known_status: WorkerStatusRecord {
+                    last_known_status: AgentStatusRecord {
                         component_revision,
                         component_revision_for_replay: component_revision,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
                         active_plugins: initial_active_plugins,
-                        ..WorkerStatusRecord::default()
+                        ..AgentStatusRecord::default()
                     },
                     original_phantom_id,
                 };
 
-                let status_value: Option<Result<WorkerStatusRecord, String>> = self
+                let status_value: Option<Result<AgentStatusRecord, String>> = self
                     .key_value_storage
                     .with_entity("worker", "get", "worker_status")
                     .get_attempt_deserialize(
-                        KeyValueStorageNamespace::Worker { worker_id: owned_worker_id.worker_id.clone() },
-                        &Self::status_key(&owned_worker_id.worker_id),
+                        KeyValueStorageNamespace::Worker { agent_id: owned_agent_id.agent_id.clone() },
+                        &Self::status_key(&owned_agent_id.agent_id),
                     )
                     .await
                     .unwrap_or_else(|err| {
-                        panic!("failed to get worker status for {owned_worker_id} from KV storage: {err}")
+                        panic!("failed to get worker status for {owned_agent_id} from KV storage: {err}")
                     });
 
                 let last_known_status = match status_value {
@@ -207,13 +207,13 @@ impl WorkerService for DefaultWorkerService {
                     Some(Err(_)) => {
                         let last_known_status = calculate_last_known_status_for_existing_worker(
                             self,
-                            owned_worker_id,
+                            owned_agent_id,
                             None,
                         )
                         .await;
 
                         self.update_cached_status(
-                            owned_worker_id,
+                            owned_agent_id,
                             &last_known_status,
                             AgentMode::Durable,
                         )
@@ -246,25 +246,23 @@ impl WorkerService for DefaultWorkerService {
         result
     }
 
-    async fn remove(&self, owned_worker_id: &OwnedWorkerId) {
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) {
         record_worker_call("remove");
 
-        self.oplog_service.delete(owned_worker_id).await;
-        self.remove_cached_status(owned_worker_id).await;
+        self.oplog_service.delete(owned_agent_id).await;
+        self.remove_cached_status(owned_agent_id).await;
 
         let shard_assignment = self
             .shard_service
             .current_assignment()
             .expect("sharding assigment is not ready");
-        let shard_id = ShardId::from_worker_id(
-            &owned_worker_id.worker_id,
-            shard_assignment.number_of_shards,
-        );
+        let shard_id =
+            ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
 
         self
             .key_value_storage
-            .with_entity("worker", "remove", "worker_id")
-            .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+            .with_entity("worker", "remove", "agent_id")
+            .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -273,16 +271,16 @@ impl WorkerService for DefaultWorkerService {
             });
     }
 
-    async fn remove_cached_status(&self, owned_worker_id: &OwnedWorkerId) {
+    async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId) {
         record_worker_call("remove_cached_status");
 
         self.key_value_storage
             .with("worker", "remove")
             .del(
                 KeyValueStorageNamespace::Worker {
-                    worker_id: owned_worker_id.worker_id(),
+                    agent_id: owned_agent_id.agent_id(),
                 },
-                &Self::status_key(&owned_worker_id.worker_id),
+                &Self::status_key(&owned_agent_id.agent_id),
             )
             .await
             .unwrap_or_else(|err| {
@@ -292,22 +290,22 @@ impl WorkerService for DefaultWorkerService {
 
     async fn update_cached_status(
         &self,
-        owned_worker_id: &OwnedWorkerId,
-        status_value: &WorkerStatusRecord,
+        owned_agent_id: &OwnedAgentId,
+        status_value: &AgentStatusRecord,
         agent_mode: AgentMode,
     ) {
         record_worker_call("update_status");
 
         if agent_mode != AgentMode::Ephemeral {
-            debug!("Updating cached worker status for {owned_worker_id} to {status_value:?}");
+            debug!("Updating cached worker status for {owned_agent_id} to {status_value:?}");
 
             self.key_value_storage
                 .with_entity("worker", "update_status", "worker_status")
                 .set(
                     KeyValueStorageNamespace::Worker {
-                        worker_id: owned_worker_id.worker_id(),
+                        agent_id: owned_agent_id.agent_id(),
                     },
-                    &Self::status_key(&owned_worker_id.worker_id),
+                    &Self::status_key(&owned_agent_id.agent_id),
                     status_value,
                 )
                 .await
@@ -318,18 +316,16 @@ impl WorkerService for DefaultWorkerService {
                 .current_assignment()
                 .expect("sharding assignment is not ready");
 
-            let shard_id = ShardId::from_worker_id(
-                &owned_worker_id.worker_id,
-                shard_assignment.number_of_shards,
-            );
+            let shard_id =
+                ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
 
-            if status_value.status == WorkerStatus::Running {
+            if status_value.status == AgentStatus::Running {
                 debug!("Adding worker to the set of running workers in shard {shard_id}");
 
                 self
                     .key_value_storage
-                    .with_entity("worker", "add", "worker_id")
-                    .add_to_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+                    .with_entity("worker", "add", "agent_id")
+                    .add_to_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
                     .await
                     .unwrap_or_else(|err| {
                         panic!(
@@ -341,8 +337,8 @@ impl WorkerService for DefaultWorkerService {
 
                 self
                     .key_value_storage
-                    .with_entity("worker", "remove", "worker_id")
-                    .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_worker_id)
+                    .with_entity("worker", "remove", "agent_id")
+                    .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
                     .await
                     .unwrap_or_else(|err| {
                         panic!(

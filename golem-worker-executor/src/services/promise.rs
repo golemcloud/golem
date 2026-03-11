@@ -31,7 +31,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{OwnedWorkerId, PromiseId, WorkerId, WorkerStatus};
+use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 #[cfg(test)]
@@ -94,7 +94,7 @@ impl PromiseHandle {
 #[async_trait]
 pub trait PromiseService: Send + Sync {
     /// poll and complete for a given promise must be called on the same
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId;
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId;
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
 
@@ -131,9 +131,9 @@ impl LazyPromiseService {
 
 #[async_trait]
 impl PromiseService for LazyPromiseService {
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().create(worker_id, oplog_idx).await
+        lock.as_ref().unwrap().create(agent_id, oplog_idx).await
     }
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
@@ -243,7 +243,7 @@ impl DefaultPromiseService {
             .with("promise", "complete")
             .exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &get_promise_redis_key(promise_id),
             )
@@ -256,9 +256,9 @@ impl DefaultPromiseService {
 
 #[async_trait]
 impl PromiseService for DefaultPromiseService {
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
         let promise_id = PromiseId {
-            worker_id: worker_id.clone(),
+            agent_id: agent_id.clone(),
             oplog_idx,
         };
         debug!("Created promise {promise_id}");
@@ -268,7 +268,7 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: worker_id.clone(),
+                    agent_id: agent_id.clone(),
                 },
                 &key,
                 &RedisPromiseState::Pending,
@@ -308,7 +308,7 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "poll", "promise")
             .get(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &get_promise_result_redis_key(&promise_id),
             )
@@ -338,7 +338,7 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
@@ -424,25 +424,25 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         promise_id: &PromiseId,
         completed_by: AccountId,
     ) -> Result<(), WorkerExecutorError> {
-        let worker_id = promise_id.worker_id.clone();
+        let agent_id = promise_id.agent_id.clone();
 
         let component_metadata = self
             .component_service
-            .get_metadata(worker_id.component_id, None)
+            .get_metadata(agent_id.component_id, None)
             .await?;
 
-        let owned_worker_id = OwnedWorkerId {
+        let owned_agent_id = OwnedAgentId {
             environment_id: component_metadata.environment_id,
-            worker_id,
+            agent_id,
         };
 
         // Check if worker is active first, otherwise fall back to stored metadata
-        let metadata = if let Some(worker) = self.active_workers.try_get(&owned_worker_id).await {
+        let metadata = if let Some(worker) = self.active_workers.try_get(&owned_agent_id).await {
             worker.get_latest_worker_metadata().await
         } else if let Some(worker::GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = self.worker_service.get(&owned_worker_id).await
+        }) = self.worker_service.get(&owned_agent_id).await
         {
             let status_deps = StatusDeps {
                 oplog_service: self.oplog_service.clone(),
@@ -450,7 +450,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             };
             let last_known_status = calculate_last_known_status(
                 &status_deps,
-                &owned_worker_id,
+                &owned_agent_id,
                 last_known_status,
             )
             .await
@@ -459,23 +459,23 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             initial_worker_metadata
         } else {
             return Err(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ));
         };
 
         let should_activate = match &metadata.last_known_status.status {
-            WorkerStatus::Interrupted
-            | WorkerStatus::Running
-            | WorkerStatus::Suspended
-            | WorkerStatus::Retrying => true,
-            WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Idle => false,
+            AgentStatus::Interrupted
+            | AgentStatus::Running
+            | AgentStatus::Suspended
+            | AgentStatus::Retrying => true,
+            AgentStatus::Exited | AgentStatus::Failed | AgentStatus::Idle => false,
         };
 
         if should_activate {
             self.worker_activator
                 .get_or_create_running(
                     completed_by,
-                    &owned_worker_id,
+                    &owned_agent_id,
                     None,
                     None,
                     Vec::new(),
@@ -534,7 +534,7 @@ impl PromiseServiceMock {
 #[cfg(test)]
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
-    async fn create(&self, _worker_id: &WorkerId, _oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(&self, _agent_id: &AgentId, _oplog_idx: OplogIndex) -> PromiseId {
         unimplemented!()
     }
 

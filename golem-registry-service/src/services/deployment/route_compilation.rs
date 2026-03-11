@@ -20,7 +20,6 @@ use crate::model::api_definition::{
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::Empty;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
     HttpMethod, HttpMountDetails, NamedElementSchemas, RegisteredAgentTypeImplementer,
@@ -36,6 +35,7 @@ use golem_service_base::custom_api::{
     OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
     SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
+use heck::ToKebabCase;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;
@@ -330,7 +330,7 @@ pub fn build_agent_http_api_deployment_details(
 
     if agent_webhook_suffix.is_empty() {
         agent_webhook_suffix.push(PathSegment::Literal {
-            value: agent_type_name.to_wit_naming().0,
+            value: agent_type_name.0.to_kebab_case(),
         });
     }
 
@@ -498,14 +498,14 @@ fn compile_agent_path_segment(
             value: inner.value.clone(),
         },
         AgentPathSegment::PathVariable(inner) => PathSegment::Variable {
-            display_name: inner.variable_name.to_wit_naming(),
+            display_name: inner.variable_name.to_kebab_case(),
         },
         AgentPathSegment::RemainingPathVariable(inner) => PathSegment::CatchAll {
-            display_name: inner.variable_name.to_wit_naming(),
+            display_name: inner.variable_name.to_kebab_case(),
         },
         AgentPathSegment::SystemVariable(system_var) => {
             let literal = match system_var.value {
-                SystemVariable::AgentType => agent.type_name.0.clone(),
+                SystemVariable::AgentType => agent.type_name.0.to_kebab_case(),
                 SystemVariable::AgentVersion => implementer.component_revision.get().to_string(),
             };
             PathSegment::Literal { value: literal }

@@ -56,6 +56,7 @@ use golem_registry_service::repo::model::mcp_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_service_base::repo::blob::Blob;
+use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use strum::IntoEnumIterator;
@@ -1140,6 +1141,7 @@ fn make_test_agent_type(name: &str) -> AgentType {
     AgentType {
         type_name: AgentTypeName(name.to_string()),
         description: format!("Test agent {name}"),
+        source_language: String::new(),
         constructor: AgentConstructor {
             name: None,
             description: "constructor".to_string(),
@@ -1245,18 +1247,17 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
 
     let agent_type_name = format!("TestAgent{}", new_repo_uuid().simple());
     let agent_type = make_test_agent_type(&agent_type_name);
-    let wrapper_type_name = agent_type.wrapper_type_name();
     let deployment_revision_id: i64 = 1;
 
     let agent_type_record = DeploymentRegisteredAgentTypeRecord {
         environment_id,
         deployment_revision_id,
         agent_type_name: agent_type_name.clone(),
-        agent_wrapper_type_name: wrapper_type_name,
         component_id,
         component_revision_id,
         webhook_prefix_authority_and_path: None,
         agent_type: Blob::new(agent_type),
+        canonical_agent_type_name: agent_type_name.to_kebab_case(),
     };
 
     let deployment_creation = DeploymentRevisionCreationRecord {

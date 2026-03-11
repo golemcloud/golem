@@ -114,6 +114,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         }
 
+        let request_rep = request.rep();
+
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
 
         match &result {
@@ -128,6 +130,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 };
 
                 let handle = future_incoming_response.rep();
+                // Resolve any pending outgoing body mapping from outgoing_request::body()
+                let outgoing_body_rep = self
+                    .state
+                    .pending_http_outgoing_request_body
+                    .remove(&request_rep);
+
                 self.state.open_http_requests.insert(
                     handle,
                     HttpRequestState {
@@ -136,6 +144,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         request,
                         span_id: span.span_id().clone(),
                         body_handle: None,
+                        outgoing_body_rep,
+                        output_stream_rep: None,
                     },
                 );
             }

@@ -1,0 +1,15 @@
+componentTemplates:
+  rust-test-component:
+    presets:
+      debug:
+        customCommands:
+          copy:
+          - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm ../../..
+      release:
+        customCommands:
+          copy:
+          - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm ../../..
+  ts-test-component:
+    customCommands:
+      copy:
+      - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm ../../../{{ component_name | to_snake_case }}.wasm

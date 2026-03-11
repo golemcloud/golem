@@ -15,7 +15,7 @@
 use super::LogEventEmitBehaviour;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
+use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, Host as AgentHost, HostCancellationToken,
     HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
@@ -49,15 +49,15 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationOutput, IdempotencyKey, OwnedWorkerId, WorkerId,
-    WorkerStatusRecord,
+    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
+    OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -280,12 +280,12 @@ impl ExternalOperations<Context> for Context {
 
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        worker_id: &OwnedWorkerId,
-        worker_status_record: &WorkerStatusRecord,
+        agent_id: &OwnedAgentId,
+        worker_status_record: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(
             this,
-            worker_id,
+            agent_id,
             worker_status_record,
         )
         .await
@@ -300,11 +300,11 @@ impl ExternalOperations<Context> for Context {
     }
 
     async fn prepare_instance(
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Self> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
+        DurableWorkerCtx::<Context>::prepare_instance(agent_id, instance, store).await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
@@ -627,8 +627,8 @@ impl WorkerCtx for Context {
 
     async fn create(
         account_id: AccountId,
-        owned_worker_id: OwnedWorkerId,
-        agent_id: Option<AgentId>,
+        owned_agent_id: OwnedAgentId,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -646,7 +646,7 @@ impl WorkerCtx for Context {
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
-        worker_config: WorkerConfig,
+        worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -654,11 +654,12 @@ impl WorkerCtx for Context {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
-            owned_worker_id.clone(),
+            owned_agent_id.clone(),
             agent_id,
             promise_service,
             worker_service,
@@ -682,6 +683,7 @@ impl WorkerCtx for Context {
             agent_types_service,
             agent_webhooks_service,
             shard_service,
+            http_connection_pool,
             pending_update,
             original_phantom_id,
         )
@@ -706,16 +708,16 @@ impl WorkerCtx for Context {
         self
     }
 
-    fn worker_id(&self) -> &WorkerId {
-        self.durable_ctx.worker_id()
-    }
-
-    fn owned_worker_id(&self) -> &OwnedWorkerId {
-        self.durable_ctx.owned_worker_id()
-    }
-
-    fn agent_id(&self) -> Option<AgentId> {
+    fn agent_id(&self) -> &AgentId {
         self.durable_ctx.agent_id()
+    }
+
+    fn owned_agent_id(&self) -> &OwnedAgentId {
+        self.durable_ctx.owned_agent_id()
+    }
+
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+        self.durable_ctx.parsed_agent_id()
     }
 
     fn agent_mode(&self) -> AgentMode {
