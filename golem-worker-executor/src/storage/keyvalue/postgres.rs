@@ -33,8 +33,9 @@ pub struct PostgresKeyValueStorage {
 }
 
 impl PostgresKeyValueStorage {
-    const SET_MANY_CHUNK_SIZE: usize = 1024;
-    const MANY_KEYS_CHUNK_SIZE: usize = 1024;
+    const SET_MANY_WRITE_CHUNK_SIZE: usize = 512;
+    const MANY_KEYS_DELETE_CHUNK_SIZE: usize = 512;
+    const MANY_KEYS_READ_CHUNK_SIZE: usize = 1024;
 
     pub async fn configured(config: &KeyValueStoragePostgresConfig) -> Result<Self, String> {
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
@@ -122,7 +123,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         self.pool
             .with_tx(svc_name, api_name, |tx| {
                 async move {
-                    for chunk in pairs.chunks(Self::SET_MANY_CHUNK_SIZE) {
+                    for chunk in pairs.chunks(Self::SET_MANY_WRITE_CHUNK_SIZE) {
                         let mut query_builder = QueryBuilder::<Postgres>::new(
                             "INSERT INTO kv_storage (namespace, key, value) ",
                         );
@@ -205,29 +206,32 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         }
 
         let namespace = Self::namespace(namespace);
-        let mut result = Vec::with_capacity(keys.len());
 
-        for chunk in keys.chunks(Self::MANY_KEYS_CHUNK_SIZE) {
-            let query = sqlx::query_as::<_, DBOrderedValue>(
-                "SELECT kv.value
-                 FROM unnest($2::text[]) WITH ORDINALITY AS requested(key, ord)
-                 LEFT JOIN kv_storage kv ON kv.namespace = $1 AND kv.key = requested.key
-                 ORDER BY requested.ord;",
-            )
-            .bind(namespace.clone())
-            .bind(chunk);
+        self.pool
+            .with_tx(svc_name, api_name, |tx| {
+                async move {
+                    let mut result = Vec::with_capacity(keys.len());
 
-            let rows = self
-                .pool
-                .with_ro(svc_name, api_name)
-                .fetch_all_as::<DBOrderedValue, _>(query)
-                .await
-                .map_err(|err| err.to_safe_string())?;
+                    for chunk in keys.chunks(Self::MANY_KEYS_READ_CHUNK_SIZE) {
+                        let query = sqlx::query_as::<_, DBOrderedValue>(
+                            "SELECT kv.value
+                             FROM unnest($2::text[]) WITH ORDINALITY AS requested(key, ord)
+                             LEFT JOIN kv_storage kv ON kv.namespace = $1 AND kv.key = requested.key
+                             ORDER BY requested.ord;",
+                        )
+                        .bind(namespace.clone())
+                        .bind(chunk);
 
-            result.extend(rows.into_iter().map(DBOrderedValue::into_bytes));
-        }
+                        let rows = tx.fetch_all_as::<DBOrderedValue, _>(query).await?;
+                        result.extend(rows.into_iter().map(DBOrderedValue::into_bytes));
+                    }
 
-        Ok(result)
+                    Ok(result)
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|err| err.to_safe_string())
     }
 
     async fn del(
@@ -264,7 +268,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         self.pool
             .with_tx(svc_name, api_name, |tx| {
                 async move {
-                    for chunk in keys.chunks(Self::MANY_KEYS_CHUNK_SIZE) {
+                    for chunk in keys.chunks(Self::MANY_KEYS_DELETE_CHUNK_SIZE) {
                         let query = sqlx::query(
                             "DELETE FROM kv_storage WHERE namespace = $1 AND key = ANY($2);",
                         )
