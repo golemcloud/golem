@@ -357,9 +357,9 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         let query = sqlx::query(
             "DELETE FROM set_storage WHERE namespace = $1 AND key = $2 AND value = $3;",
         )
-                .bind(Self::namespace(namespace))
-                .bind(key)
-                .bind(value);
+        .bind(Self::namespace(namespace))
+        .bind(key)
+        .bind(value);
 
         self.pool
             .with_rw(svc_name, api_name)
