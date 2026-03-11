@@ -36,6 +36,7 @@ pub mod observability;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod revert;
+pub mod routed_key_value_storage;
 pub mod rpc;
 pub mod scalability;
 pub mod transactions;

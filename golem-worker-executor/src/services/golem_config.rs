@@ -556,6 +556,7 @@ impl SafeDisplay for OplogConfig {
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
     Postgres(KeyValueStoragePostgresConfig),
+    Routed(KeyValueStorageRoutedConfig),
     Sqlite(DbSqliteConfig),
     MultiSqlite(KeyValueStorageMultiSqliteConfig),
     InMemory(KeyValueStorageInMemoryConfig),
@@ -571,6 +572,10 @@ impl SafeDisplay for KeyValueStorageConfig {
             }
             KeyValueStorageConfig::Postgres(inner) => {
                 let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageConfig::Routed(inner) => {
+                let _ = writeln!(&mut result, "routed:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             KeyValueStorageConfig::Sqlite(inner) => {
@@ -599,6 +604,23 @@ pub struct KeyValueStoragePostgresConfig {
 impl SafeDisplay for KeyValueStoragePostgresConfig {
     fn to_safe_string(&self) -> String {
         self.postgres.to_safe_string()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KeyValueStorageRoutedConfig {
+    pub redis: RedisConfig,
+    pub postgres: KeyValueStoragePostgresConfig,
+}
+
+impl SafeDisplay for KeyValueStorageRoutedConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "redis:");
+        let _ = writeln!(&mut result, "{}", self.redis.to_safe_string_indented());
+        let _ = writeln!(&mut result, "postgres:");
+        let _ = writeln!(&mut result, "{}", self.postgres.to_safe_string_indented());
+        result
     }
 }
 

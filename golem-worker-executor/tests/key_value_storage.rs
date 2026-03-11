@@ -28,6 +28,7 @@ use golem_worker_executor::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::routed::RoutedKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use pretty_assertions::assert_eq;
@@ -234,6 +235,88 @@ async fn postgres_storage(
     Arc::new(PostgresKeyValueStorageWrapper { postgres })
 }
 
+struct RoutedKeyValueStorageWrapper {
+    redis: Arc<dyn Redis + Send + Sync>,
+    postgres: DockerPostgresRdb,
+}
+
+impl Debug for RoutedKeyValueStorageWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RoutedKeyValueStorageWrapper")
+    }
+}
+
+#[async_trait]
+impl GetKeyValueStorage for RoutedKeyValueStorageWrapper {
+    async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        let random_prefix = Uuid::new_v4();
+        let redis_pool = RedisPool::configured(&RedisConfig {
+            host: self.redis.public_host(),
+            port: self.redis.public_port(),
+            database: 0,
+            tracing: false,
+            pool_size: 1,
+            retries: Default::default(),
+            key_prefix: random_prefix.to_string(),
+            username: None,
+            password: None,
+            tls: false,
+        })
+        .await
+        .expect("Cannot create redis pool for routed kvs");
+        let redis_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+            Arc::new(RedisKeyValueStorage::new(redis_pool));
+
+        let db_name = format!("kv_routed_{}", Uuid::new_v4().simple());
+        let admin_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&self.postgres.public_connection_string())
+            .await
+            .expect("Cannot create postgres admin pool");
+
+        sqlx::query(&format!("CREATE DATABASE \"{db_name}\";"))
+            .execute(&admin_pool)
+            .await
+            .expect("Cannot create postgres test database for routed kvs");
+
+        let postgres = DbPostgresConfig {
+            host: "localhost".to_string(),
+            database: db_name,
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            port: Url::parse(&self.postgres.public_connection_string())
+                .expect("Invalid postgres connection string")
+                .port()
+                .expect("Postgres connection string missing port"),
+            max_connections: 10,
+            schema: None,
+        };
+        let postgres_config = KeyValueStoragePostgresConfig { postgres };
+        let postgres_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+            PostgresKeyValueStorage::configured(&postgres_config)
+                .await
+                .expect("Cannot create postgres key value storage for routed kvs"),
+        );
+
+        Arc::new(RoutedKeyValueStorage::new(redis_storage, postgres_storage))
+    }
+}
+
+#[test_dep(tagged_as = "routed")]
+async fn routed_storage(
+    deps: &WorkerExecutorTestDependencies,
+) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
+    let redis = deps.redis.clone();
+    let redis_monitor = deps.redis_monitor.clone();
+    redis.assert_valid();
+    redis_monitor.assert_valid();
+
+    let unique_network_id = Uuid::new_v4().to_string();
+    let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
+
+    Arc::new(RoutedKeyValueStorageWrapper { redis, postgres })
+}
+
 #[derive(Debug)]
 struct Namespaces {
     pub ns: KeyValueStorageNamespace,
@@ -274,7 +357,7 @@ fn ns2() -> Namespaces {
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
+define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres", "routed");
 define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
 
 #[test]
