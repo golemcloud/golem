@@ -33,7 +33,7 @@ use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
-    PluginInstallation,
+    PluginInstallation, PluginInstallationAction,
 };
 use golem_common::model::component::{LocalAgentConfigEntry, PluginPriority};
 use golem_common::model::component_metadata::RawComponentMetadata;
@@ -154,6 +154,7 @@ pub trait TestDsl {
             None,
             None,
             None,
+            Vec::new(),
         )
         .await
     }
@@ -174,6 +175,7 @@ pub trait TestDsl {
             None,
             None,
             None,
+            Vec::new(),
         )
         .await
     }
@@ -194,6 +196,7 @@ pub trait TestDsl {
             Some(BTreeMap::from_iter(env.to_vec())),
             None,
             None,
+            Vec::new(),
         )
         .await
     }
@@ -208,6 +211,7 @@ pub trait TestDsl {
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
         local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        plugin_updates: Vec<PluginInstallationAction>,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn try_start_agent(

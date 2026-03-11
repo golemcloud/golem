@@ -326,6 +326,8 @@ struct CreateOplogConstructor {
     initial_worker_metadata: WorkerMetadata,
     last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    plugin_max_commit_count: usize,
+    plugin_max_elapsed_time: Duration,
 }
 
 impl CreateOplogConstructor {
@@ -339,6 +341,8 @@ impl CreateOplogConstructor {
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        plugin_max_commit_count: usize,
+        plugin_max_elapsed_time: Duration,
     ) -> Self {
         Self {
             owned_worker_id,
@@ -350,6 +354,8 @@ impl CreateOplogConstructor {
             initial_worker_metadata,
             last_known_status,
             execution_status,
+            plugin_max_commit_count,
+            plugin_max_elapsed_time,
         }
     }
 }
@@ -391,6 +397,8 @@ impl OplogConstructor for CreateOplogConstructor {
             self.last_known_status,
             last_oplog_index,
             close,
+            self.plugin_max_commit_count,
+            self.plugin_max_elapsed_time,
         ))
     }
 }
@@ -401,6 +409,8 @@ pub struct ForwardingOplogService {
 
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
+    plugin_max_commit_count: usize,
+    plugin_max_elapsed_time: Duration,
 }
 
 impl ForwardingOplogService {
@@ -408,12 +418,16 @@ impl ForwardingOplogService {
         inner: Arc<dyn OplogService>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
+        plugin_max_commit_count: usize,
+        plugin_max_elapsed_time: Duration,
     ) -> Self {
         Self {
             inner,
             oplogs: OpenOplogs::new("forwarding_oplog_service"),
             oplog_plugins,
             components,
+            plugin_max_commit_count,
+            plugin_max_elapsed_time,
         }
     }
 }
@@ -447,6 +461,8 @@ impl OplogService for ForwardingOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    self.plugin_max_commit_count,
+                    self.plugin_max_elapsed_time,
                 ),
             )
             .await
@@ -473,6 +489,8 @@ impl OplogService for ForwardingOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    self.plugin_max_commit_count,
+                    self.plugin_max_elapsed_time,
                 ),
             )
             .await
@@ -535,13 +553,12 @@ impl OplogService for ForwardingOplogService {
 pub struct ForwardingOplog {
     inner: Arc<dyn Oplog>,
     state: Arc<Mutex<ForwardingOplogState>>,
+    max_commit_count: usize,
     timer: Option<JoinHandle<()>>,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl ForwardingOplog {
-    const MAX_COMMIT_COUNT: usize = 3;
-
     pub fn new(
         inner: Arc<dyn Oplog>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
@@ -550,6 +567,8 @@ impl ForwardingOplog {
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         last_oplog_idx: OplogIndex,
         close_fn: Box<dyn FnOnce() + Send + Sync>,
+        max_commit_count: usize,
+        max_elapsed_time: Duration,
     ) -> Self {
         let state = Arc::new(Mutex::new(ForwardingOplogState {
             buffer: VecDeque::new(),
@@ -565,11 +584,10 @@ impl ForwardingOplog {
         let timer = tokio::spawn({
             let state = state.clone();
             async move {
-                const MAX_ELAPSED_TIME: Duration = Duration::from_secs(5);
                 loop {
-                    tokio::time::sleep(MAX_ELAPSED_TIME).await;
+                    tokio::time::sleep(max_elapsed_time).await;
                     let mut state = state.lock().await;
-                    if !state.buffer.is_empty() && state.last_send.elapsed() > MAX_ELAPSED_TIME {
+                    if !state.buffer.is_empty() && state.last_send.elapsed() > max_elapsed_time {
                         state.send_buffer().await;
                     }
                 }
@@ -579,6 +597,7 @@ impl ForwardingOplog {
         Self {
             inner,
             state,
+            max_commit_count,
             timer: Some(timer),
             close_fn: Some(close_fn),
         }
@@ -619,7 +638,7 @@ impl Oplog for ForwardingOplog {
         let mut state = self.state.lock().await;
         let result = self.inner.commit(level).await;
         state.commit_count += 1;
-        if state.commit_count > Self::MAX_COMMIT_COUNT {
+        if state.commit_count > self.max_commit_count {
             state.send_buffer().await;
         }
         result

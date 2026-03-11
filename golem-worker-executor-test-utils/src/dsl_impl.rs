@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::agent::{AgentId, DataValue, UntypedDataValue};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
-    InitialComponentFile, LocalAgentConfigEntry, PluginInstallation,
+    InitialComponentFile, LocalAgentConfigEntry, PluginInstallation, PluginInstallationAction,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -210,6 +210,7 @@ impl TestDsl for TestWorkerExecutor {
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
         local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        _plugin_updates: Vec<PluginInstallationAction>,
     ) -> anyhow::Result<ComponentDto> {
         if local_agent_config.is_some() {
             return Err(anyhow!(

@@ -47,12 +47,12 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             metadata.component_revision,
         )
         .unwrap();
-        for entry in enriched_entries {
-            if let PublicOplogEntry::AgentInvocationStarted(params) = &entry {
+        for ((oplog_index, _raw_entry), entry) in indexed_entries.iter().zip(enriched_entries.iter()) {
+            if let PublicOplogEntry::AgentInvocationStarted(params) = entry {
                 CURRENT_INVOCATIONS.with(|ci| {
                     ci.borrow_mut().insert(format!("{worker_id:?}"), params.clone());
                 });
-            } else if let PublicOplogEntry::AgentInvocationFinished(_params) = &entry {
+            } else if let PublicOplogEntry::AgentInvocationFinished(_params) = entry {
                 if let Some(invocation) =
                     CURRENT_INVOCATIONS.with(|ci| ci.borrow().get(&format!("{worker_id:?}")).cloned())
                 {
@@ -82,8 +82,8 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                     };
 
                     invocations.push(format!(
-                        "{}/{}/{}/{}",
-                        account_id, component_id, worker_id.agent_id, function_name
+                        "{}/{}/{}/{}/{}",
+                        account_id, component_id, worker_id.agent_id, oplog_index, function_name
                     ));
                 } else {
                     println!(

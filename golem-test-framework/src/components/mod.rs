@@ -345,6 +345,7 @@ impl EnvVarBuilder {
             .with_rust_log_with_dep_defaults(verbosity)
             .with_rust_back_log()
             .with_tracing_from_env()
+            .with_oplog_from_env()
             .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
             .with("GOLEM__TRACING__STDOUT__ENABLED", "true".to_string())
             .with("GOLEM__TRACING__STDOUT__JSON", "true".to_string())
@@ -399,6 +400,15 @@ impl EnvVarBuilder {
     fn with_tracing_from_env(mut self) -> Self {
         for (name, value) in
             std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__TRACING_"))
+        {
+            self.env_vars.insert(name, value);
+        }
+        self
+    }
+
+    fn with_oplog_from_env(mut self) -> Self {
+        for (name, value) in
+            std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__OPLOG__"))
         {
             self.env_vars.insert(name, value);
         }

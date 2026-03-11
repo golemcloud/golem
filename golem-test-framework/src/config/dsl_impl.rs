@@ -43,7 +43,7 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate, LocalAgentConfigEntry};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
-    ComponentRevision, PluginInstallation,
+    ComponentRevision, PluginInstallation, PluginInstallationAction,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
@@ -291,6 +291,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
         local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        plugin_updates: Vec<PluginInstallationAction>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
         let client = self.deps.registry_service().client(&self.token).await;
@@ -346,7 +347,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
-                    plugin_updates: Vec::new(),
+                    plugin_updates,
                 },
                 updated_wasm.map(|(wasm, _agent_types)| wasm),
                 maybe_new_files_archive,
