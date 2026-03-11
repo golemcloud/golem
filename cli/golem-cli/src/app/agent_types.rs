@@ -108,7 +108,7 @@ impl AgentTypeRegistry {
 
         // Validate first, before mutating the index
         for agent_type in agent_types {
-            let wrapper_name = agent_type.wrapper_type_name();
+            let wrapper_name = agent_type.type_name.0.clone();
             if let Some(existing) = index.agent_type_wrapper_name_sources.get(&wrapper_name) {
                 if !existing.contains(component_name) {
                     let mut all = existing.clone();
@@ -142,7 +142,7 @@ impl AgentTypeRegistry {
         for agent_type in agent_types {
             index
                 .agent_type_wrapper_name_sources
-                .entry(agent_type.wrapper_type_name())
+                .entry(agent_type.type_name.0.clone())
                 .or_default()
                 .insert(component_name.clone());
 

@@ -53,6 +53,17 @@ type = "Disabled"
 
 [grpc.tls.config]
 
+[http_client]
+type = "Enabled"
+
+[http_client.config]
+connect_timeout = "30s"
+idle_timeout = "1m 30s"
+max_connections_per_host = 20
+max_host_entries = 1024
+max_idle_per_host = 8
+max_total_connections = 200
+
 [indexed_storage]
 type = "KVStoreRedis"
 
@@ -67,6 +78,7 @@ host = "localhost"
 key_prefix = ""
 pool_size = 8
 port = 6380
+tls = false
 tracing = false
 
 [key_value_storage.config.retries]
@@ -322,6 +334,17 @@ without_time = false
 # 
 # [grpc.tls.config]
 # 
+# [http_client]
+# type = "Enabled"
+# 
+# [http_client.config]
+# connect_timeout = "30s"
+# idle_timeout = "1m 30s"
+# max_connections_per_host = 20
+# max_host_entries = 1024
+# max_idle_per_host = 8
+# max_total_connections = 200
+# 
 # [indexed_storage]
 # type = "Redis"
 # 
@@ -331,6 +354,7 @@ without_time = false
 # key_prefix = ""
 # pool_size = 8
 # port = 6380
+# tls = false
 # tracing = false
 # 
 # [indexed_storage.config.retries]
@@ -552,6 +576,17 @@ without_time = false
 # type = "Disabled"
 # 
 # [grpc.tls.config]
+# 
+# [http_client]
+# type = "Enabled"
+# 
+# [http_client.config]
+# connect_timeout = "30s"
+# idle_timeout = "1m 30s"
+# max_connections_per_host = 20
+# max_host_entries = 1024
+# max_idle_per_host = 8
+# max_total_connections = 200
 # 
 # [indexed_storage]
 # type = "InMemory"

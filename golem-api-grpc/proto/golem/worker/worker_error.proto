@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package golem.worker;
 
-message WorkerError {
+message AgentError {
   oneof error {
     StackOverflow stack_overflow = 1;
     OutOfMemory out_of_memory = 2;

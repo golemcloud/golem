@@ -86,6 +86,7 @@ impl DebugConfig {
             engine: self.engine,
             // unused
             grpc: GrpcApiConfig::default(),
+            http_client: Default::default(),
             http_address: self.http_address,
             http_port: self.http_port,
             shard_manager_service: ShardManagerServiceConfig::SingleShard(

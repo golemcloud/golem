@@ -77,10 +77,8 @@ impl HttpClient2 for HttpClient2Impl {
         use golem_wasi_http::*;
 
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
-        let component_id =
-            std::env::var("GOLEM_COMPONENT_ID").unwrap_or("unknown".to_string());
-        let worker_name =
-            std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
+        let component_id = std::env::var("GOLEM_COMPONENT_ID").unwrap_or("unknown".to_string());
+        let worker_name = std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
 
         println!("Polling until receiving {until}");
 
@@ -137,4 +135,5 @@ impl HttpClient2 for HttpClient2Impl {
             }
         }
     }
+
 }

@@ -384,17 +384,17 @@ pub enum PublicUpdateDescription {
     derive(desert_rust::BinaryCodec, poem_openapi::NewType)
 )]
 #[cfg_attr(feature = "full", desert(transparent))]
-pub struct WorkerResourceId(pub u64);
+pub struct AgentResourceId(pub u64);
 
-impl WorkerResourceId {
-    pub const INITIAL: WorkerResourceId = WorkerResourceId(0);
+impl AgentResourceId {
+    pub const INITIAL: AgentResourceId = AgentResourceId(0);
 
-    pub fn next(&self) -> WorkerResourceId {
-        WorkerResourceId(self.0 + 1)
+    pub fn next(&self) -> AgentResourceId {
+        AgentResourceId(self.0 + 1)
     }
 }
 
-impl Display for WorkerResourceId {
+impl Display for AgentResourceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }

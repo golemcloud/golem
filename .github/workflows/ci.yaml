@@ -279,7 +279,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
       - uses: davidB/rust-cargo-make@v1
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
@@ -381,7 +381,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo binstall --force cargo-component@0.21.1
@@ -461,7 +461,7 @@ jobs:
         with:
           version: latest
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo binstall --force cargo-component@0.21.1

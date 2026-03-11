@@ -28,7 +28,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::config::RedisConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::{ComponentFilePath, ComponentId};
@@ -41,10 +41,10 @@ use golem_common::model::oplog::{
     OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
 };
 use golem_common::model::plan::PlanId;
-use golem_common::model::worker::WorkerMetadataDto;
+use golem_common::model::worker::AgentMetadataDto;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationOutput, IdempotencyKey, OplogIndex, OwnedWorkerId,
-    RdbmsPoolKey, RetryConfig, TransactionId, WorkerFilter, WorkerId, WorkerStatusRecord,
+    AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
+    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
 };
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
@@ -70,7 +70,7 @@ use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
-    ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
+    AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
 };
 use golem_worker_executor::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
@@ -87,7 +87,7 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
-    EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
+    EngineConfig, GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, OplogConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
@@ -304,8 +304,8 @@ impl TestWorkerExecutor {
     pub async fn get_running_workers_metadata(
         &self,
         component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
-    ) -> anyhow::Result<Vec<WorkerMetadataDto>> {
+        filter: Option<AgentFilter>,
+    ) -> anyhow::Result<Vec<AgentMetadataDto>> {
         let response = self
             .client
             .clone()
@@ -390,7 +390,7 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, None).await
+    start_customized(deps, context, None, None, None, None, None).await
 }
 
 pub async fn start_with_snapshot_policy(
@@ -398,7 +398,15 @@ pub async fn start_with_snapshot_policy(
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, Some(snapshot_policy), None).await
+    start_customized(deps, context, None, None, Some(snapshot_policy), None, None).await
+}
+
+pub async fn start_with_http_client_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    http_client: HttpClientConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_customized(deps, context, None, None, None, Some(http_client), None).await
 }
 
 pub async fn start_with_oplog_config(
@@ -406,7 +414,7 @@ pub async fn start_with_oplog_config(
     context: &TestContext,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, oplog_config_override).await
+    start_customized(deps, context, None, None, None, None, oplog_config_override).await
 }
 
 pub async fn start_customized(
@@ -415,6 +423,7 @@ pub async fn start_customized(
     system_memory_override: Option<u64>,
     retry_override: Option<RetryConfig>,
     snapshot_policy_override: Option<SnapshotPolicy>,
+    http_client_override: Option<HttpClientConfig>,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
@@ -461,6 +470,9 @@ pub async fn start_customized(
     }
     if let Some(snapshot_policy) = snapshot_policy_override {
         config.oplog.default_snapshotting = snapshot_policy;
+    }
+    if let Some(http_client) = http_client_override {
+        config.http_client = http_client;
     }
     if let Some(oplog_config) = oplog_config_override {
         config.oplog = oplog_config;
@@ -572,12 +584,12 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        latest_worker_status: &WorkerStatusRecord,
+        owned_agent_id: &OwnedAgentId,
+        latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
-            owned_worker_id,
+            owned_agent_id,
             latest_worker_status,
         )
         .await
@@ -593,11 +605,11 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     }
 
     async fn prepare_instance(
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(worker_id, instance, store).await
+        DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
@@ -754,8 +766,8 @@ impl WorkerCtx for TestWorkerCtx {
 
     async fn create(
         _account_id: AccountId,
-        owned_worker_id: OwnedWorkerId,
-        agent_id: Option<AgentId>,
+        owned_agent_id: OwnedAgentId,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -773,7 +785,7 @@ impl WorkerCtx for TestWorkerCtx {
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
-        worker_config: WorkerConfig,
+        worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -781,17 +793,18 @@ impl WorkerCtx for TestWorkerCtx {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let oplog = Arc::new(TestOplog::new(
-            owned_worker_id.clone(),
+            owned_agent_id.clone(),
             oplog.clone(),
             extra_deps,
         ));
 
         let durable_ctx = DurableWorkerCtx::create(
-            owned_worker_id,
+            owned_agent_id,
             agent_id,
             promise_service,
             worker_service,
@@ -815,6 +828,7 @@ impl WorkerCtx for TestWorkerCtx {
             agent_types_service,
             agent_webhooks_service,
             shard_service,
+            http_connection_pool,
             pending_update,
             original_phantom_id,
         )
@@ -838,16 +852,16 @@ impl WorkerCtx for TestWorkerCtx {
         self
     }
 
-    fn worker_id(&self) -> &WorkerId {
-        self.durable_ctx.worker_id()
-    }
-
-    fn owned_worker_id(&self) -> &OwnedWorkerId {
-        self.durable_ctx.owned_worker_id()
-    }
-
-    fn agent_id(&self) -> Option<AgentId> {
+    fn agent_id(&self) -> &AgentId {
         self.durable_ctx.agent_id()
+    }
+
+    fn owned_agent_id(&self) -> &OwnedAgentId {
+        self.durable_ctx.owned_agent_id()
+    }
+
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+        self.durable_ctx.parsed_agent_id()
     }
 
     fn agent_mode(&self) -> AgentMode {
@@ -893,7 +907,7 @@ impl ResourceLimiterAsync for TestWorkerCtx {
     ) -> wasmtime::Result<bool> {
         debug!(
             "Memory growing for {}: current: {}, desired: {}",
-            self.worker_id(),
+            self.agent_id(),
             current,
             desired
         );
@@ -918,7 +932,7 @@ impl ResourceLimiterAsync for TestWorkerCtx {
     ) -> wasmtime::Result<bool> {
         debug!(
             "Table growing for {}: current: {}, desired: {}",
-            self.worker_id(),
+            self.agent_id(),
             current,
             desired
         );
@@ -1146,6 +1160,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(
@@ -1189,6 +1204,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
+            http_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1224,6 +1240,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             shutdown_token.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1256,6 +1273,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin,
             resource_limits,
             shutdown_token,
+            http_connection_pool,
             extra_deps.clone(),
             leak_sentinel,
         ))
@@ -1297,19 +1315,19 @@ fn get_durable_ctx(ctx: &mut TestWorkerCtx) -> &mut DurableWorkerCtx<TestWorkerC
 
 #[derive(Clone)]
 struct TestOplog {
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
     additional_test_deps: AdditionalTestDeps,
 }
 
 impl TestOplog {
     fn new(
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         additional_test_deps: AdditionalTestDeps,
     ) -> Self {
         Self {
-            owned_worker_id,
+            owned_agent_id,
             oplog,
             additional_test_deps,
         }
@@ -1330,15 +1348,15 @@ impl TestOplog {
         // FailOplogAdd{times}On{entry}
         let re = Regex::new(r"FailOplogAdd(\d+)On([A-Za-z]+)").unwrap();
 
-        let worker_name = self.owned_worker_id.worker_id.worker_name.as_str();
-        if let Some(captures) = re.captures(worker_name) {
+        let agent_name = self.owned_agent_id.agent_id.agent_id.as_str();
+        if let Some(captures) = re.captures(agent_name) {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
                 let failed_before = self
                     .additional_test_deps
                     .get_oplog_failures_count(
-                        self.owned_worker_id.worker_id.clone(),
+                        self.owned_agent_id.agent_id.clone(),
                         entry_name.to_string(),
                     )
                     .await;
@@ -1348,7 +1366,7 @@ impl TestOplog {
                 } else {
                     self.additional_test_deps
                         .add_oplog_failure(
-                            self.owned_worker_id.worker_id.clone(),
+                            self.owned_agent_id.agent_id.clone(),
                             entry_name.to_string(),
                         )
                         .await;
@@ -1356,7 +1374,7 @@ impl TestOplog {
                     info!("Failing worker as it hit marked oplog entry");
 
                     Err(format!(
-                        "worker {worker_name} failed on {entry_name} {} times",
+                        "worker {agent_name} failed on {entry_name} {} times",
                         failed_before + 1
                     ))
                 }
@@ -1483,31 +1501,31 @@ impl<T: RdbmsType> TestRdms<T> {
 
     async fn check_rdbms_tx(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         entry_name: &str,
     ) -> Result<(), rdbms::RdbmsError> {
         // FailRdbmsTx{times}On{entry}
         let re = Regex::new(r"FailRdbmsTx(\d+)On([A-Za-z]+)").unwrap();
 
-        let worker_name = worker_id.worker_name.as_str();
-        if let Some(captures) = re.captures(worker_name) {
+        let agent_name = agent_id.agent_id.as_str();
+        if let Some(captures) = re.captures(agent_name) {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
                 let failed_before = self
                     .additional_test_deps
-                    .get_rdbms_tx_failures_count(worker_id.clone(), entry_name.to_string())
+                    .get_rdbms_tx_failures_count(agent_id.clone(), entry_name.to_string())
                     .await;
 
                 if failed_before >= *times {
                     Ok(())
                 } else {
                     self.additional_test_deps
-                        .add_rdbms_tx_failure(worker_id.clone(), entry_name.to_string())
+                        .add_rdbms_tx_failure(agent_id.clone(), entry_name.to_string())
                         .await;
                     Err(rdbms::RdbmsError::Other(format!(
                         "worker {} failed on {} {} times",
-                        worker_name,
+                        agent_name,
                         entry_name,
                         failed_before + 1
                     )))
@@ -1526,36 +1544,36 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
     async fn create(
         &self,
         address: &str,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> Result<RdbmsPoolKey, rdbms::RdbmsError> {
-        self.rdbms.create(address, worker_id).await
+        self.rdbms.create(address, agent_id).await
     }
 
-    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
-        self.rdbms.exists(key, worker_id).await
+    async fn exists(&self, key: &RdbmsPoolKey, agent_id: &AgentId) -> bool {
+        self.rdbms.exists(key, agent_id).await
     }
 
-    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
-        self.rdbms.remove(key, worker_id).await
+    async fn remove(&self, key: &RdbmsPoolKey, agent_id: &AgentId) -> bool {
+        self.rdbms.remove(key, agent_id).await
     }
 
     async fn execute(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<u64, rdbms::RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
-        self.rdbms.execute(key, worker_id, statement, params).await
+        self.rdbms.execute(key, agent_id, statement, params).await
     }
 
     async fn query_stream(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, rdbms::RdbmsError>
@@ -1563,46 +1581,46 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         <T as RdbmsType>::DbValue: 'async_trait,
     {
         self.rdbms
-            .query_stream(key, worker_id, statement, params)
+            .query_stream(key, agent_id, statement, params)
             .await
     }
 
     async fn query(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<DbResult<T>, rdbms::RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
-        self.rdbms.query(key, worker_id, statement, params).await
+        self.rdbms.query(key, agent_id, statement, params).await
     }
 
     async fn begin_transaction(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, rdbms::RdbmsError> {
-        self.check_rdbms_tx(worker_id, "BeginTransaction").await?;
-        self.rdbms.begin_transaction(key, worker_id).await
+        self.check_rdbms_tx(agent_id, "BeginTransaction").await?;
+        self.rdbms.begin_transaction(key, agent_id).await
     }
 
     async fn get_transaction_status(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, rdbms::RdbmsError> {
         let r = self
-            .check_rdbms_tx(worker_id, "GetTransactionStatusNotFound")
+            .check_rdbms_tx(agent_id, "GetTransactionStatusNotFound")
             .await;
         if r.is_err() {
             Ok(RdbmsTransactionStatus::NotFound)
         } else {
             self.rdbms
-                .get_transaction_status(key, worker_id, transaction_id)
+                .get_transaction_status(key, agent_id, transaction_id)
                 .await
         }
     }
@@ -1610,12 +1628,12 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
     async fn cleanup_transaction(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<(), rdbms::RdbmsError> {
-        self.check_rdbms_tx(worker_id, "CleanupTransaction").await?;
+        self.check_rdbms_tx(agent_id, "CleanupTransaction").await?;
         self.rdbms
-            .cleanup_transaction(key, worker_id, transaction_id)
+            .cleanup_transaction(key, agent_id, transaction_id)
             .await
     }
 
@@ -1626,8 +1644,8 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
 
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
-    oplog_failures: Arc<scc::HashMap<WorkerId, scc::HashMap<String, usize>>>,
-    rdbms_tx_failures: Arc<scc::HashMap<WorkerId, scc::HashMap<String, usize>>>,
+    oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
+    rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
 }
 
 impl Default for AdditionalTestDeps {
@@ -1646,8 +1664,8 @@ impl AdditionalTestDeps {
         }
     }
 
-    pub async fn get_oplog_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
-        let inner = self.oplog_failures.get_async(&worker_id).await;
+    pub async fn get_oplog_failures_count(&self, agent_id: AgentId, entry: String) -> usize {
+        let inner = self.oplog_failures.get_async(&agent_id).await;
         if let Some(inner) = inner {
             inner
                 .read_async(&entry, |_, v| *v)
@@ -1658,18 +1676,14 @@ impl AdditionalTestDeps {
         }
     }
 
-    pub async fn add_oplog_failure(&self, worker_id: WorkerId, entry: String) {
-        let inner = self
-            .oplog_failures
-            .entry_async(worker_id)
-            .await
-            .or_default();
+    pub async fn add_oplog_failure(&self, agent_id: AgentId, entry: String) {
+        let inner = self.oplog_failures.entry_async(agent_id).await.or_default();
 
         *inner.entry_async(entry).await.or_default().get_mut() += 1;
     }
 
-    pub async fn get_rdbms_tx_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
-        let inner = self.rdbms_tx_failures.get_async(&worker_id).await;
+    pub async fn get_rdbms_tx_failures_count(&self, agent_id: AgentId, entry: String) -> usize {
+        let inner = self.rdbms_tx_failures.get_async(&agent_id).await;
 
         if let Some(inner) = inner {
             inner
@@ -1681,10 +1695,10 @@ impl AdditionalTestDeps {
         }
     }
 
-    pub async fn add_rdbms_tx_failure(&self, worker_id: WorkerId, entry: String) {
+    pub async fn add_rdbms_tx_failure(&self, agent_id: AgentId, entry: String) {
         let inner = self
             .rdbms_tx_failures
-            .entry_async(worker_id)
+            .entry_async(agent_id)
             .await
             .or_default();
 

@@ -9,59 +9,59 @@ import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
 import "google/protobuf/timestamp.proto";
 
-message WorkerFilter {
+message AgentFilter {
   oneof filter {
-    WorkerNameFilter name = 1;
-    WorkerRevisionFilter revision = 2;
-    WorkerStatusFilter status = 3;
-    WorkerCreatedAtFilter created_at = 4;
-    WorkerEnvFilter env = 5;
-    WorkerAndFilter and = 6;
-    WorkerOrFilter or = 7;
-    WorkerNotFilter not = 8;
-    WorkerConfigVarsFilter config_vars = 9;
+    AgentNameFilter name = 1;
+    AgentRevisionFilter revision = 2;
+    AgentStatusFilter status = 3;
+    AgentCreatedAtFilter created_at = 4;
+    AgentEnvFilter env = 5;
+    AgentAndFilter and = 6;
+    AgentOrFilter or = 7;
+    AgentNotFilter not = 8;
+    AgentConfigVarsFilter config_vars = 9;
   }
 }
 
-message WorkerNotFilter {
-  WorkerFilter filter = 1;
+message AgentNotFilter {
+  AgentFilter filter = 1;
 }
 
-message WorkerAndFilter {
-  repeated WorkerFilter filters = 1;
+message AgentAndFilter {
+  repeated AgentFilter filters = 1;
 }
 
-message WorkerOrFilter {
-  repeated WorkerFilter filters = 1;
+message AgentOrFilter {
+  repeated AgentFilter filters = 1;
 }
 
-message WorkerNameFilter {
+message AgentNameFilter {
   golem.common.StringFilterComparator comparator = 1;
   string value = 2;
 }
 
-message WorkerRevisionFilter {
+message AgentRevisionFilter {
   golem.common.FilterComparator comparator = 1;
   uint64 value = 2;
 }
 
-message WorkerCreatedAtFilter {
+message AgentCreatedAtFilter {
   golem.common.FilterComparator comparator = 1;
   google.protobuf.Timestamp value = 2;
 }
 
-message WorkerStatusFilter {
+message AgentStatusFilter {
   golem.common.FilterComparator comparator = 1;
-  WorkerStatus value = 2;
+  AgentStatus value = 2;
 }
 
-message WorkerEnvFilter {
+message AgentEnvFilter {
   string name = 1;
   golem.common.StringFilterComparator comparator = 2;
   string value = 3;
 }
 
-message WorkerConfigVarsFilter {
+message AgentConfigVarsFilter {
   string name = 1;
   golem.common.StringFilterComparator comparator = 2;
   string value = 3;
