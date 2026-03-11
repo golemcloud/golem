@@ -206,7 +206,7 @@ regex = "1.11.1"
 reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
-rmcp = {version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
+rmcp = {version = "0.16.0", features = ["server", "transport-streamable-http-server", "client", "transport-streamable-http-client-reqwest"] }
 rsa = "0.9.7"
 
 rustc-hash = "2.1.1"
