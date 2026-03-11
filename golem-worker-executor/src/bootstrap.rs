@@ -105,6 +105,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits = resource_limits::configured(
@@ -146,6 +147,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
+            http_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -181,6 +183,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             shutdown_token.clone(),
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -214,6 +217,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits,
             shutdown_token,
+            http_connection_pool,
             additional_deps,
             leak_sentinel,
         ))
