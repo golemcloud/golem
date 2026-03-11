@@ -34,8 +34,6 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server
 };
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
-use model::{Pod, RoutingTable};
-use persistence::{RoutingTablePersistence, RoutingTableRedisPersistence};
 use prometheus::Registry;
 use shard_management::ShardManagement;
 use shard_manager_config::ShardManagerConfig;
@@ -52,6 +50,9 @@ use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;
 use tracing::{debug, info, warn};
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
+
+pub use model::{Pod, RoutingTable};
+pub use persistence::{RoutingTablePersistence, RoutingTableRedisPersistence};
 
 #[cfg(test)]
 test_r::enable!();

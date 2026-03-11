@@ -2,11 +2,17 @@
 name = "golem-shard-manager"
 version = "0.0.0"
 edition = "2021"
+autotests = false
 
 license-file = "../LICENSE"
 
 [lib]
 path = "src/lib.rs"
+harness = false
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
 harness = false
 
 [[bin]]
@@ -45,8 +51,10 @@ tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+golem-test-framework = { workspace = true }
 tracing-test = { workspace = true }
 test-r = { workspace = true }
+uuid = { workspace = true }
 
 [features]
 default = ["kubernetes"]
