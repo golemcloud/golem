@@ -35,12 +35,14 @@ fred = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
+include_dir = { workspace = true }
 itertools = { workspace = true }
 k8s-openapi = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
 prometheus = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 serde = { workspace = true }
+sqlx = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
@@ -49,11 +51,14 @@ tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
 tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { workspace = true }
-tracing-test = { workspace = true }
+sqlx = { workspace = true }
 test-r = { workspace = true }
+tracing-test = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true }
 
 [features]

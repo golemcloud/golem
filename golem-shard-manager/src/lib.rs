@@ -52,7 +52,9 @@ use tracing::{debug, info, warn};
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
 pub use model::{Pod, RoutingTable};
-pub use persistence::{RoutingTablePersistence, RoutingTableRedisPersistence};
+pub use persistence::{
+    RoutingTablePersistence, RoutingTablePostgresPersistence, RoutingTableRedisPersistence,
+};
 
 #[cfg(test)]
 test_r::enable!();
@@ -251,6 +253,13 @@ pub async fn run(
                     shard_manager_config.number_of_shards,
                 ))
             }
+            PersistenceConfig::Postgres(postgres) => Arc::new(
+                crate::persistence::RoutingTablePostgresPersistence::configured(
+                    postgres,
+                    shard_manager_config.number_of_shards,
+                )
+                .await?,
+            ),
             PersistenceConfig::FileSystem(fs) => Arc::new(
                 RoutingTableFileSystemPersistence::new(
                     &fs.path,

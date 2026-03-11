@@ -49,8 +49,12 @@ impl std::fmt::Debug for ShardManagerTestDependencies {
 #[test_dep]
 pub async fn test_dependencies(_tracing: &Tracing) -> ShardManagerTestDependencies {
     let port = available_port();
-    let redis: Arc<dyn Redis + Send + Sync> =
-        Arc::new(SpawnedRedis::new(port, "".to_string(), Level::INFO, Level::ERROR));
+    let redis: Arc<dyn Redis + Send + Sync> = Arc::new(SpawnedRedis::new(
+        port,
+        "".to_string(),
+        Level::INFO,
+        Level::ERROR,
+    ));
     redis.assert_valid();
     ShardManagerTestDependencies { redis }
 }

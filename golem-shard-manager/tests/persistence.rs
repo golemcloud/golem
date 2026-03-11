@@ -15,15 +15,20 @@
 use crate::ShardManagerTestDependencies;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
-use golem_common::config::RedisConfig;
+use golem_common::config::{DbPostgresConfig, RedisConfig};
 use golem_common::model::ShardId;
 use golem_common::redis::RedisPool;
-use golem_shard_manager::{Pod, RoutingTable, RoutingTablePersistence, RoutingTableRedisPersistence};
+use golem_shard_manager::{
+    Pod, RoutingTable, RoutingTablePersistence, RoutingTablePostgresPersistence,
+    RoutingTableRedisPersistence,
+};
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::redis::Redis;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
+use url::Url;
 use uuid::Uuid;
 
 #[async_trait]
@@ -63,6 +68,53 @@ impl GetRoutingTablePersistence for RedisRoutingTablePersistence {
     }
 }
 
+struct PostgresRoutingTablePersistence {
+    postgres: DockerPostgresRdb,
+}
+
+impl std::fmt::Debug for PostgresRoutingTablePersistence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PostgresRoutingTablePersistence")
+    }
+}
+
+#[async_trait]
+impl GetRoutingTablePersistence for PostgresRoutingTablePersistence {
+    async fn get_persistence(&self) -> Arc<dyn RoutingTablePersistence + Send + Sync> {
+        let db_name = format!("shard_{}", Uuid::new_v4().simple());
+
+        let admin_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&self.postgres.public_connection_string())
+            .await
+            .expect("Cannot create postgres admin pool");
+
+        sqlx::query(&format!("CREATE DATABASE \"{db_name}\";"))
+            .execute(&admin_pool)
+            .await
+            .expect("Cannot create postgres test database");
+
+        let postgres = DbPostgresConfig {
+            host: "localhost".to_string(),
+            database: db_name,
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            port: Url::parse(&self.postgres.public_connection_string())
+                .expect("Invalid postgres connection string")
+                .port()
+                .expect("Postgres connection string missing port"),
+            max_connections: 10,
+            schema: None,
+        };
+
+        Arc::new(
+            RoutingTablePostgresPersistence::configured(&postgres, 16)
+                .await
+                .expect("Failed to initialize postgres routing table persistence"),
+        )
+    }
+}
+
 #[test_dep(tagged_as = "redis")]
 async fn redis_persistence(
     deps: &ShardManagerTestDependencies,
@@ -73,9 +125,18 @@ async fn redis_persistence(
     })
 }
 
+#[test_dep(tagged_as = "postgres")]
+async fn postgres_persistence(
+    _deps: &ShardManagerTestDependencies,
+) -> Arc<dyn GetRoutingTablePersistence + Send + Sync> {
+    let unique_network_id = Uuid::new_v4().to_string();
+    let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
+    Arc::new(PostgresRoutingTablePersistence { postgres })
+}
+
 inherit_test_dep!(ShardManagerTestDependencies);
 
-define_matrix_dimension!(persistence: Arc<dyn GetRoutingTablePersistence + Send + Sync> -> "redis");
+define_matrix_dimension!(persistence: Arc<dyn GetRoutingTablePersistence + Send + Sync> -> "redis", "postgres");
 
 #[test]
 #[tracing::instrument]

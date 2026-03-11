@@ -16,9 +16,19 @@ use crate::error::ShardManagerError;
 use crate::model::{RoutingTable, ShardManagerState};
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::config::DbPostgresConfig;
 use golem_common::redis::RedisPool;
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::db;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::Pool;
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+use include_dir::include_dir;
+use sqlx::Row;
 use std::path::{Path, PathBuf};
+
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
+const PERSISTENCE_SVC: &str = "persistence";
 
 #[async_trait]
 pub trait RoutingTablePersistence {
@@ -42,7 +52,7 @@ impl RoutingTablePersistence for RoutingTableRedisPersistence {
             .map_err(ShardManagerError::SerializationError)?;
 
         self.pool
-            .with("persistence", "write")
+            .with(PERSISTENCE_SVC, "write")
             .set(key, value, None, None, false)
             .await
             .map_err(ShardManagerError::RedisError)
@@ -53,7 +63,7 @@ impl RoutingTablePersistence for RoutingTableRedisPersistence {
 
         let value: Option<Bytes> = self
             .pool
-            .with("persistence", "read")
+            .with(PERSISTENCE_SVC, "read")
             .get(key)
             .await
             .map_err(ShardManagerError::RedisError)?;
@@ -83,6 +93,73 @@ impl RoutingTableRedisPersistence {
 pub struct RoutingTableFileSystemPersistence {
     path: PathBuf,
     number_of_shards: usize,
+}
+
+pub struct RoutingTablePostgresPersistence {
+    pool: PostgresPool,
+    number_of_shards: usize,
+}
+
+impl RoutingTablePostgresPersistence {
+    pub async fn configured(
+        config: &DbPostgresConfig,
+        number_of_shards: usize,
+    ) -> Result<Self, ShardManagerError> {
+        db::postgres::migrate(
+            config,
+            IncludedMigrationsDir::new(&DB_MIGRATIONS).postgres_migrations(),
+        )
+        .await?;
+
+        let pool = PostgresPool::configured(config).await?;
+
+        Ok(Self {
+            pool,
+            number_of_shards,
+        })
+    }
+}
+
+#[async_trait]
+impl RoutingTablePersistence for RoutingTablePostgresPersistence {
+    async fn write(&self, routing_table: &RoutingTable) -> Result<(), ShardManagerError> {
+        let shard_manager_state = ShardManagerState::new(routing_table);
+        let encoded =
+            serialize(&shard_manager_state).map_err(ShardManagerError::SerializationError)?;
+
+        self.pool
+            .with_rw(PERSISTENCE_SVC, "write")
+            .execute(sqlx::query(
+            "INSERT INTO shard_manager_state (id, state) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state",
+        )
+            .bind(encoded))
+            .await
+            .map_err(|err| ShardManagerError::PostgresError(sqlx::Error::Protocol(err.to_string())))?;
+
+        Ok(())
+    }
+
+    async fn read(&self) -> Result<RoutingTable, ShardManagerError> {
+        let row = self
+            .pool
+            .with_ro(PERSISTENCE_SVC, "read")
+            .fetch_optional(sqlx::query(
+                "SELECT state FROM shard_manager_state WHERE id = 1",
+            ))
+            .await
+            .map_err(|err| {
+                ShardManagerError::PostgresError(sqlx::Error::Protocol(err.to_string()))
+            })?;
+
+        if let Some(row) = row {
+            let bytes: Vec<u8> = row.try_get("state")?;
+            let shard_manager_state: ShardManagerState =
+                deserialize(&bytes).map_err(ShardManagerError::SerializationError)?;
+            Ok(shard_manager_state.get_routing_table())
+        } else {
+            Ok(RoutingTable::new(self.number_of_shards))
+        }
+    }
 }
 
 impl RoutingTableFileSystemPersistence {
