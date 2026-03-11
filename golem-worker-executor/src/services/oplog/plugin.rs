@@ -29,11 +29,11 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
-use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
@@ -156,7 +156,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         Ok(agent_id)
     }
 
-    /// Converts a `TargetWorkerId` to an `AgentId`. If the worker name was not specified,
+    /// Converts a `TargetAgentId` to an `AgentId`. If the worker name was not specified,
     /// it generates a new unique one, and if the `force_in_shard` set is not empty, it guarantees
     /// that the generated worker ID will belong to one of the provided shards.
     ///
@@ -781,15 +781,15 @@ impl ForwardingOplogState {
 const OPLOG_PROC_NS: Uuid = uuid!("A7E3F1B2-8C4D-5E6F-9A0B-1C2D3E4F5A6B");
 
 fn oplog_processor_idempotency_key(
-    source_worker_id: &AgentId,
+    source_agent_id: &AgentId,
     plugin_installation_id: &EnvironmentPluginGrantId,
     batch_first_index: OplogIndex,
     batch_last_index: OplogIndex,
 ) -> IdempotencyKey {
     let mut buf = Vec::with_capacity(128);
     buf.extend_from_slice(b"oplog-proc-v1\0");
-    buf.extend_from_slice(source_worker_id.component_id.0.as_bytes());
-    let worker_name = source_worker_id.agent_id.as_bytes();
+    buf.extend_from_slice(source_agent_id.component_id.0.as_bytes());
+    let worker_name = source_agent_id.agent_id.as_bytes();
     buf.extend_from_slice(&(worker_name.len() as u32).to_be_bytes());
     buf.extend_from_slice(worker_name);
     buf.extend_from_slice(plugin_installation_id.0.as_bytes());
@@ -806,15 +806,15 @@ mod tests {
     use golem_common::model::component::{
         ComponentId, ComponentName, ComponentRevision, InstalledPlugin, PluginPriority,
     };
+    use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::diff;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::plugin_registration::PluginRegistrationId;
-    use golem_common::model::{Timestamp, WorkerMetadata, WorkerStatusRecord};
+    use golem_common::model::Timestamp;
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
-    use golem_common::model::component_metadata::ComponentMetadata;
     use test_r::test;
 
     // --------------------------------------------------------------------------
@@ -823,78 +823,84 @@ mod tests {
 
     #[test]
     fn deterministic_idempotency_key_same_inputs_produce_same_key() {
-        let worker_id = WorkerId {
+        let agent_id = AgentId {
             component_id: ComponentId::new(),
-            worker_name: "test-worker".to_string(),
+            agent_id: "test-worker".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
         let first = OplogIndex::from_u64(10);
         let last = OplogIndex::from_u64(20);
 
-        let key1 = oplog_processor_idempotency_key(&worker_id, &plugin_id, first, last);
-        let key2 = oplog_processor_idempotency_key(&worker_id, &plugin_id, first, last);
+        let key1 = oplog_processor_idempotency_key(&agent_id, &plugin_id, first, last);
+        let key2 = oplog_processor_idempotency_key(&agent_id, &plugin_id, first, last);
 
-        assert_eq!(key1, key2, "Same inputs must produce the same idempotency key");
+        assert_eq!(
+            key1, key2,
+            "Same inputs must produce the same idempotency key"
+        );
     }
 
     #[test]
     fn deterministic_idempotency_key_different_batch_range_produces_different_key() {
-        let worker_id = WorkerId {
+        let agent_id = AgentId {
             component_id: ComponentId::new(),
-            worker_name: "test-worker".to_string(),
+            agent_id: "test-worker".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
 
         let key1 = oplog_processor_idempotency_key(
-            &worker_id,
+            &agent_id,
             &plugin_id,
             OplogIndex::from_u64(10),
             OplogIndex::from_u64(20),
         );
         let key2 = oplog_processor_idempotency_key(
-            &worker_id,
+            &agent_id,
             &plugin_id,
             OplogIndex::from_u64(21),
             OplogIndex::from_u64(30),
         );
 
-        assert_ne!(key1, key2, "Different batch ranges must produce different keys");
+        assert_ne!(
+            key1, key2,
+            "Different batch ranges must produce different keys"
+        );
     }
 
     #[test]
     fn deterministic_idempotency_key_different_worker_produces_different_key() {
         let component_id = ComponentId::new();
-        let worker_id1 = WorkerId {
+        let agent_id1 = AgentId {
             component_id,
-            worker_name: "worker-a".to_string(),
+            agent_id: "worker-a".to_string(),
         };
-        let worker_id2 = WorkerId {
+        let agent_id2 = AgentId {
             component_id,
-            worker_name: "worker-b".to_string(),
+            agent_id: "worker-b".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
         let first = OplogIndex::from_u64(1);
         let last = OplogIndex::from_u64(5);
 
-        let key1 = oplog_processor_idempotency_key(&worker_id1, &plugin_id, first, last);
-        let key2 = oplog_processor_idempotency_key(&worker_id2, &plugin_id, first, last);
+        let key1 = oplog_processor_idempotency_key(&agent_id1, &plugin_id, first, last);
+        let key2 = oplog_processor_idempotency_key(&agent_id2, &plugin_id, first, last);
 
         assert_ne!(key1, key2, "Different workers must produce different keys");
     }
 
     #[test]
     fn deterministic_idempotency_key_different_plugin_produces_different_key() {
-        let worker_id = WorkerId {
+        let agent_id = AgentId {
             component_id: ComponentId::new(),
-            worker_name: "test-worker".to_string(),
+            agent_id: "test-worker".to_string(),
         };
         let plugin_id1 = EnvironmentPluginGrantId::new();
         let plugin_id2 = EnvironmentPluginGrantId::new();
         let first = OplogIndex::from_u64(1);
         let last = OplogIndex::from_u64(5);
 
-        let key1 = oplog_processor_idempotency_key(&worker_id, &plugin_id1, first, last);
-        let key2 = oplog_processor_idempotency_key(&worker_id, &plugin_id2, first, last);
+        let key1 = oplog_processor_idempotency_key(&agent_id, &plugin_id1, first, last);
+        let key2 = oplog_processor_idempotency_key(&agent_id, &plugin_id2, first, last);
 
         assert_ne!(key1, key2, "Different plugins must produce different keys");
     }
@@ -935,7 +941,7 @@ mod tests {
     impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
         async fn send(
             &self,
-            _worker_metadata: WorkerMetadata,
+            _worker_metadata: AgentMetadata,
             _plugin: &InstalledPlugin,
             initial_oplog_index: OplogIndex,
             entries: Vec<OplogEntry>,
@@ -1128,20 +1134,23 @@ mod tests {
 
     fn test_worker_metadata(
         active_plugins: HashSet<PluginPriority>,
-    ) -> (WorkerMetadata, read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>) {
-        let worker_id = WorkerId {
+    ) -> (
+        AgentMetadata,
+        read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+    ) {
+        let agent_id = AgentId {
             component_id: ComponentId::new(),
-            worker_name: "test-worker".to_string(),
+            agent_id: "test-worker".to_string(),
         };
         let environment_id = EnvironmentId::new();
         let account_id = AccountId::new();
-        let status = WorkerStatusRecord {
+        let status = AgentStatusRecord {
             active_plugins,
             ..Default::default()
         };
 
-        let metadata = WorkerMetadata {
-            worker_id,
+        let metadata = AgentMetadata {
+            agent_id,
             env: vec![],
             environment_id,
             created_by: account_id,
@@ -1166,11 +1175,11 @@ mod tests {
     #[test]
     async fn empty_buffer_no_send() {
         let plugin_priority = PluginPriority(0);
-        let (metadata, status_lock) =
-            test_worker_metadata(HashSet::from([plugin_priority]));
+        let (metadata, status_lock) = test_worker_metadata(HashSet::from([plugin_priority]));
         let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
-        let components: Arc<dyn ComponentService> =
-            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(plugin_priority));
+        let components: Arc<dyn ComponentService> = Arc::new(
+            FakeComponentService::with_one_oplog_processor_plugin(plugin_priority),
+        );
 
         let mut state = ForwardingOplogState {
             buffer: VecDeque::new(),
@@ -1201,8 +1210,7 @@ mod tests {
     async fn no_active_plugins_no_send() {
         let (metadata, status_lock) = test_worker_metadata(HashSet::new());
         let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
-        let components: Arc<dyn ComponentService> =
-            Arc::new(FakeComponentService::empty());
+        let components: Arc<dyn ComponentService> = Arc::new(FakeComponentService::empty());
 
         let mut state = ForwardingOplogState {
             buffer: VecDeque::from([OplogEntry::GrowMemory {
@@ -1234,11 +1242,11 @@ mod tests {
     #[test]
     async fn active_plugin_receives_buffered_entries() {
         let plugin_priority = PluginPriority(0);
-        let (metadata, status_lock) =
-            test_worker_metadata(HashSet::from([plugin_priority]));
+        let (metadata, status_lock) = test_worker_metadata(HashSet::from([plugin_priority]));
         let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
-        let components: Arc<dyn ComponentService> =
-            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(plugin_priority));
+        let components: Arc<dyn ComponentService> = Arc::new(
+            FakeComponentService::with_one_oplog_processor_plugin(plugin_priority),
+        );
 
         let mut state = ForwardingOplogState {
             buffer: VecDeque::from([

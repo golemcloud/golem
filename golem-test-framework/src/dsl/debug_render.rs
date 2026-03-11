@@ -423,6 +423,30 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 }
             }
         }
+        PublicOplogEntry::OplogProcessorCheckpoint(params) => {
+            let _ = writeln!(result, "OPLOG PROCESSOR CHECKPOINT");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}plugin:            {} v{}",
+                &params.plugin.plugin_name, &params.plugin.plugin_version
+            );
+            let _ = writeln!(
+                result,
+                "{pad}target:            {}",
+                &params.target_agent_id
+            );
+            let _ = writeln!(
+                result,
+                "{pad}confirmed up to:   {}",
+                &params.confirmed_up_to
+            );
+            let _ = writeln!(
+                result,
+                "{pad}sending up to:     {}",
+                &params.sending_up_to
+            );
+        }
     }
 
     result

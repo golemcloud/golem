@@ -54,6 +54,7 @@ message OplogEntry {
     RemoteTransactionParameters CommittedRemoteTransaction = 37;
     RemoteTransactionParameters RolledBackRemoteTransaction = 38;
     SnapshotDataParameters Snapshot = 39;
+    OplogProcessorCheckpointParameters OplogProcessorCheckpoint = 40;
   }
 }
 
@@ -359,6 +360,14 @@ message RawSnapshotData {
 
 message JsonSnapshotData {
   string data = 1;
+}
+
+message OplogProcessorCheckpointParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  PluginInstallationDescription plugin = 2;
+  AgentId target_agent_id = 3;
+  uint64 confirmed_up_to = 4;
+  uint64 sending_up_to = 5;
 }
 
 message OplogEntryWithIndex {

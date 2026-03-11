@@ -544,5 +544,22 @@ oplog_entry! {
         public {
             data: PublicSnapshotData
         }
+    },
+    /// Checkpoint for oplog processor plugin delivery tracking
+    OplogProcessorCheckpoint {
+        hint: true
+        wit_raw_type: "raw-oplog-processor-checkpoint-parameters"
+        raw {
+            plugin_priority: PluginPriority,
+            target_agent_id: AgentId,
+            confirmed_up_to: OplogIndex,
+            sending_up_to: OplogIndex,
+        }
+        public {
+            plugin: PluginInstallationDescription,
+            target_agent_id: AgentId,
+            confirmed_up_to: OplogIndex,
+            sending_up_to: OplogIndex,
+        }
     }
 }

@@ -364,6 +364,7 @@ fn calculate_latest_worker_status(
                 current_status = AgentStatus::Running;
             }
             OplogEntry::Snapshot { .. } => {}
+            OplogEntry::OplogProcessorCheckpoint { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately
             }

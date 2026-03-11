@@ -498,6 +498,15 @@ fn get_oplog_entry_from_public_oplog_entry(
                 mime_type: bytes.1,
             })
         }
+        PublicOplogEntry::OplogProcessorCheckpoint(params) => {
+            Ok(OplogEntry::OplogProcessorCheckpoint {
+                timestamp: params.timestamp,
+                plugin_priority: params.plugin.plugin_priority,
+                target_agent_id: params.target_agent_id,
+                confirmed_up_to: params.confirmed_up_to,
+                sending_up_to: params.sending_up_to,
+            })
+        }
     }
 }
 

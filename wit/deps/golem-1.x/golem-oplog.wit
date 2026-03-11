@@ -326,6 +326,14 @@ interface oplog {
         mime-type: string
     }
 
+    record oplog-processor-checkpoint-parameters {
+        timestamp: datetime,
+        plugin: plugin-installation-description,
+        target-agent-id: agent-id,
+        confirmed-up-to: oplog-index,
+        sending-up-to: oplog-index,
+    }
+
     record timestamp {
         timestamp: datetime
     }
@@ -471,6 +479,14 @@ interface oplog {
         mime-type: string
     }
 
+    record raw-oplog-processor-checkpoint-parameters {
+        timestamp: datetime,
+        plugin-priority: s32,
+        target-agent-id: agent-id,
+        confirmed-up-to: oplog-index,
+        sending-up-to: oplog-index,
+    }
+
     variant oplog-entry {
         /// The initial agent oplog entry
         create(raw-create-parameters),
@@ -557,7 +573,9 @@ interface oplog {
         /// Rolled back transaction operation, indicating that the transaction was rolled back
         rolled-back-remote-transaction(remote-transaction-parameters),
         /// A snapshot of the agent's state
-        snapshot(raw-snapshot-parameters)
+        snapshot(raw-snapshot-parameters),
+        /// Checkpoint for oplog processor plugin delivery tracking
+        oplog-processor-checkpoint(raw-oplog-processor-checkpoint-parameters)
     }
 
     variant public-oplog-entry {
@@ -646,7 +664,9 @@ interface oplog {
         /// Rolled back transaction operation, indicating that the transaction was rolled back
         rolled-back-remote-transaction(remote-transaction-parameters),
         /// A snapshot of the worker's state
-        snapshot(snapshot-parameters)
+        snapshot(snapshot-parameters),
+        /// Checkpoint for oplog processor plugin delivery tracking
+        oplog-processor-checkpoint(oplog-processor-checkpoint-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

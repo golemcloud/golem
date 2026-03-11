@@ -30,7 +30,8 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
+    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
@@ -742,6 +743,38 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     data: snapshot_data,
                 }))
+            }
+            OplogEntry::OplogProcessorCheckpoint {
+                timestamp,
+                plugin_priority,
+                target_agent_id,
+                confirmed_up_to,
+                sending_up_to,
+            } => {
+                let metadata = components
+                    .get_metadata(
+                        owned_agent_id.agent_id.component_id,
+                        Some(component_revision),
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+
+                let plugin_installation = metadata
+                    .installed_plugins
+                    .into_iter()
+                    .find(|p| p.priority == plugin_priority)
+                    .ok_or("plugin not found in metadata".to_string())?;
+
+                let desc = make_plugin_installation_description(plugin_installation);
+                Ok(PublicOplogEntry::OplogProcessorCheckpoint(
+                    OplogProcessorCheckpointParams {
+                        timestamp,
+                        plugin: desc,
+                        target_agent_id,
+                        confirmed_up_to,
+                        sending_up_to,
+                    },
+                ))
             }
         }
     }

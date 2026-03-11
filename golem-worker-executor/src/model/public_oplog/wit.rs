@@ -21,7 +21,8 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, PendingAgentInvocationParams,
+    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams,
     PendingUpdateParams, PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
@@ -365,6 +366,19 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     mime_type,
                 })
             }
+            PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
+                timestamp,
+                plugin,
+                target_agent_id,
+                confirmed_up_to,
+                sending_up_to,
+            }) => Self::OplogProcessorCheckpoint(oplog::OplogProcessorCheckpointParameters {
+                timestamp: timestamp.into(),
+                plugin: plugin.into(),
+                target_agent_id: target_agent_id.into(),
+                confirmed_up_to: confirmed_up_to.into(),
+                sending_up_to: sending_up_to.into(),
+            }),
         }
     }
 }
@@ -1046,6 +1060,21 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 data: oplog_payload_from_wit(params.data),
                 mime_type: params.mime_type,
             }),
+            oplog::OplogEntry::OplogProcessorCheckpoint(params) => {
+                Ok(Self::OplogProcessorCheckpoint {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    plugin_priority: golem_common::model::component::PluginPriority(
+                        params.plugin_priority,
+                    ),
+                    target_agent_id: golem_common::model::AgentId::from(params.target_agent_id),
+                    confirmed_up_to: golem_common::model::OplogIndex::from_u64(
+                        params.confirmed_up_to,
+                    ),
+                    sending_up_to: golem_common::model::OplogIndex::from_u64(
+                        params.sending_up_to,
+                    ),
+                })
+            }
         }
     }
 }

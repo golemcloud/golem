@@ -389,6 +389,10 @@ impl PublicOplogEntry {
             PublicOplogEntry::Snapshot(_params) => {
                 Self::string_match("snapshot", &[], query_path, query)
             }
+            PublicOplogEntry::OplogProcessorCheckpoint(_params) => {
+                Self::string_match("oplogprocessorcheckpoint", &[], query_path, query)
+                    || Self::string_match("oplog-processor-checkpoint", &[], query_path, query)
+            }
         }
     }
 
