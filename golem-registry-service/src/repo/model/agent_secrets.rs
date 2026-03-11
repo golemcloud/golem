@@ -17,7 +17,9 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent_secret::{AgentSecretId, AgentSecretRevision};
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::repo::RepoError;
@@ -52,14 +54,14 @@ impl AgentSecretCreationRecord {
     pub fn new(
         id: AgentSecretId,
         environment_id: EnvironmentId,
-        path: Vec<String>,
+        path: CanonicalAgentSecretPath,
         secret_type: AnalysedType,
         secret_value: Option<golem_wasm::Value>,
         actor: AccountId,
     ) -> Self {
         Self {
             environment_id: environment_id.0,
-            path: Json(path),
+            path: Json(path.0),
             agent_secret_data: Blob::new(AgentSecretData { secret_type }),
             revision: AgentSecretRevisionRecord {
                 agent_secret_id: id.0,
@@ -140,7 +142,7 @@ impl TryFrom<AgentSecretExtRevisionRecord> for AgentSecret {
         Ok(Self {
             id: AgentSecretId(value.revision.agent_secret_id),
             environment_id: EnvironmentId(value.environment_id),
-            path: value.path.0,
+            path: CanonicalAgentSecretPath(value.path.0),
             revision: value.revision.revision_id.try_into()?,
             secret_type: value.agent_secret_data.into_value().secret_type,
             secret_value: value

@@ -14,8 +14,9 @@
 
 use super::optional_field_update::OptionalFieldUpdate;
 use crate::base_model::environment::EnvironmentId;
-use crate::{declare_revision, declare_structs, newtype_uuid};
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use golem_wasm::analysis::AnalysedType;
+use heck::ToLowerCamelCase;
 
 newtype_uuid!(
     AgentSecretId,
@@ -24,18 +25,42 @@ newtype_uuid!(
 
 declare_revision!(AgentSecretRevision);
 
+declare_transparent_newtypes! {
+    /// Agent secret path in any casing. All agent secret paths
+    /// are converted to the same casing internally to allow easier cross-language use.
+    #[oai(to_header = false)]
+    pub struct AgentSecretPath(pub Vec<String>);
+
+    /// Canonical representation of an agent secret path (segments are each camelCase)
+    #[derive(Eq, Hash)]
+    #[oai(to_header = false)]
+    pub struct CanonicalAgentSecretPath(pub Vec<String>);
+}
+
+impl CanonicalAgentSecretPath {
+    pub fn from_path_in_unknown_casing(value: &[String]) -> Self {
+        Self(value.iter().map(|s| s.to_lower_camel_case()).collect())
+    }
+}
+
+impl From<AgentSecretPath> for CanonicalAgentSecretPath {
+    fn from(value: AgentSecretPath) -> Self {
+        Self::from_path_in_unknown_casing(&value.0)
+    }
+}
+
 declare_structs! {
     pub struct AgentSecretDto {
         pub id: AgentSecretId,
         pub environment_id: EnvironmentId,
-        pub path: Vec<String>,
+        pub path: CanonicalAgentSecretPath,
         pub revision: AgentSecretRevision,
         pub secret_type: AnalysedType,
         pub secret_value: Option<serde_json::Value>,
     }
 
     pub struct AgentSecretCreation {
-        pub path: Vec<String>,
+        pub path: AgentSecretPath,
         pub secret_type: AnalysedType,
         pub secret_value: Option<serde_json::Value>,
     }
