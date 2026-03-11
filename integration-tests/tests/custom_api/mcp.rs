@@ -18,24 +18,161 @@ use golem_common::base_model::domain_registration::{Domain, DomainRegistrationCr
 use golem_common::base_model::mcp_deployment::{McpDeploymentAgentOptions, McpDeploymentCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{EnvironmentOptions, TestDsl, TestDslExtended};
-use rmcp::model::InitializeRequestParams;
-use rmcp::model::{
-    CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation,
-    ReadResourceRequestParams,
-};
-use rmcp::service::RunningService;
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use rmcp::transport::StreamableHttpClientTransport;
-use rmcp::{RoleClient, ServiceExt};
-use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::atomic::{AtomicU64, Ordering};
 use test_r::test_dep;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
 const MCP_PORT: u16 = 9007;
+
+static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+/// A minimal MCP client that speaks JSON-RPC over HTTP POST,
+/// avoiding rmcp's transport layer (which requires reqwest 0.13).
+struct McpClient {
+    http: reqwest::Client,
+    url: String,
+    session_id: Option<String>,
+}
+
+impl McpClient {
+    fn next_id() -> u64 {
+        REQUEST_ID.fetch_add(1, Ordering::SeqCst)
+    }
+
+    async fn new(url: String, host: &str) -> anyhow::Result<Self> {
+        let http = reqwest::Client::new();
+
+        // Send initialize request
+        let init_req = json!({
+            "jsonrpc": "2.0",
+            "id": Self::next_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "golem-mcp-integration-test",
+                    "version": "0.0.1"
+                }
+            }
+        });
+
+        let resp = http
+            .post(&url)
+            .header("Host", host)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&init_req)
+            .send()
+            .await?;
+
+        let session_id = resp
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let _init_result: Value = resp.json().await?;
+
+        // Send initialized notification
+        let notif = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        });
+
+        let mut notif_req = http
+            .post(&url)
+            .header("Host", host)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream");
+
+        if let Some(sid) = &session_id {
+            notif_req = notif_req.header("mcp-session-id", sid.as_str());
+        }
+
+        notif_req.json(&notif).send().await?;
+
+        Ok(McpClient {
+            http,
+            url,
+            session_id,
+        })
+    }
+
+    async fn request(&self, method: &str, params: Value) -> anyhow::Result<Value> {
+        let req_body = json!({
+            "jsonrpc": "2.0",
+            "id": Self::next_id(),
+            "method": method,
+            "params": params
+        });
+
+        let mut builder = self
+            .http
+            .post(&self.url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream");
+
+        if let Some(sid) = &self.session_id {
+            builder = builder.header("mcp-session-id", sid.as_str());
+        }
+
+        let resp = builder.json(&req_body).send().await?;
+        let body: Value = resp.json().await?;
+
+        if let Some(error) = body.get("error") {
+            anyhow::bail!("MCP error: {}", error);
+        }
+
+        Ok(body["result"].clone())
+    }
+
+    async fn list_tools(&self) -> anyhow::Result<Vec<Value>> {
+        let result = self.request("tools/list", json!({})).await?;
+        Ok(result["tools"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn call_tool(&self, name: &str, arguments: Value) -> anyhow::Result<Value> {
+        self.request(
+            "tools/call",
+            json!({
+                "name": name,
+                "arguments": arguments
+            }),
+        )
+        .await
+    }
+
+    async fn list_resources(&self) -> anyhow::Result<Vec<Value>> {
+        let result = self.request("resources/list", json!({})).await?;
+        Ok(result["resources"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn list_resource_templates(&self) -> anyhow::Result<Vec<Value>> {
+        let result = self
+            .request("resources/templates/list", json!({}))
+            .await?;
+        Ok(result["resourceTemplates"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn read_resource(&self, uri: &str) -> anyhow::Result<Value> {
+        self.request("resources/read", json!({ "uri": uri })).await
+    }
+}
 
 pub struct McpTestContext {
     pub domain: Domain,
@@ -48,47 +185,16 @@ impl Debug for McpTestContext {
 }
 
 impl McpTestContext {
-    async fn connect_mcp_client(
-        &self,
-    ) -> anyhow::Result<RunningService<RoleClient, InitializeRequestParams>> {
-        let uri = format!("http://127.0.0.1:{}/mcp", MCP_PORT);
-
-        let mut custom_headers = HashMap::new();
-        custom_headers.insert(
-            http::HeaderName::from_static("host"),
-            http::HeaderValue::from_str(&self.domain.0)?,
-        );
-
-        let config =
-            StreamableHttpClientTransportConfig::with_uri(uri).custom_headers(custom_headers);
-
-        let transport = StreamableHttpClientTransport::from_config(config);
-
-        let client_info = ClientInfo {
-            meta: None,
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "golem-mcp-integration-test".to_string(),
-                title: None,
-                version: "0.0.1".to_string(),
-                description: None,
-                website_url: None,
-                icons: None,
-            },
-        };
-
-        let client = client_info.serve(transport).await?;
-        Ok(client)
+    async fn connect_mcp_client(&self) -> anyhow::Result<McpClient> {
+        let url = format!("http://127.0.0.1:{}/mcp", MCP_PORT);
+        McpClient::new(url, &self.domain.0).await
     }
 }
 
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     let user = deps.user().await.unwrap().with_auto_deploy(false);
-
     let client = deps.registry_service().client(&user.token).await;
-
     let (_, env) = user
         .app_and_env_custom(&EnvironmentOptions {
             security_overrides: true,
@@ -148,13 +254,18 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
     McpTestContext { domain }
 }
 
+// ── Tool listing tests ──────────────────────────────────────────────────
+
 #[test]
 #[tracing::instrument]
 async fn list_tools(ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
-    let tools = client.list_all_tools().await?;
+    let tools = client.list_tools().await?;
 
-    let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+    let tool_names: Vec<String> = tools
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(String::from))
+        .collect();
 
     // WeatherAgent tools (with constructor param "name")
     assert!(
@@ -167,30 +278,30 @@ async fn list_tools(ctx: &McpTestContext) -> anyhow::Result<()> {
     );
     assert!(tool_names.contains(&"WeatherAgent-get_weather_report_for_city_text".to_string()));
     assert!(tool_names.contains(&"WeatherAgent-get_snow_fall_image_for_city".to_string()));
-
     assert!(tool_names.contains(&"WeatherAgent-get_lat_long_for_city".to_string()));
 
     // WeatherAgentSingleton tools (no constructor params)
-    assert!(tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city".to_string()));
-
+    assert!(
+        tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city".to_string())
+    );
     assert!(tool_names
         .contains(&"WeatherAgentSingleton-get_weather_report_for_city_with_images".to_string()));
-
     assert!(
         tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city_text".to_string())
     );
-
-    assert!(tool_names.contains(&"WeatherAgentSingleton-get_snow_fall_image_for_city".to_string()));
-
+    assert!(
+        tool_names.contains(&"WeatherAgentSingleton-get_snow_fall_image_for_city".to_string())
+    );
     assert!(tool_names.contains(&"WeatherAgentSingleton-get_lat_long_for_city".to_string()));
 
     // StaticResource and DynamicResource methods have no input params -> exposed as resources, not tools
     assert!(!tool_names.iter().any(|n| n.starts_with("StaticResource")));
     assert!(!tool_names.iter().any(|n| n.starts_with("DynamicResource")));
 
-    drop(client);
     Ok(())
 }
+
+// ── Tool call tests: WeatherAgent (with constructor param) ──────────────
 
 #[test]
 #[tracing::instrument]
@@ -198,30 +309,18 @@ async fn call_tool_weather_agent_string(ctx: &McpTestContext) -> anyhow::Result<
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "WeatherAgent-get_weather_report_for_city".into(),
-            arguments: Some(
-                json!({
-                    "name": "test-agent",
-                    "city": "Sydney"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-            task: None,
-        })
+        .call_tool(
+            "WeatherAgent-get_weather_report_for_city",
+            json!({ "name": "test-agent", "city": "Sydney" }),
+        )
         .await?;
 
-    assert_eq!(result.is_error, Some(false));
-    let structured = result.structured_content.unwrap();
+    assert_eq!(result["isError"], json!(false));
     assert_eq!(
-        structured,
+        result["structuredContent"],
         json!("Agent test-agent: This is a weather report for Sydney")
     );
 
-    drop(client);
     Ok(())
 }
 
@@ -231,43 +330,27 @@ async fn call_tool_weather_agent_multimodal(ctx: &McpTestContext) -> anyhow::Res
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "WeatherAgent-get_weather_report_for_city_with_images".into(),
-            arguments: Some(
-                json!({
-                    "name": "test-agent",
-                    "city": "Sydney"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-            task: None,
-        })
+        .call_tool(
+            "WeatherAgent-get_weather_report_for_city_with_images",
+            json!({ "name": "test-agent", "city": "Sydney" }),
+        )
         .await?;
 
-    assert_eq!(result.is_error, Some(false));
-    let structured = result.structured_content.unwrap();
+    assert_eq!(result["isError"], json!(false));
+    let structured = &result["structuredContent"];
 
     let parts = structured["parts"].as_array().unwrap();
     assert_eq!(parts.len(), 2);
 
     // First part: text
-    let text_part = &parts[0];
-    assert!(text_part["value"]["data"]
+    assert!(parts[0]["value"]["data"]
         .as_str()
         .unwrap()
         .contains("snow fall in Sydney"));
 
     // Second part: binary (base64 encoded)
-    let binary_part = &parts[1];
-
-    assert_eq!(binary_part["value"]["mimeType"], "image/png");
-
-    assert!(binary_part["value"]["data"].as_str().is_some());
-
-    drop(client);
+    assert_eq!(parts[1]["value"]["mimeType"], "image/png");
+    assert!(parts[1]["value"]["data"].as_str().is_some());
 
     Ok(())
 }
@@ -278,24 +361,14 @@ async fn call_tool_weather_agent_unstructured_text(ctx: &McpTestContext) -> anyh
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "WeatherAgent-get_weather_report_for_city_text".into(),
-            arguments: Some(
-                json!({
-                    "name": "test-agent",
-                    "city": "Sydney"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-            task: None,
-        })
+        .call_tool(
+            "WeatherAgent-get_weather_report_for_city_text",
+            json!({ "name": "test-agent", "city": "Sydney" }),
+        )
         .await?;
 
-    assert_eq!(result.is_error, Some(false));
-    let structured = result.structured_content.unwrap();
+    assert_eq!(result["isError"], json!(false));
+    let structured = &result["structuredContent"];
     assert!(
         structured["data"]
             .as_str()
@@ -305,7 +378,6 @@ async fn call_tool_weather_agent_unstructured_text(ctx: &McpTestContext) -> anyh
         structured
     );
 
-    drop(client);
     Ok(())
 }
 
@@ -315,30 +387,18 @@ async fn call_tool_weather_agent_unstructured_binary(ctx: &McpTestContext) -> an
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "WeatherAgent-get_snow_fall_image_for_city".into(),
-            arguments: Some(
-                json!({
-                    "name": "test-agent",
-                    "city": "Sydney"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-            task: None,
-        })
+        .call_tool(
+            "WeatherAgent-get_snow_fall_image_for_city",
+            json!({ "name": "test-agent", "city": "Sydney" }),
+        )
         .await?;
 
-    assert_eq!(result.is_error, Some(false));
-    let structured = result.structured_content.unwrap();
-
+    assert_eq!(result["isError"], json!(false));
+    let structured = &result["structuredContent"];
     // Binary data is base64 encoded: vec![1, 2, 3] -> "AQID"
     assert_eq!(structured["data"], "AQID");
     assert_eq!(structured["mimeType"], "image/png");
 
-    drop(client);
     Ok(())
 }
 
@@ -348,34 +408,24 @@ async fn call_tool_weather_agent_component_model(ctx: &McpTestContext) -> anyhow
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "WeatherAgent-get_lat_long_for_city".into(),
-            arguments: Some(
-                json!({
-                    "name": "test-agent",
-                    "city": "Sydney"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-            task: None,
-        })
+        .call_tool(
+            "WeatherAgent-get_lat_long_for_city",
+            json!({ "name": "test-agent", "city": "Sydney" }),
+        )
         .await?;
 
-    assert_eq!(result.is_error, Some(false));
-    let structured = result.structured_content.unwrap();
-
+    assert_eq!(result["isError"], json!(false));
+    let structured = &result["structuredContent"];
     // LocationDetails { lat: 0.0, long: 0.0, country: "Unknown", population: 0 }
     assert_eq!(structured["lat"], json!(0.0));
     assert_eq!(structured["long"], json!(0.0));
     assert_eq!(structured["country"], "Unknown");
     assert_eq!(structured["population"], 0);
 
-    drop(client);
     Ok(())
 }
+
+// ── Tool call tests: WeatherAgentSingleton (no constructor params) ──────
 
 #[test]
 #[tracing::instrument]
@@ -383,28 +433,17 @@ async fn call_tool_singleton_string(ctx: &McpTestContext) -> anyhow::Result<()> 
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "WeatherAgentSingleton-get_weather_report_for_city".into(),
-            arguments: Some(
-                json!({
-                    "city": "Darwin"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-            task: None,
-        })
+        .call_tool(
+            "WeatherAgentSingleton-get_weather_report_for_city",
+            json!({ "city": "Darwin" }),
+        )
         .await?;
 
-    assert_eq!(result.is_error, Some(false));
-
-    let structured = result.structured_content.unwrap();
-
-    assert_eq!(structured, json!("This is a weather report for Darwin."));
-
-    drop(client);
+    assert_eq!(result["isError"], json!(false));
+    assert_eq!(
+        result["structuredContent"],
+        json!("This is a weather report for Darwin.")
+    );
 
     Ok(())
 }
@@ -415,30 +454,19 @@ async fn call_tool_singleton_component_model(ctx: &McpTestContext) -> anyhow::Re
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .call_tool(CallToolRequestParams {
-            meta: None,
-            name: "WeatherAgentSingleton-get_lat_long_for_city".into(),
-            arguments: Some(
-                json!({
-                    "city": "Darwin"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-            task: None,
-        })
+        .call_tool(
+            "WeatherAgentSingleton-get_lat_long_for_city",
+            json!({ "city": "Darwin" }),
+        )
         .await?;
 
-    assert_eq!(result.is_error, Some(false));
-    let structured = result.structured_content.unwrap();
-
+    assert_eq!(result["isError"], json!(false));
+    let structured = &result["structuredContent"];
     assert_eq!(structured["lat"], json!(0.0));
     assert_eq!(structured["long"], json!(0.0));
     assert_eq!(structured["country"], "Unknown");
     assert_eq!(structured["population"], 0);
 
-    drop(client);
     Ok(())
 }
 
@@ -448,10 +476,12 @@ async fn call_tool_singleton_component_model(ctx: &McpTestContext) -> anyhow::Re
 #[tracing::instrument]
 async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
+    let resources = client.list_resources().await?;
 
-    let resources = client.list_all_resources().await?;
-
-    let resource_uris: Vec<String> = resources.iter().map(|r| r.uri.clone()).collect();
+    let resource_uris: Vec<String> = resources
+        .iter()
+        .filter_map(|r| r["uri"].as_str().map(String::from))
+        .collect();
 
     // StaticResource: methods exposed as static resources
     assert!(
@@ -461,18 +491,17 @@ async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
     );
     assert!(resource_uris
         .contains(&"golem://StaticResource/get_static_weather_report_with_images".to_string()));
-
     assert!(resource_uris
         .contains(&"golem://StaticResource/get_static_weather_report_text".to_string()));
-
-    assert!(resource_uris.contains(&"golem://StaticResource/get_static_now_fall_image".to_string()));
+    assert!(
+        resource_uris.contains(&"golem://StaticResource/get_static_now_fall_image".to_string())
+    );
 
     // DynamicResource methods should NOT be in static resources (they are templates)
     assert!(!resource_uris
         .iter()
         .any(|u| u.starts_with("golem://DynamicResource")));
 
-    drop(client);
     Ok(())
 }
 
@@ -480,9 +509,12 @@ async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
 #[tracing::instrument]
 async fn list_resource_templates(ctx: &McpTestContext) -> anyhow::Result<()> {
     let client = ctx.connect_mcp_client().await?;
-    let templates = client.list_all_resource_templates().await?;
+    let templates = client.list_resource_templates().await?;
 
-    let template_uris: Vec<String> = templates.iter().map(|t| t.uri_template.clone()).collect();
+    let template_uris: Vec<String> = templates
+        .iter()
+        .filter_map(|t| t["uriTemplate"].as_str().map(String::from))
+        .collect();
 
     // DynamicResource: methods exposed as resource templates with {name} param
     assert!(
@@ -498,9 +530,10 @@ async fn list_resource_templates(ctx: &McpTestContext) -> anyhow::Result<()> {
         template_uris.contains(&"golem://DynamicResource/get_snow_fall_image/{name}".to_string())
     );
 
-    drop(client);
     Ok(())
 }
+
+// ── Resource read tests: StaticResource ─────────────────────────────────
 
 #[test]
 #[tracing::instrument]
@@ -508,28 +541,23 @@ async fn read_static_resource_string(ctx: &McpTestContext) -> anyhow::Result<()>
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .read_resource(ReadResourceRequestParams {
-            meta: None,
-            uri: "golem://StaticResource/get_static_weather_report".to_string(),
-        })
+        .read_resource("golem://StaticResource/get_static_weather_report")
         .await?;
 
-    assert_eq!(result.contents.len(), 1);
-    match &result.contents[0] {
-        rmcp::model::ResourceContents::TextResourceContents {
-            text, mime_type, ..
-        } => {
-            assert_eq!(mime_type.as_deref(), Some("application/json"));
-            let json_value: serde_json::Value = serde_json::from_str(text)?;
-            let expected_text = "Sydney: Sunny, Darwin: Rainy, Hobart: Cloudy";
-            assert_eq!(json_value, json!(expected_text));
-        }
-        other => {
-            panic!("Expected TextResourceContents, got: {:?}", other);
-        }
-    }
+    let contents = result["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 1);
 
-    drop(client);
+    assert_eq!(
+        contents[0]["mimeType"].as_str(),
+        Some("application/json")
+    );
+    let text = contents[0]["text"].as_str().unwrap();
+    let json_value: Value = serde_json::from_str(text)?;
+    assert_eq!(
+        json_value,
+        json!("Sydney: Sunny, Darwin: Rainy, Hobart: Cloudy")
+    );
+
     Ok(())
 }
 
@@ -539,31 +567,23 @@ async fn read_static_resource_unstructured_text(ctx: &McpTestContext) -> anyhow:
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .read_resource(ReadResourceRequestParams {
-            meta: None,
-            uri: "golem://StaticResource/get_static_weather_report_text".to_string(),
-        })
+        .read_resource("golem://StaticResource/get_static_weather_report_text")
         .await?;
 
-    assert_eq!(result.contents.len(), 1);
-    match &result.contents[0] {
-        rmcp::model::ResourceContents::TextResourceContents { text, .. } => {
-            // Note: ResourceContents::text() puts the first arg as text and second as uri.
-            // The resource.rs code calls ResourceContents::text(uri, data) which swaps them.
-            // We verify against actual behavior.
-            assert!(
-                text == "golem://StaticResource/get_static_weather_report_text"
-                    || text.contains("unstructured weather report"),
-                "Unexpected text content: {}",
-                text
-            );
-        }
-        other => {
-            panic!("Expected TextResourceContents, got: {:?}", other);
-        }
-    }
+    let contents = result["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 1);
 
-    drop(client);
+    // ResourceContents::text() in resource.rs has swapped args (uri, data),
+    // so text field contains the URI and uri field contains the data.
+    // We verify against actual behavior.
+    let text = contents[0]["text"].as_str().unwrap();
+    assert!(
+        text == "golem://StaticResource/get_static_weather_report_text"
+            || text.contains("unstructured weather report"),
+        "Unexpected text content: {}",
+        text
+    );
+
     Ok(())
 }
 
@@ -573,27 +593,16 @@ async fn read_static_resource_binary(ctx: &McpTestContext) -> anyhow::Result<()>
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .read_resource(ReadResourceRequestParams {
-            meta: None,
-            uri: "golem://StaticResource/get_static_now_fall_image".to_string(),
-        })
+        .read_resource("golem://StaticResource/get_static_now_fall_image")
         .await?;
 
-    assert_eq!(result.contents.len(), 1);
-    match &result.contents[0] {
-        rmcp::model::ResourceContents::BlobResourceContents {
-            blob, mime_type, ..
-        } => {
-            assert_eq!(mime_type.as_deref(), Some("image/png"));
-            // vec![1, 2, 3] encoded as base64 = "AQID"
-            assert_eq!(blob, "AQID");
-        }
-        other => {
-            panic!("Expected BlobResourceContents, got: {:?}", other);
-        }
-    }
+    let contents = result["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 1);
 
-    drop(client);
+    assert_eq!(contents[0]["mimeType"].as_str(), Some("image/png"));
+    // vec![1, 2, 3] encoded as base64 = "AQID"
+    assert_eq!(contents[0]["blob"].as_str(), Some("AQID"));
+
     Ok(())
 }
 
@@ -603,52 +612,30 @@ async fn read_static_resource_multimodal(ctx: &McpTestContext) -> anyhow::Result
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .read_resource(ReadResourceRequestParams {
-            meta: None,
-            uri: "golem://StaticResource/get_static_weather_report_with_images".to_string(),
-        })
+        .read_resource("golem://StaticResource/get_static_weather_report_with_images")
         .await?;
 
     // Multimodal returns multiple ResourceContents items
-    assert_eq!(result.contents.len(), 2);
+    let contents = result["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 2);
 
     // First: text part
-    match &result.contents[0] {
-        rmcp::model::ResourceContents::TextResourceContents { text, .. } => {
-            assert!(
-                text.contains("snow fall in Sydney")
-                    || text == "golem://StaticResource/get_static_weather_report_with_images",
-                "Unexpected text: {}",
-                text
-            );
-        }
-        other => {
-            panic!(
-                "Expected TextResourceContents for first part, got: {:?}",
-                other
-            );
-        }
-    }
+    let text = contents[0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("snow fall in Sydney")
+            || text == "golem://StaticResource/get_static_weather_report_with_images",
+        "Unexpected text: {}",
+        text
+    );
 
     // Second: blob part
-    match &result.contents[1] {
-        rmcp::model::ResourceContents::BlobResourceContents {
-            blob, mime_type, ..
-        } => {
-            assert_eq!(mime_type.as_deref(), Some("image/png"));
-            assert_eq!(blob, "AQID");
-        }
-        other => {
-            panic!(
-                "Expected BlobResourceContents for second part, got: {:?}",
-                other
-            );
-        }
-    }
+    assert_eq!(contents[1]["mimeType"].as_str(), Some("image/png"));
+    assert_eq!(contents[1]["blob"].as_str(), Some("AQID"));
 
-    drop(client);
     Ok(())
 }
+
+// ── Resource read tests: DynamicResource (with constructor param) ───────
 
 #[test]
 #[tracing::instrument]
@@ -656,33 +643,23 @@ async fn read_dynamic_resource_string(ctx: &McpTestContext) -> anyhow::Result<()
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .read_resource(ReadResourceRequestParams {
-            meta: None,
-            uri: "golem://DynamicResource/get_weather_report/test-city".to_string(),
-        })
+        .read_resource("golem://DynamicResource/get_weather_report/test-city")
         .await?;
 
-    assert_eq!(result.contents.len(), 1);
+    let contents = result["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 1);
 
-    match &result.contents[0] {
-        rmcp::model::ResourceContents::TextResourceContents {
-            text, mime_type, ..
-        } => {
-            assert_eq!(mime_type.as_deref(), Some("application/json"));
+    assert_eq!(
+        contents[0]["mimeType"].as_str(),
+        Some("application/json")
+    );
+    let text = contents[0]["text"].as_str().unwrap();
+    let json_value: Value = serde_json::from_str(text)?;
+    assert_eq!(
+        json_value,
+        json!("This is a dynamic weather report for test-city.")
+    );
 
-            let json_value: serde_json::Value = serde_json::from_str(text)?;
-
-            assert_eq!(
-                json_value,
-                json!("This is a dynamic weather report for test-city.")
-            );
-        }
-        other => {
-            panic!("Expected TextResourceContents, got: {:?}", other);
-        }
-    }
-
-    drop(client);
     Ok(())
 }
 
@@ -692,25 +669,14 @@ async fn read_dynamic_resource_binary(ctx: &McpTestContext) -> anyhow::Result<()
     let client = ctx.connect_mcp_client().await?;
 
     let result = client
-        .read_resource(ReadResourceRequestParams {
-            meta: None,
-            uri: "golem://DynamicResource/get_snow_fall_image/test-city".to_string(),
-        })
+        .read_resource("golem://DynamicResource/get_snow_fall_image/test-city")
         .await?;
 
-    assert_eq!(result.contents.len(), 1);
-    match &result.contents[0] {
-        rmcp::model::ResourceContents::BlobResourceContents {
-            blob, mime_type, ..
-        } => {
-            assert_eq!(mime_type.as_deref(), Some("image/png"));
-            assert_eq!(blob, "AQID");
-        }
-        other => {
-            panic!("Expected BlobResourceContents, got: {:?}", other);
-        }
-    }
+    let contents = result["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 1);
 
-    drop(client);
+    assert_eq!(contents[0]["mimeType"].as_str(), Some("image/png"));
+    assert_eq!(contents[0]["blob"].as_str(), Some("AQID"));
+
     Ok(())
 }
