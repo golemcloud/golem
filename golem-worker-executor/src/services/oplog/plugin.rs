@@ -36,8 +36,8 @@ use golem_common::model::oplog::{
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
-    AgentInvocation, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
-    WorkerStatusRecord,
+    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -55,7 +55,7 @@ use uuid::{uuid, Uuid};
 pub trait OplogProcessorPlugin: Send + Sync {
     async fn send(
         &self,
-        worker_metadata: WorkerMetadata,
+        worker_metadata: AgentMetadata,
         plugin: &InstalledPlugin,
         initial_oplog_index: OplogIndex,
         entries: Vec<OplogEntry>,
@@ -78,7 +78,7 @@ type WorkerKey = (EnvironmentId, PluginRegistrationId);
 #[derive(Debug, Clone)]
 struct RunningPlugin {
     pub account_id: AccountId,
-    pub owned_worker_id: OwnedWorkerId,
+    pub owned_agent_id: OwnedAgentId,
     pub configuration: BTreeMap<String, String>,
     pub component_revision: ComponentRevision,
 }
@@ -109,7 +109,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
             None => {
                 let mut workers = RwLockUpgradableReadGuard::upgrade(workers).await;
                 match workers.get(&key) {
-                    Some(worker_id) => Ok(worker_id.clone()),
+                    Some(agent_id) => Ok(agent_id.clone()),
                     None => {
                         let plugin_component_id = plugin
                             .oplog_processor_component_id
@@ -119,18 +119,18 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                                 "missing oplog processor plugin component revision"
                             ))?;
 
-                        let worker_id = self.generate_worker_id_for(plugin_component_id).await?;
+                        let agent_id = self.generate_agent_id_for(plugin_component_id).await?;
                         let plugin_component = self
                             .component_service
                             .get_metadata(plugin_component_id, Some(plugin_component_revision))
                             .await?;
-                        let owned_worker_id = OwnedWorkerId {
+                        let owned_agent_id = OwnedAgentId {
                             environment_id,
-                            worker_id: worker_id.clone(),
+                            agent_id: agent_id.clone(),
                         };
                         let running_plugin = RunningPlugin {
                             account_id: plugin_component.account_id,
-                            owned_worker_id: owned_worker_id.clone(),
+                            owned_agent_id: owned_agent_id.clone(),
                             configuration: plugin.parameters.clone(),
                             component_revision: plugin_component_revision,
                         };
@@ -142,48 +142,48 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         }
     }
 
-    async fn generate_worker_id_for(
+    async fn generate_agent_id_for(
         &self,
         plugin_component_id: ComponentId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
+    ) -> Result<AgentId, WorkerExecutorError> {
         let current_assignment = self.shard_service.current_assignment()?;
-        let worker_id = Self::generate_local_worker_id(
+        let agent_id = Self::generate_local_agent_id(
             plugin_component_id,
             &current_assignment.shard_ids,
             current_assignment.number_of_shards,
         );
 
-        Ok(worker_id)
+        Ok(agent_id)
     }
 
-    /// Converts a `TargetWorkerId` to a `WorkerId`. If the worker name was not specified,
+    /// Converts a `TargetWorkerId` to an `AgentId`. If the worker name was not specified,
     /// it generates a new unique one, and if the `force_in_shard` set is not empty, it guarantees
     /// that the generated worker ID will belong to one of the provided shards.
     ///
     /// If the worker name was specified, `force_in_shard` is ignored.
-    fn generate_local_worker_id(
+    fn generate_local_agent_id(
         component_id: ComponentId,
         force_in_shard: &HashSet<ShardId>,
         number_of_shards: usize,
-    ) -> WorkerId {
+    ) -> AgentId {
         if force_in_shard.is_empty() || number_of_shards == 0 {
-            let worker_name = Uuid::new_v4().to_string();
-            WorkerId {
+            let agent_name = Uuid::new_v4().to_string();
+            AgentId {
                 component_id,
-                worker_name,
+                agent_id: agent_name,
             }
         } else {
             let mut current = Uuid::new_v4().to_u128_le();
             loop {
                 let uuid = Uuid::from_u128_le(current);
-                let worker_name = uuid.to_string();
-                let worker_id = WorkerId {
+                let agent_name = uuid.to_string();
+                let agent_id = AgentId {
                     component_id,
-                    worker_name,
+                    agent_id: agent_name,
                 };
-                let shard_id = ShardId::from_worker_id(&worker_id, number_of_shards);
+                let shard_id = ShardId::from_agent_id(&agent_id, number_of_shards);
                 if force_in_shard.contains(&shard_id) {
-                    return worker_id;
+                    return agent_id;
                 }
                 current += 1;
             }
@@ -195,7 +195,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
 impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ctx> {
     async fn send(
         &self,
-        worker_metadata: WorkerMetadata,
+        worker_metadata: AgentMetadata,
         plugin: &InstalledPlugin,
         initial_oplog_index: OplogIndex,
         entries: Vec<OplogEntry>,
@@ -208,7 +208,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             .worker_activator
             .get_or_create_running(
                 running_plugin.account_id,
-                &running_plugin.owned_worker_id,
+                &running_plugin.owned_agent_id,
                 None,
                 None,
                 Vec::new(),
@@ -225,7 +225,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             initial_oplog_index.range_end(entries.len() as u64)
         };
         let idempotency_key = oplog_processor_idempotency_key(
-            &worker_metadata.owned_worker_id().worker_id,
+            &worker_metadata.owned_agent_id().agent_id,
             &plugin.environment_plugin_grant_id,
             initial_oplog_index,
             batch_last_index,
@@ -259,8 +259,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             let entry = workers.entry(key);
             match entry {
                 Entry::Occupied(entry) => {
-                    let shard_id = ShardId::from_worker_id(
-                        &entry.get().owned_worker_id.worker_id,
+                    let shard_id = ShardId::from_agent_id(
+                        &entry.get().owned_agent_id.agent_id,
                         new_assignment.number_of_shards,
                     );
                     if new_assignment.shard_ids.contains(&shard_id) {
@@ -317,14 +317,14 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for PerExecutorOplogProcessorPlugin
 
 #[derive(Clone)]
 struct CreateOplogConstructor {
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     initial_entry: Option<OplogEntry>,
     inner: Arc<dyn OplogService>,
     last_oplog_index: Option<OplogIndex>,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
-    initial_worker_metadata: WorkerMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+    initial_worker_metadata: AgentMetadata,
+    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     plugin_max_commit_count: usize,
     plugin_max_elapsed_time: Duration,
@@ -332,20 +332,20 @@ struct CreateOplogConstructor {
 
 impl CreateOplogConstructor {
     pub fn new(
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         initial_entry: Option<OplogEntry>,
         inner: Arc<dyn OplogService>,
         last_oplog_index: Option<OplogIndex>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
-        initial_worker_metadata: WorkerMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         plugin_max_commit_count: usize,
         plugin_max_elapsed_time: Duration,
     ) -> Self {
         Self {
-            owned_worker_id,
+            owned_agent_id,
             initial_entry,
             inner,
             last_oplog_index,
@@ -365,12 +365,12 @@ impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let last_oplog_index = match self.last_oplog_index {
             Some(idx) => idx,
-            None => self.inner.get_last_index(&self.owned_worker_id).await,
+            None => self.inner.get_last_index(&self.owned_agent_id).await,
         };
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(
-                    &self.owned_worker_id,
+                    &self.owned_agent_id,
                     initial_entry,
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -380,7 +380,7 @@ impl OplogConstructor for CreateOplogConstructor {
         } else {
             self.inner
                 .open(
-                    &self.owned_worker_id,
+                    &self.owned_agent_id,
                     Some(last_oplog_index),
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -442,17 +442,17 @@ impl Debug for ForwardingOplogService {
 impl OplogService for ForwardingOplogService {
     async fn create(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         initial_entry: OplogEntry,
-        initial_worker_metadata: WorkerMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
-                &owned_worker_id.worker_id,
+                &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
-                    owned_worker_id.clone(),
+                    owned_agent_id.clone(),
                     Some(initial_entry),
                     self.inner.clone(),
                     Some(OplogIndex::INITIAL),
@@ -470,17 +470,17 @@ impl OplogService for ForwardingOplogService {
 
     async fn open(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         last_oplog_index: Option<OplogIndex>,
-        initial_worker_metadata: WorkerMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
-                &owned_worker_id.worker_id,
+                &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
-                    owned_worker_id.clone(),
+                    owned_agent_id.clone(),
                     None,
                     self.inner.clone(),
                     last_oplog_index,
@@ -496,25 +496,25 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
-    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
-        self.inner.get_last_index(owned_worker_id).await
+    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
+        self.inner.get_last_index(owned_agent_id).await
     }
 
-    async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
-        self.inner.delete(owned_worker_id).await
+    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
+        self.inner.delete(owned_agent_id).await
     }
 
     async fn read(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read(owned_worker_id, idx, n).await
+        self.inner.read(owned_agent_id, idx, n).await
     }
 
-    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
-        self.inner.exists(owned_worker_id).await
+    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.inner.exists(owned_agent_id).await
     }
 
     async fn scan_for_component(
@@ -523,7 +523,7 @@ impl OplogService for ForwardingOplogService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
             .scan_for_component(environment_id, component_id, cursor, count)
             .await
@@ -531,20 +531,20 @@ impl OplogService for ForwardingOplogService {
 
     async fn upload_raw_payload(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
-        self.inner.upload_raw_payload(owned_worker_id, data).await
+        self.inner.upload_raw_payload(owned_agent_id, data).await
     }
 
     async fn download_raw_payload(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner
-            .download_raw_payload(owned_worker_id, payload_id, md5_hash)
+            .download_raw_payload(owned_agent_id, payload_id, md5_hash)
             .await
     }
 }
@@ -563,8 +563,8 @@ impl ForwardingOplog {
         inner: Arc<dyn Oplog>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
-        initial_worker_metadata: WorkerMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         last_oplog_idx: OplogIndex,
         close_fn: Box<dyn FnOnce() + Send + Sync>,
         max_commit_count: usize,
@@ -683,6 +683,10 @@ impl Oplog for ForwardingOplog {
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
         self.inner.switch_persistence_level(mode).await;
     }
+
+    fn inner(&self) -> Option<Arc<dyn Oplog>> {
+        Some(self.inner.clone())
+    }
 }
 
 struct ForwardingOplogState {
@@ -690,8 +694,8 @@ struct ForwardingOplogState {
     commit_count: usize,
     last_send: Instant,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
-    initial_worker_metadata: WorkerMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+    initial_worker_metadata: AgentMetadata,
+    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
     last_oplog_idx: OplogIndex,
     components: Arc<dyn ComponentService>,
 }
@@ -700,7 +704,7 @@ impl ForwardingOplogState {
     pub async fn send_buffer(&mut self) {
         let metadata = {
             let status = self.last_known_status.read().await.clone();
-            WorkerMetadata {
+            AgentMetadata {
                 last_known_status: status,
                 ..self.initial_worker_metadata.clone()
             }
@@ -735,7 +739,7 @@ impl ForwardingOplogState {
 
     async fn try_send_entries(
         &self,
-        metadata: WorkerMetadata,
+        metadata: AgentMetadata,
         initial_oplog_index: OplogIndex,
         entries: &[OplogEntry],
     ) -> Result<(), WorkerExecutorError> {
@@ -743,7 +747,7 @@ impl ForwardingOplogState {
             let component_metadata = self
                 .components
                 .get_metadata(
-                    metadata.owned_worker_id().component_id(),
+                    metadata.owned_agent_id().component_id(),
                     Some(metadata.last_known_status.component_revision),
                 )
                 .await?;
@@ -777,7 +781,7 @@ impl ForwardingOplogState {
 const OPLOG_PROC_NS: Uuid = uuid!("A7E3F1B2-8C4D-5E6F-9A0B-1C2D3E4F5A6B");
 
 fn oplog_processor_idempotency_key(
-    source_worker_id: &WorkerId,
+    source_worker_id: &AgentId,
     plugin_installation_id: &EnvironmentPluginGrantId,
     batch_first_index: OplogIndex,
     batch_last_index: OplogIndex,
@@ -785,7 +789,7 @@ fn oplog_processor_idempotency_key(
     let mut buf = Vec::with_capacity(128);
     buf.extend_from_slice(b"oplog-proc-v1\0");
     buf.extend_from_slice(source_worker_id.component_id.0.as_bytes());
-    let worker_name = source_worker_id.worker_name.as_bytes();
+    let worker_name = source_worker_id.agent_id.as_bytes();
     buf.extend_from_slice(&(worker_name.len() as u32).to_be_bytes());
     buf.extend_from_slice(worker_name);
     buf.extend_from_slice(plugin_installation_id.0.as_bytes());

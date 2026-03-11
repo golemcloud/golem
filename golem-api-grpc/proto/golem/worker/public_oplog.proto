@@ -80,13 +80,13 @@ message PluginInstallationDescription {
 
 message CreateParameters {
   google.protobuf.Timestamp timestamp = 1;
-  WorkerId worker_id = 2;
+  AgentId agent_id = 2;
   uint64 component_revision = 3;
   map<string, string> env = 5;
   map<string, string> config_vars = 6;
   repeated ParsedLocalAgentConfigEntry local_agent_config = 7;
   golem.common.AccountId created_by = 8;
-  optional WorkerId parent = 9;
+  optional AgentId parent = 9;
   uint64 component_size = 10;
   uint64 initial_total_linear_memory_size = 11;
   repeated PluginInstallationDescription initial_active_plugins = 12;

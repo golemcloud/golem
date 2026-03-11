@@ -39,7 +39,7 @@ use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
-    EngineConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    EngineConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
@@ -65,6 +65,7 @@ use crate::services::{
     HasWorkerActivator, HasWorkerService,
 };
 use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
+use crate::storage::indexed::postgres::PostgresIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -250,6 +251,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>>;
 
@@ -391,6 +393,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             let pool = RedisPool::configured(redis).await?;
             Arc::new(RedisIndexedStorage::new(pool.clone()))
         }
+        IndexedStorageConfig::Postgres(postgres) => {
+            Arc::new(
+                PostgresIndexedStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            )
+        }
         IndexedStorageConfig::KVStoreSqlite(_) => {
             let sqlite = sqlite
                 .clone()
@@ -495,7 +504,20 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         registry_service.clone(),
     );
 
-    let golem_config = Arc::new(golem_config.clone());
+    let http_connection_pool = match &golem_config.http_client {
+        HttpClientConfig::Enabled(config) => Some(wasmtime_wasi_http::HttpConnectionPool::new(
+            wasmtime_wasi_http::HttpConnectionPoolConfig {
+                max_idle_per_host: config.max_idle_per_host,
+                idle_timeout: config.idle_timeout,
+                connect_timeout: config.connect_timeout,
+                max_connections_per_host: config.max_connections_per_host,
+                max_total_connections: config.max_total_connections,
+                max_host_entries: config.max_host_entries,
+            },
+        )),
+        HttpClientConfig::Disabled(_) => None,
+    };
+    let golem_config = Arc::new(golem_config);
 
     let shard_service = Arc::new(ShardServiceDefault::new());
 
@@ -656,6 +678,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             agent_webhooks_service,
             registry_service,
             shutdown_token,
+            http_connection_pool,
             leak_sentinel,
         )
         .await?;

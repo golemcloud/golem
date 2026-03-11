@@ -28,7 +28,7 @@ mod tests {
     use golem_common::model::plugin_registration::{
         OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
     };
-    use golem_common::model::{IdempotencyKey, WorkerStatus};
+    use golem_common::model::{AgentStatus, IdempotencyKey};
     use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
     use golem_common::{agent_id, data_value};
     use golem_test_framework::config::{
@@ -36,10 +36,9 @@ mod tests {
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 
-    use golem_common::model::agent::AgentId;
+    use golem_common::model::agent::ParsedAgentId;
     use rand::prelude::*;
     use rand::rng;
-    use uuid::Uuid;
     use std::collections::{BTreeMap, HashSet};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -47,6 +46,7 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::task::{JoinHandle, JoinSet};
     use tracing::{error, info, Instrument};
+    use uuid::Uuid;
 
     pub struct Tracing;
 
@@ -351,12 +351,12 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentDto, Vec<AgentId>);
+        ) -> (ComponentDto, Vec<ParsedAgentId>);
         async fn invoke_and_await_workers(
             &self,
             component: &ComponentDto,
-            agent_ids: &[AgentId],
-        ) -> Result<(), worker::v1::worker_error::Error>;
+            agent_ids: &[ParsedAgentId],
+        ) -> Result<(), worker::v1::agent_error::Error>;
         async fn start_all_worker_executors(&self);
         async fn stop_random_worker_executor(&self);
         async fn start_random_worker_executor(&self);
@@ -389,7 +389,7 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentDto, Vec<AgentId>) {
+        ) -> (ComponentDto, Vec<ParsedAgentId>) {
             let admin = self.admin().await;
             let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
@@ -405,7 +405,7 @@ mod tests {
 
             for i in 1..=n {
                 info!("Worker {i} starting");
-                let agent_id = agent_id!("counter", format!("sharding-test-{i}"));
+                let agent_id = agent_id!("Counter", format!("sharding-test-{i}"));
                 admin
                     .start_agent(&component.id, agent_id.clone())
                     .await
@@ -422,8 +422,8 @@ mod tests {
         async fn invoke_and_await_workers(
             &self,
             component: &ComponentDto,
-            agent_ids: &[AgentId],
-        ) -> Result<(), worker::v1::worker_error::Error> {
+            agent_ids: &[ParsedAgentId],
+        ) -> Result<(), worker::v1::agent_error::Error> {
             let mut tasks = JoinSet::new();
             for agent_id in agent_ids {
                 let self_clone = self.admin().await;
@@ -679,7 +679,7 @@ mod tests {
         InvokeAndAwaitWorkers {
             name: String,
             component: Box<ComponentDto>,
-            agent_ids: Vec<AgentId>,
+            agent_ids: Vec<ParsedAgentId>,
         },
         Stop,
     }
@@ -855,7 +855,11 @@ mod tests {
             axum::serve(listener, route).await.unwrap();
         });
 
-        (format!("http://localhost:{port}/callback"), received, handle)
+        (
+            format!("http://localhost:{port}/callback"),
+            received,
+            handle,
+        )
     }
 
     async fn wait_for_invocations(
@@ -971,7 +975,7 @@ mod tests {
         // Wait for worker to be available again
         user.wait_for_statuses(
             &worker_id,
-            &[WorkerStatus::Idle, WorkerStatus::Running],
+            &[AgentStatus::Idle, AgentStatus::Running],
             Duration::from_secs(60),
         )
         .await
@@ -1089,7 +1093,7 @@ mod tests {
 
         user.wait_for_statuses(
             &worker_id,
-            &[WorkerStatus::Idle, WorkerStatus::Running],
+            &[AgentStatus::Idle, AgentStatus::Running],
             Duration::from_secs(60),
         )
         .await
@@ -1209,7 +1213,7 @@ mod tests {
 
         user.wait_for_statuses(
             &worker_id,
-            &[WorkerStatus::Idle, WorkerStatus::Running],
+            &[AgentStatus::Idle, AgentStatus::Running],
             Duration::from_secs(60),
         )
         .await
@@ -1325,7 +1329,7 @@ mod tests {
                 user.simulated_crash(&worker_id).await.unwrap();
                 user.wait_for_statuses(
                     &worker_id,
-                    &[WorkerStatus::Idle, WorkerStatus::Running],
+                    &[AgentStatus::Idle, AgentStatus::Running],
                     Duration::from_secs(30),
                 )
                 .await
@@ -1341,7 +1345,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 user.wait_for_statuses(
                     &worker_id,
-                    &[WorkerStatus::Idle, WorkerStatus::Running],
+                    &[AgentStatus::Idle, AgentStatus::Running],
                     Duration::from_secs(60),
                 )
                 .await

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agent_secret;
 pub mod auth;
 pub mod component;
 pub mod plugin_registration;
@@ -25,9 +26,9 @@ use golem_common::model::component::{
 };
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
-    FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind, WorkerUpdateMode,
+    AgentUpdateMode, FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind,
 };
-use golem_common::model::{OplogIndex, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,7 +38,7 @@ use std::time::{Duration, SystemTime};
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerCreationResponse {
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub component_revision: ComponentRevision,
 }
 
@@ -111,7 +112,7 @@ pub struct GetFilesResponse {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct UpdateWorkerRequest {
-    pub mode: WorkerUpdateMode,
+    pub mode: AgentUpdateMode,
     pub target_revision: ComponentRevision,
     #[serde(default)]
     #[oai(default)]
@@ -122,7 +123,7 @@ pub struct UpdateWorkerRequest {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ForkWorkerRequest {
-    pub target_worker_id: WorkerId,
+    pub target_agent_id: AgentId,
     pub oplog_index_cutoff: OplogIndex,
 }
 
@@ -130,7 +131,7 @@ pub struct ForkWorkerRequest {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkersMetadataRequest {
-    pub filter: Option<WorkerFilter>,
+    pub filter: Option<AgentFilter>,
     pub cursor: Option<ScanCursor>,
     pub count: Option<u64>,
     pub precise: Option<bool>,

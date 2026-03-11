@@ -14,6 +14,7 @@
 
 use super::DeploymentWriteError;
 use super::http_parameter_conversion::build_http_agent_constructor_parameters;
+use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::route_compilation::{
@@ -24,15 +25,19 @@ use crate::services::deployment::route_compilation::{
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
 use golem_common::model::component::ComponentName;
+use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use golem_wasm::ValueAndType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use heck::ToKebabCase;
+use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 
 #[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {
@@ -59,6 +64,7 @@ pub struct DeploymentContext {
     pub components: BTreeMap<ComponentName, Component>,
     pub http_api_deployments: BTreeMap<Domain, HttpApiDeployment>,
     pub mcp_deployments: BTreeMap<Domain, golem_common::model::mcp_deployment::McpDeployment>,
+    pub registered_agent_types: HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
 }
 
 impl DeploymentContext {
@@ -67,22 +73,32 @@ impl DeploymentContext {
         components: Vec<Component>,
         http_api_deployments: Vec<HttpApiDeployment>,
         mcp_deployments: Vec<golem_common::model::mcp_deployment::McpDeployment>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, DeploymentWriteError> {
+        let components = components
+            .into_iter()
+            .map(|c| (c.component_name.clone(), c))
+            .collect();
+
+        let http_api_deployments = http_api_deployments
+            .into_iter()
+            .map(|had| (had.domain.clone(), had))
+            .collect();
+
+        let mcp_deployments = mcp_deployments
+            .into_iter()
+            .map(|mcd| (mcd.domain.clone(), mcd))
+            .collect();
+
+        let registered_agent_types =
+            extract_registered_agent_types(&components, &http_api_deployments)?;
+
+        Ok(Self {
             environment,
-            components: components
-                .into_iter()
-                .map(|c| (c.component_name.clone(), c))
-                .collect(),
-            http_api_deployments: http_api_deployments
-                .into_iter()
-                .map(|had| (had.domain.clone(), had))
-                .collect(),
-            mcp_deployments: mcp_deployments
-                .into_iter()
-                .map(|mcd| (mcd.domain.clone(), mcd))
-                .collect(),
-        }
+            components,
+            http_api_deployments,
+            mcp_deployments,
+            registered_agent_types,
+        })
     }
 
     pub fn hash(&self) -> diff::Hash {
@@ -106,74 +122,20 @@ impl DeploymentContext {
         diffable.hash()
     }
 
-    pub fn extract_registered_agent_types(
-        &self,
-    ) -> Result<HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>, DeploymentWriteError>
-    {
-        let mut agent_types = HashMap::new();
-        let mut errors = Vec::new();
-
-        for component in self.components.values() {
-            for agent_type in component.metadata.agent_types() {
-                let agent_type_name = agent_type.type_name.to_wit_naming();
-                let implementer = RegisteredAgentTypeImplementer {
-                    component_id: component.id,
-                    component_revision: component.revision,
-                };
-
-                let webhook_domain_and_segments = ok_or_continue!(
-                    build_agent_http_api_deployment_details(
-                        &agent_type_name,
-                        agent_type,
-                        &implementer,
-                        &self.http_api_deployments
-                    ),
-                    errors
-                );
-
-                let registered_agent_type = InProgressDeployedRegisteredAgentType {
-                    agent_type: agent_type.clone(),
-                    implemented_by: RegisteredAgentTypeImplementer {
-                        component_id: component.id,
-                        component_revision: component.revision,
-                    },
-                    webhook_domain_and_segments,
-                };
-
-                // Agent types can only be implemented once per deployments
-                ok_or_continue!(
-                    if agent_types
-                        .insert(agent_type_name, registered_agent_type)
-                        .is_some()
-                    {
-                        Err(DeployValidationError::AmbiguousAgentTypeName(
-                            agent_type.type_name.clone(),
-                        ))
-                    } else {
-                        Ok(())
-                    },
-                    errors
-                )
-            }
-        }
-        Ok(agent_types)
-    }
-
     pub fn compile_http_api_routes(
         &self,
-        registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
-    ) -> Result<Vec<UnboundCompiledRoute>, DeploymentWriteError> {
+        errors: &mut Vec<DeployValidationError>,
+    ) -> Vec<UnboundCompiledRoute> {
         let mut current_route_id: i32 = 0;
         let mut all_routes = Vec::new();
         let mut seen_agent_types = HashSet::new();
-        let mut errors = Vec::new();
 
         for deployment in self.http_api_deployments.values() {
             let mut deployment_routes = Vec::new();
 
             for (agent_type, agent_options) in &deployment.agents {
                 let registered_agent_type = ok_or_continue!(
-                    registered_agent_types.get(agent_type).ok_or(
+                    self.registered_agent_types.get(agent_type).ok_or(
                         DeployValidationError::HttpApiDeploymentMissingAgentType {
                             http_api_deployment_domain: deployment.domain.clone(),
                             missing_agent_type: agent_type.clone(),
@@ -234,7 +196,7 @@ impl DeploymentContext {
                     agent_options,
                     &mut current_route_id,
                     &mut deployment_routes,
-                    &mut errors,
+                    errors,
                 );
 
                 add_webhook_callback_routes(
@@ -257,29 +219,21 @@ impl DeploymentContext {
                 &mut deployment_routes,
             );
 
-            validate_final_router(&deployment.domain, &deployment_routes, &mut errors);
+            validate_final_http_api_router(&deployment.domain, &deployment_routes, errors);
 
             all_routes.append(&mut deployment_routes);
         }
 
-        // Fixme: code-first routes
-        // * SwaggerUi routes
-
-        if !errors.is_empty() {
-            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
-        };
-
-        Ok(all_routes)
+        all_routes
     }
 
     pub fn compile_mcp_deployments(
         &self,
-        registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
         account_id: AccountId,
         deployment_revision: golem_common::model::deployment::DeploymentRevision,
-    ) -> Result<Vec<golem_service_base::mcp::CompiledMcp>, DeploymentWriteError> {
+        errors: &mut Vec<DeployValidationError>,
+    ) -> Vec<golem_service_base::mcp::CompiledMcp> {
         let mut all_compiled_mcps = Vec::new();
-        let mut errors = Vec::new();
 
         for (domain, mcp_deployment) in &self.mcp_deployments {
             let mut agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
@@ -287,7 +241,7 @@ impl DeploymentContext {
 
             for agent_type in mcp_deployment.agents.keys() {
                 let registered_agent_type = ok_or_continue!(
-                    registered_agent_types.get(agent_type).ok_or(
+                    self.registered_agent_types.get(agent_type).ok_or(
                         DeployValidationError::McpDeploymentMissingAgentType {
                             mcp_deployment_domain: domain.clone(),
                             missing_agent_type: agent_type.clone(),
@@ -315,15 +269,216 @@ impl DeploymentContext {
             all_compiled_mcps.push(compiled_mcp);
         }
 
-        if !errors.is_empty() {
-            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
-        };
+        all_compiled_mcps
+    }
 
-        Ok(all_compiled_mcps)
+    /// Get all environment level agent secret updates that need to be executed as part of the deployment
+    pub fn deployment_agent_secret_creations_and_updates(
+        &self,
+        agent_secrets_in_environment: Vec<AgentSecret>,
+        agent_secret_defaults_as_part_of_deployment: Vec<DeploymentAgentSecretDefault>,
+        errors: &mut Vec<DeployValidationError>,
+    ) -> (
+        Vec<DeploymentAgentSecretCreation>,
+        Vec<DeploymentAgentSecretUpdate>,
+    ) {
+        use golem_common::model::agent::{ConfigKeyValueType, ConfigValueType};
+
+        let env_secrets: HashMap<&Vec<String>, &AgentSecret> = agent_secrets_in_environment
+            .iter()
+            .map(|s| (&s.path, s))
+            .collect();
+
+        let defaults: HashMap<&Vec<String>, &DeploymentAgentSecretDefault> =
+            agent_secret_defaults_as_part_of_deployment
+                .iter()
+                .map(|d| (&d.path, d))
+                .collect();
+
+        let mut creations = Vec::new();
+        let mut updates = Vec::new();
+        let mut seen_secrets = HashMap::new();
+
+        for agent_type in self.registered_agent_types.values() {
+            for config in &agent_type.agent_type.config {
+                let ConfigKeyValueType {
+                    key,
+                    value: ConfigValueType::Shared(agent_secret_declaration),
+                } = config
+                else {
+                    continue;
+                };
+
+                match seen_secrets.entry(key.clone()) {
+                    hash_map::Entry::Vacant(e) => {
+                        e.insert(agent_secret_declaration.value.clone());
+                    }
+                    hash_map::Entry::Occupied(e) => {
+                        if *e.get() != agent_secret_declaration.value {
+                            ok_or_continue!(
+                                Err(DeployValidationError::AgentSecretTypeConflict {
+                                    path: key.clone()
+                                }),
+                                errors
+                            );
+                        }
+                        // we already processed this secret previously, nothing to do here
+                        continue;
+                    }
+                }
+
+                if let Some(environment_level_secret_declaration) = env_secrets.get(key) {
+                    // secret does exist in environment, we need to check that types are compatible with deployment
+                    if environment_level_secret_declaration.secret_type
+                        != agent_secret_declaration.value
+                    {
+                        errors.push(
+                            DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
+                                path: key.clone(),
+                                agent_secret_type: agent_secret_declaration.value.clone(),
+                                environment_secret_type: environment_level_secret_declaration
+                                    .secret_type
+                                    .clone(),
+                            },
+                        );
+                    }
+
+                    // declaration exists in environment but has no value.
+                    // if default was provided as part of deployment we can set it now.
+                    if environment_level_secret_declaration.secret_value.is_none() {
+                        let secret_default = defaults.get(key);
+
+                        let secret_value = ok_or_continue!(
+                            secret_default
+                                .map(|sd| ValueAndType::parse_with_type(
+                                    &sd.secret_value,
+                                    &agent_secret_declaration.value
+                                ))
+                                .transpose()
+                                .map_err(|errors| {
+                                    DeployValidationError::AgentSecretDefaultTypeMismatch {
+                                        path: key.clone(),
+                                        errors,
+                                    }
+                                }),
+                            errors
+                        )
+                        .map(|vat| vat.value);
+
+                        if let Some(secret_value) = secret_value {
+                            updates.push(DeploymentAgentSecretUpdate {
+                                agent_secret_id: environment_level_secret_declaration.id,
+                                current_revision: environment_level_secret_declaration.revision,
+                                new_secret_value: secret_value,
+                            });
+                        }
+                    }
+                } else {
+                    // secret does not yet exist in environment, create it with optional default.
+                    let secret_type = &agent_secret_declaration.value;
+                    let secret_default = defaults.get(key);
+
+                    let secret_value = ok_or_continue!(
+                        secret_default
+                            .map(|sd| ValueAndType::parse_with_type(&sd.secret_value, secret_type))
+                            .transpose()
+                            .map_err(|errors| {
+                                DeployValidationError::AgentSecretDefaultTypeMismatch {
+                                    path: key.clone(),
+                                    errors,
+                                }
+                            }),
+                        errors
+                    )
+                    .map(|vat| vat.value);
+
+                    creations.push(DeploymentAgentSecretCreation {
+                        path: key.clone(),
+                        secret_type: secret_type.clone(),
+                        secret_value,
+                    });
+                }
+            }
+        }
+
+        (creations, updates)
     }
 }
 
-fn validate_final_router(
+pub fn extract_registered_agent_types(
+    components: &BTreeMap<ComponentName, Component>,
+    http_api_deployments: &BTreeMap<Domain, HttpApiDeployment>,
+) -> Result<HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>, DeploymentWriteError> {
+    let mut agent_types = HashMap::new();
+    let mut errors = Vec::new();
+
+    for component in components.values() {
+        for agent_type in component.metadata.agent_types() {
+            let agent_type_name = agent_type.type_name.clone();
+            let implementer = RegisteredAgentTypeImplementer {
+                component_id: component.id,
+                component_revision: component.revision,
+            };
+
+            let webhook_domain_and_segments = ok_or_continue!(
+                build_agent_http_api_deployment_details(
+                    &agent_type_name,
+                    agent_type,
+                    &implementer,
+                    http_api_deployments
+                ),
+                errors
+            );
+
+            let registered_agent_type = InProgressDeployedRegisteredAgentType {
+                agent_type: agent_type.clone(),
+                implemented_by: RegisteredAgentTypeImplementer {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                },
+                webhook_domain_and_segments,
+            };
+
+            // Agent types can only be implemented once per deployments
+            ok_or_continue!(
+                if agent_types
+                    .insert(agent_type_name, registered_agent_type)
+                    .is_some()
+                {
+                    Err(DeployValidationError::AmbiguousAgentTypeName(
+                        agent_type.type_name.clone(),
+                    ))
+                } else {
+                    Ok(())
+                },
+                errors
+            )
+        }
+    }
+
+    // Check for kebab-case collisions
+    let mut kebab_map: BTreeMap<String, AgentTypeName> = BTreeMap::new();
+    for agent_type_name in agent_types.keys() {
+        let kebab = agent_type_name.0.to_kebab_case();
+        if let Some(existing) = kebab_map.get(&kebab) {
+            errors.push(DeployValidationError::ConflictingAgentTypeNames {
+                name1: existing.clone(),
+                name2: agent_type_name.clone(),
+                normalized: kebab.clone(),
+            });
+        } else {
+            kebab_map.insert(kebab, agent_type_name.clone());
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+    };
+
+    Ok(agent_types)
+}
+
+fn validate_final_http_api_router(
     domain: &Domain,
     compiled_routes: &[UnboundCompiledRoute],
     errors: &mut Vec<DeployValidationError>,

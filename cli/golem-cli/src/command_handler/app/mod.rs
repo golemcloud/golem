@@ -56,6 +56,7 @@ use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
@@ -894,6 +895,23 @@ impl AppCommandHandler {
             }
         }
 
+        // Emit schema evolution warnings
+        for (component_name, new_props) in &deploy_diff.deployable_components {
+            if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
+                let warnings = validate_schema_evolution(old_agent_types, &new_props.agent_types);
+                for w in &warnings {
+                    log_warn_action(
+                        "Schema evolution",
+                        format!(
+                            "component {}: {}",
+                            component_name.0.log_color_highlight(),
+                            w
+                        ),
+                    );
+                }
+            }
+        }
+
         Ok(Some(deploy_diff))
     }
 
@@ -1533,6 +1551,8 @@ impl AppCommandHandler {
                     current_revision: deploy_diff.current_deployment_revision(),
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
                     version: DeploymentVersion("".to_string()), // TODO: atomic
+                    // FIXME: agent-config
+                    agent_secret_defaults: Vec::new(),
                 },
             )
             .await

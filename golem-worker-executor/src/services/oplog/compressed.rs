@@ -24,7 +24,7 @@ use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
+use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
@@ -49,51 +49,51 @@ impl CompressedOplogArchiveService {
         }
     }
 
-    fn compressed_oplog_key(worker_id: &WorkerId) -> String {
-        worker_id.to_redis_key()
+    fn compressed_oplog_key(agent_id: &AgentId) -> String {
+        agent_id.to_redis_key()
     }
 }
 
 #[async_trait]
 impl OplogArchiveService for CompressedOplogArchiveService {
-    async fn open(&self, owned_worker_id: &OwnedWorkerId) -> Arc<dyn OplogArchive + Send + Sync> {
+    async fn open(&self, owned_agent_id: &OwnedAgentId) -> Arc<dyn OplogArchive + Send + Sync> {
         Arc::new(CompressedOplogArchive::new(
-            owned_worker_id.worker_id(),
+            owned_agent_id.agent_id(),
             self.indexed_storage.clone(),
             self.level,
         ))
     }
 
-    async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
+    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
         self.indexed_storage
             .with("compressed_oplog", "delete")
-            .delete(IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level }, &Self::compressed_oplog_key(&owned_worker_id.worker_id))
+            .delete(IndexedStorageNamespace::CompressedOpLog { agent_id: owned_agent_id.agent_id(), level: self.level }, &Self::compressed_oplog_key(&owned_agent_id.agent_id))
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to drop compressed oplog for worker {owned_worker_id} in indexed storage: {err}")
+                panic!("failed to drop compressed oplog for worker {owned_agent_id} in indexed storage: {err}")
             });
     }
 
     async fn read(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let archive = self.open(owned_worker_id).await;
+        let archive = self.open(owned_agent_id).await;
         archive.read(idx, n).await
     }
 
-    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
+    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
         self.indexed_storage
             .with("compressed_oplog", "exists")
             .exists(
-                IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level },
-                &Self::compressed_oplog_key(&owned_worker_id.worker_id),
+                IndexedStorageNamespace::CompressedOpLog { agent_id: owned_agent_id.agent_id(), level: self.level },
+                &Self::compressed_oplog_key(&owned_agent_id.agent_id),
             )
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to check if compressed oplog exists for worker {owned_worker_id} in indexed storage: {err}")
+                panic!("failed to check if compressed oplog exists for worker {owned_agent_id} in indexed storage: {err}")
             })
     }
 
@@ -103,7 +103,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         let ScanCursor { cursor, layer } = cursor;
         let (cursor, keys) = self
             .indexed_storage
@@ -122,23 +122,23 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         Ok((
             ScanCursor { cursor, layer },
             keys.into_iter()
-                .map(|key| OwnedWorkerId {
-                    worker_id: PrimaryOplogService::get_worker_id_from_key(&key, component_id),
+                .map(|key| OwnedAgentId {
+                    agent_id: PrimaryOplogService::get_agent_id_from_key(&key, component_id),
                     environment_id: *environment_id,
                 })
                 .collect(),
         ))
     }
 
-    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
-        let key = Self::compressed_oplog_key(&owned_worker_id.worker_id);
+    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
+        let key = Self::compressed_oplog_key(&owned_agent_id.agent_id);
         OplogIndex::from_u64(
             self.indexed_storage
                 .with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
-                .last_id(IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level }, &key)
+                .last_id(IndexedStorageNamespace::CompressedOpLog { agent_id: owned_agent_id.agent_id(), level: self.level }, &key)
                 .await
                 .unwrap_or_else(|err| {
-                    panic!("failed to get last entry from compressed oplog for worker {owned_worker_id} in indexed storage: {err}")
+                    panic!("failed to get last entry from compressed oplog for worker {owned_agent_id} in indexed storage: {err}")
                 }).unwrap_or_default(),
         )
     }
@@ -146,7 +146,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
 
 #[derive(Debug)]
 pub struct CompressedOplogArchive {
-    worker_id: WorkerId,
+    agent_id: AgentId,
     key: String,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     #[allow(clippy::type_complexity)]
@@ -163,13 +163,13 @@ pub struct CompressedOplogArchive {
 
 impl CompressedOplogArchive {
     pub fn new(
-        worker_id: WorkerId,
+        agent_id: AgentId,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         level: usize,
     ) -> Self {
-        let key = CompressedOplogArchiveService::compressed_oplog_key(&worker_id);
+        let key = CompressedOplogArchiveService::compressed_oplog_key(&agent_id);
         Self {
-            worker_id,
+            agent_id,
             key,
             indexed_storage,
             cache: RwLock::new(EvictingCacheMap::new()),
@@ -190,7 +190,7 @@ impl CompressedOplogArchive {
             .with_entity("compressed_oplog", "read", "compressed_entry")
             .closest::<CompressedOplogChunk>(
                 IndexedStorageNamespace::CompressedOpLog {
-                    worker_id: self.worker_id.clone(),
+                    agent_id: self.agent_id.clone(),
                     level: self.level,
                 },
                 &self.key,
@@ -241,7 +241,7 @@ impl OplogArchive for CompressedOplogArchive {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry> {
-        let worker_id = &self.worker_id;
+        let agent_id = &self.agent_id;
 
         let mut result = BTreeMap::new();
         let mut last_idx = idx.range_end(n);
@@ -269,7 +269,7 @@ impl OplogArchive for CompressedOplogArchive {
             // we encountered an entry that is not in our cache. fetch the chunk that contains the entry and use as much as we can from it.
             // after the end of the chunk
             if let Some(chunk) = self.fetch_and_cache_range(idx, last_idx).await.unwrap_or_else(|err| {
-                panic!("failed to read compressed oplog for worker {worker_id} in indexed storage: {err}")
+                panic!("failed to read compressed oplog for worker {agent_id} in indexed storage: {err}")
             }) {
                 last_idx = last_idx.subtract(chunk.len() as u64);
                 for (index, entry) in chunk {
@@ -290,7 +290,7 @@ impl OplogArchive for CompressedOplogArchive {
             return;
         }
 
-        let worker_id = &self.worker_id;
+        let agent_id = &self.agent_id;
         let mut cache = self.cache.write().await;
 
         for (idx, entry) in &chunk {
@@ -309,7 +309,7 @@ impl OplogArchive for CompressedOplogArchive {
             self.indexed_storage
                 .with_entity("compressed_oplog", "append", "compressed_entry")
                 .append(
-                    IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level },
+                    IndexedStorageNamespace::CompressedOpLog { agent_id: self.agent_id.clone(), level: self.level },
                     &self.key,
                     last_id.into(),
                     &compressed_chunk,
@@ -317,41 +317,41 @@ impl OplogArchive for CompressedOplogArchive {
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
-                        "failed to append compressed oplog chunk for worker {worker_id} in indexed storage: {err}"
+                        "failed to append compressed oplog chunk for worker {agent_id} in indexed storage: {err}"
                     )
                 });
         }
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
-        let worker_id = &self.worker_id;
+        let agent_id = &self.agent_id;
         OplogIndex::from_u64(
             self.indexed_storage
                 .with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
-                .last_id(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key)
+                .last_id(IndexedStorageNamespace::CompressedOpLog { agent_id: self.agent_id.clone(), level: self.level }, &self.key)
                 .await
                 .unwrap_or_else(|err| {
-                    panic!("failed to get the last entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
+                    panic!("failed to get the last entry from compressed oplog for worker {agent_id} in indexed storage: {err}")
                 }).unwrap_or_default(),
         )
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
-        let worker_id = &self.worker_id;
+        let agent_id = &self.agent_id;
         let before = self.length().await;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
-            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key, last_dropped_id.into())
+            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { agent_id: self.agent_id.clone(), level: self.level }, &self.key, last_dropped_id.into())
             .await
             .unwrap_or_else(|err| {
-                panic!("failed to drop prefix from compressed oplog for worker {worker_id} in indexed storage: {err}")
+                panic!("failed to drop prefix from compressed oplog for worker {agent_id} in indexed storage: {err}")
             });
         let remaining = self.length().await;
         if remaining == 0 {
             self.indexed_storage.with("compressed_oplog", "drop_prefix")
-                .delete(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key)
+                .delete(IndexedStorageNamespace::CompressedOpLog { agent_id: self.agent_id.clone(), level: self.level }, &self.key)
                 .await
                 .unwrap_or_else(|err| {
-                    panic!("failed to drop compressed oplog for worker {worker_id} in indexed storage: {err}")
+                    panic!("failed to drop compressed oplog for worker {agent_id} in indexed storage: {err}")
                 });
         }
         before - remaining
@@ -362,7 +362,7 @@ impl OplogArchive for CompressedOplogArchive {
             .with("compressed_oplog", "length")
             .length(
                 IndexedStorageNamespace::CompressedOpLog {
-                    worker_id: self.worker_id.clone(),
+                    agent_id: self.agent_id.clone(),
                     level: self.level,
                 },
                 &self.key,

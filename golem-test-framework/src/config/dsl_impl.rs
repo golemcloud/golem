@@ -31,11 +31,10 @@ use golem_client::api::{
     WorkerError,
 };
 use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
-use golem_common::base_model::agent::{AgentId, DataValue};
+use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_agent_types;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -52,12 +51,12 @@ use golem_common::model::environment::{
 };
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
-    FlatComponentFileSystemNode, WorkerCreationRequest, WorkerMetadataDto, WorkerUpdateMode,
+    AgentMetadataDto, AgentUpdateMode, FlatComponentFileSystemNode, RevertWorkerTarget,
+    WorkerCreationLocalAgentConfigEntry,
 };
-use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
-use golem_common::model::{IdempotencyKey, WorkerEvent};
-use golem_common::model::{OplogIndex, WorkerId};
-use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
+use golem_common::model::{
+    AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
+};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -364,11 +363,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: AgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
         local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
-    ) -> anyhow::Result<Result<WorkerId, Self::WorkerError>> {
+    ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         let client = self
             .deps
             .worker_service()
@@ -378,22 +377,22 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let response = client
             .launch_new_worker(
                 &component_id.0,
-                &WorkerCreationRequest {
+                &golem_client::model::AgentCreationRequest {
                     name: id.to_string(),
                     env,
-                    config_vars,
-                    local_agent_config,
+                    config_vars: Some(config_vars.into_iter().collect()),
+                    local_agent_config: Some(local_agent_config),
                 },
             )
             .await;
 
-        Ok(response.map(|r| r.worker_id))
+        Ok(response.map(|r| r.agent_id))
     }
 
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &AgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -419,7 +418,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &golem_client::model::AgentInvocationRequest {
                     app_name: app_name.0,
                     env_name: env_name.0,
-                    agent_type_name: agent_id.agent_type.to_wit_naming().0,
+                    agent_type_name: agent_id.agent_type.0.clone(),
                     parameters: agent_id.parameters.clone().into(),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
@@ -439,7 +438,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &AgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         method_name: &str,
@@ -470,7 +469,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &golem_client::model::AgentInvocationRequest {
                     app_name: app_name.0,
                     env_name: env_name.0,
-                    agent_type_name: agent_id.agent_type.to_wit_naming().0,
+                    agent_type_name: agent_id.agent_type.0.clone(),
                     parameters: agent_id.parameters.clone().into(),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
@@ -487,16 +486,15 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         match result.result {
             Some(untyped_json) => {
-                let worker_id = WorkerId::from_agent_id(component.id, agent_id)
+                let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
                     .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
-                let worker_metadata = self.get_worker_metadata(&worker_id).await?;
+                let worker_metadata = self.get_worker_metadata(&worker_agent_id).await?;
                 let component_at_rev = self
                     .get_component_at_revision(&component.id, worker_metadata.component_revision)
                     .await?;
                 let agent_type = component_at_rev
                     .metadata
-                    .find_agent_type_by_wrapper_name(&agent_id.agent_type)
-                    .map_err(|err| anyhow!("Agent type not found: {err}"))?
+                    .find_agent_type_by_name(&agent_id.agent_type)
                     .ok_or_else(|| anyhow!("Agent type not found: {}", agent_id.agent_type))?;
                 let agent_method = agent_type
                     .methods
@@ -517,21 +515,21 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         }
     }
 
-    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {
+    async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
         client
-            .revert_worker(&worker_id.component_id.0, &worker_id.worker_name, &target)
+            .revert_worker(&agent_id.component_id.0, &agent_id.agent_id, &target)
             .await?;
         Ok(())
     }
 
     async fn get_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let client = self
@@ -546,15 +544,15 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         loop {
             let response = client
                 .get_oplog(
-                    &worker_id.component_id.0,
-                    &worker_id.worker_name,
+                    &agent_id.component_id.0,
+                    &agent_id.agent_id,
                     Some(from.as_u64()),
                     100,
                     cursor.as_ref(),
                     None,
                 )
                 .await
-                .map_err(|e| anyhow!("get_oplog failed for worker {worker_id}: {e}"))?;
+                .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
 
             result.extend(response.entries);
             match response.next {
@@ -568,7 +566,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
     async fn search_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let client = self
@@ -583,8 +581,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         loop {
             let response = client
                 .get_oplog(
-                    &worker_id.component_id.0,
-                    &worker_id.worker_name,
+                    &agent_id.component_id.0,
+                    &agent_id.agent_id,
                     None,
                     100,
                     cursor.as_ref(),
@@ -592,7 +590,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 )
                 .await
                 .map_err(|e| {
-                    anyhow!("search_oplog failed for worker {worker_id}, query={query}: {e}")
+                    anyhow!("search_oplog failed for agent {agent_id}, query={query}: {e}")
                 })?;
 
             result.extend(response.entries);
@@ -607,7 +605,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
     async fn interrupt_with_optional_recovery(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         recover_immediately: bool,
     ) -> anyhow::Result<()> {
         let client = self
@@ -617,22 +615,22 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await;
         client
             .interrupt_worker(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
                 Some(recover_immediately),
             )
             .await?;
         Ok(())
     }
 
-    async fn resume(&self, worker_id: &WorkerId, _force: bool) -> anyhow::Result<()> {
+    async fn resume(&self, agent_id: &AgentId, _force: bool) -> anyhow::Result<()> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
         client
-            .resume_worker(&worker_id.component_id.0, &worker_id.worker_name)
+            .resume_worker(&agent_id.component_id.0, &agent_id.agent_id)
             .await?;
         Ok(())
     }
@@ -645,8 +643,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await;
         client
             .complete_promise(
-                &promise_id.worker_id.component_id.0,
-                &promise_id.worker_id.worker_name,
+                &promise_id.agent_id.component_id.0,
+                &promise_id.agent_id.agent_id,
                 &CompleteParameters {
                     oplog_idx: promise_id.oplog_idx.as_u64(),
                     data,
@@ -658,20 +656,20 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
     async fn make_worker_log_event_stream(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> anyhow::Result<impl WorkerLogEventStream> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
-        let stream = HttpWorkerLogEventStream::new(Arc::new(client), worker_id).await?;
+        let stream = HttpWorkerLogEventStream::new(Arc::new(client), agent_id).await?;
         Ok(stream)
     }
 
     async fn auto_update_worker(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
@@ -682,10 +680,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await;
         client
             .update_worker(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
                 &UpdateWorkerRequest {
-                    mode: WorkerUpdateMode::Automatic,
+                    mode: AgentUpdateMode::Automatic,
                     target_revision: target_revision.into(),
                     disable_wakeup: Some(disable_wakeup),
                 },
@@ -696,7 +694,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
     async fn manual_update_worker(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
@@ -707,10 +705,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await;
         client
             .update_worker(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
                 &UpdateWorkerRequest {
-                    mode: WorkerUpdateMode::Manual,
+                    mode: AgentUpdateMode::Manual,
                     target_revision: target_revision.into(),
                     disable_wakeup: Some(disable_wakeup),
                 },
@@ -719,29 +717,29 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(())
     }
 
-    async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
+    async fn delete_worker(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
         client
-            .delete_worker(&worker_id.component_id.0, &worker_id.worker_name)
+            .delete_worker(&agent_id.component_id.0, &agent_id.agent_id)
             .await?;
         Ok(())
     }
 
     async fn get_worker_metadata_opt(
         &self,
-        worker_id: &WorkerId,
-    ) -> anyhow::Result<Option<WorkerMetadataDto>> {
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Option<AgentMetadataDto>> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
         match client
-            .get_worker_metadata(&worker_id.component_id.0, &worker_id.worker_name)
+            .get_worker_metadata(&agent_id.component_id.0, &agent_id.agent_id)
             .await
         {
             Ok(worker_metadata) => Ok(Some(worker_metadata)),
@@ -753,11 +751,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     async fn get_workers_metadata(
         &self,
         component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> anyhow::Result<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
+    ) -> anyhow::Result<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
         let client = self
             .deps
             .worker_service()
@@ -779,7 +777,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
     async fn cancel_invocation(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool> {
         let client = self
@@ -789,8 +787,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await;
         let result = client
             .cancel_invocation(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
                 &idempotency_key.value,
             )
             .await?;
@@ -799,7 +797,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
     async fn get_file_system_node(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         path: &str,
     ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>> {
         let client = self
@@ -808,27 +806,27 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .worker_http_client(&self.token)
             .await;
         let result = client
-            .get_files(&worker_id.component_id.0, &worker_id.worker_name, path)
+            .get_files(&agent_id.component_id.0, &agent_id.agent_id, path)
             .await?;
         Ok(result.nodes)
     }
 
-    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes> {
+    async fn get_file_contents(&self, agent_id: &AgentId, path: &str) -> anyhow::Result<Bytes> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
         let result = client
-            .get_file_content(&worker_id.component_id.0, &worker_id.worker_name, path)
+            .get_file_content(&agent_id.component_id.0, &agent_id.agent_id, path)
             .await?;
         Ok(result)
     }
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
-        target_worker_name: &str,
+        source_agent_id: &AgentId,
+        target_agent_name: &str,
         oplog_index: OplogIndex,
     ) -> anyhow::Result<()> {
         let client = self
@@ -839,12 +837,12 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         client
             .fork_worker(
-                &source_worker_id.component_id.0,
-                &source_worker_id.worker_name,
+                &source_agent_id.component_id.0,
+                &source_agent_id.agent_id,
                 &golem_client::model::ForkWorkerRequest {
-                    target_worker_id: WorkerId {
-                        component_id: source_worker_id.component_id,
-                        worker_name: target_worker_name.to_string(),
+                    target_agent_id: AgentId {
+                        component_id: source_agent_id.component_id,
+                        agent_id: target_agent_name.to_string(),
                     },
                     oplog_index_cutoff: oplog_index.as_u64(),
                 },
@@ -967,6 +965,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                     current_revision: plan.current_revision,
                     expected_deployment_hash: plan.deployment_hash,
                     version: DeploymentVersion(Uuid::new_v4().to_string()),
+                    agent_secret_defaults: Vec::new(),
                 },
             )
             .await?;
@@ -999,13 +998,13 @@ struct HttpWorkerLogEventStream {
 }
 
 impl HttpWorkerLogEventStream {
-    async fn new(client: Arc<WorkerClientLive>, worker_id: &WorkerId) -> anyhow::Result<Self> {
+    async fn new(client: Arc<WorkerClientLive>, agent_id: &AgentId) -> anyhow::Result<Self> {
         let url = format!(
             "ws://{}:{}/v1/components/{}/workers/{}/connect",
             client.context.base_url.host().unwrap(),
             client.context.base_url.port_or_known_default().unwrap(),
-            worker_id.component_id.0,
-            worker_id.worker_name,
+            agent_id.component_id.0,
+            agent_id.agent_id,
         );
 
         let mut connection_request = url
@@ -1056,14 +1055,14 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
                 Some(Ok(message)) => match message {
                     Message::Text(payload) => {
                         return Ok(Some(
-                            serde_json::from_str::<WorkerEvent>(payload.as_str())?
+                            serde_json::from_str::<AgentEvent>(payload.as_str())?
                                 .try_into()
                                 .map_err(|error: String| anyhow!(error))?,
                         ))
                     }
                     Message::Binary(payload) => {
                         return Ok(Some(
-                            serde_json::from_slice::<WorkerEvent>(payload.as_slice())?
+                            serde_json::from_slice::<AgentEvent>(payload.as_slice())?
                                 .try_into()
                                 .map_err(|error: String| anyhow!(error))?,
                         ))

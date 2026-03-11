@@ -20,6 +20,7 @@ use bytes::Bytes;
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::{
     PluginInstallation, PluginInstallationAction, PluginPriority, PluginUninstallation,
 };
@@ -27,8 +28,7 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreatio
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
-use golem_common::model::component::ComponentId;
-use golem_common::model::{OplogIndex, ScanCursor, WorkerStatus};
+use golem_common::model::{AgentStatus, OplogIndex, ScanCursor};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -108,7 +108,10 @@ fn assert_unique_oplog_indices(invocations: &[String]) {
 /// Assert that the function names match the expected list, sorted by oplog_index
 /// (batching may deliver entries out of arrival order).
 fn assert_function_names(invocations: &[String], expected_fns: &[&str]) {
-    let mut parsed: Vec<_> = invocations.iter().map(|s| parse_callback_entry(s)).collect();
+    let mut parsed: Vec<_> = invocations
+        .iter()
+        .map(|s| parse_callback_entry(s))
+        .collect();
     parsed.sort_by_key(|e| e.oplog_index);
     let actual_fns: Vec<String> = parsed.into_iter().map(|e| e.fn_name).collect();
     let expected: Vec<String> = expected_fns.iter().map(|s| s.to_string()).collect();
@@ -193,7 +196,7 @@ async fn start_callback_server_gated() -> (
 async fn find_plugin_workers(
     user: &(impl TestDsl + Send + Sync + ?Sized),
     plugin_component_id: &ComponentId,
-) -> Vec<golem_common::model::WorkerId> {
+) -> Vec<golem_common::model::AgentId> {
     let mut all_workers = Vec::new();
     let mut cursor = ScanCursor {
         cursor: 0,
@@ -208,7 +211,7 @@ async fn find_plugin_workers(
                 (None, Vec::new())
             });
         for w in &workers {
-            all_workers.push(w.worker_id.clone());
+            all_workers.push(w.agent_id.clone());
         }
         match next_cursor {
             Some(c) if !c.is_finished() => cursor = c,
@@ -221,7 +224,7 @@ async fn find_plugin_workers(
 /// Crashes the user worker and all discovered plugin workers via simulated_crash.
 async fn crash_user_and_plugin_workers(
     user: &(impl TestDsl + Send + Sync + ?Sized),
-    user_worker_id: &golem_common::model::WorkerId,
+    user_worker_id: &golem_common::model::AgentId,
     plugin_component_id: &ComponentId,
 ) {
     // Discover plugin workers first (before crashing anything)
@@ -350,16 +353,11 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     // E1: Wait for callbacks and verify function names + unique oplog indices
     let invocations = wait_for_invocations(&received_invocations, 4, Duration::from_secs(60)).await;
-    assert_function_names(
-        &invocations,
-        &["agent-initialization", "add", "add", "add"],
-    );
+    assert_function_names(&invocations, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&invocations);
 
     // E2: Verify oplog entries exist for the worker
-    let oplog = user
-        .get_oplog(&worker_id, OplogIndex::from_u64(0))
-        .await?;
+    let oplog = user.get_oplog(&worker_id, OplogIndex::from_u64(0)).await?;
     assert!(!oplog.is_empty(), "Worker oplog should not be empty");
 
     Ok(())
@@ -430,14 +428,10 @@ async fn oplog_processor_in_different_env_after_unregistering(
     client_2
         .delete_environment_plugin_grant(&oplog_processor_plugin_grant.id.0)
         .await?;
-    client_2
-        .delete_plugin(&oplog_processor_plugin.id.0)
-        .await?;
+    client_2.delete_plugin(&oplog_processor_plugin.id.0).await?;
 
     let repo_id = agent_id!("repository", "worker1");
-    let _worker_id = user_1
-        .start_agent(&component.id, repo_id.clone())
-        .await?;
+    let _worker_id = user_1.start_agent(&component.id, repo_id.clone()).await?;
 
     user_1
         .invoke_and_await_agent(
@@ -467,10 +461,7 @@ async fn oplog_processor_in_different_env_after_unregistering(
         .await?;
 
     let invocations = wait_for_invocations(&received_invocations, 4, Duration::from_secs(60)).await;
-    assert_function_names(
-        &invocations,
-        &["agent-initialization", "add", "add", "add"],
-    );
+    assert_function_names(&invocations, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&invocations);
 
     Ok(())
@@ -561,7 +552,7 @@ async fn oplog_processor_crash_after_confirmed_flush(
     crash_user_and_plugin_workers(&user, &worker_id, &plugin_component.id).await;
     user.wait_for_statuses(
         &worker_id,
-        &[WorkerStatus::Idle, WorkerStatus::Running],
+        &[AgentStatus::Idle, AgentStatus::Running],
         Duration::from_secs(60),
     )
     .await?;
@@ -621,9 +612,7 @@ async fn oplog_processor_crash_after_confirmed_flush(
 
 #[test]
 #[tracing::instrument]
-async fn oplog_processor_crash_stress(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
+async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     const CRASH_ROUNDS: usize = 5;
     const INVOCATIONS_PER_ROUND: usize = 2;
 
@@ -702,7 +691,7 @@ async fn oplog_processor_crash_stress(
     // Wait for the worker to recover after executor restart
     user.wait_for_statuses(
         &worker_id,
-        &[WorkerStatus::Idle, WorkerStatus::Running],
+        &[AgentStatus::Idle, AgentStatus::Running],
         Duration::from_secs(60),
     )
     .await?;
@@ -729,7 +718,7 @@ async fn oplog_processor_crash_stress(
         // Wait for recovery before next round
         user.wait_for_statuses(
             &worker_id,
-            &[WorkerStatus::Idle, WorkerStatus::Running],
+            &[AgentStatus::Idle, AgentStatus::Running],
             Duration::from_secs(60),
         )
         .await?;
@@ -748,7 +737,7 @@ async fn oplog_processor_crash_stress(
     // Wait for the worker to recover after executor restart
     user.wait_for_statuses(
         &worker_id,
-        &[WorkerStatus::Idle, WorkerStatus::Running],
+        &[AgentStatus::Idle, AgentStatus::Running],
         Duration::from_secs(60),
     )
     .await?;
@@ -770,18 +759,15 @@ async fn oplog_processor_crash_stress(
     let expected_total_adds = 3 + (CRASH_ROUNDS * INVOCATIONS_PER_ROUND) + 5;
     let expected_total_callbacks = 1 + expected_total_adds; // +1 for agent-initialization
 
-    let invocations = match tokio::time::timeout(
-        Duration::from_secs(90),
-        async {
-            loop {
-                let inv = received_invocations.lock().unwrap().clone();
-                if inv.len() >= expected_total_callbacks {
-                    return inv;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+    let invocations = match tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let inv = received_invocations.lock().unwrap().clone();
+            if inv.len() >= expected_total_callbacks {
+                return inv;
             }
-        },
-    )
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    })
     .await
     {
         Ok(inv) => inv,
@@ -793,15 +779,16 @@ async fn oplog_processor_crash_stress(
 
     let fn_names = extract_function_names(&invocations);
     let add_count = fn_names.iter().filter(|f| *f == "add").count();
-    let init_count = fn_names.iter().filter(|f| *f == "agent-initialization").count();
+    let init_count = fn_names
+        .iter()
+        .filter(|f| *f == "agent-initialization")
+        .count();
 
     // Count completed adds in the oplog via InvocationFinished entries
     let oplog = user.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let completed_invocations_in_oplog = oplog
         .iter()
-        .filter(|entry| {
-            format!("{:?}", entry.entry).contains("InvocationFinished")
-        })
+        .filter(|entry| format!("{:?}", entry.entry).contains("InvocationFinished"))
         .count();
     // Subtract 1 for agent-initialization's InvocationFinished
     let completed_adds_in_oplog = completed_invocations_in_oplog.saturating_sub(1);
@@ -922,7 +909,7 @@ async fn oplog_processor_no_duplicates_after_crash(
     crash_user_and_plugin_workers(&user, &worker_id, &plugin_component.id).await;
     user.wait_for_statuses(
         &worker_id,
-        &[WorkerStatus::Idle, WorkerStatus::Running],
+        &[AgentStatus::Idle, AgentStatus::Running],
         Duration::from_secs(60),
     )
     .await?;
@@ -1144,7 +1131,10 @@ async fn oplog_processor_partial_plugin_failure(
     let mut params_a = BTreeMap::new();
     params_a.insert("callback-url".to_string(), callback_url_a);
     let mut params_b = BTreeMap::new();
-    params_b.insert("callback-url".to_string(), "http://127.0.0.1:1/fail".to_string());
+    params_b.insert(
+        "callback-url".to_string(),
+        "http://127.0.0.1:1/fail".to_string(),
+    );
 
     let component = user
         .component(&env.id, "it_agent_counters_release")
@@ -1193,7 +1183,7 @@ async fn oplog_processor_partial_plugin_failure(
     let metadata = user.get_worker_metadata(&worker_id).await?;
     assert_ne!(
         metadata.status,
-        WorkerStatus::Failed,
+        AgentStatus::Failed,
         "Worker should not have failed due to plugin failure"
     );
 
@@ -1271,9 +1261,7 @@ async fn oplog_processor_activation_mid_stream(
     let mut plugin_params = BTreeMap::new();
     plugin_params.insert("callback-url".to_string(), callback_url.clone());
 
-    let latest = user
-        .get_latest_component_revision(&component.id)
-        .await?;
+    let latest = user.get_latest_component_revision(&component.id).await?;
     let updated_component = user
         .update_component_with(
             &component.id,
@@ -1294,7 +1282,7 @@ async fn oplog_processor_activation_mid_stream(
 
     user.auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
-    user.wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(30))
+    user.wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
 
     // Invoke twice AFTER plugin is activated
@@ -1403,16 +1391,11 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
 
     // Wait for initial delivery
     let invocations = wait_for_invocations(&received_invocations, 4, Duration::from_secs(60)).await;
-    assert_function_names(
-        &invocations,
-        &["agent-initialization", "add", "add", "add"],
-    );
+    assert_function_names(&invocations, &["agent-initialization", "add", "add", "add"]);
     let pre_deactivation_count = invocations.len();
 
     // Uninstall the plugin via component update
-    let latest = user
-        .get_latest_component_revision(&component.id)
-        .await?;
+    let latest = user.get_latest_component_revision(&component.id).await?;
     let updated_component = user
         .update_component_with(
             &component.id,
@@ -1423,17 +1406,15 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
             None,
             None,
             None,
-            vec![PluginInstallationAction::Uninstall(
-                PluginUninstallation {
-                    environment_plugin_grant_id: oplog_processor_plugin_grant.id,
-                },
-            )],
+            vec![PluginInstallationAction::Uninstall(PluginUninstallation {
+                environment_plugin_grant_id: oplog_processor_plugin_grant.id,
+            })],
         )
         .await?;
 
     user.auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
-    user.wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(30))
+    user.wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
 
     // Invoke after deactivation
@@ -1555,9 +1536,7 @@ async fn oplog_processor_idle_worker_timer_flush(
 
 #[test]
 #[tracing::instrument]
-async fn oplog_processor_rapid_invocations(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
+async fn oplog_processor_rapid_invocations(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
@@ -1733,7 +1712,7 @@ async fn oplog_processor_no_resend_after_confirmed(
     crash_user_and_plugin_workers(&user, &worker_id, &plugin_component.id).await;
     user.wait_for_statuses(
         &worker_id,
-        &[WorkerStatus::Idle, WorkerStatus::Running],
+        &[AgentStatus::Idle, AgentStatus::Running],
         Duration::from_secs(60),
     )
     .await?;

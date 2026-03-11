@@ -14,7 +14,13 @@
 
 use heck::ToSnakeCase;
 
-pub fn to_rust_ident(name: &str) -> String {
+/// Converts a name to a valid Rust identifier.
+///
+/// When `same_language` is true, the name is already in Rust's native snake_case,
+/// so only keyword escaping is applied (no `to_snake_case` transformation).
+/// When `same_language` is false, the name may come from WIT (kebab-case) or
+/// another language, so `to_snake_case` is applied as the default fallback.
+pub fn to_rust_ident(name: &str, same_language: bool) -> String {
     match name {
         // Escape Rust keywords.
         // Source: https://doc.rust-lang.org/reference/keywords.html
@@ -68,6 +74,12 @@ pub fn to_rust_ident(name: &str) -> String {
         "virtual" => "virtual_".into(),
         "yield" => "yield_".into(),
         "try" => "try_".into(),
-        s => s.to_snake_case(),
+        s => {
+            if same_language {
+                s.to_string()
+            } else {
+                s.to_snake_case()
+            }
+        }
     }
 }

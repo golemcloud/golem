@@ -49,17 +49,17 @@ message LaunchNewWorkerRequest {
 message LaunchNewWorkerResponse {
   oneof result {
     LaunchNewWorkerSuccessResponse success = 1;
-    golem.worker.v1.WorkerError error = 2;
+    golem.worker.v1.AgentError error = 2;
   }
 }
 
 message LaunchNewWorkerSuccessResponse {
-  golem.worker.WorkerId workerId = 1;
+  golem.worker.AgentId agentId = 1;
   uint64 component_version = 2;
 }
 
 message CompletePromiseRequest {
-  golem.worker.WorkerId workerId = 1;
+  golem.worker.AgentId agentId = 1;
   golem.worker.CompleteParameters completeParameters = 2;
   golem.auth.AuthCtx auth_ctx = 3;
 }
@@ -67,13 +67,13 @@ message CompletePromiseRequest {
 message CompletePromiseResponse {
   oneof result {
     bool success = 1;
-    golem.worker.v1.WorkerError error = 2;
+    golem.worker.v1.AgentError error = 2;
   }
 }
 
 message ForkWorkerRequest {
-  golem.worker.WorkerId source_worker_id = 1;
-  golem.worker.WorkerId target_worker_id = 2;
+  golem.worker.AgentId source_agent_id = 1;
+  golem.worker.AgentId target_agent_id = 2;
   uint64 oplog_index_cutoff = 3;
   golem.auth.AuthCtx auth_ctx = 4;
 }
@@ -81,12 +81,12 @@ message ForkWorkerRequest {
 message ForkWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.v1.WorkerError error  = 2;
+    golem.worker.v1.AgentError error  = 2;
   }
 }
 
 message ResumeWorkerRequest {
-  golem.worker.WorkerId workerId = 1;
+  golem.worker.AgentId agentId = 1;
   optional bool force = 2;
   golem.auth.AuthCtx auth_ctx = 3;
 }
@@ -94,12 +94,12 @@ message ResumeWorkerRequest {
 message ResumeWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    golem.worker.v1.WorkerError error = 2;
+    golem.worker.v1.AgentError error = 2;
   }
 }
 
 message UpdateWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   uint64 target_revision = 2;
   golem.worker.UpdateMode mode = 3;
   golem.auth.AuthCtx auth_ctx = 4;
@@ -109,7 +109,7 @@ message UpdateWorkerRequest {
 message UpdateWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    WorkerError error = 2;
+    AgentError error = 2;
   }
 }
 
@@ -118,7 +118,7 @@ message ListFileSystemNodeResponse {
 }
 
 message RevertWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   golem.common.RevertWorkerTarget target = 2;
   golem.auth.AuthCtx auth_ctx = 3;
 }
@@ -126,7 +126,7 @@ message RevertWorkerRequest {
 message RevertWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    WorkerError error = 2;
+    AgentError error = 2;
   }
 }
 
@@ -136,7 +136,7 @@ enum AgentInvocationMode {
 }
 
 message InvokeAgentRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.AgentId agent_id = 1;
   string method_name = 2;
   golem.component.UntypedDataValue method_parameters = 3;
   AgentInvocationMode mode = 4;
@@ -150,7 +150,7 @@ message InvokeAgentRequest {
 message InvokeAgentResponse {
   oneof result {
     InvokeAgentSuccess success = 1;
-    WorkerError error = 2;
+    AgentError error = 2;
   }
 }
 

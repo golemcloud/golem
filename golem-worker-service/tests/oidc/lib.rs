@@ -21,10 +21,12 @@ use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_f
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
+use golem_test_framework::components::redis::spawned_tls::{CERT_PEM, SpawnedRedisTls};
 use golem_worker_service::custom_api::oidc::session_store::SessionStore;
 use golem_worker_service::custom_api::oidc::session_store::{
     RedisSessionStore, SqliteSessionStore,
 };
+use rustls::RootCertStore;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -38,6 +40,10 @@ pub struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
+        // The AWS SDK crates transitively pull in both aws-lc-rs and ring as rustls backends.
+        // When both are compiled in, rustls requires an explicit process-level default.
+        // We use ring consistently with the rest of the workspace.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         init_tracing_with_default_debug_env_filter(
             &TracingConfig::test_pretty_without_time("worker-service-session-store-tests")
                 .with_env_overrides(),
@@ -138,4 +144,64 @@ async fn redis_store_fast_expiry(
     redis_pool: &RedisPool,
 ) -> Arc<dyn SessionStore> {
     Arc::new(redis_store(redis_pool, 100).await)
+}
+
+#[test_dep(tagged_as = "tls")]
+async fn redis_tls() -> Arc<dyn Redis> {
+    Arc::new(SpawnedRedisTls::new(
+        6380,
+        "".to_string(),
+        Level::INFO,
+        Level::ERROR,
+    ))
+}
+
+#[test_dep(tagged_as = "tls")]
+async fn redis_tls_pool(#[tagged_as("tls")] redis_tls: &Arc<dyn Redis>) -> RedisPool {
+    // Build a rustls ClientConfig that trusts the self-signed CA used by SpawnedRedisTls.
+    let mut cert_store = RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut std::io::Cursor::new(CERT_PEM)) {
+        cert_store
+            .add(cert.expect("valid cert PEM"))
+            .expect("cert added to store");
+    }
+    let tls_client_config = rustls::ClientConfig::builder()
+        .with_root_certificates(cert_store)
+        .with_no_client_auth();
+    let tls_connector = fred::types::config::TlsConnector::from(tls_client_config).into();
+
+    let redis_config = golem_common::config::RedisConfig {
+        host: redis_tls.public_host(),
+        port: redis_tls.public_port(),
+        tls: true,
+        ..Default::default()
+    };
+
+    let mut fred_config = fred::prelude::Config::from_url(redis_config.url().as_str()).unwrap();
+    fred_config.tls = Some(tls_connector);
+
+    let policy = fred::prelude::ReconnectPolicy::new_exponential(
+        redis_config.retries.max_attempts,
+        redis_config.retries.min_delay.as_millis() as u32,
+        redis_config.retries.max_delay.as_millis() as u32,
+        redis_config.retries.multiplier.round() as u32,
+    );
+    let pool = fred::clients::Pool::new(
+        fred_config,
+        None,
+        None,
+        Some(policy),
+        redis_config.pool_size,
+    )
+    .unwrap();
+    RedisPool::new(pool, redis_config.key_prefix.clone())
+}
+
+#[test_dep(tagged_as = "redis_tls")]
+async fn redis_tls_store(
+    _tracing: &Tracing,
+    #[tagged_as("tls")] redis_tls_pool: &RedisPool,
+) -> Arc<dyn SessionStore> {
+    let expiration = fred::types::Expiration::PX(6000);
+    Arc::new(RedisSessionStore::new(redis_tls_pool.clone(), expiration))
 }

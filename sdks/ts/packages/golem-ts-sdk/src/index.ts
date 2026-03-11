@@ -23,6 +23,7 @@ import { AgentInitiator } from './internal/agentInitiator';
 import { TypeInfoInternal } from './internal/typeInfoInternal';
 import { loadConfigKey } from './internal/mapping/values/dataValue';
 import { Type } from '@golemcloud/golem-ts-types-core';
+import { setAgentId } from './internal/registry/agentId';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -71,6 +72,8 @@ async function initialize(
     );
   }
 
+  setAgentId(getRawSelfAgentId());
+
   const initiateResult = initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
@@ -103,7 +106,7 @@ async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
   try {
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
-    // Have to throw AgentError, as the discover-agent-types WIT function returns result<list<agent-type>, AgentError>
+    // Have to throw RuntimeError, as the discover-agent-types WIT function returns result<list<agent-type>, RuntimeError>
     if (isAgentError(e)) {
       throw e;
     } else {
