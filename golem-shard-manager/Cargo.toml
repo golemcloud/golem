@@ -55,10 +55,8 @@ url = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { workspace = true }
-sqlx = { workspace = true }
 test-r = { workspace = true }
 tracing-test = { workspace = true }
-url = { workspace = true }
 uuid = { workspace = true }
 
 [features]
