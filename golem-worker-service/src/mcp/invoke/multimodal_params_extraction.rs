@@ -138,3 +138,127 @@ pub fn extract_multimodal_element_value(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::base_model::agent::{BinaryDescriptor, TextDescriptor, TextType};
+    use golem_wasm::analysis::analysed_type::str;
+    use serde_json::json;
+    use test_r::test;
+
+    #[test]
+    fn extracts_component_model_string() {
+        let schema = ElementSchema::ComponentModel(ComponentModelElementSchema {
+            element_type: str(),
+        });
+        let value = json!("hello");
+        let result = extract_multimodal_element_value("msg", &value, &schema, 0).unwrap();
+        assert!(matches!(result, UntypedElementValue::ComponentModel(_)));
+    }
+
+    #[test]
+    fn extracts_text_without_language_code() {
+        let schema = ElementSchema::UnstructuredText(TextDescriptor { restrictions: None });
+        let value = json!({"data": "some text"});
+        let result = extract_multimodal_element_value("note", &value, &schema, 0).unwrap();
+        match result {
+            UntypedElementValue::UnstructuredText(t) => match t.value {
+                TextReference::Inline(src) => {
+                    assert_eq!(src.data, "some text");
+                    assert!(src.text_type.is_none());
+                }
+                _ => panic!("expected inline"),
+            },
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn extracts_text_with_language_code() {
+        let schema = ElementSchema::UnstructuredText(TextDescriptor { restrictions: None });
+        let value = json!({"data": "bonjour", "languageCode": "fr"});
+        let result = extract_multimodal_element_value("note", &value, &schema, 0).unwrap();
+        match result {
+            UntypedElementValue::UnstructuredText(t) => match t.value {
+                TextReference::Inline(src) => {
+                    assert_eq!(src.data, "bonjour");
+                    assert_eq!(src.text_type.unwrap().language_code, "fr");
+                }
+                _ => panic!("expected inline"),
+            },
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn rejects_disallowed_language_code() {
+        let schema = ElementSchema::UnstructuredText(TextDescriptor {
+            restrictions: Some(vec![TextType {
+                language_code: "en".to_string(),
+            }]),
+        });
+        let value = json!({"data": "hola", "languageCode": "es"});
+        let err = extract_multimodal_element_value("note", &value, &schema, 1).unwrap_err();
+        assert!(
+            err.contains("language code 'es' is not allowed"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn extracts_binary() {
+        let schema = ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None });
+        let value = json!({"data": "AQID", "mimeType": "image/png"});
+        let result = extract_multimodal_element_value("img", &value, &schema, 0).unwrap();
+        match result {
+            UntypedElementValue::UnstructuredBinary(b) => match b.value {
+                BinaryReference::Inline(src) => {
+                    assert_eq!(src.data, vec![1, 2, 3]);
+                    assert_eq!(src.binary_type.mime_type, "image/png");
+                }
+                _ => panic!("expected inline"),
+            },
+            _ => panic!("expected binary"),
+        }
+    }
+
+    #[test]
+    fn rejects_disallowed_mime_type() {
+        let schema = ElementSchema::UnstructuredBinary(BinaryDescriptor {
+            restrictions: Some(vec![BinaryType {
+                mime_type: "image/png".to_string(),
+            }]),
+        });
+        let value = json!({"data": "AQID", "mimeType": "image/jpeg"});
+        let err = extract_multimodal_element_value("img", &value, &schema, 0).unwrap_err();
+        assert!(
+            err.contains("MIME type 'image/jpeg' is not allowed"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn error_on_invalid_base64() {
+        let schema = ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None });
+        let value = json!({"data": "!!!invalid!!!", "mimeType": "image/png"});
+        let err = extract_multimodal_element_value("img", &value, &schema, 0).unwrap_err();
+        assert!(err.contains("base64"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_missing_data_field_text() {
+        let schema = ElementSchema::UnstructuredText(TextDescriptor { restrictions: None });
+        let value = json!({"other": "stuff"});
+        let err = extract_multimodal_element_value("note", &value, &schema, 0).unwrap_err();
+        assert!(err.contains("missing 'data'"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_missing_mime_type() {
+        let schema = ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None });
+        let value = json!({"data": "AQID"});
+        let err = extract_multimodal_element_value("img", &value, &schema, 0).unwrap_err();
+        assert!(err.contains("mimeType"), "got: {err}");
+    }
+}

@@ -83,3 +83,84 @@ pub fn extract_constructor_input_values(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::base_model::agent::{NamedElementSchemas, TextDescriptor};
+    use golem_wasm::analysis::analysed_type::{str, u32};
+    use serde_json::json;
+    use test_r::test;
+
+    fn string_schema(name: &str) -> NamedElementSchema {
+        NamedElementSchema {
+            name: name.to_string(),
+            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                element_type: str(),
+            }),
+        }
+    }
+
+    fn u32_schema(name: &str) -> NamedElementSchema {
+        NamedElementSchema {
+            name: name.to_string(),
+            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                element_type: u32(),
+            }),
+        }
+    }
+
+    #[test]
+    fn extracts_string_param() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![string_schema("name")],
+        });
+        let args: JsonObject = json!({"name": "alice"}).as_object().unwrap().clone();
+        let result = extract_constructor_input_values(&args, &schema).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn extracts_multiple_params() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![string_schema("name"), u32_schema("age")],
+        });
+        let args: JsonObject = json!({"name": "alice", "age": 30})
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = extract_constructor_input_values(&args, &schema).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn error_on_missing_required_param() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![string_schema("name")],
+        });
+        let args: JsonObject = json!({}).as_object().unwrap().clone();
+        let err = extract_constructor_input_values(&args, &schema).unwrap_err();
+        assert!(err.contains("Missing parameter: name"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_unstructured_text_constructor() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "desc".to_string(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            }],
+        });
+        let args: JsonObject = json!({"desc": "hello"}).as_object().unwrap().clone();
+        let err = extract_constructor_input_values(&args, &schema).unwrap_err();
+        assert!(err.contains("unstructured-text"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_multimodal_schema() {
+        let schema = DataSchema::Multimodal(NamedElementSchemas { elements: vec![] });
+        let args: JsonObject = json!({}).as_object().unwrap().clone();
+        let err = extract_constructor_input_values(&args, &schema).unwrap_err();
+        assert!(err.contains("multimodal"), "got: {err}");
+    }
+}

@@ -225,3 +225,193 @@ fn convert_to_resource_content(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::base_model::agent::{
+        BinaryDescriptor, ComponentModelElementSchema, ElementSchema, NamedElementSchema,
+        NamedElementSchemas, TextDescriptor, UntypedNamedElementValue, Url as AgentUrl,
+    };
+    use golem_wasm::Value;
+    use golem_wasm::analysis::analysed_type::str;
+    use serde_json::json;
+    use test_r::test;
+
+    const TEST_URI: &str = "golem://Agent/resource";
+
+    fn str_output_schema() -> DataSchema {
+        DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "result".to_string(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: str(),
+                }),
+            }],
+        })
+    }
+
+    #[test]
+    fn component_model_to_text_resource_json() {
+        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+            Value::String("sunny".to_string()),
+        )]);
+        let contents =
+            map_agent_response_to_resource_contents(Some(response), &str_output_schema(), TEST_URI)
+                .unwrap();
+        assert_eq!(contents.len(), 1);
+        match &contents[0] {
+            ResourceContents::TextResourceContents {
+                uri,
+                mime_type,
+                text,
+                ..
+            } => {
+                assert_eq!(uri, TEST_URI);
+                assert_eq!(mime_type.as_deref(), Some("application/json"));
+                let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+                assert_eq!(parsed, json!("sunny"));
+            }
+            _ => panic!("expected TextResourceContents"),
+        }
+    }
+
+    #[test]
+    fn text_element_to_text_resource() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "report".to_string(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            }],
+        });
+        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredText(
+            TextReferenceValue {
+                value: TextReference::Inline(TextSource {
+                    data: "rainy day".to_string(),
+                    text_type: None,
+                }),
+            },
+        )]);
+        let contents =
+            map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
+        assert_eq!(contents.len(), 1);
+        match &contents[0] {
+            ResourceContents::TextResourceContents { text, .. } => {
+                assert_eq!(text, "rainy day");
+            }
+            _ => panic!("expected TextResourceContents"),
+        }
+    }
+
+    #[test]
+    fn binary_element_to_blob_resource() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "image".to_string(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            }],
+        });
+        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredBinary(
+            BinaryReferenceValue {
+                value: BinaryReference::Inline(BinarySource {
+                    data: vec![1, 2, 3],
+                    binary_type: BinaryType {
+                        mime_type: "image/png".to_string(),
+                    },
+                }),
+            },
+        )]);
+        let contents =
+            map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
+        assert_eq!(contents.len(), 1);
+        match &contents[0] {
+            ResourceContents::BlobResourceContents {
+                blob, mime_type, ..
+            } => {
+                assert_eq!(blob, "AQID");
+                assert_eq!(mime_type.as_deref(), Some("image/png"));
+            }
+            _ => panic!("expected BlobResourceContents"),
+        }
+    }
+
+    #[test]
+    fn none_response_returns_empty() {
+        let contents =
+            map_agent_response_to_resource_contents(None, &str_output_schema(), TEST_URI).unwrap();
+        assert!(contents.is_empty());
+    }
+
+    #[test]
+    fn multimodal_returns_multiple_contents() {
+        let schema = DataSchema::Multimodal(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "text".to_string(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                },
+                NamedElementSchema {
+                    name: "img".to_string(),
+                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                        restrictions: None,
+                    }),
+                },
+            ],
+        });
+        let response = UntypedDataValue::Multimodal(vec![
+            UntypedNamedElementValue {
+                name: "text".to_string(),
+                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "snow report".to_string(),
+                        text_type: None,
+                    }),
+                }),
+            },
+            UntypedNamedElementValue {
+                name: "img".to_string(),
+                value: UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: vec![1, 2, 3],
+                        binary_type: BinaryType {
+                            mime_type: "image/png".to_string(),
+                        },
+                    }),
+                }),
+            },
+        ]);
+        let contents =
+            map_agent_response_to_resource_contents(Some(response), &schema, TEST_URI).unwrap();
+        assert_eq!(contents.len(), 2);
+        assert!(
+            matches!(&contents[0], ResourceContents::TextResourceContents { text, .. } if text == "snow report")
+        );
+        assert!(
+            matches!(&contents[1], ResourceContents::BlobResourceContents { blob, .. } if blob == "AQID")
+        );
+    }
+
+    #[test]
+    fn error_on_text_url_reference() {
+        let elem = ElementValue::UnstructuredText(UnstructuredTextElementValue {
+            value: TextReference::Url(AgentUrl {
+                value: "https://example.com".to_string(),
+            }),
+            descriptor: TextDescriptor { restrictions: None },
+        });
+        let err = convert_to_resource_content(elem, TEST_URI).unwrap_err();
+        assert!(err.message.contains("URL"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn error_on_binary_url_reference() {
+        let elem = ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+            value: BinaryReference::Url(AgentUrl {
+                value: "https://example.com/img.png".to_string(),
+            }),
+            descriptor: BinaryDescriptor { restrictions: None },
+        });
+        let err = convert_to_resource_content(elem, TEST_URI).unwrap_err();
+        assert!(err.message.contains("URL"), "got: {}", err.message);
+    }
+}

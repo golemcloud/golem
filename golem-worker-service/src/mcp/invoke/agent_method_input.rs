@@ -216,3 +216,182 @@ fn extract_single_element_value(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::base_model::agent::{
+        BinaryDescriptor, ComponentModelElementSchema, NamedElementSchemas, TextDescriptor,
+    };
+    use golem_wasm::analysis::analysed_type::{option, str};
+    use serde_json::json;
+    use test_r::test;
+
+    fn string_schema(name: &str) -> NamedElementSchema {
+        NamedElementSchema {
+            name: name.to_string(),
+            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                element_type: str(),
+            }),
+        }
+    }
+
+    fn text_schema(name: &str) -> NamedElementSchema {
+        NamedElementSchema {
+            name: name.to_string(),
+            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+        }
+    }
+
+    fn binary_schema(name: &str) -> NamedElementSchema {
+        NamedElementSchema {
+            name: name.to_string(),
+            schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+        }
+    }
+
+    #[test]
+    fn tuple_extracts_component_model_param() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![string_schema("city")],
+        });
+        let args: JsonObject = json!({"city": "Sydney"}).as_object().unwrap().clone();
+        let result = get_agent_method_input(&args, &schema).unwrap();
+        assert!(matches!(result, UntypedDataValue::Tuple(elems) if elems.len() == 1));
+    }
+
+    #[test]
+    fn tuple_extracts_unstructured_text() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![text_schema("report")],
+        });
+        let args: JsonObject = json!({"report": {"data": "hello world"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = get_agent_method_input(&args, &schema).unwrap();
+        match result {
+            UntypedDataValue::Tuple(elems) => match &elems[0] {
+                UntypedElementValue::UnstructuredText(t) => match &t.value {
+                    TextReference::Inline(src) => assert_eq!(src.data, "hello world"),
+                    _ => panic!("expected inline text"),
+                },
+                _ => panic!("expected unstructured text"),
+            },
+            _ => panic!("expected tuple"),
+        }
+    }
+
+    #[test]
+    fn tuple_extracts_unstructured_binary() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![binary_schema("image")],
+        });
+        // base64("abc") = "YWJj"
+        let args: JsonObject = json!({"image": {"data": "YWJj", "mimeType": "image/png"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = get_agent_method_input(&args, &schema).unwrap();
+        match result {
+            UntypedDataValue::Tuple(elems) => match &elems[0] {
+                UntypedElementValue::UnstructuredBinary(b) => match &b.value {
+                    BinaryReference::Inline(src) => {
+                        assert_eq!(src.data, b"abc");
+                        assert_eq!(src.binary_type.mime_type, "image/png");
+                    }
+                    _ => panic!("expected inline binary"),
+                },
+                _ => panic!("expected unstructured binary"),
+            },
+            _ => panic!("expected tuple"),
+        }
+    }
+
+    #[test]
+    fn error_on_missing_required_param() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![string_schema("city")],
+        });
+        let args: JsonObject = json!({}).as_object().unwrap().clone();
+        let err = get_agent_method_input(&args, &schema).unwrap_err();
+        assert!(err.contains("Missing parameter: city"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_invalid_base64() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![binary_schema("image")],
+        });
+        let args: JsonObject =
+            json!({"image": {"data": "not-valid-b64!!!", "mimeType": "image/png"}})
+                .as_object()
+                .unwrap()
+                .clone();
+        let err = get_agent_method_input(&args, &schema).unwrap_err();
+        assert!(err.contains("base64"), "got: {err}");
+    }
+
+    #[test]
+    fn error_on_binary_missing_mime_type() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![binary_schema("image")],
+        });
+        let args: JsonObject = json!({"image": {"data": "YWJj"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let err = get_agent_method_input(&args, &schema).unwrap_err();
+        assert!(err.contains("mimeType"), "got: {err}");
+    }
+
+    #[test]
+    fn multimodal_extracts_parts() {
+        let schema = DataSchema::Multimodal(NamedElementSchemas {
+            elements: vec![text_schema("description"), binary_schema("photo")],
+        });
+        let args: JsonObject = json!({
+            "parts": [
+                {"name": "description", "value": {"data": "a photo"}},
+                {"name": "photo", "value": {"data": "AQID", "mimeType": "image/png"}}
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let result = get_agent_method_input(&args, &schema).unwrap();
+        assert!(matches!(result, UntypedDataValue::Multimodal(parts) if parts.len() == 2));
+    }
+
+    #[test]
+    fn multimodal_error_on_unknown_part_name() {
+        let schema = DataSchema::Multimodal(NamedElementSchemas {
+            elements: vec![text_schema("description")],
+        });
+        let args: JsonObject = json!({
+            "parts": [
+                {"name": "unknown_field", "value": {"data": "hello"}}
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let err = get_agent_method_input(&args, &schema).unwrap_err();
+        assert!(err.contains("unknown element name"), "got: {err}");
+    }
+
+    #[test]
+    fn tuple_missing_optional_param_defaults_to_none() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "note".to_string(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: option(str()),
+                }),
+            }],
+        });
+        let args: JsonObject = json!({}).as_object().unwrap().clone();
+        let result = get_agent_method_input(&args, &schema).unwrap();
+        assert!(matches!(result, UntypedDataValue::Tuple(elems) if elems.len() == 1));
+    }
+}

@@ -215,3 +215,166 @@ fn convert_elem_value_to_mcp_tool_response(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::base_model::agent::{
+        BinaryDescriptor, ComponentModelElementSchema, ElementSchema, NamedElementSchema,
+        NamedElementSchemas, TextDescriptor, TextType, UntypedNamedElementValue, Url,
+    };
+    use golem_wasm::Value;
+    use golem_wasm::analysis::{AnalysedType, TypeStr};
+    use serde_json::json;
+    use test_r::test;
+
+    fn str_output_schema() -> DataSchema {
+        DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "result".to_string(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: AnalysedType::Str(TypeStr),
+                }),
+            }],
+        })
+    }
+
+    #[test]
+    fn tuple_single_component_model_to_structured_json() {
+        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+            Value::String("hello".to_string()),
+        )]);
+        let result = map_agent_response_to_tool_result(response, &str_output_schema()).unwrap();
+        assert_eq!(result.structured_content, Some(json!("hello")));
+        assert_eq!(result.is_error, Some(false));
+    }
+
+    #[test]
+    fn tuple_empty_returns_success() {
+        let schema = DataSchema::Tuple(NamedElementSchemas { elements: vec![] });
+        let response = UntypedDataValue::Tuple(vec![]);
+        let result = map_agent_response_to_tool_result(response, &schema).unwrap();
+        assert!(result.content.is_empty());
+        assert_eq!(result.is_error, Some(false));
+    }
+
+    #[test]
+    fn tuple_text_element_to_data_object() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "report".to_string(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+            }],
+        });
+        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredText(
+            TextReferenceValue {
+                value: TextReference::Inline(TextSource {
+                    data: "weather is sunny".to_string(),
+                    text_type: Some(TextType {
+                        language_code: "en".to_string(),
+                    }),
+                }),
+            },
+        )]);
+        let result = map_agent_response_to_tool_result(response, &schema).unwrap();
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["data"], "weather is sunny");
+        assert_eq!(structured["languageCode"], "en");
+    }
+
+    #[test]
+    fn tuple_binary_element_to_base64_object() {
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "image".to_string(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
+            }],
+        });
+        let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredBinary(
+            BinaryReferenceValue {
+                value: BinaryReference::Inline(BinarySource {
+                    data: vec![1, 2, 3],
+                    binary_type: BinaryType {
+                        mime_type: "image/png".to_string(),
+                    },
+                }),
+            },
+        )]);
+        let result = map_agent_response_to_tool_result(response, &schema).unwrap();
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["data"], "AQID");
+        assert_eq!(structured["mimeType"], "image/png");
+    }
+
+    #[test]
+    fn multimodal_response_to_parts_array() {
+        let schema = DataSchema::Multimodal(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "desc".to_string(),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+                },
+                NamedElementSchema {
+                    name: "photo".to_string(),
+                    schema: ElementSchema::UnstructuredBinary(BinaryDescriptor {
+                        restrictions: None,
+                    }),
+                },
+            ],
+        });
+        let response = UntypedDataValue::Multimodal(vec![
+            UntypedNamedElementValue {
+                name: "desc".to_string(),
+                value: UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "a photo".to_string(),
+                        text_type: None,
+                    }),
+                }),
+            },
+            UntypedNamedElementValue {
+                name: "photo".to_string(),
+                value: UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: vec![1, 2, 3],
+                        binary_type: BinaryType {
+                            mime_type: "image/png".to_string(),
+                        },
+                    }),
+                }),
+            },
+        ]);
+        let result = map_agent_response_to_tool_result(response, &schema).unwrap();
+        let structured = result.structured_content.unwrap();
+        let parts = structured["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["name"], "desc");
+        assert_eq!(parts[0]["value"]["data"], "a photo");
+        assert_eq!(parts[1]["name"], "photo");
+        assert_eq!(parts[1]["value"]["data"], "AQID");
+    }
+
+    #[test]
+    fn error_on_text_url_reference() {
+        let elem = ElementValue::UnstructuredText(UnstructuredTextElementValue {
+            value: TextReference::Url(Url {
+                value: "https://example.com".to_string(),
+            }),
+            descriptor: TextDescriptor { restrictions: None },
+        });
+        let err = convert_elem_value_to_mcp_tool_response(&elem).unwrap_err();
+        assert!(err.message.contains("URL"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn error_on_binary_url_reference() {
+        let elem = ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+            value: BinaryReference::Url(Url {
+                value: "https://example.com/img.png".to_string(),
+            }),
+            descriptor: BinaryDescriptor { restrictions: None },
+        });
+        let err = convert_elem_value_to_mcp_tool_response(&elem).unwrap_err();
+        assert!(err.message.contains("URL"), "got: {}", err.message);
+    }
+}
