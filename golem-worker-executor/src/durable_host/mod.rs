@@ -544,12 +544,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            function_type = ?function_type,
-            is_live = self.state.is_live(),
-            "begin_function called"
-        );
         if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
             || matches!(
                 *function_type,
@@ -562,21 +556,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .worker()
                     .add_and_commit_oplog(OplogEntry::begin_remote_write())
                     .await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    begin_index = %begin_index,
-                    "begin_function (live): wrote BeginRemoteWrite"
-                );
                 Ok(begin_index)
             } else {
                 let (begin_index, _) =
                     crate::get_oplog_entry!(self.state.replay_state, OplogEntry::BeginRemoteWrite)?;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    begin_index = %begin_index,
-                    assume_idempotence = self.state.assume_idempotence,
-                    "begin_function (replay): got BeginRemoteWrite"
-                );
                 if !self.state.assume_idempotence {
                     let end_index = self
                         .state
@@ -690,13 +673,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            function_type = ?function_type,
-            begin_index = %begin_index,
-            is_live = self.is_live(),
-            "end_function called"
-        );
         if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
             || matches!(
                 *function_type,
@@ -704,30 +680,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
         {
             if self.is_live() {
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    begin_index = %begin_index,
-                    "end_function (live): writing EndRemoteWrite"
-                );
                 self.state
                     .oplog
                     .add(OplogEntry::end_remote_write(begin_index))
                     .await;
                 Ok(())
             } else {
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    begin_index = %begin_index,
-                    "end_function (replay): looking for EndRemoteWrite"
-                );
-                let (end_idx, _) =
+                let (_, _) =
                     crate::get_oplog_entry!(self.state.replay_state, OplogEntry::EndRemoteWrite)?;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    begin_index = %begin_index,
-                    end_index = %end_idx,
-                    "end_function (replay): found EndRemoteWrite"
-                );
                 Ok(())
             }
         } else {

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
@@ -50,13 +49,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<Vec<u8>, StreamError> {
         let handle = self_.rep();
         if is_incoming_http_body_stream(self, &self_) {
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                len,
-                is_live = self.state.is_live(),
-                "InputStream::read (http body stream)"
-            );
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
             let durability = Durability::<HttpTypesIncomingBodyStreamRead>::new(
@@ -102,13 +94,6 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<Vec<u8>, StreamError> {
         if is_incoming_http_body_stream(self, &self_) {
             let handle = self_.rep();
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                len,
-                is_live = self.state.is_live(),
-                "InputStream::blocking_read (http body stream)"
-            );
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
             let durability = Durability::<HttpTypesIncomingBodyStreamBlockingRead>::new(
@@ -236,25 +221,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
         if is_incoming_http_body_stream(self, &rep) {
             let handle = rep.rep();
-            let tracking_info = self
-                .state
-                .open_http_requests
-                .get(&handle)
-                .map(|s| (s.close_owner.clone(), s.begin_index, s.body_handle));
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                is_live = self.state.is_live(),
-                tracking_info = ?tracking_info,
-                "InputStream::drop (http body stream)"
-            );
             if let Some(state) = self.state.open_http_requests.get(&handle) {
                 if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                    debug!(
-                        worker_id = %self.owned_agent_id.agent_id,
-                        handle,
-                        "InputStream::drop: ending http request (we are close owner)"
-                    );
                     end_http_request(self, handle).await?;
                 }
             }
@@ -269,13 +237,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                stream_rep = rep,
-                begin_index = %state.begin_index,
-                is_live = self.state.is_live(),
-                "OutputStream::check_write (http body stream) - enter"
-            );
             let durability = Durability::<HttpTypesOutgoingBodyStreamCheckWrite>::new(
                 self,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
@@ -285,12 +246,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
             let result = if durability.is_live() {
                 let result = HostOutputStream::check_write(self.table(), self_).await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    stream_rep = rep,
-                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                    "OutputStream::check_write (http body stream) - live result"
-                );
                 durability
                     .persist(
                         self,
@@ -301,27 +256,14 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     )
                     .await
             } else {
-                let result = durability.replay(self).await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    stream_rep = rep,
-                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                    "OutputStream::check_write (http body stream) - replay result"
-                );
-                result
+                durability.replay(self).await
             }
             .map_err(StreamError::from)?;
 
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "check_write");
-            let result = HostOutputStream::check_write(self.table(), self_).await;
-            debug!(
-                stream_rep = rep,
-                ?result,
-                "output_stream::check_write result"
-            );
-            result
+            HostOutputStream::check_write(self.table(), self_).await
         }
     }
 
@@ -334,14 +276,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                stream_rep = rep,
-                begin_index = %state.begin_index,
-                is_live = self.state.is_live(),
-                content_len = contents.len(),
-                "OutputStream::write (http body stream) - enter"
-            );
             let durability = Durability::<HttpTypesOutgoingBodyStreamWrite>::new(
                 self,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
@@ -351,12 +285,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
             let result = if durability.is_live() {
                 let result = HostOutputStream::write(self.table(), self_, contents).await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    stream_rep = rep,
-                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                    "OutputStream::write (http body stream) - live result"
-                );
                 durability
                     .persist(
                         self,
@@ -367,14 +295,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     )
                     .await
             } else {
-                let result = durability.replay(self).await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    stream_rep = rep,
-                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                    "OutputStream::write (http body stream) - replay result"
-                );
-                result
+                durability.replay(self).await
             }
             .map_err(StreamError::from)?;
 
@@ -407,15 +328,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<(), StreamError> {
         // This is already composed from write + blocking_flush, both of which
         // are individually made durable, so no additional oplog entry needed.
-        let rep = self_.rep();
-        debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            stream_rep = rep,
-            is_http = is_outgoing_http_body_stream(self, rep),
-            is_live = self.state.is_live(),
-            content_len = contents.len(),
-            "OutputStream::blocking_write_and_flush - enter"
-        );
         let self2 = Resource::new_borrow(self_.rep());
         self.write(self_, contents).await?;
         self.blocking_flush(self2).await?;
@@ -426,13 +338,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                stream_rep = rep,
-                begin_index = %state.begin_index,
-                is_live = self.state.is_live(),
-                "OutputStream::flush (http body stream) - enter"
-            );
             let durability = Durability::<HttpTypesOutgoingBodyStreamFlush>::new(
                 self,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
@@ -442,12 +347,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
             let result = if durability.is_live() {
                 let result = HostOutputStream::flush(self.table(), self_).await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    stream_rep = rep,
-                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                    "OutputStream::flush (http body stream) - live result"
-                );
                 durability
                     .persist(
                         self,
@@ -458,14 +357,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     )
                     .await
             } else {
-                let result = durability.replay(self).await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    stream_rep = rep,
-                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                    "OutputStream::flush (http body stream) - replay result"
-                );
-                result
+                durability.replay(self).await
             }
             .map_err(StreamError::from)?;
 
@@ -480,13 +372,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                stream_rep = rep,
-                begin_index = %state.begin_index,
-                is_live = self.state.is_live(),
-                "OutputStream::blocking_flush (http body stream) - enter"
-            );
             let durability = Durability::<HttpTypesOutgoingBodyStreamBlockingFlush>::new(
                 self,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
@@ -496,12 +381,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
             let result = if durability.is_live() {
                 let result = HostOutputStream::blocking_flush(self.table(), self_).await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    stream_rep = rep,
-                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                    "OutputStream::blocking_flush (http body stream) - live result"
-                );
                 durability
                     .persist(
                         self,
@@ -512,14 +391,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     )
                     .await
             } else {
-                let result = durability.replay(self).await;
-                debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    stream_rep = rep,
-                    result = ?result.as_ref().map_err(|e| format!("{e:?}")),
-                    "OutputStream::blocking_flush (http body stream) - replay result"
-                );
-                result
+                durability.replay(self).await
             }
             .map_err(StreamError::from)?;
 
@@ -531,15 +403,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     }
 
     fn subscribe(&mut self, self_: Resource<OutputStream>) -> wasmtime::Result<Resource<Pollable>> {
-        let rep = self_.rep();
-        let is_http = is_outgoing_http_body_stream(self, rep);
-        debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            stream_rep = rep,
-            is_http,
-            is_live = self.state.is_live(),
-            "OutputStream::subscribe"
-        );
         self.observe_function_call("io::streams::output_stream", "subscribe");
         HostOutputStream::subscribe(self.table(), self_)
     }
@@ -552,14 +415,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                stream_rep = rep,
-                begin_index = %state.begin_index,
-                is_live = self.state.is_live(),
-                len,
-                "OutputStream::write_zeroes (http body stream) - enter"
-            );
             let durability = Durability::<HttpTypesOutgoingBodyStreamWriteZeroes>::new(
                 self,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
@@ -611,14 +466,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                stream_rep = rep,
-                begin_index = %state.begin_index,
-                is_live = self.state.is_live(),
-                len,
-                "OutputStream::splice (http body stream) - enter"
-            );
             let durability = Durability::<HttpTypesOutgoingBodyStreamSplice>::new(
                 self,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
@@ -658,14 +505,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
             let state = get_http_output_stream_state(self, rep)?;
-            debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                stream_rep = rep,
-                begin_index = %state.begin_index,
-                is_live = self.state.is_live(),
-                len,
-                "OutputStream::blocking_splice (http body stream) - enter"
-            );
             let durability = Durability::<HttpTypesOutgoingBodyStreamBlockingSplice>::new(
                 self,
                 DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
@@ -698,17 +537,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
     async fn drop(&mut self, rep: Resource<OutputStream>) -> wasmtime::Result<()> {
         let handle = rep.rep();
-        let was_http = self
-            .state
-            .find_request_handle_by_output_stream(handle)
-            .is_some();
-        debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            stream_rep = handle,
-            was_http,
-            is_live = self.state.is_live(),
-            "OutputStream::drop"
-        );
         self.observe_function_call("io::streams::output_stream", "drop");
         if let Some(request_handle) = self.state.find_request_handle_by_output_stream(handle) {
             if let Some(state) = self.state.open_http_requests.get_mut(&request_handle) {
@@ -783,12 +611,6 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
     result: &Result<T, SerializableStreamError>,
 ) -> Result<(), WorkerExecutorError> {
     if matches!(result, Err(SerializableStreamError::Closed)) {
-        debug!(
-            worker_id = %ctx.owned_agent_id.agent_id,
-            handle,
-            is_live = ctx.state.is_live(),
-            "end_http_request_if_closed: stream is closed"
-        );
         if let Some(state) = ctx.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
                 // If the stream has a recorded body handle, transfer tracking back
@@ -797,12 +619,6 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
                 // making FutureTrailers::get() durable.
                 let body_handle = state.body_handle;
                 if let Some(body_handle) = body_handle {
-                    debug!(
-                        worker_id = %ctx.owned_agent_id.agent_id,
-                        handle,
-                        body_handle,
-                        "end_http_request_if_closed: transferring back to body"
-                    );
                     continue_http_request(
                         ctx,
                         handle,
@@ -810,11 +626,6 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
                         HttpRequestCloseOwner::IncomingBodyDropOrFinish,
                     );
                 } else {
-                    debug!(
-                        worker_id = %ctx.owned_agent_id.agent_id,
-                        handle,
-                        "end_http_request_if_closed: ending http request (no body handle)"
-                    );
                     end_http_request(ctx, handle).await?;
                 }
             }

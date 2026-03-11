@@ -116,14 +116,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let request_rep = request.rep();
 
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            begin_index = %begin_index,
-            is_live = self.state.is_live(),
-            uri = %uri,
-            "outgoing_handler::handle: about to call underlying handle"
-        );
-
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
 
         match &result {
@@ -138,13 +130,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 };
 
                 let handle = future_incoming_response.rep();
-                tracing::debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    handle,
-                    begin_index = %begin_index,
-                    is_live = self.state.is_live(),
-                    "outgoing_handler::handle: registering FutureIncomingResponse handle"
-                );
                 // Resolve any pending outgoing body mapping from outgoing_request::body()
                 let outgoing_body_rep = self
                     .state

@@ -375,23 +375,10 @@ impl<Ctx: WorkerCtx> HostIncomingResponse for DurableWorkerCtx<Ctx> {
     ) -> wasmtime::Result<Result<Resource<IncomingBody>, ()>> {
         self.observe_function_call("http::types::incoming_response", "consume");
         let handle = self_.rep();
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            handle,
-            is_live = self.state.is_live(),
-            has_tracking = self.state.open_http_requests.contains_key(&handle),
-            "IncomingResponse::consume called"
-        );
         let result = HostIncomingResponse::consume(&mut self.as_wasi_http_view(), self_);
 
         if let Ok(Ok(resource)) = &result {
             let incoming_body_handle = resource.rep();
-            tracing::debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                incoming_body_handle,
-                "IncomingResponse::consume: transferring to IncomingBody"
-            );
             continue_http_request(
                 self,
                 handle,
@@ -407,21 +394,8 @@ impl<Ctx: WorkerCtx> HostIncomingResponse for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::incoming_response", "drop");
 
         let handle = rep.rep();
-        let tracking_info = self.state.open_http_requests.get(&handle).map(|s| (s.close_owner.clone(), s.begin_index));
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            handle,
-            is_live = self.state.is_live(),
-            tracking_info = ?tracking_info,
-            "IncomingResponse::drop called"
-        );
         if let Some(state) = self.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop {
-                tracing::debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    handle,
-                    "IncomingResponse::drop: ending http request (we are close owner)"
-                );
                 end_http_request(self, handle).await?;
             }
         }
@@ -438,23 +412,10 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::incoming_body", "stream");
 
         let handle = self_.rep();
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            handle,
-            is_live = self.state.is_live(),
-            has_tracking = self.state.open_http_requests.contains_key(&handle),
-            "IncomingBody::stream called"
-        );
         let result = HostIncomingBody::stream(&mut self.as_wasi_http_view(), self_);
 
         if let Ok(Ok(resource)) = &result {
             let stream_handle = resource.rep();
-            tracing::debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                stream_handle,
-                "IncomingBody::stream: transferring to InputStream"
-            );
             continue_http_request(
                 self,
                 handle,
@@ -480,24 +441,11 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
 
         let handle = this.rep();
         let has_tracking = self.state.open_http_requests.contains_key(&handle);
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            handle,
-            has_tracking,
-            is_live = self.state.is_live(),
-            "IncomingBody::finish called"
-        );
 
         let result = HostIncomingBody::finish(&mut self.as_wasi_http_view(), this).await?;
 
         if has_tracking {
             let ft_handle = result.rep();
-            tracing::debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                ft_handle,
-                "IncomingBody::finish: transferring to FutureTrailers"
-            );
             continue_http_request(
                 self,
                 handle,
@@ -513,21 +461,8 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::incoming_body", "drop");
 
         let handle = rep.rep();
-        let tracking_info = self.state.open_http_requests.get(&handle).map(|s| (s.close_owner.clone(), s.begin_index));
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            handle,
-            is_live = self.state.is_live(),
-            tracking_info = ?tracking_info,
-            "IncomingBody::drop called"
-        );
         if let Some(state) = self.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                tracing::debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    handle,
-                    "IncomingBody::drop: ending http request (we are close owner)"
-                );
                 end_http_request(self, handle).await?;
             }
         }
@@ -659,14 +594,6 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::future_trailers", "drop");
 
         let handle = rep.rep();
-        let had_tracking = self.state.open_http_requests.contains_key(&handle);
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            handle,
-            is_live = self.state.is_live(),
-            had_tracking,
-            "FutureTrailers::drop called"
-        );
         // Remove tracking if still present (guest dropped without calling get()).
         self.state.open_http_requests.remove(&handle);
 
@@ -782,17 +709,19 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         self_: Resource<FutureIncomingResponse>,
     ) -> wasmtime::Result<Option<Result<Result<Resource<IncomingResponse>, ErrorCode>, ()>>> {
         self.observe_function_call("http::types::future_incoming_response", "get");
+
+        // Each get call is stored in the oplog. If the result was Error or None (future is pending), we just
+        // continue the replay. If the result was Ok, we return register the stored response to the table as a new
+        // HostIncomingResponse and return its reference.
+        // In live mode the underlying implementation is either polling the response future, or, if it was Deferred
+        // (when the request was initiated in replay mode), it starts executing the deferred request and returns None.
+        //
+        // Note that the response body is streaming, so at this point we don't have it in memory. Each chunk read from
+        // the body is stored in the oplog, so we can replay it later. In replay mode we initialize the body with a
+        // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
+
         let handle = self_.rep();
         let durable_execution_state = self.durable_execution_state();
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            handle,
-            is_live = durable_execution_state.is_live,
-            snapshotting = self.state.snapshotting_mode.is_some(),
-            open_requests = ?self.state.open_http_requests.keys().collect::<Vec<_>>(),
-            has_tracking = self.state.open_http_requests.contains_key(&handle),
-            "FutureIncomingResponse::get called"
-        );
         if durable_execution_state.is_live || self.state.snapshotting_mode.is_some() {
             let request_state = self.state.open_http_requests.get(&handle).ok_or_else(|| {
                 wasmtime::Error::msg("No matching HTTP request is associated with resource handle")
@@ -838,13 +767,6 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             }
 
             let is_pending = matches!(serializable_response, SerializableHttpResponse::Pending);
-            tracing::debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                is_pending,
-                response_type = ?std::mem::discriminant(&serializable_response),
-                "FutureIncomingResponse::get (live): persisting response"
-            );
             if self.state.snapshotting_mode.is_none() {
                 self.state
                     .oplog
@@ -883,19 +805,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             )
             .into())
         } else {
-            tracing::debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                "FutureIncomingResponse::get (replay): reading oplog entry"
-            );
-            let (replay_idx, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall).map_err(|golem_err| wasmtime::Error::msg(format!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}")))?;
-
-            tracing::debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                replay_idx = %replay_idx,
-                "FutureIncomingResponse::get (replay): got oplog entry"
-            );
+            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall).map_err(|golem_err| wasmtime::Error::msg(format!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}")))?;
 
             let serialized_response = match oplog_entry {
                 OplogEntry::HostCall { response, .. } => {
@@ -915,21 +825,8 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 other => panic!("unexpected oplog entry: {other:?}"),
             };
 
-            tracing::debug!(
-                worker_id = %self.owned_agent_id.agent_id,
-                handle,
-                response_type = ?std::mem::discriminant(&serialized_response),
-                "FutureIncomingResponse::get (replay): deserialized response"
-            );
             match serialized_response {
-                SerializableHttpResponse::Pending => {
-                    tracing::debug!(
-                        worker_id = %self.owned_agent_id.agent_id,
-                        handle,
-                        "FutureIncomingResponse::get (replay): response was Pending"
-                    );
-                    Ok(None)
-                }
+                SerializableHttpResponse::Pending => Ok(None),
                 SerializableHttpResponse::HeadersReceived(serializable_response_headers) => {
                     let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
                         serializable_response_headers
@@ -963,30 +860,9 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::future_incoming_response", "drop");
 
         let handle = rep.rep();
-        let tracking_info = self.state.open_http_requests.get(&handle).map(|s| (s.close_owner.clone(), s.begin_index));
-        tracing::debug!(
-            worker_id = %self.owned_agent_id.agent_id,
-            handle,
-            is_live = self.state.is_live(),
-            tracking_info = ?tracking_info,
-            "FutureIncomingResponse::drop called"
-        );
         if let Some(state) = self.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::FutureIncomingResponseDrop {
-                tracing::debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    handle,
-                    begin_index = %state.begin_index,
-                    "FutureIncomingResponse::drop: ending http request (we are the close owner)"
-                );
                 end_http_request(self, handle).await?;
-            } else {
-                tracing::debug!(
-                    worker_id = %self.owned_agent_id.agent_id,
-                    handle,
-                    close_owner = ?state.close_owner,
-                    "FutureIncomingResponse::drop: NOT ending http request (not the close owner)"
-                );
             }
         }
 
