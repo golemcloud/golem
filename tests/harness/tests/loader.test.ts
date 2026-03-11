@@ -1,19 +1,19 @@
-import { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
-import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { ScenarioLoader } from '../src/executor.js';
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { ScenarioLoader } from "../src/executor.js";
 
 async function writeTempYaml(content: string): Promise<string> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'loader-test-'));
-  const filePath = path.join(tmpDir, 'scenario.yaml');
-  await fs.writeFile(filePath, content, 'utf8');
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "loader-test-"));
+  const filePath = path.join(tmpDir, "scenario.yaml");
+  await fs.writeFile(filePath, content, "utf8");
   return filePath;
 }
 
-describe('ScenarioLoader', () => {
-  it('loads a valid scenario', async () => {
+describe("ScenarioLoader", () => {
+  it("loads a valid scenario", async () => {
     const filePath = await writeTempYaml(`
 name: "test-scenario"
 steps:
@@ -23,24 +23,24 @@ steps:
       - "some-skill"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.name, 'test-scenario');
+    assert.equal(spec.name, "test-scenario");
     assert.equal(spec.steps.length, 1);
-    assert.equal(spec.steps[0].id, 'step-1');
-    assert.deepEqual(spec.steps[0].expectedSkills, ['some-skill']);
+    assert.equal(spec.steps[0].id, "step-1");
+    assert.deepEqual(spec.steps[0].expectedSkills, ["some-skill"]);
   });
 
-  it('loads a minimal valid scenario', async () => {
+  it("loads a minimal valid scenario", async () => {
     const filePath = await writeTempYaml(`
 name: "minimal"
 steps:
   - prompt: "hello"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.name, 'minimal');
+    assert.equal(spec.name, "minimal");
     assert.equal(spec.steps.length, 1);
   });
 
-  it('rejects scenario without name', async () => {
+  it("rejects scenario without name", async () => {
     const filePath = await writeTempYaml(`
 steps:
   - prompt: "hello"
@@ -48,26 +48,26 @@ steps:
     await assert.rejects(
       () => ScenarioLoader.load(filePath),
       (err: Error) => {
-        assert.ok(err.message.includes('Invalid scenario file'));
+        assert.ok(err.message.includes("Invalid scenario file"));
         return true;
-      }
+      },
     );
   });
 
-  it('rejects scenario without steps', async () => {
+  it("rejects scenario without steps", async () => {
     const filePath = await writeTempYaml(`
 name: "no-steps"
 `);
     await assert.rejects(
       () => ScenarioLoader.load(filePath),
       (err: Error) => {
-        assert.ok(err.message.includes('Invalid scenario file'));
+        assert.ok(err.message.includes("Invalid scenario file"));
         return true;
-      }
+      },
     );
   });
 
-  it('rejects scenario with empty steps array', async () => {
+  it("rejects scenario with empty steps array", async () => {
     const filePath = await writeTempYaml(`
 name: "empty-steps"
 steps: []
@@ -75,13 +75,13 @@ steps: []
     await assert.rejects(
       () => ScenarioLoader.load(filePath),
       (err: Error) => {
-        assert.ok(err.message.includes('at least one step'));
+        assert.ok(err.message.includes("at least one step"));
         return true;
-      }
+      },
     );
   });
 
-  it('rejects scenario with invalid step field types', async () => {
+  it("rejects scenario with invalid step field types", async () => {
     const filePath = await writeTempYaml(`
 name: "bad-types"
 steps:
@@ -91,15 +91,15 @@ steps:
     await assert.rejects(
       () => ScenarioLoader.load(filePath),
       (err: Error) => {
-        assert.ok(err.message.includes('Invalid scenario file'));
+        assert.ok(err.message.includes("Invalid scenario file"));
         return true;
-      }
+      },
     );
   });
 
-  // New tests for #2887 settings/prerequisites
+  // Tests for settings/prerequisites
 
-  it('loads scenario with settings', async () => {
+  it("loads scenario with settings", async () => {
     const filePath = await writeTempYaml(`
 name: "with-settings"
 settings:
@@ -118,7 +118,7 @@ steps:
     assert.equal(spec.settings?.cleanup, false);
   });
 
-  it('loads scenario with prerequisites', async () => {
+  it("loads scenario with prerequisites", async () => {
     const filePath = await writeTempYaml(`
 name: "with-prereqs"
 prerequisites:
@@ -129,10 +129,13 @@ steps:
   - prompt: "hello"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.deepEqual(spec.prerequisites?.env, { MY_VAR: 'test_value', OTHER_VAR: 'other' });
+    assert.deepEqual(spec.prerequisites?.env, {
+      MY_VAR: "test_value",
+      OTHER_VAR: "other",
+    });
   });
 
-  it('loads step with timeout and continue_session', async () => {
+  it("loads step with timeout and continue_session", async () => {
     const filePath = await writeTempYaml(`
 name: "step-options"
 steps:
@@ -150,9 +153,9 @@ steps:
     assert.equal(spec.steps[1].timeout, 120);
   });
 
-  // New tests for #2890 invoke
+  // Tests for invoke
 
-  it('loads step with invoke and expect', async () => {
+  it("loads step with invoke and expect", async () => {
     const filePath = await writeTempYaml(`
 name: "invoke-test"
 steps:
@@ -166,15 +169,15 @@ steps:
       stdout_contains: "success"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].invoke?.agent, 'my-agent');
-    assert.equal(spec.steps[0].invoke?.function, 'my-func');
+    assert.equal(spec.steps[0].invoke?.agent, "my-agent");
+    assert.equal(spec.steps[0].invoke?.function, "my-func");
     assert.equal(spec.steps[0].expect?.exit_code, 0);
-    assert.equal(spec.steps[0].expect?.stdout_contains, 'success');
+    assert.equal(spec.steps[0].expect?.stdout_contains, "success");
   });
 
-  // New tests for #2893 shell/sleep/trigger
+  // Tests for shell/sleep/trigger
 
-  it('loads step with sleep', async () => {
+  it("loads step with sleep", async () => {
     const filePath = await writeTempYaml(`
 name: "sleep-test"
 steps:
@@ -185,7 +188,7 @@ steps:
     assert.equal(spec.steps[0].sleep, 5);
   });
 
-  it('loads step with shell command', async () => {
+  it("loads step with shell command", async () => {
     const filePath = await writeTempYaml(`
 name: "shell-test"
 steps:
@@ -198,12 +201,12 @@ steps:
       stdout_contains: "hello"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].shell?.command, 'echo');
-    assert.deepEqual(spec.steps[0].shell?.args, ['hello']);
-    assert.equal(spec.steps[0].shell?.cwd, './subdir');
+    assert.equal(spec.steps[0].shell?.command, "echo");
+    assert.deepEqual(spec.steps[0].shell?.args, ["hello"]);
+    assert.equal(spec.steps[0].shell?.cwd, "./subdir");
   });
 
-  it('loads step with trigger', async () => {
+  it("loads step with trigger", async () => {
     const filePath = await writeTempYaml(`
 name: "trigger-test"
 steps:
@@ -213,13 +216,13 @@ steps:
       function: "do-thing"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].trigger?.agent, 'my-agent');
-    assert.equal(spec.steps[0].trigger?.function, 'do-thing');
+    assert.equal(spec.steps[0].trigger?.agent, "my-agent");
+    assert.equal(spec.steps[0].trigger?.function, "do-thing");
   });
 
-  // New tests for #2894 create/delete agent
+  // Tests for create/delete agent
 
-  it('loads step with create_agent', async () => {
+  it("loads step with create_agent", async () => {
     const filePath = await writeTempYaml(`
 name: "create-agent-test"
 steps:
@@ -228,10 +231,10 @@ steps:
       name: "test-agent"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].create_agent?.name, 'test-agent');
+    assert.equal(spec.steps[0].create_agent?.name, "test-agent");
   });
 
-  it('loads step with delete_agent', async () => {
+  it("loads step with delete_agent", async () => {
     const filePath = await writeTempYaml(`
 name: "delete-agent-test"
 steps:
@@ -240,6 +243,56 @@ steps:
       name: "test-agent"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].delete_agent?.name, 'test-agent');
+    assert.equal(spec.steps[0].delete_agent?.name, "test-agent");
+  });
+
+  // Tests for only_if/skip_if
+
+  it("loads step with only_if condition", async () => {
+    const filePath = await writeTempYaml(`
+name: "only-if-test"
+steps:
+  - id: "conditional"
+    prompt: "do something"
+    only_if:
+      agent: "claude-code"
+      language: "ts"
+      os: "macos"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.deepEqual(spec.steps[0].only_if, {
+      agent: "claude-code",
+      language: "ts",
+      os: "macos",
+    });
+  });
+
+  it("loads step with skip_if condition", async () => {
+    const filePath = await writeTempYaml(`
+name: "skip-if-test"
+steps:
+  - id: "skip-gemini"
+    prompt: "do something"
+    skip_if:
+      agent: "gemini"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.deepEqual(spec.steps[0].skip_if, { agent: "gemini" });
+  });
+
+  it("loads step with both only_if and skip_if", async () => {
+    const filePath = await writeTempYaml(`
+name: "both-conditions"
+steps:
+  - id: "combo"
+    prompt: "do something"
+    only_if:
+      language: "ts"
+    skip_if:
+      os: "windows"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.deepEqual(spec.steps[0].only_if, { language: "ts" });
+    assert.deepEqual(spec.steps[0].skip_if, { os: "windows" });
   });
 });

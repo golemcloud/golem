@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn } from "node:child_process";
 
 export interface AgentResult {
   success: boolean;
@@ -15,8 +15,8 @@ export interface AgentDriver {
 }
 
 export abstract class BaseAgentDriver implements AgentDriver {
-  protected workspace: string = '.';
-  protected skillsDir: string = '';
+  protected workspace: string = ".";
+  protected skillsDir: string = "";
 
   async setup(workspace: string, skillsDir: string): Promise<void> {
     this.workspace = workspace;
@@ -31,7 +31,7 @@ export abstract class BaseAgentDriver implements AgentDriver {
     command: string,
     args: string[],
     timeoutSeconds: number,
-    cwd?: string
+    cwd?: string,
   ): Promise<AgentResult> {
     const startTime = Date.now();
     const controller = new AbortController();
@@ -42,16 +42,16 @@ export abstract class BaseAgentDriver implements AgentDriver {
         cwd: cwd || this.workspace,
         signal,
         env: { ...process.env },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ["ignore", "pipe", "pipe"],
       });
 
-      let output = '';
-      child.stdout?.on('data', (data) => {
+      let output = "";
+      child.stdout?.on("data", (data) => {
         const chunk = data.toString();
         output += chunk;
         process.stdout.write(chunk);
       });
-      child.stderr?.on('data', (data) => {
+      child.stderr?.on("data", (data) => {
         const chunk = data.toString();
         output += chunk;
         process.stderr.write(chunk);
@@ -61,7 +61,7 @@ export abstract class BaseAgentDriver implements AgentDriver {
         controller.abort();
       }, timeoutSeconds * 1000);
 
-      child.on('close', (exitCode) => {
+      child.on("close", (exitCode) => {
         clearTimeout(timeoutId);
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
@@ -72,12 +72,12 @@ export abstract class BaseAgentDriver implements AgentDriver {
         });
       });
 
-      child.on('error', (err) => {
+      child.on("error", (err) => {
         clearTimeout(timeoutId);
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
           success: false,
-          output: output + (err.message || 'Unknown error'),
+          output: output + (err.message || "Unknown error"),
           durationSeconds,
           exitCode: null,
         });

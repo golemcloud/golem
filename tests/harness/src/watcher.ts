@@ -1,6 +1,6 @@
-import { spawn, ChildProcess } from 'node:child_process';
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
+import { spawn, ChildProcess } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 export interface WatcherEvent {
   path: string;
@@ -14,7 +14,8 @@ export class SkillWatcher {
   private activatedEvents: WatcherEvent[] = [];
   private skillsDir: string;
   private extraDirs: string[] = [];
-  private atimeBaselines: Map<string, { skillName: string; atimeMs: number }> = new Map();
+  private atimeBaselines: Map<string, { skillName: string; atimeMs: number }> =
+    new Map();
 
   constructor(skillsDir: string) {
     this.skillsDir = path.resolve(skillsDir);
@@ -33,9 +34,10 @@ export class SkillWatcher {
       if (!child) continue;
       this.children.push(child);
 
-      child.stdout?.on('data', (data) => {
+      child.stdout?.on("data", (data) => {
         const output = data.toString();
-        const paths = platform === 'darwin' ? output.split('\0') : output.split('\n');
+        const paths =
+          platform === "darwin" ? output.split("\0") : output.split("\n");
 
         for (const p of paths) {
           if (!p) continue;
@@ -51,21 +53,32 @@ export class SkillWatcher {
         }
       });
 
-      child.on('error', (err) => {
+      child.on("error", (err) => {
         console.error(`SkillWatcher error: ${err.message}`);
       });
     }
   }
 
-  private spawnWatcher(platform: NodeJS.Platform, dir: string): ChildProcess | null {
-    if (platform === 'linux') {
-      return spawn('inotifywait', [
-        '-m', '-r', '-e', 'access', '--format', '%w%f', dir
+  private spawnWatcher(
+    platform: NodeJS.Platform,
+    dir: string,
+  ): ChildProcess | null {
+    if (platform === "linux") {
+      return spawn("inotifywait", [
+        "-m",
+        "-r",
+        "-e",
+        "access",
+        "--format",
+        "%w%f",
+        dir,
       ]);
-    } else if (platform === 'darwin') {
-      return spawn('fswatch', ['-0', '-a', '-L', dir]);
+    } else if (platform === "darwin") {
+      return spawn("fswatch", ["-0", "-a", "-L", dir]);
     }
-    console.warn(`SkillWatcher: Unsupported platform ${platform}, activation tracking disabled.`);
+    console.warn(
+      `SkillWatcher: Unsupported platform ${platform}, activation tracking disabled.`,
+    );
     return null;
   }
 
@@ -100,7 +113,9 @@ export class SkillWatcher {
    * Compare current atimes against the snapshot.
    * Returns skill names whose SKILL.md files had atime updated since the snapshot.
    */
-  async getSkillsWithChangedAtime(): Promise<{ skillName: string; path: string }[]> {
+  async getSkillsWithChangedAtime(): Promise<
+    { skillName: string; path: string }[]
+  > {
     const changed: { skillName: string; path: string }[] = [];
     for (const [filePath, baseline] of this.atimeBaselines) {
       try {
@@ -125,7 +140,7 @@ export class SkillWatcher {
   }
 
   pathToSkillName(filePath: string): string | null {
-    if (!filePath.endsWith('SKILL.md')) return null;
+    if (!filePath.endsWith("SKILL.md")) return null;
     // Extract the parent directory name
     const dirName = path.dirname(filePath);
     return path.basename(dirName);
@@ -136,7 +151,7 @@ export class SkillWatcher {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
-        const skillFile = path.join(dir, entry.name, 'SKILL.md');
+        const skillFile = path.join(dir, entry.name, "SKILL.md");
         try {
           const stat = await fs.stat(skillFile);
           // On macOS APFS, atime only updates when atime <= mtime (relatime).
