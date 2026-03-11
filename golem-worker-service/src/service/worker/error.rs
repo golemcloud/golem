@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,7 +17,7 @@ use crate::service::component::ComponentServiceError;
 use crate::service::limit::LimitServiceError;
 use crate::service::worker::CallWorkerExecutorError;
 use golem_common::SafeDisplay;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentFilePath, ComponentId};
 use golem_service_base::clients::registry::RegistryServiceError;
@@ -42,7 +42,7 @@ pub enum WorkerServiceError {
     #[error("Account not found: {0}")]
     AccountIdNotFound(AccountId),
     #[error("Worker not found: {0}")]
-    WorkerNotFound(WorkerId),
+    AgentNotFound(AgentId),
     #[error("Internal error: {0}")]
     Internal(String),
     #[error("File not found: {0}")]
@@ -60,7 +60,7 @@ impl SafeDisplay for WorkerServiceError {
             Self::TypeChecker(_) => self.to_string(),
             Self::ComponentNotFound(_) => self.to_string(),
             Self::AccountIdNotFound(_) => self.to_string(),
-            Self::WorkerNotFound(_) => self.to_string(),
+            Self::AgentNotFound(_) => self.to_string(),
             Self::Internal(_) => self.to_string(),
             Self::GolemError(inner) => inner.to_safe_string(),
             Self::InternalCallError(inner) => inner.to_safe_string(),
@@ -73,7 +73,7 @@ impl SafeDisplay for WorkerServiceError {
     }
 }
 
-impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::WorkerError {
+impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::AgentError {
     fn from(error: WorkerServiceError) -> Self {
         Self {
             error: Some(error.into()),
@@ -81,7 +81,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::Work
     }
 }
 
-impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::worker_error::Error {
+impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agent_error::Error {
     fn from(error: WorkerServiceError) -> Self {
         use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
         use golem_api_grpc::proto::golem::worker::v1::UnknownError;
@@ -91,11 +91,11 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
         match error {
             WorkerServiceError::ComponentNotFound(_)
             | WorkerServiceError::AccountIdNotFound(_)
-            | WorkerServiceError::WorkerNotFound(_)
+            | WorkerServiceError::AgentNotFound(_)
             | WorkerServiceError::FileNotFound(_)
             | WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(_))
             | WorkerServiceError::Component(ComponentServiceError::ComponentNotFound)
-            | WorkerServiceError::GolemError(WorkerExecutorError::WorkerNotFound { .. }) => {
+            | WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }) => {
                 Self::NotFound(ErrorBody {
                     error: error.to_safe_string(),
                 })

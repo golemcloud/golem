@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,7 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
-use crate::base_model::WorkerId;
+use crate::base_model::AgentId;
 use crate::model::Empty;
 use async_trait::async_trait;
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
@@ -115,6 +115,12 @@ pub enum AgentMode {
     Ephemeral = 1,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AgentInvocationMode {
+    Await,
+    Schedule,
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoValue, FromValue,
 )]
@@ -141,7 +147,9 @@ pub struct ComponentModelElementSchema {
     pub element_type: AnalysedType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -206,7 +214,9 @@ pub enum TextReference {
     Inline(TextSource),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -360,18 +370,21 @@ impl AgentDependency {
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[cfg_attr(feature = "full", desert(evolution(FieldAdded("http_mount", None))))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
     pub type_name: AgentTypeName,
     pub description: String,
+    #[serde(default)]
+    pub source_language: String,
     pub constructor: AgentConstructor,
     pub methods: Vec<AgentMethod>,
     pub dependencies: Vec<AgentDependency>,
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
     pub snapshotting: Snapshotting,
+    pub config: Vec<ConfigKeyValueType>,
 }
 
 impl AgentType {
@@ -379,10 +392,12 @@ impl AgentType {
         self.methods.sort_by(|a, b| a.name.cmp(&b.name));
         self.dependencies
             .sort_by(|a, b| a.type_name.cmp(&b.type_name));
+        self.config.sort_by(|a, b| a.key.cmp(&b.key));
 
         Self {
             type_name: self.type_name,
             description: self.description,
+            source_language: self.source_language,
             constructor: self.constructor,
             methods: self.methods,
             dependencies: self
@@ -393,6 +408,7 @@ impl AgentType {
             mode: self.mode,
             http_mount: self.http_mount,
             snapshotting: self.snapshotting,
+            config: self.config,
         }
     }
 
@@ -404,10 +420,7 @@ impl AgentType {
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    fn resolve_agent_type_by_wrapper_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<AgentType, String>;
+    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String>;
 }
 
 #[derive(
@@ -481,11 +494,13 @@ impl DataValue {
                         .elements
                         .into_iter()
                         .zip(schema.elements)
-                        .map(|(value, schema)| {
+                        .enumerate()
+                        .map(|(idx, (value, schema))| {
                             ElementValue::try_from_untyped_json(value.value, schema.schema).map(
                                 |v| NamedElementValue {
                                     name: value.name,
                                     value: v,
+                                    schema_index: idx as u32,
                                 },
                             )
                         })
@@ -500,10 +515,19 @@ impl DataValue {
     ///
     /// Note that this conversion does not support unstructured binary/text and multimodal return values
     pub fn into_return_value(self) -> Option<Value> {
+        self.into_return_value_and_type().map(|vat| vat.value)
+    }
+
+    /// Returns the DataValue as a single ComponentModel ValueAndType if possible
+    ///
+    /// Note that this conversion does not support unstructured binary/text and multimodal return values
+    pub fn into_return_value_and_type(self) -> Option<ValueAndType> {
         match self {
             DataValue::Tuple(mut elements) if elements.elements.len() == 1 => {
                 match elements.elements.remove(0) {
-                    ElementValue::ComponentModel(value) => Some(value.value),
+                    ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                        Some(value)
+                    }
                     _ => None,
                 }
             }
@@ -513,21 +537,30 @@ impl DataValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
 pub enum UntypedDataValue {
     Tuple(Vec<UntypedElementValue>),
     Multimodal(Vec<UntypedNamedElementValue>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
 pub struct UntypedNamedElementValue {
     pub name: String,
     pub value: UntypedElementValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
 pub enum UntypedElementValue {
     ComponentModel(Value),
     UnstructuredText(TextReferenceValue),
@@ -623,22 +656,18 @@ pub enum UntypedJsonElementValue {
 impl From<ElementValue> for UntypedJsonElementValue {
     fn from(value: ElementValue) -> Self {
         match value {
-            ElementValue::ComponentModel(value) => {
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
                 UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: value
                         .to_json_value()
                         .expect("Invalid ValueAndType in ElementValue"), // TODO: convert to TryFrom and propagate this
                 })
             }
-            ElementValue::UnstructuredText(text_reference) => {
-                UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
-                    value: text_reference,
-                })
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                UntypedJsonElementValue::UnstructuredText(TextReferenceValue { value })
             }
-            ElementValue::UnstructuredBinary(binary_reference) => {
-                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue {
-                    value: binary_reference,
-                })
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue { value })
             }
         }
     }
@@ -670,13 +699,12 @@ pub struct NamedElementValues {
 
 /// Identifies a deployed, instantiated agent.
 ///
-/// AgentId is convertible to and from string, and is used as _worker names_.
+/// ParsedAgentId is convertible to and from string, and is used as _agent ids_.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AgentId {
+pub struct ParsedAgentId {
     pub agent_type: AgentTypeName,
     pub parameters: DataValue,
     pub phantom_id: Option<Uuid>,
-    pub(crate) wrapper_agent_type: String,
     pub(crate) as_string: String,
 }
 
@@ -691,6 +719,51 @@ pub struct AgentId {
 pub struct NamedElementValue {
     pub name: String,
     pub value: ElementValue,
+    #[serde(default)]
+    pub schema_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentModelElementValue {
+    #[cfg_attr(feature = "full", wit_field(convert = golem_wasm::WitValue))]
+    pub value: ValueAndType,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct UnstructuredTextElementValue {
+    pub value: TextReference,
+    #[cfg_attr(feature = "full", wit_field(skip))]
+    #[serde(default)]
+    pub descriptor: TextDescriptor,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct UnstructuredBinaryElementValue {
+    pub value: BinaryReference,
+    #[cfg_attr(feature = "full", wit_field(skip))]
+    #[serde(default)]
+    pub descriptor: BinaryDescriptor,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -702,11 +775,9 @@ pub struct NamedElementValue {
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum ElementValue {
-    ComponentModel(
-        #[cfg_attr(feature = "full", wit_field(convert = golem_wasm::WitValue))] ValueAndType,
-    ),
-    UnstructuredText(TextReference),
-    UnstructuredBinary(BinaryReference),
+    ComponentModel(ComponentModelElementValue),
+    UnstructuredText(UnstructuredTextElementValue),
+    UnstructuredBinary(UnstructuredBinaryElementValue),
 }
 
 impl ElementValue {
@@ -727,16 +798,28 @@ impl ElementValue {
                             errors.join(", ")
                         )
                     })?;
-                Ok(ElementValue::ComponentModel(value_and_type))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: value_and_type,
+                }))
             }
             (
                 UntypedJsonElementValue::UnstructuredText(text),
-                ElementSchema::UnstructuredText(_),
-            ) => Ok(ElementValue::UnstructuredText(text.value)),
+                ElementSchema::UnstructuredText(descriptor),
+            ) => Ok(ElementValue::UnstructuredText(
+                UnstructuredTextElementValue {
+                    value: text.value,
+                    descriptor,
+                },
+            )),
             (
                 UntypedJsonElementValue::UnstructuredBinary(binary),
-                ElementSchema::UnstructuredBinary(_),
-            ) => Ok(ElementValue::UnstructuredBinary(binary.value)),
+                ElementSchema::UnstructuredBinary(descriptor),
+            ) => Ok(ElementValue::UnstructuredBinary(
+                UnstructuredBinaryElementValue {
+                    value: binary.value,
+                    descriptor,
+                },
+            )),
             _ => Err("Element value does not match schema".to_string()),
         }
     }
@@ -1009,6 +1092,58 @@ pub struct SnapshottingEveryNInvocation {
     pub count: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigKeyValueType {
+    pub key: Vec<String>,
+    pub value: ConfigValueType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum ConfigValueType {
+    Local(ConfigValueTypeLocal),
+    Shared(ConfigValueTypeShared),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[cfg_attr(feature = "full", wit_transparent)]
+pub struct ConfigValueTypeLocal {
+    pub value: AnalysedType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[cfg_attr(feature = "full", wit_transparent)]
+pub struct ConfigValueTypeShared {
+    pub value: AnalysedType,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(
     feature = "full",
@@ -1073,7 +1208,7 @@ pub struct OidcPrincipal {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPrincipal {
-    pub agent_id: WorkerId,
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]

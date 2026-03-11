@@ -73,13 +73,14 @@ pub mod service {
 
     use crate::model::text::fmt::{format_stack, format_stderr};
     use golem_client::api::{
-        AccountError, ApiDeploymentError, ApiDomainError, ApiSecurityError, ApplicationError,
-        ComponentError, EnvironmentError, LoginCompleteOauth2DeviceFlowError,
+        AccountError, AgentError, ApiDeploymentError, ApiDomainError, ApiSecurityError,
+        ApplicationError, ComponentError, EnvironmentError, LoginCompleteOauth2DeviceFlowError,
         LoginCurrentLoginTokenError, LoginLoginOauth2Error, LoginPollOauth2WebflowError,
         LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
-        LoginSubmitOauth2WebflowCallbackError, PluginError, TokenError, WorkerError,
+        LoginSubmitOauth2WebflowCallbackError, McpDeploymentError, PluginError, TokenError,
+        WorkerError,
     };
-    use golem_common::model::{PromiseId, WorkerId};
+    use golem_common::model::{AgentId, PromiseId};
     use itertools::Itertools;
     use reqwest::StatusCode;
     use std::error::Error;
@@ -105,7 +106,7 @@ pub mod service {
         pub fn is_domain_is_not_registered(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
-                    err.status_code == 409
+                    (err.status_code == 409 || err.status_code == 404)
                         && err.message.starts_with("Domain")
                         && err.message.ends_with("is not registered")
                 }
@@ -384,6 +385,67 @@ pub mod service {
                     status_code: 500,
                     message: error.error,
                 },
+            }
+        }
+    }
+
+    impl HasServiceName for AgentError {
+        fn service_name() -> &'static str {
+            "Agent"
+        }
+    }
+
+    impl From<AgentError> for ServiceErrorResponse {
+        fn from(value: AgentError) -> Self {
+            match value {
+                AgentError::Error400(errors) => ServiceErrorResponse {
+                    status_code: 400,
+                    message: errors.errors.join("\n"),
+                },
+                AgentError::Error401(error) => ServiceErrorResponse {
+                    status_code: 401,
+                    message: error.error,
+                },
+                AgentError::Error403(error) => ServiceErrorResponse {
+                    status_code: 403,
+                    message: error.error,
+                },
+                AgentError::Error404(error) => ServiceErrorResponse {
+                    status_code: 404,
+                    message: error.error,
+                },
+                AgentError::Error409(error) => ServiceErrorResponse {
+                    status_code: 409,
+                    message: error.error,
+                },
+                AgentError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
+                AgentError::Error500(error) => {
+                    let message = match error.worker_error {
+                        Some(worker_error) => {
+                            let error_logs = if !worker_error.stderr.is_empty() {
+                                format!("\n\nStderr:\n{}", format_stderr(&worker_error.stderr))
+                            } else {
+                                "".to_string()
+                            };
+
+                            format!(
+                                "{}:\n{}{}",
+                                error.error,
+                                format_stack(&worker_error.cause),
+                                error_logs
+                            )
+                        }
+                        _ => error.error,
+                    };
+
+                    ServiceErrorResponse {
+                        status_code: 500,
+                        message,
+                    }
+                }
             }
         }
     }
@@ -990,14 +1052,55 @@ pub mod service {
         }
     }
 
-    pub fn display_worker_id(worker_id: WorkerId) -> String {
-        format!("{}/{}", worker_id.component_id, worker_id.worker_name)
+    impl HasServiceName for McpDeploymentError {
+        fn service_name() -> &'static str {
+            "MCP Deployment"
+        }
+    }
+
+    impl From<McpDeploymentError> for ServiceErrorResponse {
+        fn from(value: McpDeploymentError) -> Self {
+            match value {
+                McpDeploymentError::Error400(errors) => ServiceErrorResponse {
+                    status_code: 400,
+                    message: errors.errors.join("\n"),
+                },
+                McpDeploymentError::Error401(error) => ServiceErrorResponse {
+                    status_code: 401,
+                    message: error.error,
+                },
+                McpDeploymentError::Error403(error) => ServiceErrorResponse {
+                    status_code: 403,
+                    message: error.error,
+                },
+                McpDeploymentError::Error404(error) => ServiceErrorResponse {
+                    status_code: 404,
+                    message: error.error,
+                },
+                McpDeploymentError::Error409(error) => ServiceErrorResponse {
+                    status_code: 409,
+                    message: error.error,
+                },
+                McpDeploymentError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
+                McpDeploymentError::Error500(error) => ServiceErrorResponse {
+                    status_code: 500,
+                    message: error.error,
+                },
+            }
+        }
+    }
+
+    pub fn display_agent_id(agent_id: AgentId) -> String {
+        format!("{}/{}", agent_id.component_id, agent_id.agent_id)
     }
 
     pub fn display_promise_id(promise_id: PromiseId) -> String {
         format!(
             "{}/{}",
-            display_worker_id(promise_id.worker_id),
+            display_agent_id(promise_id.agent_id),
             promise_id.oplog_idx
         )
     }

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,7 +20,7 @@ use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
@@ -34,6 +34,10 @@ use tracing::Instrument;
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
+inherit_test_dep!(
+    #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
 
 #[test]
 #[tracing::instrument]
@@ -41,6 +45,7 @@ async fn http_client(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -65,25 +70,27 @@ async fn http_client(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
-    let agent_id = agent_id!("http-client");
+    let agent_id = agent_id!("HttpClient");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     let rx = executor.capture_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -102,6 +109,7 @@ async fn http_client_using_reqwest(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -138,23 +146,25 @@ async fn http_client_using_reqwest(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("http-client2");
+    let agent_id = agent_id!("HttpClient2");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
@@ -183,6 +193,7 @@ async fn http_client_using_reqwest_async(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -219,23 +230,25 @@ async fn http_client_using_reqwest_async(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("http-client3");
+    let agent_id = agent_id!("HttpClient3");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
 
@@ -264,6 +277,7 @@ async fn http_client_using_reqwest_async_parallel(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -299,23 +313,25 @@ async fn http_client_using_reqwest_async_parallel(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("http-client3");
+    let agent_id = agent_id!("HttpClient3");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run_parallel", data_value!(32u16))
+        .invoke_and_await_agent(&component, &agent_id, "run_parallel", data_value!(32u16))
         .await?;
     let mut captured_body = captured_body.lock().unwrap().clone();
     captured_body.sort();
@@ -377,6 +393,7 @@ async fn outgoing_http_contains_idempotency_key(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -407,24 +424,26 @@ async fn outgoing_http_contains_idempotency_key(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("http-client2");
+    let agent_id = agent_id!("HttpClient2");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let key = IdempotencyKey::new("177db03d-3234-4a04-8d03-e8d042348abd".to_string());
     let result = executor
-        .invoke_and_await_agent_with_key(&component.id, &agent_id, &key, "run", data_value!())
+        .invoke_and_await_agent_with_key(&component, &agent_id, &key, "run", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -434,7 +453,7 @@ async fn outgoing_http_contains_idempotency_key(
 
     assert_eq!(
         result, data_value!(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"15f8d7f6-663b-584d-b597-23d46a929eed\") }"
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"29e89d8e-585f-519d-a57b-fd8650d59edb\") }"
             )
     );
     Ok(())

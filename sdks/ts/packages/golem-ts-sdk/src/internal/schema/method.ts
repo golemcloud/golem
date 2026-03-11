@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,7 +14,7 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import { AgentMethod, DataSchema, HttpMountDetails } from 'golem:agent/common';
+import { AgentMethod, DataSchema, HttpMountDetails } from 'golem:agent/common@1.5.0';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
 import { validateHttpEndpoint } from '../http/validation';

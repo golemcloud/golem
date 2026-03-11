@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,9 +21,10 @@ use golem_common::model::oplog::{
     PersistenceLevel,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{ForkResult, IdempotencyKey, OwnedWorkerId};
+use golem_common::model::{
+    AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey, OwnedAgentId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{Value, ValueAndType};
 use metrohash::MetroHash128;
 use std::collections::HashSet;
 use std::hash::Hasher;
@@ -41,16 +42,15 @@ pub enum ReplayEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct ExportedFunctionInvoked {
-    pub function_name: String,
-    pub function_input: Vec<Value>,
+pub struct AgentInvocationStartedEntry {
     pub idempotency_key: IdempotencyKey,
+    pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
     replay_target: AtomicOplogIndex,
     /// The oplog index of the last replayed entry
@@ -73,14 +73,14 @@ struct InternalReplayState {
 
 impl ReplayState {
     pub async fn new(
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
     ) -> Self {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
         let mut result = Self {
-            owned_worker_id,
+            owned_agent_id,
             oplog,
             last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
             last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -188,15 +188,18 @@ impl ReplayState {
         if entry.is_hint() {
             // Keeping the last replayed index as-is, so the next attempt will read the next one
             Some(self.last_replayed_index())
-        } else if let OplogEntry::ChangePersistenceLevel { level, .. } = &entry {
-            if level == &PersistenceLevel::PersistNothing {
+        } else if let OplogEntry::ChangePersistenceLevel {
+            persistence_level, ..
+        } = &entry
+        {
+            if persistence_level == &PersistenceLevel::PersistNothing {
                 let begin_index = self.last_replayed_index();
                 let end_index = self
                     .lookup_oplog_entry(begin_index, |entry, _idx| match entry {
-                        OplogEntry::ChangePersistenceLevel { level, .. } => {
-                            level != &PersistenceLevel::PersistNothing
-                        }
-                        OplogEntry::ExportedFunctionCompleted { .. } => true,
+                        OplogEntry::ChangePersistenceLevel {
+                            persistence_level, ..
+                        } => persistence_level != &PersistenceLevel::PersistNothing,
+                        OplogEntry::AgentInvocationFinished { .. } => true,
                         _ => false,
                     })
                     .await;
@@ -337,7 +340,13 @@ impl ReplayState {
         let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
             oplog_entry
         } else {
-            panic!("missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}", self.owned_worker_id, read_idx, self.replay_target.get(), self.last_replayed_non_hint_index.get())
+            panic!(
+                "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
+                self.owned_agent_id,
+                read_idx,
+                self.replay_target.get(),
+                self.last_replayed_non_hint_index.get()
+            )
         };
 
         // record side effects that need to be applied at the next opportunity
@@ -350,7 +359,7 @@ impl ReplayState {
             })
             .await
         }
-        if let OplogEntry::ImportedFunctionInvoked {
+        if let OplogEntry::HostCall {
             function_name,
             response,
             ..
@@ -484,42 +493,40 @@ impl ReplayState {
         }
     }
 
-    pub async fn get_oplog_entry_exported_function_invoked(
+    pub async fn get_oplog_entry_agent_invocation_started(
         &mut self,
-    ) -> Result<Option<ExportedFunctionInvoked>, WorkerExecutorError> {
+    ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match oplog_entry {
-                    OplogEntry::ExportedFunctionInvoked {
-                        function_name,
+                    OplogEntry::AgentInvocationStarted {
                         idempotency_key,
+                        payload,
                         trace_id,
-                        trace_states: trace_state,
+                        trace_states,
                         invocation_context: spans,
-                        request,
                         ..
                     } => {
-                        let request = self
+                        let invocation_payload = self
                             .oplog
-                            .download_payload(request)
+                            .download_payload(payload)
                             .await
-                            .expect("failed to deserialize function request payload");
+                            .expect("failed to deserialize agent invocation payload");
 
                         let invocation_context =
-                            InvocationContextStack::from_oplog_data(trace_id, trace_state, spans);
+                            InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
 
-                        break Ok(Some(ExportedFunctionInvoked {
-                            function_name: function_name.to_string(),
-                            function_input: request,
-                            idempotency_key: idempotency_key.clone(),
+                        break Ok(Some(AgentInvocationStartedEntry {
+                            idempotency_key,
+                            invocation_payload,
                             invocation_context,
                         }));
                     }
                     entry if entry.is_hint() => {}
                     _ => {
                         break Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "ExportedFunctionInvoked",
+                            "AgentInvocationStarted",
                             format!("{oplog_entry:?}"),
                         ));
                     }
@@ -530,26 +537,26 @@ impl ReplayState {
         }
     }
 
-    pub async fn get_oplog_entry_exported_function_completed(
+    pub async fn get_oplog_entry_agent_invocation_finished(
         &mut self,
-    ) -> Result<Option<Option<ValueAndType>>, WorkerExecutorError> {
+    ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match oplog_entry {
-                    OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                        let response: Option<ValueAndType> = self
+                    OplogEntry::AgentInvocationFinished { result, .. } => {
+                        let result: AgentInvocationResult = self
                             .oplog
-                            .download_payload(response)
+                            .download_payload(result)
                             .await
-                            .expect("failed to deserialize function response payload");
+                            .expect("failed to deserialize agent invocation result payload");
 
-                        break Ok(Some(response));
+                        break Ok(Some(result));
                     }
                     entry if entry.is_hint() => {}
                     _ => {
                         break Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "ExportedFunctionCompleted",
+                            "AgentInvocationFinished",
                             format!("{oplog_entry:?}"),
                         ));
                     }

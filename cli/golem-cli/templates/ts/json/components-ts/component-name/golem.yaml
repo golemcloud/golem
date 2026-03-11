@@ -1,0 +1,18 @@
+# golem-app-manifest-header
+
+httpApi:
+  deployments:
+    local:
+    - domain: app-name.localhost:9006
+      agents:
+        TaskAgent: {}
+
+components:
+  componentname:
+    templates: ts
+
+    # golem-app-manifest-env-doc
+    env:
+    # golem-app-manifest-dep-env-vars-doc
+
+    # golem-app-manifest-env-presets

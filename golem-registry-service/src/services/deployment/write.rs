@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -19,6 +19,7 @@ use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::route_compilation::render_http_method;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
+use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
 use futures::TryFutureExt;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, HttpMethod};
 use golem_common::model::component::ComponentName;
@@ -89,7 +90,8 @@ error_forwarding!(
     EnvironmentError,
     DeployRepoError,
     ComponentError,
-    HttpApiDeploymentError
+    HttpApiDeploymentError,
+    McpDeploymentError
 );
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
@@ -101,14 +103,19 @@ pub enum DeployValidationError {
         http_api_deployment_domain: Domain,
         missing_agent_type: AgentTypeName,
     },
+    #[error(
+        "Agent type {missing_agent_type} requested by mcp deployment {mcp_deployment_domain} is not part of the deployment"
+    )]
+    McpDeploymentMissingAgentType {
+        mcp_deployment_domain: Domain,
+        missing_agent_type: AgentTypeName,
+    },
     #[error("Invalid path pattern: {0}")]
     HttpApiDefinitionInvalidPathPattern(String),
     #[error("Invalid http cors binding expression: {0}")]
     InvalidHttpCorsBindingExpr(String),
     #[error("Component {0} not found in deployment")]
     ComponentNotFound(ComponentName),
-    #[error("Agent type name {0} is provided by multiple components")]
-    AmbiguousAgentTypeName(AgentTypeName),
     #[error("No security scheme configured for agent {0} but agent has methods that require auth")]
     NoSecuritySchemeConfigured(AgentTypeName),
     #[error(
@@ -158,6 +165,14 @@ pub enum DeployValidationError {
     },
     #[error("Invalid http method: {method:?}")]
     InvalidHttpMethod { method: HttpMethod },
+    #[error(
+        "Agent type names '{name1}' and '{name2}' conflict: both normalize to '{normalized}' in kebab-case"
+    )]
+    ConflictingAgentTypeNames {
+        name1: AgentTypeName,
+        name2: AgentTypeName,
+        normalized: String,
+    },
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -179,6 +194,7 @@ pub struct DeploymentWriteService {
     deployment_repo: Arc<dyn DeploymentRepo>,
     component_service: Arc<ComponentService>,
     http_api_deployment_service: Arc<HttpApiDeploymentService>,
+    mcp_deployment_service: Arc<McpDeploymentService>,
 }
 
 impl DeploymentWriteService {
@@ -187,12 +203,14 @@ impl DeploymentWriteService {
         deployment_repo: Arc<dyn DeploymentRepo>,
         component_service: Arc<ComponentService>,
         http_api_deployment_service: Arc<HttpApiDeploymentService>,
+        mcp_deployment_service: Arc<McpDeploymentService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
             deployment_repo,
             component_service,
             http_api_deployment_service,
+            mcp_deployment_service,
         }
     }
 
@@ -249,17 +267,32 @@ impl DeploymentWriteService {
 
         tracing::info!("Creating deployment for environment: {environment_id}");
 
-        let (components, http_api_deployments) = tokio::try_join!(
+        let (components, http_api_deployments, mcp_deployments) = tokio::try_join!(
             self.component_service
                 .list_staged_components_for_environment(&environment, auth)
                 .map_err(DeploymentWriteError::from),
             self.http_api_deployment_service
                 .list_staged_for_environment(&environment, auth)
                 .map_err(DeploymentWriteError::from),
+            self.mcp_deployment_service
+                .list_staged_for_environment(&environment, auth)
+                .map_err(DeploymentWriteError::from),
         )?;
 
-        let deployment_context =
-            DeploymentContext::new(environment, components, http_api_deployments);
+        tracing::info!(
+            "Fetched staged deployment data for environment: {environment_id}, components: {}, http api deployments: {}, mcp deployments: {}",
+            components.len(),
+            http_api_deployments.len(),
+            mcp_deployments.len()
+        );
+
+        let account_id = environment.owner_account_id;
+        let deployment_context = DeploymentContext::new(
+            environment,
+            components,
+            http_api_deployments,
+            mcp_deployments,
+        );
 
         {
             let actual_hash = deployment_context.hash();
@@ -275,6 +308,12 @@ impl DeploymentWriteService {
         let compiled_routes =
             deployment_context.compile_http_api_routes(&registered_agent_types)?;
 
+        let compiled_mcps = deployment_context.compile_mcp_deployments(
+            &registered_agent_types,
+            account_id,
+            next_deployment_revision,
+        )?;
+
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,
             next_deployment_revision,
@@ -285,7 +324,9 @@ impl DeploymentWriteService {
                 .http_api_deployments
                 .into_values()
                 .collect(),
+            deployment_context.mcp_deployments.into_values().collect(),
             compiled_routes,
+            compiled_mcps,
             registered_agent_types
                 .into_values()
                 .map(DeployedRegisteredAgentType::from)

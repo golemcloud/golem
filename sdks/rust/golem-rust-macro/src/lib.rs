@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -50,6 +50,13 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
     let golem_rust_crate_ident = get_golem_rust_crate_ident();
 
     agentic::derive_schema(input, &golem_rust_crate_ident)
+}
+
+#[proc_macro_derive(ConfigSchema)]
+pub fn derive_config_schema(input: TokenStream) -> TokenStream {
+    let golem_rust_crate_ident = get_golem_rust_crate_ident();
+
+    agentic::derive_config_schema(input, &golem_rust_crate_ident)
 }
 
 #[proc_macro_derive(AllowedLanguages, attributes(code))]

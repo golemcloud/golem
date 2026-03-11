@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ use test_r::test;
 
 use crate::value_and_type::{FromValueAndType, IntoValue};
 use golem_rust_macro::{FromValueAndType, IntoValue};
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::golem_core_1_5_x::types::ValueAndType;
 use golem_wasm::{Value, WitValue};
 
 #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]

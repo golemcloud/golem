@@ -416,47 +416,6 @@
         "jsModules"
       ]
     },
-    "generateAgentWrapperCommand": {
-      "type": "object",
-      "description": "Generate Agent Wrapper",
-      "properties": {
-        "generateAgentWrapper": {
-          "type": "string",
-          "description": "Target path of the generated wrapper component"
-        },
-        "basedOnCompiledWasm": {
-          "type": "string",
-          "description": "Path of the compiled WASM component containing the dynamic golem:agent implementation"
-        }
-      },
-      "required": [
-        "generateAgentWrapper",
-        "basedOnCompiledWasm"
-      ]
-    },
-    "composeAgentWrapperCommand": {
-      "type": "object",
-      "description": "Compose Agent Wrapper",
-      "properties": {
-        "composeAgentWrapper": {
-          "type": "string",
-          "description": "Target path of the generated wrapper component"
-        },
-        "withAgent": {
-          "type": "string",
-          "description": "Path of the compiled WASM component implementing golem:agent"
-        },
-        "to": {
-          "type": "string",
-          "description": "Path of the resulting composed WASM component"
-        }
-      },
-      "required": [
-        "composeAgentWrapper",
-        "withAgent",
-        "to"
-      ]
-    },
     "injectToPrebuiltQuickjsCommand": {
       "type": "object",
       "description": "Inject to prebuilt QuickJS",
@@ -495,12 +454,6 @@
         },
         {
           "$ref": "#/definitions/generateQuickJsdtsCommand"
-        },
-        {
-          "$ref": "#/definitions/generateAgentWrapperCommand"
-        },
-        {
-          "$ref": "#/definitions/composeAgentWrapperCommand"
         },
         {
           "$ref": "#/definitions/injectToPrebuiltQuickjsCommand"

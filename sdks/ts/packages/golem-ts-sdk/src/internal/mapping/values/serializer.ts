@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -24,7 +24,7 @@ import {
 } from './errors';
 import { TaggedTypeMetadata } from '../types/taggedUnion';
 import { Value } from './Value';
-import { BinaryReference, TextReference } from 'golem:agent/common';
+import { BinaryReference, TextReference } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
 
 /**
@@ -137,7 +137,7 @@ export function serializeDefaultTsValue(
       if (typeof tsValue === 'bigint' || typeof tsValue === 'number') {
         return Either.right({
           kind: 'u64',
-          value: tsValue as any,
+          value: typeof tsValue === 'bigint' ? tsValue : BigInt(tsValue as number),
         });
       } else {
         return Either.left(typeMismatchInSerialize(tsValue, 'bigint'));
@@ -395,7 +395,7 @@ export function serializeDefaultTsValue(
       }
 
       if (!('tag' in tsValue)) {
-        return Either.left(missingObjectKey(tsValue, 'tag'));
+        return Either.left(missingObjectKey('tag', tsValue));
       }
 
       switch (analysedType.resultType.tag) {
@@ -599,7 +599,7 @@ export function serializeTextReferenceTsValue(tsValue: any): Value {
 }
 
 export function serializeTsValueToBinaryReference(tsValue: any): BinaryReference {
-  if (typeof tsValue === 'object') {
+  if (typeof tsValue === 'object' && tsValue !== null) {
     const keys = Object.keys(tsValue);
 
     if (!keys.includes('tag')) {
@@ -662,7 +662,7 @@ export function serializeTsValueToBinaryReference(tsValue: any): BinaryReference
 }
 
 export function serializeTsValueToTextReference(value: any): TextReference {
-  if (typeof value === 'object') {
+  if (typeof value === 'object' && value !== null) {
     const keys = Object.keys(value);
 
     if (!keys.includes('tag')) {
@@ -1163,7 +1163,7 @@ function matchesArray(
 }
 
 function handleObjectMatch(value: any, props: NameTypePair[]): boolean {
-  if (typeof value !== 'object' && value !== 'interface') {
+  if (typeof value !== 'object' || value === null) {
     return false;
   }
 

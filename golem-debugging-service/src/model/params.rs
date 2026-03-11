@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,13 +14,13 @@
 
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::PublicOplogEntry;
-use golem_common::model::{LogLevel, Timestamp, WorkerId};
+use golem_common::model::{AgentId, LogLevel, Timestamp};
 use golem_worker_executor::model::event::InternalWorkerEvent;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectParams {
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -44,19 +44,19 @@ pub struct RewindParams {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ForkParams {
-    pub target_worker_id: WorkerId,
+    pub target_agent_id: AgentId,
     pub oplog_index_cut_off: OplogIndex,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectResult {
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PlaybackResult {
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub current_index: OplogIndex,
     pub message: String,
     pub incremental_playback: bool,
@@ -64,15 +64,15 @@ pub struct PlaybackResult {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RewindResult {
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub current_index: OplogIndex,
     pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ForkResult {
-    pub source_worker_id: WorkerId,
-    pub target_worker_id: WorkerId,
+    pub source_agent_id: AgentId,
+    pub target_agent_id: AgentId,
     pub message: String,
 }
 

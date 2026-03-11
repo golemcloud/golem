@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -23,7 +23,7 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::{RdbmsPoolKey, TransactionId, WorkerId};
+use golem_common::model::{AgentId, RdbmsPoolKey, TransactionId};
 use itertools::Either;
 use sqlx::pool::PoolConnection;
 use sqlx::{Database, Describe, Execute, Pool, Row, TransactionManager};
@@ -44,7 +44,7 @@ where
     rdbms_type: T,
     config: RdbmsConfig,
     pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, RdbmsError>,
-    pool_workers_cache: scc::HashMap<RdbmsPoolKey, HashSet<WorkerId>>,
+    pool_workers_cache: scc::HashMap<RdbmsPoolKey, HashSet<AgentId>>,
 }
 
 impl<T, DB> SqlxRdbms<T, DB>
@@ -81,7 +81,7 @@ where
     async fn get_or_create(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> Result<Arc<Pool<DB>>, RdbmsError> {
         let key_clone = key.clone();
         let pool_config = self.config.pool;
@@ -116,7 +116,7 @@ where
             .await
             .or_default()
             .get_mut()
-            .insert(worker_id.clone());
+            .insert(agent_id.clone());
 
         Ok(pool)
     }
@@ -157,11 +157,7 @@ where
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
     RdbmsPoolKey: PoolCreator<DB>,
 {
-    async fn create(
-        &self,
-        address: &str,
-        worker_id: &WorkerId,
-    ) -> Result<RdbmsPoolKey, RdbmsError> {
+    async fn create(&self, address: &str, agent_id: &AgentId) -> Result<RdbmsPoolKey, RdbmsError> {
         let start = Instant::now();
 
         let result = match RdbmsPoolKey::from(address) {
@@ -171,7 +167,7 @@ where
                     pool_key = key.to_string(),
                     "create connection",
                 );
-                self.get_or_create(&key, worker_id)
+                self.get_or_create(&key, agent_id)
                     .await
                     .map(|_| key.clone())
                     .map_err(|e| {
@@ -195,16 +191,16 @@ where
         self.record_metrics("create-connection", start, result)
     }
 
-    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+    async fn remove(&self, key: &RdbmsPoolKey, agent_id: &AgentId) -> bool {
         self.pool_workers_cache
-            .update_async(key, |_, workers| workers.remove(worker_id))
+            .update_async(key, |_, workers| workers.remove(agent_id))
             .await
             .is_some()
     }
 
-    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+    async fn exists(&self, key: &RdbmsPoolKey, agent_id: &AgentId) -> bool {
         self.pool_workers_cache
-            .read_async(key, |_, workers| workers.contains(worker_id))
+            .read_async(key, |_, workers| workers.contains(agent_id))
             .await
             .unwrap_or_default()
     }
@@ -212,7 +208,7 @@ where
     async fn execute(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<u64, RdbmsError>
@@ -228,7 +224,7 @@ where
             params.len()
         );
 
-        let pool = self.get_or_create(key, worker_id).await;
+        let pool = self.get_or_create(key, agent_id).await;
         let result = match pool {
             Ok(pool) => T::execute(statement, params, pool.deref()).await,
             Err(e) => Err(e),
@@ -250,7 +246,7 @@ where
     async fn query_stream(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, RdbmsError>
@@ -266,7 +262,7 @@ where
             params.len()
         );
 
-        let pool = self.get_or_create(key, worker_id).await;
+        let pool = self.get_or_create(key, agent_id).await;
         let result = match pool {
             Ok(pool) => {
                 T::query_stream(
@@ -296,7 +292,7 @@ where
     async fn query(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<DbResult<T>, RdbmsError>
@@ -312,7 +308,7 @@ where
             params.len()
         );
 
-        let pool = self.get_or_create(key, worker_id).await;
+        let pool = self.get_or_create(key, agent_id).await;
         let result = match pool {
             Ok(pool) => T::query(statement, params, pool.deref()).await,
             Err(e) => Err(e),
@@ -334,7 +330,7 @@ where
     async fn begin_transaction(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, RdbmsError> {
         let start = Instant::now();
         debug!(
@@ -343,7 +339,7 @@ where
             "begin transaction",
         );
 
-        let pool = self.get_or_create(key, worker_id).await;
+        let pool = self.get_or_create(key, agent_id).await;
         let result = match pool {
             Ok(pool) => T::begin_transaction(key, pool, self.config.query)
                 .await
@@ -366,7 +362,7 @@ where
     async fn get_transaction_status(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         let start = Instant::now();
@@ -377,7 +373,7 @@ where
             "get transaction status",
         );
 
-        let pool = self.get_or_create(key, worker_id).await;
+        let pool = self.get_or_create(key, agent_id).await;
         let result = match pool {
             Ok(pool) => T::get_transaction_status(pool.deref(), transaction_id).await,
             Err(e) => Err(e),
@@ -399,7 +395,7 @@ where
     async fn cleanup_transaction(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<(), RdbmsError> {
         let start = Instant::now();
@@ -410,7 +406,7 @@ where
             "cleanup transaction",
         );
 
-        let pool = self.get_or_create(key, worker_id).await;
+        let pool = self.get_or_create(key, agent_id).await;
         let result = match pool {
             Ok(pool) => T::cleanup_transaction(pool.deref(), transaction_id).await,
             Err(e) => Err(e),
@@ -433,8 +429,8 @@ where
         let mut pools = HashMap::new();
 
         self.pool_workers_cache
-            .iter_async(|pool_key, worker_ids| {
-                pools.insert(pool_key.clone(), worker_ids.clone());
+            .iter_async(|pool_key, agent_ids| {
+                pools.insert(pool_key.clone(), agent_ids.clone());
                 true
             })
             .await;

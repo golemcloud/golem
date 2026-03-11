@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,9 +15,9 @@
 import { describe, expect, it } from 'vitest';
 import { AgentClassName } from '../src';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
-import { Result } from 'golem:rpc/types@0.2.2';
+import { Result } from 'golem:agent/host@1.5.0';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import { AgentError, AgentType, DataValue } from 'golem:agent/common';
+import { AgentError, AgentType, DataValue } from 'golem:agent/common@1.5.0';
 import { AgentInitiator } from '../src/internal/agentInitiator';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
@@ -50,6 +50,7 @@ describe('AgentType look up', () => {
     const AgentTypeSample: AgentType = {
       typeName: agentClassName.value,
       description: 'An assistant agent',
+      sourceLanguage: 'typescript',
       constructor: {
         name: 'foo',
         description: 'sample desc',
@@ -63,6 +64,7 @@ describe('AgentType look up', () => {
       dependencies: [],
       mode: 'durable',
       snapshotting: { tag: 'disabled' },
+      config: [],
     };
 
     AgentTypeRegistry.register(agentClassName, AgentTypeSample);

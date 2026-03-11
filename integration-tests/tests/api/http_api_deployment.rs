@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -426,15 +426,15 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
 
     let client = deps.registry_service().client(&user.token).await;
 
-    user.component(&env.id, "golem_it_agent_http_routes_ts")
-        .name("golem-it:agent-http-routes-ts")
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
         .store()
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
-            AgentTypeName("http-agent".to_string()),
+            AgentTypeName("HttpAgent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
@@ -444,7 +444,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
-    let deployment = user.deploy_environment(&env.id).await?;
+    let deployment = user.deploy_environment(env.id).await?;
 
     {
         let fetched_http_api_deployment = client

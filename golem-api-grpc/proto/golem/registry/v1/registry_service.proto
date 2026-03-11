@@ -18,6 +18,7 @@ import "golem/registry/agent_deployment.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
 import "golem/customapi/core.proto";
+import "golem/mcp/core.proto";
 import "golem/auth/auth_details_for_environment.proto";
 
 service RegistryService {
@@ -42,9 +43,13 @@ service RegistryService {
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
   rpc ResolveLatestAgentTypeByNames (ResolveLatestAgentTypeByNamesRequest) returns (ResolveLatestAgentTypeByNamesResponse);
+  rpc ResolveAgentTypeAtDeployment (ResolveAgentTypeAtDeploymentRequest) returns (ResolveAgentTypeAtDeploymentResponse);
+  rpc ResolveAgentTypeByNames(ResolveAgentTypeByNamesRequest)
+      returns (ResolveAgentTypeByNamesResponse);
 
   // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
+  rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
   rpc GetAgentDeployments (GetAgentDeploymentsRequest) returns (GetAgentDeploymentsResponse);
 }
 
@@ -97,7 +102,7 @@ message GetResourceLimitsSuccessResponse {
 
 message UpdateWorkerLimitRequest {
   golem.common.AccountId accountId = 1;
-  golem.worker.WorkerId workerId = 2;
+  golem.worker.AgentId agentId = 2;
   bool added = 3;
 }
 
@@ -110,7 +115,7 @@ message UpdateWorkerLimitResponse {
 
 message UpdateWorkerConnectionLimitRequest {
   golem.common.AccountId accountId = 1;
-  golem.worker.WorkerId workerId = 2;
+  golem.worker.AgentId agentId = 2;
   bool added = 3;
 }
 
@@ -265,7 +270,50 @@ message ResolveLatestAgentTypeByNamesSuccessResponse {
   RegisteredAgentType agent_type = 1;
 }
 
+message ResolveAgentTypeAtDeploymentRequest {
+  golem.common.AccountId accountId = 1;
+  string app_name = 2;
+  string environment_name = 3;
+  string agent_type_name = 4;
+  uint64 deployment_revision = 5;
+}
+
+message ResolveAgentTypeAtDeploymentResponse {
+  oneof result {
+    ResolveAgentTypeAtDeploymentSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveAgentTypeAtDeploymentSuccessResponse {
+  RegisteredAgentType agent_type = 1;
+}
+
+message ResolveAgentTypeByNamesRequest {
+  string app_name = 1;
+  string environment_name = 2;
+  string agent_type_name = 3;
+  optional uint64 deployment_revision = 4;
+  optional string owner_account_email = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
+}
+
+message ResolveAgentTypeByNamesResponse {
+  oneof result {
+    ResolveAgentTypeByNamesSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveAgentTypeByNamesSuccessResponse {
+  RegisteredAgentType agent_type = 1;
+}
+
 message GetActiveRoutesForDomainRequest {
+  string domain = 1;
+}
+
+message GetActiveMcpForDomainRequest {
   string domain = 1;
 }
 
@@ -276,8 +324,19 @@ message GetActiveRoutesForDomainResponse {
   }
 }
 
+message GetActiveMcpForDomainResponse {
+  oneof result {
+    GetActiveMcpForDomainSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
 message GetActiveRoutesForDomainSuccessResponse {
   golem.customapi.CompiledRoutes compiled_routes = 1;
+}
+
+message GetActiveMcpForDomainSuccessResponse {
+  golem.mcp.CompiledMcp compiled_mcp = 1;
 }
 
 message GetAgentDeploymentsRequest {

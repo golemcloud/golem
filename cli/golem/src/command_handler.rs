@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -52,6 +52,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     router_addr: args.router_addr().to_string(),
                     router_port: args.router_port(),
                     custom_request_port: args.custom_request_port(),
+                    mcp_port: args.mcp_port(),
                     data_dir,
                 })
                 .await?;
@@ -73,6 +74,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
             router_addr: args.router_addr().to_string(),
             router_port: args.router_port(),
             custom_request_port: args.custom_request_port(),
+            mcp_port: args.mcp_port(),
             data_dir: default_data_dir()?,
         })
         .await?;

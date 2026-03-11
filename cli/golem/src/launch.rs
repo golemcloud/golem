@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -61,6 +61,7 @@ pub struct LaunchArgs {
     pub router_addr: String,
     pub router_port: u16,
     pub custom_request_port: u16,
+    pub mcp_port: u16,
     pub data_dir: PathBuf,
 }
 
@@ -332,6 +333,7 @@ fn worker_service_config(
     WorkerServiceConfig {
         port: 0,
         custom_request_port: args.custom_request_port,
+        mcp_port: args.mcp_port,
         grpc: golem_worker_service::config::GrpcApiConfig {
             port: 0,
             ..Default::default()

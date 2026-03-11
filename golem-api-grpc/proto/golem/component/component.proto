@@ -10,8 +10,15 @@ import "golem/component/component_files.proto";
 import "golem/component/component_metadata.proto";
 import "golem/component/plugin.proto";
 import "golem/component/component_id.proto";
+import "wasm/rpc/value_and_type.proto";
 import "golem/auth/environment_role.proto";
 import "google/protobuf/timestamp.proto";
+
+message LocalAgentConfigEntry {
+  string agent = 1;
+  repeated string key = 2;
+  wasm.rpc.ValueAndType value = 3;
+}
 
 message Component {
   ComponentId component_id = 1;
@@ -22,14 +29,13 @@ message Component {
   golem.common.EnvironmentId environment_id = 6;
   google.protobuf.Timestamp created_at = 7;
   repeated golem.component.InitialComponentFile files = 8;
-  repeated golem.component.InitialComponentFile original_files = 9;
   repeated golem.component.PluginInstallation installed_plugins = 10;
   golem.common.AccountId account_id = 11;
   map<string, string> env = 12;
-  map<string, string> original_env = 13;
-  map<string, string> config_vars = 14;
-  map<string, string> original_config_vars = 15;
-  golem.common.Hash wasm_hash = 16;
-  golem.common.ApplicationId application_id = 17;
-  golem.common.Hash hash = 18;
+  map<string, string> config_vars = 13;
+  repeated LocalAgentConfigEntry local_agent_config = 14;
+  golem.common.Hash wasm_hash = 15;
+  golem.common.ApplicationId application_id = 16;
+  golem.common.Hash hash = 17;
+  string object_store_key = 18;
 }

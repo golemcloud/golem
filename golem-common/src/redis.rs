@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,6 +21,7 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use fred::clients::Transaction;
 use fred::cmd;
 use fred::prelude::{Pool as FredRedisPool, *};
+use fred::types::config::TlsConnector;
 use fred::types::{InfoKind, Limit, Map, MultipleKeys, MultipleValues};
 use tracing::{debug, Level};
 
@@ -56,6 +57,10 @@ impl RedisPool {
         redis_config.tracing.default_tracing_level = Level::DEBUG;
         redis_config.username.clone_from(&config.username);
         redis_config.password.clone_from(&config.password);
+
+        if config.tls {
+            redis_config.tls = Some(TlsConnector::default_rustls()?.into());
+        }
 
         // NOTE: jitter setting is not converted, using the default fred jitter settings
         let policy = ReconnectPolicy::new_exponential(

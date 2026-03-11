@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,4 +20,20 @@ use std::collections::BTreeMap;
 pub struct HttpApiDeploymentDeployProperties {
     pub webhooks_url: String,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug)]
+pub struct McpDeploymentDeployProperties {
+    pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug)]
+pub struct McpDeploymentAgentOptions {
+    // MCP agent configuration options coming soon
+}
+
+impl McpDeploymentAgentOptions {
+    pub fn to_diffable(&self) -> golem_common::model::diff::McpDeploymentAgentOptions {
+        golem_common::model::diff::McpDeploymentAgentOptions {}
+    }
 }

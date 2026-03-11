@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,10 +16,10 @@ use super::type_builder::TypeNodeBuilder;
 use crate::bindings::golem::api::host::{
     AgentAllFilter, AgentAnyFilter, AgentConfigVarsFilter, AgentCreatedAtFilter, AgentEnvFilter,
     AgentMetadata, AgentNameFilter, AgentPropertyFilter, AgentStatus, AgentStatusFilter,
-    AgentVersionFilter, FilterComparator, StringFilterComparator, UpdateMode,
+    AgentVersionFilter, EnvironmentId, FilterComparator, StringFilterComparator, UpdateMode,
 };
 use crate::value_and_type::{FromValueAndType, IntoValue};
-use golem_wasm::{AgentId, NodeBuilder, WitValueExtractor};
+use golem_wasm::{AgentId, NodeBuilder, Uuid, WitValueExtractor};
 
 // UpdateMode
 
@@ -36,7 +36,7 @@ impl IntoValue for UpdateMode {
         let mut builder =
             builder.variant(Some("UpdateMode".to_string()), Some("golem".to_string()));
         builder = builder.unit_case("automatic");
-        builder = builder.unit_case("snapshot-based");
+        builder = builder.unit_case("SnapshotBased");
         builder.finish()
     }
 }
@@ -80,10 +80,10 @@ impl IntoValue for FilterComparator {
             Some("golem".to_string()),
         );
         builder = builder.unit_case("equal");
-        builder = builder.unit_case("not-equal");
-        builder = builder.unit_case("greater-equal");
+        builder = builder.unit_case("NotEqual");
+        builder = builder.unit_case("GreaterEqual");
         builder = builder.unit_case("greater");
-        builder = builder.unit_case("less-equal");
+        builder = builder.unit_case("LessEqual");
         builder = builder.unit_case("less");
         builder.finish()
     }
@@ -131,10 +131,10 @@ impl IntoValue for StringFilterComparator {
             Some("golem".to_string()),
         );
         builder = builder.unit_case("equal");
-        builder = builder.unit_case("not-equal");
+        builder = builder.unit_case("NotEqual");
         builder = builder.unit_case("like");
-        builder = builder.unit_case("not-like");
-        builder = builder.unit_case("starts-with");
+        builder = builder.unit_case("NotLike");
+        builder = builder.unit_case("StartsWith");
         builder.finish()
     }
 }
@@ -512,9 +512,9 @@ impl IntoValue for AgentPropertyFilter {
         builder = <AgentNameFilter>::add_to_type_builder(builder.case("name"));
         builder = <AgentStatusFilter>::add_to_type_builder(builder.case("status"));
         builder = <AgentVersionFilter>::add_to_type_builder(builder.case("version"));
-        builder = <AgentCreatedAtFilter>::add_to_type_builder(builder.case("created-at"));
+        builder = <AgentCreatedAtFilter>::add_to_type_builder(builder.case("CreatedAt"));
         builder = <AgentEnvFilter>::add_to_type_builder(builder.case("env"));
-        builder = <AgentConfigVarsFilter>::add_to_type_builder(builder.case("wasi-config-vars"));
+        builder = <AgentConfigVarsFilter>::add_to_type_builder(builder.case("WasiConfigVars"));
         builder.finish()
     }
 }
@@ -637,6 +637,36 @@ impl FromValueAndType for AgentAnyFilter {
     }
 }
 
+// EnvironmentId
+
+impl IntoValue for EnvironmentId {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        let builder = builder.record();
+        let builder = self.uuid.add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let builder = builder.record(Some("EnvironmentId".to_string()), None);
+        let builder = <Uuid>::add_to_type_builder(builder.field("uuid"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for EnvironmentId {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            uuid: <Uuid>::from_extractor(
+                &extractor
+                    .field(0usize)
+                    .ok_or_else(|| "Missing uuid field".to_string())?,
+            )?,
+        })
+    }
+}
+
 // AgentMetadata
 
 impl IntoValue for AgentMetadata {
@@ -649,18 +679,20 @@ impl IntoValue for AgentMetadata {
         let builder = self.status.add_to_builder(builder.item());
         let builder = self.component_revision.add_to_builder(builder.item());
         let builder = self.retry_count.add_to_builder(builder.item());
+        let builder = self.environment_id.add_to_builder(builder.item());
         builder.finish()
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
         let builder = builder.record(Some("AgentMetadata".to_string()), Some("golem".to_string()));
-        let builder = <AgentId>::add_to_type_builder(builder.field("agent-id"));
+        let builder = <AgentId>::add_to_type_builder(builder.field("agent_id"));
         let builder = <Vec<String>>::add_to_type_builder(builder.field("args"));
         let builder = <Vec<(String, String)>>::add_to_type_builder(builder.field("env"));
-        let builder = <Vec<(String, String)>>::add_to_type_builder(builder.field("config-vars"));
+        let builder = <Vec<(String, String)>>::add_to_type_builder(builder.field("config_vars"));
         let builder = <AgentStatus>::add_to_type_builder(builder.field("status"));
-        let builder = <u64>::add_to_type_builder(builder.field("component-revision"));
-        let builder = <u64>::add_to_type_builder(builder.field("retry-count"));
+        let builder = <u64>::add_to_type_builder(builder.field("component_revision"));
+        let builder = <u64>::add_to_type_builder(builder.field("retry_count"));
+        let builder = <EnvironmentId>::add_to_type_builder(builder.field("environment_id"));
         builder.finish()
     }
 }
@@ -704,6 +736,11 @@ impl FromValueAndType for AgentMetadata {
                 .field(6usize)
                 .ok_or_else(|| "Missing retry-count field".to_string())?,
         )?;
+        let environment_id = <EnvironmentId>::from_extractor(
+            &extractor
+                .field(7usize)
+                .ok_or_else(|| "Missing environment-id field".to_string())?,
+        )?;
         Ok(AgentMetadata {
             agent_id,
             args,
@@ -712,6 +749,7 @@ impl FromValueAndType for AgentMetadata {
             status,
             component_revision,
             retry_count,
+            environment_id,
         })
     }
 }

@@ -1,12 +1,11 @@
-package golem:api@1.3.0;
+package golem:api@1.5.0;
 
 interface oplog-processor {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use golem:rpc/types@0.2.2.{wit-value, account-id};
+    use golem:core/types@1.5.0.{wit-value, account-id, component-id, agent-id};
 
     use host.{oplog-index, agent-metadata};
     use oplog.{oplog-entry};
-    use golem:rpc/types@0.2.2.{component-id, agent-id};
 
     record account-info {
         account-id: account-id

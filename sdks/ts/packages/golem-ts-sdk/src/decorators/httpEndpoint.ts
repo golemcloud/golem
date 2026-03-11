@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,7 +20,7 @@ import {
   HttpEndpointDetails,
   PathSegment,
   QueryVariable,
-} from 'golem:agent/common';
+} from 'golem:agent/common@1.5.0';
 import { AgentMethodRegistry } from '../internal/registry/agentMethodRegistry';
 import { parsePath } from '../internal/http/path';
 import { parseQuery } from '../internal/http/query';

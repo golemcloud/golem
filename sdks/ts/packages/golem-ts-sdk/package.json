@@ -22,11 +22,11 @@
       "agentic-guest": [
         "types/exports.d.ts"
       ],
-      "golem:agent/common": [
-        "types/golem_agent_common.d.ts"
+      "golem:agent/common@1.5.0": [
+        "types/golem_agent_1_5_0_common.d.ts"
       ],
-      "golem:agent/host": [
-        "types/golem_agent_host.d.ts"
+      "golem:agent/host@1.5.0": [
+        "types/golem_agent_1_5_0_host.d.ts"
       ]
     }
   },

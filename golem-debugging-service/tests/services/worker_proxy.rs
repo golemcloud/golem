@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -7,19 +8,21 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::RevertWorkerTarget;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
+use golem_common::model::AgentInvocationOutput;
+use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
-use golem_wasm::{ValueAndType, WitValue};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor_test_utils::component_writer::FileSystemComponentWriter;
 use golem_worker_executor_test_utils::TestContext;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 // Worker Proxy will be internally used by fork functionality,
 // Fork will be resuming the worker (the target) in the real executor by
@@ -28,14 +31,14 @@ use tonic::transport::Channel;
 // Here the proxy implementation bypasses the worker service
 // however place it in the real executor
 pub struct TestWorkerProxy {
-    client: WorkerExecutorClient<Channel>,
+    client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     component_service: Arc<FileSystemComponentWriter>,
     test_ctx: TestContext,
 }
 
 impl TestWorkerProxy {
     pub fn new(
-        client: WorkerExecutorClient<Channel>,
+        client: WorkerExecutorClient<OtelGrpcService<Channel>>,
         component_service: Arc<FileSystemComponentWriter>,
         test_ctx: TestContext,
     ) -> Self {
@@ -63,10 +66,13 @@ impl TestWorkerProxy {
 impl WorkerProxy for TestWorkerProxy {
     async fn start(
         &self,
-        _owned_worker_id: &OwnedWorkerId,
+        _owned_agent_id: &OwnedAgentId,
+        _caller_agent_id: &AgentId,
         _caller_env: HashMap<String, String>,
         _caller_config_vars: BTreeMap<String, String>,
+        _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
+        _principal: Principal,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -75,47 +81,31 @@ impl WorkerProxy for TestWorkerProxy {
         ))
     }
 
-    async fn invoke_and_await(
+    async fn invoke_agent(
         &self,
-        _owned_worker_id: &OwnedWorkerId,
+        _agent_id: &AgentId,
+        _method_name: String,
+        _method_parameters: UntypedDataValue,
+        _mode: AgentInvocationMode,
+        _schedule_at: Option<DateTime<Utc>>,
         _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _function_params: Vec<WitValue>,
-        _caller_worker_id: WorkerId,
+        _caller_agent_id: AgentId,
         _caller_env: HashMap<String, String>,
         _caller_config_vars: BTreeMap<String, String>,
-        _invocation_context_stack: InvocationContextStack,
+        _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
-    ) -> Result<Option<ValueAndType>, WorkerProxyError> {
+        _principal: Principal,
+    ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
-                "Not implemented in tests as debug service is not expected to call invoke and await through proxy",
-            )
-        ))
-    }
-
-    async fn invoke(
-        &self,
-        _owned_worker_id: &OwnedWorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _function_params: Vec<WitValue>,
-        _caller_worker_id: WorkerId,
-        _caller_env: HashMap<String, String>,
-        _caller_config_vars: BTreeMap<String, String>,
-        _invocation_context_stack: InvocationContextStack,
-        _caller_account_id: AccountId,
-    ) -> Result<(), WorkerProxyError> {
-        Err(WorkerProxyError::InternalError(
-            WorkerExecutorError::unknown(
-                "Not implemented in tests as debug service is not expected to call invoke and await through proxy",
+                "Not implemented in tests as debug service is not expected to call invoke_agent through proxy",
             )
         ))
     }
 
     async fn update(
         &self,
-        _owned_worker_id: &OwnedWorkerId,
+        _owned_agent_id: &OwnedAgentId,
         _target_revision: ComponentRevision,
         _mode: UpdateMode,
         _disable_wakeup: bool,
@@ -130,7 +120,7 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn resume(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         force: bool,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
@@ -138,7 +128,7 @@ impl WorkerProxy for TestWorkerProxy {
 
         let component = self
             .component_service
-            .get_latest_component_metadata(&worker_id.component_id)
+            .get_latest_component_metadata(&agent_id.component_id)
             .await
             .unwrap();
 
@@ -155,10 +145,11 @@ impl WorkerProxy for TestWorkerProxy {
                 .client
                 .clone()
                 .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
+                    agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(component.environment_id.into()),
                     force: Some(force),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: None,
                 })
                 .await;
 
@@ -185,14 +176,14 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &AgentId,
+        target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
-            .get_latest_component_metadata(&source_worker_id.component_id)
+            .get_latest_component_metadata(&source_agent_id.component_id)
             .await
             .unwrap();
 
@@ -210,10 +201,11 @@ impl WorkerProxy for TestWorkerProxy {
             .fork_worker(ForkWorkerRequest {
                 component_owner_account_id: Some(component.account_id.into()),
                 environment_id: Some(component.environment_id.into()),
-                source_worker_id: Some(source_worker_id.clone().into()),
-                target_worker_id: Some(target_worker_id.clone().into()),
+                source_agent_id: Some(source_agent_id.clone().into()),
+                target_agent_id: Some(target_agent_id.clone().into()),
                 oplog_index_cutoff: (*oplog_index_cutoff).into(),
                 auth_ctx: Some(auth_ctx.into()),
+                principal: None,
             })
             .await?
             .into_inner()
@@ -232,13 +224,13 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn revert(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target: RevertWorkerTarget,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
-            .get_latest_component_metadata(&worker_id.component_id)
+            .get_latest_component_metadata(&agent_id.component_id)
             .await
             .unwrap();
 
@@ -254,10 +246,11 @@ impl WorkerProxy for TestWorkerProxy {
             .client
             .clone()
             .revert_worker(RevertWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(component.environment_id.into()),
                 target: Some(target.into()),
                 auth_ctx: Some(auth_ctx.into()),
+                principal: None,
             })
             .await?
             .into_inner()

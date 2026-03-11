@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,6 +17,7 @@ mod deployment;
 mod environment;
 mod hash;
 mod http_api_deployment;
+mod mcp_deployment;
 mod plugin;
 mod ser;
 
@@ -25,6 +26,7 @@ pub use deployment::*;
 pub use environment::*;
 pub use hash::*;
 pub use http_api_deployment::*;
+pub use mcp_deployment::*;
 pub use plugin::*;
 pub use ser::*;
 
@@ -173,6 +175,53 @@ where
                 (false, false) => {
                     panic!("unreachable");
                 }
+            }
+        }
+
+        if diff.is_empty() {
+            None
+        } else {
+            Some(diff)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VecDiffValue<ValueDiff> {
+    Create,
+    Delete,
+    Update(ValueDiff),
+}
+
+pub type VecDiff<V> = BTreeMap<String, VecDiffValue<<V as Diffable>::DiffResult>>;
+
+impl<V> Diffable for Vec<V>
+where
+    V: Diffable,
+    V::DiffResult: Serialize,
+{
+    type DiffResult = VecDiff<V>;
+
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let mut diff = BTreeMap::new();
+
+        let max_len = std::cmp::max(new.len(), current.len());
+
+        for i in 0..max_len {
+            match (new.get(i), current.get(i)) {
+                (Some(n), Some(c)) => {
+                    if let Some(d) = n.diff_with_current(c) {
+                        diff.insert(i.to_string(), VecDiffValue::Update(d));
+                    }
+                }
+                (Some(_), None) => {
+                    diff.insert(i.to_string(), VecDiffValue::Create);
+                }
+                (None, Some(_)) => {
+                    diff.insert(i.to_string(), VecDiffValue::Delete);
+                }
+                (None, None) => {}
             }
         }
 

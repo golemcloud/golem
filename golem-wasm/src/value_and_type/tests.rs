@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -496,5 +496,55 @@ fn test_converted_and_skipped_fields_roundtrip() {
     };
     let val = original.clone().into_value();
     let back = TestWithConvertedFieldAndSkip::from_value(val).unwrap();
+    assert_eq!(back, original);
+}
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+enum TestEnumWithSkipAndConvert {
+    VariantA {
+        #[wit_field(convert = u32)]
+        field: WrappedU32,
+        #[wit_field(skip)]
+        skipped: bool,
+    },
+    VariantB {
+        value: String,
+    },
+}
+
+#[test]
+fn test_enum_struct_variant_skip_and_convert_roundtrip() {
+    let original = TestEnumWithSkipAndConvert::VariantA {
+        field: WrappedU32(42),
+        skipped: false,
+    };
+    let val = original.clone().into_value();
+    let back = TestEnumWithSkipAndConvert::from_value(val).unwrap();
+    assert_eq!(back, original);
+
+    let original2 = TestEnumWithSkipAndConvert::VariantB {
+        value: "hello".to_string(),
+    };
+    let val2 = original2.clone().into_value();
+    let back2 = TestEnumWithSkipAndConvert::from_value(val2).unwrap();
+    assert_eq!(back2, original2);
+}
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+struct TestWithSkipFirst {
+    #[wit_field(skip)]
+    skipped: bool,
+    #[wit_field(convert = u32)]
+    field: WrappedU32,
+}
+
+#[test]
+fn test_skip_first_field_roundtrip() {
+    let original = TestWithSkipFirst {
+        skipped: false,
+        field: WrappedU32(99),
+    };
+    let val = original.clone().into_value();
+    let back = TestWithSkipFirst::from_value(val).unwrap();
     assert_eq!(back, original);
 }

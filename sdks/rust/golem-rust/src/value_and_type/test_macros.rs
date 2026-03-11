@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@ macro_rules! roundtrip_test {
     ($name:ident, $type:ty, $strategy:expr) => {
         #[test]
         fn $name() {
-            use crate::value_and_type::{FromValueAndType, IntoValue};
-            use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+            use $crate::value_and_type::{FromValueAndType, IntoValue};
+            use golem_wasm::golem_core_1_5_x::types::ValueAndType;
             use proptest::proptest;
             use proptest::prop_assert_eq;
 
@@ -45,8 +45,8 @@ macro_rules! roundtrip_test_map {
     ($name:ident, $type:ty, $strategy:expr, |$val:ident| $map_expr:expr) => {
         #[test]
         fn $name() {
-            use crate::value_and_type::{FromValueAndType, IntoValue};
-            use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+            use $crate::value_and_type::{FromValueAndType, IntoValue};
+            use golem_wasm::golem_core_1_5_x::types::ValueAndType;
             use proptest::proptest;
             use proptest::prop_assert_eq;
 
@@ -71,8 +71,8 @@ macro_rules! roundtrip_test_deref {
     ($name:ident, $type:ty, $strategy:expr, |$val:ident| $map_expr:expr) => {
         #[test]
         fn $name() {
-            use crate::value_and_type::{FromValueAndType, IntoValue};
-            use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+            use $crate::value_and_type::{FromValueAndType, IntoValue};
+            use golem_wasm::golem_core_1_5_x::types::ValueAndType;
             use proptest::proptest;
             use proptest::prop_assert_eq;
 

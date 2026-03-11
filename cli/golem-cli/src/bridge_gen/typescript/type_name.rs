@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -46,7 +46,13 @@ impl TypeName for TypeScriptTypeName {
         None
     }
 
-    fn from_owner_and_name(owner: Option<impl AsRef<str>>, name: impl AsRef<str>) -> Self {
+    fn from_owner_and_name(
+        owner: Option<impl AsRef<str>>,
+        name: impl AsRef<str>,
+        _same_language: bool,
+    ) -> Self {
+        // WIT type names are always kebab-case regardless of source language,
+        // so we always need to convert to UpperCamelCase for TypeScript.
         match owner {
             Some(owner) => format!(
                 "{}{}",
@@ -58,7 +64,12 @@ impl TypeName for TypeScriptTypeName {
         }
     }
 
-    fn from_segments(segments: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+    fn from_segments(
+        segments: impl IntoIterator<Item = impl AsRef<str>>,
+        _same_language: bool,
+    ) -> Self {
+        // WIT type names are always kebab-case regardless of source language,
+        // so we always need to convert to UpperCamelCase for TypeScript.
         segments
             .into_iter()
             .map(|segment| segment.as_ref().to_upper_camel_case())

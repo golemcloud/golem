@@ -67,6 +67,7 @@ serde_json = { workspace = true }
 sha2.workspace = true
 sqlx = { workspace = true, features = [
     "runtime-tokio",
+    "tls-rustls",
     "sqlite",
     "postgres",
     "uuid",
@@ -96,7 +97,6 @@ pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
 testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
 tryhard = { workspace = true }
 uuid = { workspace = true }
 

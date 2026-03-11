@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
+use crate::model::agent::{Principal, UntypedDataValue};
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextStack, TraceId};
@@ -20,10 +21,9 @@ use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
 use crate::model::{
-    AccountId, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId, ScheduledAction, WorkerId,
-    WorkerMetadata, WorkerStatus,
+    AccountId, AgentId, AgentInvocation, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId,
+    RdbmsPoolKey, ScheduleId, ScheduledAction,
 };
-use anyhow::anyhow;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -33,7 +33,7 @@ use desert_rust::{
 };
 use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{FromValue, IntoValue, NodeIndex, Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValue, NodeIndex, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue, Version};
 use mac_address::MacAddress;
@@ -60,6 +60,9 @@ use wasmtime_wasi_http::bindings::http::types::{
 use wasmtime_wasi_http::body::HostIncomingBody;
 use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
 
+/// Must match `DEFAULT_FIELD_SIZE_LIMIT` in wasmtime-wasi-http's `WasiHttpCtx`
+const DEFAULT_FIELD_SIZE_LIMIT: usize = 128 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 pub struct ObjectMetadata {
@@ -74,15 +77,6 @@ pub struct ObjectMetadata {
 pub struct SerializableDateTime {
     pub seconds: u64,
     pub nanoseconds: u32,
-}
-
-impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
-    fn from(value: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
-        }
-    }
 }
 
 impl From<golem_wasm::wasi::clocks::wall_clock::Datetime> for SerializableDateTime {
@@ -146,7 +140,7 @@ impl From<FileSystemError> for FsError {
     fn from(value: FileSystemError) -> Self {
         match value {
             FileSystemError::ErrorCode(SerializableFsErrorCode(error_code)) => error_code.into(),
-            FileSystemError::Generic(error) => FsError::trap(anyhow!(error)),
+            FileSystemError::Generic(error) => FsError::trap(wasmtime::Error::msg(error)),
         }
     }
 }
@@ -246,7 +240,7 @@ impl BinaryDeserializer for SerializableFsErrorCode {
             other => {
                 return Err(desert_rust::Error::DeserializationFailure(format!(
                     "Invalid tag for SerializableFsErrorCode: {other}"
-                )))
+                )));
             }
         };
         Ok(SerializableFsErrorCode(error_code))
@@ -475,7 +469,9 @@ impl From<SerializableSocketError> for SocketError {
             SerializableSocketError::ErrorCode(SerializableSocketErrorCode(error_code)) => {
                 error_code.into()
             }
-            SerializableSocketError::Generic(error) => SocketError::trap(anyhow!(error)),
+            SerializableSocketError::Generic(error) => {
+                SocketError::trap(wasmtime::Error::msg(error))
+            }
         }
     }
 }
@@ -543,7 +539,7 @@ impl BinaryDeserializer for SerializableSocketErrorCode {
             other => {
                 return Err(desert_rust::Error::DeserializationFailure(format!(
                     "Invalid tag for SerializableSocketErrorCode: {other}"
-                )))
+                )));
             }
         };
         Ok(SerializableSocketErrorCode(error_code))
@@ -724,7 +720,7 @@ impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
 
     fn try_from(response: &HostIncomingResponse) -> Result<Self, Self::Error> {
         let mut headers = HashMap::new();
-        for (key, value) in response.headers.iter() {
+        for (key, value) in response.headers.as_ref().iter() {
             headers.insert(key.as_str().to_string(), value.as_bytes().to_vec());
         }
 
@@ -739,10 +735,11 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
     type Error = anyhow::Error;
 
     fn try_from(value: SerializableResponseHeaders) -> Result<Self, Self::Error> {
-        let mut headers = FieldMap::new();
+        let mut header_map = http::HeaderMap::new();
         for (key, value) in value.headers {
-            headers.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
+            header_map.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
         }
+        let headers = FieldMap::new(header_map, DEFAULT_FIELD_SIZE_LIMIT);
 
         Ok(Self {
             status: value.status,
@@ -1094,22 +1091,23 @@ impl Display for SerializableHttpMethod {
     }
 }
 
-/// A subset of WorkerMetadata visible for guests (and serializable to oplog)
+/// A subset of AgentMetadata visible for guests (and serializable to oplog)
 #[derive(Debug, Clone, PartialEq, IntoValue, FromValue, BinaryCodec)]
 pub struct AgentMetadataForGuests {
-    pub agent_id: WorkerId,
+    pub agent_id: AgentId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config_vars: BTreeMap<String, String>,
-    pub status: WorkerStatus,
+    pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u64,
+    pub environment_id: EnvironmentId,
 }
 
-impl From<WorkerMetadata> for AgentMetadataForGuests {
-    fn from(value: WorkerMetadata) -> Self {
+impl From<AgentMetadata> for AgentMetadataForGuests {
+    fn from(value: AgentMetadata) -> Self {
         Self {
-            agent_id: value.worker_id,
+            agent_id: value.agent_id,
             args: vec![],
             env: value.env,
             config_vars: value.config_vars,
@@ -1122,6 +1120,7 @@ impl From<WorkerMetadata> for AgentMetadataForGuests {
                 .max_by_key(|(idx, _)| **idx)
                 .map(|(_, value)| *value)
                 .unwrap_or_default() as u64,
+            environment_id: value.environment_id,
         }
     }
 }
@@ -1149,9 +1148,9 @@ impl From<SerializableStreamError> for StreamError {
         match value {
             SerializableStreamError::Closed => Self::Closed,
             SerializableStreamError::LastOperationFailed(e) => {
-                Self::LastOperationFailed(anyhow!(e))
+                Self::LastOperationFailed(wasmtime::Error::msg(e))
             }
-            SerializableStreamError::Trap(e) => Self::Trap(anyhow!(e)),
+            SerializableStreamError::Trap(e) => Self::Trap(wasmtime::Error::msg(e)),
         }
     }
 }
@@ -1265,7 +1264,7 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
 pub enum SerializableInvokeResult {
     Failed(String),
     Pending,
-    Completed(Result<Option<ValueAndType>, SerializableRpcError>),
+    Completed(Result<UntypedDataValue, SerializableRpcError>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
@@ -1284,10 +1283,11 @@ pub struct SerializableScheduledInvocation {
     pub timestamp: i64,
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub idempotency_key: IdempotencyKey,
-    pub full_function_name: String,
-    pub function_input: Vec<Value>,
+    pub method_name: String,
+    pub input: UntypedDataValue,
+    pub principal: Principal,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub spans: Vec<Vec<PublicSpanData>>,
@@ -1298,44 +1298,58 @@ impl SerializableScheduledInvocation {
         match schedule_id.action {
             ScheduledAction::Invoke {
                 account_id,
-                owned_worker_id,
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            } => Ok(Self {
-                timestamp: schedule_id.timestamp,
-                account_id,
-                environment_id: owned_worker_id.environment_id,
-                worker_id: owned_worker_id.worker_id,
-                idempotency_key,
-                full_function_name,
-                function_input,
-                spans: encode_span_data(&invocation_context.to_oplog_data()),
-                trace_id: invocation_context.trace_id,
-                trace_states: invocation_context.trace_states,
-            }),
+                owned_agent_id,
+                invocation,
+            } => match *invocation {
+                AgentInvocation::AgentMethod {
+                    idempotency_key,
+                    method_name,
+                    input,
+                    invocation_context,
+                    principal,
+                } => Ok(Self {
+                    timestamp: schedule_id.timestamp,
+                    account_id,
+                    environment_id: owned_agent_id.environment_id,
+                    agent_id: owned_agent_id.agent_id,
+                    idempotency_key,
+                    method_name,
+                    input,
+                    principal,
+                    spans: encode_span_data(&invocation_context.to_oplog_data()),
+                    trace_id: invocation_context.trace_id,
+                    trace_states: invocation_context.trace_states,
+                }),
+                other => Err(format!(
+                    "ScheduleId contains a non-method invocation: {:?}",
+                    other.kind()
+                )),
+            },
             _ => Err("ScheduleId does not describe an invocation".to_string()),
         }
     }
 
     pub fn into_domain(self) -> ScheduleId {
+        let invocation_context = InvocationContextStack::from_oplog_data(
+            self.trace_id,
+            self.trace_states,
+            decode_span_data(self.spans),
+        );
         ScheduleId {
             timestamp: self.timestamp,
             action: ScheduledAction::Invoke {
                 account_id: self.account_id,
-                owned_worker_id: OwnedWorkerId {
+                owned_agent_id: OwnedAgentId {
                     environment_id: self.environment_id,
-                    worker_id: self.worker_id,
+                    agent_id: self.agent_id,
                 },
-                idempotency_key: self.idempotency_key,
-                full_function_name: self.full_function_name,
-                function_input: self.function_input,
-                invocation_context: InvocationContextStack::from_oplog_data(
-                    self.trace_id,
-                    self.trace_states,
-                    decode_span_data(self.spans),
-                ),
+                invocation: Box::new(AgentInvocation::AgentMethod {
+                    idempotency_key: self.idempotency_key,
+                    method_name: self.method_name,
+                    input: self.input,
+                    invocation_context,
+                    principal: self.principal,
+                }),
             },
         }
     }

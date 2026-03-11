@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use crate::model::api_definition::{BoundCompiledRoute, UnboundCompiledRoute};
-use crate::model::component::Component;
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
+use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use anyhow::anyhow;
+use desert_rust::BinaryCodec;
+use golem_common::base_model::domain_registration::Domain;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -30,10 +32,14 @@ use golem_common::model::deployment::{
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::mcp_deployment::McpDeployment;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::mcp::CompiledMcp;
+use golem_service_base::model::component::Component;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
+use heck::ToKebabCase;
 use sqlx::FromRow;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -168,6 +174,30 @@ impl DeploymentHttpApiDeploymentRevisionRecord {
     }
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct DeploymentMcpDeploymentRevisionRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub mcp_deployment_id: Uuid,
+    pub mcp_deployment_revision_id: i64,
+}
+
+impl DeploymentMcpDeploymentRevisionRecord {
+    pub fn from_model(
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        mcp_deployment_id: Uuid,
+        mcp_deployment_revision_id: i64,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            mcp_deployment_id,
+            mcp_deployment_revision_id,
+        }
+    }
+}
+
 pub struct DeploymentHashes {
     pub env_hash: SqlBlake3Hash,
     pub deployment_hash: SqlBlake3Hash,
@@ -176,6 +206,7 @@ pub struct DeploymentHashes {
 pub struct DeploymentIdentity {
     pub components: Vec<ComponentRevisionIdentityRecord>,
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
+    pub mcp_deployments: Vec<McpDeploymentRevisionIdentityRecord>,
 }
 
 impl DeploymentIdentity {
@@ -196,6 +227,11 @@ impl DeploymentIdentity {
                 .into_iter()
                 .map(|had| had.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            mcp_deployments: self
+                .mcp_deployments
+                .into_iter()
+                .map(|mcd| mcd.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -215,6 +251,16 @@ impl DeploymentIdentity {
                 .collect(),
             http_api_deployments: self
                 .http_api_deployments
+                .iter()
+                .map(|deployment| {
+                    (
+                        (&deployment.domain).into(),
+                        diff::HashOf::from_blake3_hash(deployment.hash.into()),
+                    )
+                })
+                .collect(),
+            mcp_deployments: self
+                .mcp_deployments
                 .iter()
                 .map(|deployment| {
                     (
@@ -249,6 +295,12 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
                 .http_api_deployments
                 .into_iter()
                 .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            mcp_deployments: value
+                .identity
+                .mcp_deployments
+                .into_iter()
+                .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
@@ -289,7 +341,7 @@ pub struct DeploymentRegisteredAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub agent_type_name: String,
-    pub agent_wrapper_type_name: String,
+    pub canonical_agent_type_name: String,
 
     pub component_id: Uuid,
     pub component_revision_id: i64,
@@ -307,7 +359,11 @@ impl DeploymentRegisteredAgentTypeRecord {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
             agent_type_name: registered_agent_type.agent_type.type_name.to_string(),
-            agent_wrapper_type_name: registered_agent_type.agent_type.wrapper_type_name(),
+            canonical_agent_type_name: registered_agent_type
+                .agent_type
+                .type_name
+                .to_string()
+                .to_kebab_case(),
             component_id: registered_agent_type.implemented_by.component_id.0,
             component_revision_id: registered_agent_type
                 .implemented_by
@@ -334,6 +390,34 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
     }
 }
 
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct ResolvedAgentTypeRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub agent_type_name: String,
+    pub canonical_agent_type_name: String,
+    pub component_id: Uuid,
+    pub component_revision_id: i64,
+    pub webhook_prefix_authority_and_path: Option<String>,
+    pub agent_type: Blob<AgentType>,
+    pub owner_account_id: Uuid,
+    pub environment_roles_from_shares: i32,
+}
+
+impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {
+    type Error = DeployRepoError;
+    fn try_from(value: ResolvedAgentTypeRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            agent_type: value.agent_type.into_value(),
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: value.component_id.into(),
+                component_revision: value.component_revision_id.try_into()?,
+            },
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
+        })
+    }
+}
+
 pub struct DeploymentRevisionCreationRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
@@ -343,7 +427,9 @@ pub struct DeploymentRevisionCreationRecord {
 
     pub components: Vec<DeploymentComponentRevisionRecord>,
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
+    pub mcp_deployments: Vec<DeploymentMcpDeploymentRevisionRecord>,
     pub compiled_routes: Vec<DeploymentCompiledRouteRecord>,
+    pub compiled_mcp: Vec<DeploymentCompiledMcpRecord>,
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
 }
 
@@ -355,7 +441,9 @@ impl DeploymentRevisionCreationRecord {
         hash: diff::Hash,
         components: Vec<Component>,
         http_api_deployments: Vec<HttpApiDeployment>,
+        mcp_deployments: Vec<McpDeployment>,
         compiled_routes: Vec<UnboundCompiledRoute>,
+        compiled_mcp: Vec<CompiledMcp>,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
     ) -> Self {
         Self {
@@ -383,6 +471,17 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
+            mcp_deployments: mcp_deployments
+                .into_iter()
+                .map(|mcd| {
+                    DeploymentMcpDeploymentRevisionRecord::from_model(
+                        environment_id,
+                        deployment_revision,
+                        mcd.id.0,
+                        mcd.revision.into(),
+                    )
+                })
+                .collect(),
             compiled_routes: compiled_routes
                 .into_iter()
                 .map(|r| {
@@ -392,6 +491,10 @@ impl DeploymentRevisionCreationRecord {
                         r,
                     )
                 })
+                .collect(),
+            compiled_mcp: compiled_mcp
+                .into_iter()
+                .map(DeploymentCompiledMcpRecord::from_model)
                 .collect(),
             registered_agent_types: registered_agent_types
                 .into_iter()
@@ -404,6 +507,50 @@ impl DeploymentRevisionCreationRecord {
                 })
                 .collect(),
         }
+    }
+}
+
+#[derive(Debug, Clone, BinaryCodec)]
+pub struct CompiledMcpData {
+    pub implementers: golem_service_base::mcp::AgentTypeImplementers,
+}
+
+#[derive(FromRow)]
+pub struct DeploymentCompiledMcpRecord {
+    pub account_id: Uuid,
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub domain: String,
+    pub mcp_data: Blob<CompiledMcpData>,
+}
+
+impl DeploymentCompiledMcpRecord {
+    pub fn from_model(compiled_mcp: CompiledMcp) -> Self {
+        Self {
+            account_id: compiled_mcp.account_id.0,
+            environment_id: compiled_mcp.environment_id.0,
+            deployment_revision_id: compiled_mcp.deployment_revision.into(),
+            domain: compiled_mcp.domain.0.clone(),
+            mcp_data: Blob::new(CompiledMcpData {
+                implementers: compiled_mcp.agent_type_implementers,
+            }),
+        }
+    }
+}
+
+impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
+    type Error = DeployRepoError;
+
+    fn try_from(value: DeploymentCompiledMcpRecord) -> Result<Self, Self::Error> {
+        let mcp_data = value.mcp_data.into_value();
+
+        Ok(Self {
+            account_id: AccountId(value.account_id),
+            environment_id: EnvironmentId(value.environment_id),
+            deployment_revision: value.deployment_revision_id.try_into()?,
+            domain: Domain(value.domain),
+            agent_type_implementers: mcp_data.implementers,
+        })
     }
 }
 

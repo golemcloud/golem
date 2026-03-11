@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -22,7 +22,7 @@ use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use golem_common::model::component::{InitialComponentFile, InstalledPlugin};
-use golem_common::model::WorkerStatus;
+use golem_common::model::AgentStatus;
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
@@ -207,16 +207,16 @@ pub fn format_binary_size(size: &u64) -> String {
     humansize::format_size(*size, humansize::BINARY)
 }
 
-pub fn format_status(status: &WorkerStatus) -> String {
+pub fn format_status(status: &AgentStatus) -> String {
     let status_name = status.to_string();
     match status {
-        WorkerStatus::Running => status_name.green(),
-        WorkerStatus::Idle => status_name.cyan(),
-        WorkerStatus::Suspended => status_name.yellow(),
-        WorkerStatus::Interrupted => status_name.red(),
-        WorkerStatus::Retrying => status_name.yellow(),
-        WorkerStatus::Failed => status_name.bright_red(),
-        WorkerStatus::Exited => status_name.white(),
+        AgentStatus::Running => status_name.green(),
+        AgentStatus::Idle => status_name.cyan(),
+        AgentStatus::Suspended => status_name.yellow(),
+        AgentStatus::Interrupted => status_name.red(),
+        AgentStatus::Retrying => status_name.yellow(),
+        AgentStatus::Failed => status_name.bright_red(),
+        AgentStatus::Exited => status_name.white(),
     }
     .to_string()
 }
@@ -230,6 +230,7 @@ pub fn format_retry_count(retry_count: &u32) -> String {
 }
 
 static BUILTIN_TYPES: phf::Set<&'static str> = phf::phf_set! {
+    // WIT primitives
     "bool",
     "s8", "s16", "s32", "s64",
     "u8", "u16", "u32", "u64",
@@ -241,17 +242,34 @@ static BUILTIN_TYPES: phf::Set<&'static str> = phf::phf_set! {
     "result",
     "tuple",
     "record",
+    // Rust types
+    "String",
+    "Option",
+    "Vec",
+    "Result",
+    "Some",
+    "None",
+    "i8", "i16", "i32", "i64",
+    "enum",
+    "flags",
+    // TypeScript types
+    "number",
+    "boolean",
+    "undefined",
+    "Uint8Array",
+    "void",
+    "never",
+    "true",
 };
 
-// TODO: should handle '->'
-// A very naive highlighter for basic coloring of builtin types and user defined names
+// A naive highlighter for basic coloring of builtin types and user defined names
 pub fn format_export(export: &str) -> String {
     if !SHOULD_COLORIZE.should_colorize() {
         return export.to_string();
     }
 
-    let separator =
-        Regex::new(r"[ :/.{}()<>,]").expect("Failed to compile export separator pattern");
+    let separator = Regex::new(r#"[\s:/.{}()\[\]<>,;|?"]"#)
+        .expect("Failed to compile export separator pattern");
     let mut formatted = String::with_capacity(export.len());
 
     fn format_token(target: &mut String, token: &str) {

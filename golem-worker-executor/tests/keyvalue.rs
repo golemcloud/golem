@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,13 +18,17 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -32,27 +36,24 @@ inherit_test_dep!(Tracing);
 async fn readwrite_get_returns_the_value_that_was_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-1");
+    let agent_id = agent_id!("KeyValue", "key-value-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(
@@ -65,7 +66,7 @@ async fn readwrite_get_returns_the_value_that_was_set(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get",
             data_value!(
@@ -96,27 +97,24 @@ async fn readwrite_get_returns_the_value_that_was_set(
 async fn readwrite_get_fails_if_the_value_was_not_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-2");
+    let agent_id = agent_id!("KeyValue", "key-value-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get",
             data_value!(
@@ -140,27 +138,24 @@ async fn readwrite_get_fails_if_the_value_was_not_set(
 async fn readwrite_set_replaces_the_value_if_it_was_already_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-3");
+    let agent_id = agent_id!("KeyValue", "key-value-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(
@@ -173,7 +168,7 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(
@@ -186,7 +181,7 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get",
             data_value!(
@@ -217,27 +212,24 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
 async fn readwrite_delete_removes_the_value_if_it_was_already_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-4");
+    let agent_id = agent_id!("KeyValue", "key-value-service-4");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(
@@ -250,7 +242,7 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "delete",
             data_value!(
@@ -262,7 +254,7 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get",
             data_value!(
@@ -286,27 +278,24 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
 async fn readwrite_exists_returns_true_if_the_value_was_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-5");
+    let agent_id = agent_id!("KeyValue", "key-value-service-5");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(
@@ -319,7 +308,7 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "exists",
             data_value!(
@@ -342,27 +331,24 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
 async fn readwrite_exists_returns_false_if_the_value_was_not_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-6");
+    let agent_id = agent_id!("KeyValue", "key-value-service-6");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "exists",
             data_value!(
@@ -386,31 +372,28 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set(
 async fn readwrite_buckets_can_be_shared_between_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id_1 = agent_id!("key-value", "key-value-service-7");
+    let agent_id_1 = agent_id!("KeyValue", "key-value-service-7");
     let worker_id_1 = executor
         .start_agent(&component.id, agent_id_1.clone())
         .await?;
-    let agent_id_2 = agent_id!("key-value", "key-value-service-8");
+    let agent_id_2 = agent_id!("KeyValue", "key-value-service-8");
     let worker_id_2 = executor
         .start_agent(&component.id, agent_id_2.clone())
         .await?;
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id_1,
             "set",
             data_value!(
@@ -423,7 +406,7 @@ async fn readwrite_buckets_can_be_shared_between_workers(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id_2,
             "get",
             data_value!(format!("{}-bucket", component.id), "key"),
@@ -452,20 +435,17 @@ async fn readwrite_buckets_can_be_shared_between_workers(
 async fn batch_get_many_gets_multiple_values(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-9");
+    let agent_id = agent_id!("KeyValue", "key-value-service-9");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -474,7 +454,7 @@ async fn batch_get_many_gets_multiple_values(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key1", vec![1u8, 2u8, 3u8]),
@@ -483,7 +463,7 @@ async fn batch_get_many_gets_multiple_values(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key2", vec![4u8, 5u8, 6u8]),
@@ -492,7 +472,7 @@ async fn batch_get_many_gets_multiple_values(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key3", vec![7u8, 8u8, 9u8]),
@@ -501,7 +481,7 @@ async fn batch_get_many_gets_multiple_values(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_many",
             data_value!(
@@ -532,20 +512,17 @@ async fn batch_get_many_gets_multiple_values(
 async fn batch_get_many_fails_if_any_value_was_not_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-10");
+    let agent_id = agent_id!("KeyValue", "key-value-service-10");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -554,7 +531,7 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key1", vec![1u8, 2u8, 3u8]),
@@ -563,7 +540,7 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key2", vec![4u8, 5u8, 6u8]),
@@ -572,7 +549,7 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_many",
             data_value!(
@@ -594,20 +571,17 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
 async fn batch_set_many_sets_multiple_values(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-11");
+    let agent_id = agent_id!("KeyValue", "key-value-service-11");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -616,7 +590,7 @@ async fn batch_set_many_sets_multiple_values(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set_many",
             data_value!(
@@ -632,7 +606,7 @@ async fn batch_set_many_sets_multiple_values(
 
     let result1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get",
             data_value!(bucket.clone(), "key1"),
@@ -643,7 +617,7 @@ async fn batch_set_many_sets_multiple_values(
 
     let result2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get",
             data_value!(bucket.clone(), "key2"),
@@ -653,7 +627,7 @@ async fn batch_set_many_sets_multiple_values(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let result3 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!(bucket, "key3"))
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!(bucket, "key3"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -693,20 +667,17 @@ async fn batch_set_many_sets_multiple_values(
 async fn batch_delete_many_deletes_multiple_values(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-12");
+    let agent_id = agent_id!("KeyValue", "key-value-service-12");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -715,7 +686,7 @@ async fn batch_delete_many_deletes_multiple_values(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key1", vec![1u8, 2u8, 3u8]),
@@ -724,7 +695,7 @@ async fn batch_delete_many_deletes_multiple_values(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key2", vec![4u8, 5u8, 6u8]),
@@ -733,7 +704,7 @@ async fn batch_delete_many_deletes_multiple_values(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key3", vec![7u8, 8u8, 9u8]),
@@ -742,7 +713,7 @@ async fn batch_delete_many_deletes_multiple_values(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "delete_many",
             data_value!(
@@ -754,7 +725,7 @@ async fn batch_delete_many_deletes_multiple_values(
 
     let result1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get",
             data_value!(bucket.clone(), "key1"),
@@ -765,7 +736,7 @@ async fn batch_delete_many_deletes_multiple_values(
 
     let result2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get",
             data_value!(bucket.clone(), "key2"),
@@ -775,7 +746,7 @@ async fn batch_delete_many_deletes_multiple_values(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let result3 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!(bucket, "key3"))
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!(bucket, "key3"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -794,20 +765,17 @@ async fn batch_delete_many_deletes_multiple_values(
 async fn batch_get_keys_returns_multiple_keys(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("key-value", "key-value-service-13");
+    let agent_id = agent_id!("KeyValue", "key-value-service-13");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -816,7 +784,7 @@ async fn batch_get_keys_returns_multiple_keys(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key1", vec![1u8, 2u8, 3u8]),
@@ -825,7 +793,7 @@ async fn batch_get_keys_returns_multiple_keys(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key2", vec![4u8, 5u8, 6u8]),
@@ -834,7 +802,7 @@ async fn batch_get_keys_returns_multiple_keys(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "set",
             data_value!(bucket.clone(), "key3", vec![7u8, 8u8, 9u8]),
@@ -842,7 +810,7 @@ async fn batch_get_keys_returns_multiple_keys(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_keys", data_value!(bucket))
+        .invoke_and_await_agent(&component, &agent_id, "get_keys", data_value!(bucket))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;

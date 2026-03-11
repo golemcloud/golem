@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,12 +14,15 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { AgentType, Principal, DataValue } from 'golem:agent/common';
+import { AgentType, Principal, DataValue } from 'golem:agent/common@1.5.0';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
+import { TypeInfoInternal } from './internal/typeInfoInternal';
+import { loadConfigKey } from './internal/mapping/values/dataValue';
+import { Type } from '@golemcloud/golem-ts-types-core';
 import { setAgentId } from './internal/registry/agentId';
 
 export { BaseAgent } from './baseAgent';
@@ -33,7 +36,7 @@ export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
-export { Principal } from 'golem:agent/common';
+export { Principal } from 'golem:agent/common@1.5.0';
 
 export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
@@ -103,7 +106,7 @@ async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
   try {
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
-    // Have to throw AgentError, as the discover-agent-types WIT function returns result<list<agent-type>, AgentError>
+    // Have to throw RuntimeError, as the discover-agent-types WIT function returns result<list<agent-type>, RuntimeError>
     if (isAgentError(e)) {
       throw e;
     } else {
@@ -232,3 +235,55 @@ export const saveSnapshot: typeof bindings.saveSnapshot = {
 export const loadSnapshot: typeof bindings.loadSnapshot = {
   load,
 };
+
+export class Secret<T> {
+  private readonly path: string[];
+  private readonly type: Type.Type;
+
+  constructor(path: string[], type: Type.Type) {
+    this.path = path;
+    this.type = type;
+  }
+
+  /** Lazily loads or reloads the secret value */
+  get(): T {
+    return loadConfigKey(this.path, this.type);
+  }
+}
+
+export class Config<T> {
+  constructor(readonly properties: Type.ConfigProperty[]) {}
+
+  get value(): T {
+    return this.loadConfig();
+  }
+
+  private loadConfig(): T {
+    const root: Record<string, any> = {};
+
+    for (const prop of this.properties) {
+      const { path } = prop;
+      if (path.length === 0) continue;
+
+      let current = root;
+
+      for (let i = 0; i < path.length - 1; i++) {
+        const key = path[i];
+        if (!(key in current)) current[key] = {};
+        current = current[key];
+      }
+
+      const leafKey = path[path.length - 1];
+      let leafValue;
+      if (prop.secret) {
+        leafValue = new Secret(path, prop.type);
+      } else {
+        leafValue = loadConfigKey(path, prop.type);
+      }
+
+      current[leafKey] = leafValue;
+    }
+
+    return root as T;
+  }
+}

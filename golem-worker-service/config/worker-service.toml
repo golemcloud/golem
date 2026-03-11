@@ -2,6 +2,7 @@
 cors_origin_regex = "https://*.golem.cloud"
 custom_request_port = 9006
 environment = "local"
+mcp_port = 9007
 port = 9005
 workspace = "release"
 
@@ -26,6 +27,7 @@ key_prefix = ""
 pending_login_expiration = "1h"
 pool_size = 8
 port = 6380
+tls = false
 tracing = false
 
 [gateway_session_storage.config.retries]
@@ -97,6 +99,7 @@ enabled = false
 json = true
 json_flatten = true
 json_flatten_span = true
+json_source_location = false
 pretty = false
 span_events_active = false
 span_events_full = false
@@ -115,6 +118,7 @@ enabled = false
 json = false
 json_flatten = false
 json_flatten_span = false
+json_source_location = false
 pretty = false
 span_events_active = false
 span_events_full = false
@@ -127,6 +131,7 @@ enabled = true
 json = false
 json_flatten = true
 json_flatten_span = true
+json_source_location = false
 pretty = false
 span_events_active = false
 span_events_full = false

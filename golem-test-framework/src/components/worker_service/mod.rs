@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -22,10 +22,11 @@ use super::{
     wait_for_startup_grpc, wait_for_startup_http, wait_for_startup_http_any_response, EnvVarBuilder,
 };
 use async_trait::async_trait;
-use golem_client::api::WorkerClientLive;
+use golem_client::api::{AgentClientLive, WorkerClientLive};
 use golem_client::{Context, Security};
 use golem_common::model::auth::TokenSecret;
 use std::collections::HashMap;
+use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Level;
@@ -56,6 +57,17 @@ pub trait WorkerService: Send + Sync {
             },
         }
     }
+
+    async fn agent_http_client(&self, token: &TokenSecret) -> AgentClientLive {
+        let url = format!("http://{}:{}", self.http_host(), self.http_port());
+        AgentClientLive {
+            context: Context {
+                client: self.base_http_client().await,
+                base_url: Url::parse(&url).expect("Failed to parse url"),
+                security_token: Security::Bearer(token.secret().to_string()),
+            },
+        }
+    }
 }
 
 async fn wait_for_startup(
@@ -64,11 +76,18 @@ async fn wait_for_startup(
     http_port: u16,
     custom_request_port: u16,
     timeout: Duration,
+    child: Option<&mut Child>,
 ) {
-    wait_for_startup_grpc(host, grpc_port, "golem-worker-service", timeout).await;
-    wait_for_startup_http(host, http_port, "golem-worker-service", timeout).await;
-    wait_for_startup_http_any_response(host, custom_request_port, "golem-worker-service", timeout)
-        .await;
+    wait_for_startup_grpc(host, grpc_port, "golem-worker-service", timeout, child).await;
+    wait_for_startup_http(host, http_port, "golem-worker-service", timeout, None).await;
+    wait_for_startup_http_any_response(
+        host,
+        custom_request_port,
+        "golem-worker-service",
+        timeout,
+        None,
+    )
+    .await;
 }
 
 async fn env_vars(

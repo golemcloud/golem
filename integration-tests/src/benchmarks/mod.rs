@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::{AgentId, DataValue};
-use golem_common::model::component::ComponentId;
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::base_model::agent::{DataValue, ParsedAgentId};
+use golem_common::model::component::ComponentDto;
+use golem_common::model::{AgentId, IdempotencyKey};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::BenchmarkTestDependencies;
@@ -34,15 +34,15 @@ pub mod throughput;
 
 pub async fn delete_workers(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    worker_ids: &[WorkerId],
+    agent_ids: &[AgentId],
 ) {
-    info!("Deleting {} workers...", worker_ids.len());
-    for worker_id in worker_ids {
-        if let Err(err) = user.delete_worker(worker_id).await {
+    info!("Deleting {} workers...", agent_ids.len());
+    for agent_id in agent_ids {
+        if let Err(err) = user.delete_worker(agent_id).await {
             warn!("Failed to delete worker: {:?}", err);
         }
     }
-    info!("Deleting {} workers completed", worker_ids.len());
+    info!("Deleting {} workers completed", agent_ids.len());
 }
 
 #[derive(Debug)]
@@ -54,10 +54,10 @@ pub struct InvokeResult {
 }
 
 impl InvokeResult {
-    pub fn record(&self, recorder: &BenchmarkRecorder, prefix: &str, worker_id: &str) {
+    pub fn record(&self, recorder: &BenchmarkRecorder, prefix: &str, agent_id: &str) {
         recorder.duration(&format!("{prefix}invocation").into(), self.accumulated_time);
         recorder.duration(
-            &ResultKey::secondary(format!("{prefix}worker-{worker_id}")),
+            &ResultKey::secondary(format!("{prefix}worker-{agent_id}")),
             self.accumulated_time,
         );
         recorder.count(
@@ -65,7 +65,7 @@ impl InvokeResult {
             self.retries as u64,
         );
         recorder.count(
-            &ResultKey::secondary(format!("{prefix}worker-{worker_id}-retries")),
+            &ResultKey::secondary(format!("{prefix}worker-{agent_id}-retries")),
             self.retries as u64,
         );
         recorder.count(
@@ -73,7 +73,7 @@ impl InvokeResult {
             self.timeouts as u64,
         );
         recorder.count(
-            &ResultKey::secondary(format!("{prefix}worker-{worker_id}-timeouts")),
+            &ResultKey::secondary(format!("{prefix}worker-{agent_id}-timeouts")),
             self.timeouts as u64,
         );
     }
@@ -81,8 +81,8 @@ impl InvokeResult {
 
 pub async fn invoke_and_await_agent(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    component_id: &ComponentId,
-    agent_id: &AgentId,
+    component: &ComponentDto,
+    agent_id: &ParsedAgentId,
     method_name: &str,
     params: DataValue,
 ) -> InvokeResult {
@@ -100,7 +100,7 @@ pub async fn invoke_and_await_agent(
         let result = tokio::time::timeout(
             TIMEOUT,
             user.invoke_and_await_agent_with_key(
-                component_id,
+                component,
                 agent_id,
                 &key,
                 method_name,

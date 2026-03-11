@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,7 +20,7 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{Timestamp, WorkerId};
+use golem_common::model::{AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -370,7 +370,7 @@ pub enum BlobStorageNamespace {
     },
     OplogPayload {
         environment_id: EnvironmentId,
-        worker_id: WorkerId,
+        agent_id: AgentId,
     },
     CompressedOplog {
         environment_id: EnvironmentId,

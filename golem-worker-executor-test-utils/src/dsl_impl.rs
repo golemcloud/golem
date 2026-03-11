@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -24,23 +24,25 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     interrupt_worker_response, resume_worker_response, revert_worker_response,
     search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest,
     ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
-    GetFileContentsRequest, GetFileSystemNodeRequest, GetWorkerMetadataRequest,
+    GetAgentMetadataRequest, GetFileContentsRequest, GetFileSystemNodeRequest,
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
     ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
 };
-use golem_common::base_model::agent::{AgentId, DataValue, UntypedDataValue};
-use golem_common::model::agent::AgentError;
+use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
-    InitialComponentFile, PluginInstallation,
+    InitialComponentFile, LocalAgentConfigEntry, PluginInstallation,
 };
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
-use golem_common::model::worker::RevertWorkerTarget;
-use golem_common::model::worker::{FlatComponentFileSystemNode, WorkerMetadataDto};
+use golem_common::model::worker::{
+    AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget,
+    WorkerCreationLocalAgentConfigEntry,
+};
 use golem_common::model::PromiseId;
-use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter};
-use golem_common::model::{OplogIndex, WorkerId};
+use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
+use golem_common::model::{AgentId, OplogIndex};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
@@ -48,72 +50,21 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{rename_component_if_needed, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tonic::Streaming;
 use tracing::debug;
 use uuid::Uuid;
 
-impl TestWorkerExecutor {
-    // TODO: Old invocation implementation, to be removed
-    async fn invoke_and_await_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<Value>,
-    ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>> {
-        let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
-            .await?;
-
-        let result = self
-            .client
-            .clone()
-            .invoke_and_await_worker(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                environment_id: Some(latest_version.environment_id.into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-                name: function_name.to_string(),
-                input: params.into_iter().map(|param| param.into()).collect(),
-                component_owner_account_id: Some(latest_version.account_id.into()),
-                context: None,
-                auth_ctx: Some(self.auth_ctx().into()),
-            })
-            .await;
-
-        let result = result?.into_inner();
-
-        match result.result {
-            None => Err(anyhow!(
-                "No response from golem-worker-executor invoke call"
-            )),
-            Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Success(result)) => {
-                Ok(Ok(result
-                    .output
-                    .into_iter()
-                    .map(|v| v.try_into())
-                    .collect::<Result<Vec<Value>, String>>()
-                    .map_err(|err| {
-                        anyhow!("Invocation result had unexpected format: {err}")
-                    })?))
-            }
-            Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(error)) => {
-                Ok(Err(error
-                    .try_into()
-                    .map_err(|e| anyhow!("Failed converting error: {e}"))?))
-            }
-        }
-    }
-}
-
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
+    type WorkerError = WorkerExecutorError;
+
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis.clone()
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(wasm_name, name))]
     async fn store_component_with(
         &self,
         wasm_name: &str,
@@ -124,12 +75,17 @@ impl TestDsl for TestWorkerExecutor {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<LocalAgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
-        if !plugins.is_empty() {
+        if !local_agent_config.is_empty() {
             return Err(anyhow!(
-                "Plugins aren not supported in worker executor tests"
+                "Local agent config isn't supported in worker executor tests"
             ));
+        }
+
+        if !plugins.is_empty() {
+            return Err(anyhow!("Plugins aren't supported in worker executor tests"));
         }
 
         let component_directory = &self.deps.component_directory;
@@ -215,30 +171,37 @@ impl TestDsl for TestWorkerExecutor {
             }
         };
 
-        Ok(component)
+        Ok(component.into())
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%component_id))]
     async fn get_latest_component_revision(
         &self,
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto> {
-        self.deps
+        let component = self
+            .deps
             .component_writer
             .get_latest_component_metadata(component_id)
-            .await
+            .await?;
+        Ok(component.into())
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%component_id, revision))]
     async fn get_component_at_revision(
         &self,
         component_id: &ComponentId,
         revision: ComponentRevision,
     ) -> anyhow::Result<ComponentDto> {
-        self.deps
+        let component = self
+            .deps
             .component_writer
             .get_component_metadata_at_revision(component_id, revision)
-            .await
+            .await?;
+        Ok(component.into())
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%component_id, previous_revision))]
     async fn update_component_with(
         &self,
         component_id: &ComponentId,
@@ -248,7 +211,14 @@ impl TestDsl for TestWorkerExecutor {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
+        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
     ) -> anyhow::Result<ComponentDto> {
+        if local_agent_config.is_some() {
+            return Err(anyhow!(
+                "Local agent config isn't supported in worker executor tests"
+            ));
+        }
+
         let latest_revision = self
             .deps
             .component_writer
@@ -311,34 +281,42 @@ impl TestDsl for TestWorkerExecutor {
             )
             .await?;
 
-        Ok(component)
+        Ok(component.into())
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%component_id, %id))]
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: AgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-    ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+    ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
-        let worker_id = WorkerId {
+        let agent_id = AgentId {
             component_id: *component_id,
-            worker_name: id.to_string(),
+            agent_id: id.to_string(),
         };
 
         let response = self
             .client
             .clone()
             .create_worker(CreateWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
                 config_vars,
+                local_agent_config: local_agent_config
+                    .into_iter()
+                    .map(|lac| lac.into())
+                    .collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
+                invocation_context: None,
             })
             .await?;
 
@@ -346,47 +324,40 @@ impl TestDsl for TestWorkerExecutor {
 
         match response.result {
             None => panic!("No response from create_worker"),
-            Some(create_worker_response::Result::Success(_)) => Ok(Ok(worker_id)),
+            Some(create_worker_response::Result::Success(_)) => Ok(Ok(agent_id)),
             Some(create_worker_response::Result::Failure(error)) => Ok(Err(error
                 .try_into()
                 .map_err(|e| anyhow!("Failed converting error: {e}"))?)),
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(component_id = %component.id, %agent_id, method_name))]
     async fn invoke_agent_with_key(
         &self,
-        component_id: &ComponentId,
-        agent_id: &AgentId,
+        component: &ComponentDto,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<()> {
-        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
+        let agent_id = AgentId::from_agent_id(component.id, agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
-
-        let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
-            .await?;
 
         let result = self
             .client
             .clone()
-            .invoke_worker(workerexecutor::v1::InvokeWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                environment_id: Some(latest_version.environment_id.into()),
+            .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+                agent_id: Some(agent_id.clone().into()),
+                method_name: method_name.to_string(),
+                method_parameters: Some(UntypedDataValue::from(params).into()),
+                mode: workerexecutor::v1::AgentInvocationMode::Schedule as i32,
+                schedule_at: None,
                 idempotency_key: Some(idempotency_key.clone().into()),
-                name: "golem:agent/guest.{invoke}".to_string(),
-                input: vec![
-                    method_name.into_value_and_type(),
-                    params.into_value_and_type(),
-                    golem_common::model::agent::Principal::anonymous().into_value_and_type(),
-                ]
-                .into_iter()
-                .map(|param| param.value.into())
-                .collect(),
-                component_owner_account_id: Some(latest_version.account_id.into()),
-                context: None,
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                context: None,
+                principal: None,
             })
             .await;
 
@@ -394,103 +365,122 @@ impl TestDsl for TestWorkerExecutor {
 
         match result.result {
             None => Err(anyhow!(
-                "No response from golem-worker-executor invoke call"
+                "No response from golem-worker-executor invoke_agent call"
             )),
-            Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)) => Ok(()),
-            Some(workerexecutor::v1::invoke_worker_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::invoke_agent_response::Result::Success(_)) => Ok(()),
+            Some(workerexecutor::v1::invoke_agent_response::Result::Failure(error)) => {
                 Err(anyhow!("Failed converting error: {error:?}"))
             }
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(component_id = %component.id, %agent_id, method_name))]
     async fn invoke_and_await_agent_impl(
         &self,
-        component_id: &ComponentId,
-        agent_id: &AgentId,
+        component: &ComponentDto,
+        agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
+        _deployment_revision: Option<DeploymentRevision>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
-        // TODO: temporarily going through the dynamic invocation route, will be migrated to the new invocation API
-        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
+        let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
         let key = idempotency_key
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
-        let invoke_result = self
-            .invoke_and_await_with_key(
-                &worker_id,
-                &key,
-                "golem:agent/guest.{invoke}",
-                vec![
-                    method_name.into_value(),
-                    params.into_value(),
-                    golem_common::model::agent::Principal::anonymous().into_value(),
-                ],
-            )
-            .await?;
-        match invoke_result {
-            Ok(mut values) if values.len() == 1 => {
-                let worker_metadata = self.get_worker_metadata(&worker_id).await?;
-                let component = self
-                    .get_component_at_revision(component_id, worker_metadata.component_revision)
-                    .await?;
-                let agent_type = component
-                    .metadata
-                    .find_agent_type_by_wrapper_name(&agent_id.agent_type)
-                    .map_err(|err| anyhow!("Agent type not found: {err}"))?
-                    .ok_or_else(|| anyhow!("Agent type not found: {}", agent_id.agent_type))?;
-                let agent_method = agent_type
-                    .methods
-                    .iter()
-                    .find(|method| method.name == method_name)
-                    .ok_or_else(|| {
-                        debug!("Agent method not found: {}", method_name);
-                        debug!("In agent type: {:#?}", agent_type);
-                        debug!(
-                            "Got for worker-id: {worker_id} with component revision {}",
-                            worker_metadata.component_revision
-                        );
 
-                        anyhow!("Agent method not found: {}", method_name)
-                    })?;
+        let result = self
+            .client
+            .clone()
+            .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
+                agent_id: Some(worker_agent_id.clone().into()),
+                method_name: method_name.to_string(),
+                method_parameters: Some(UntypedDataValue::from(params).into()),
+                mode: workerexecutor::v1::AgentInvocationMode::Await as i32,
+                schedule_at: None,
+                idempotency_key: Some(key.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                context: None,
+                principal: None,
+            })
+            .await;
 
-                let result = match values.remove(0) {
-                    Value::Result(Ok(Some(data_value_value))) => {
-                        let untyped_data_value = UntypedDataValue::from_value(*data_value_value)
-                            .map_err(|err| anyhow!("Unexpected DataValue value: {err}"))?;
-                        Ok(DataValue::try_from_untyped(
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor invoke_agent call"
+            )),
+            Some(workerexecutor::v1::invoke_agent_response::Result::Success(success)) => {
+                match success.result {
+                    Some(proto_val) => {
+                        let untyped_data_value = UntypedDataValue::try_from(proto_val)
+                            .map_err(|err| anyhow!("UntypedDataValue conversion error: {err}"))?;
+
+                        let component_revision = success
+                            .component_revision
+                            .ok_or_else(|| {
+                                anyhow!("Missing component_revision in invoke_agent response")
+                            })
+                            .and_then(ComponentRevision::new)?;
+                        let component_at_rev = self
+                            .get_component_at_revision(&component.id, component_revision)
+                            .await?;
+                        let agent_type = component_at_rev
+                            .metadata
+                            .find_agent_type_by_name(&agent_id.agent_type)
+                            .ok_or_else(|| {
+                                anyhow!("Agent type not found: {}", agent_id.agent_type)
+                            })?;
+                        let agent_method = agent_type
+                            .methods
+                            .iter()
+                            .find(|method| method.name == method_name)
+                            .ok_or_else(|| {
+                                debug!("Agent method not found: {}", method_name);
+                                debug!("In agent type: {:#?}", agent_type);
+                                debug!(
+                                    "Got for worker-id: {agent_id} with component revision {}",
+                                    component_revision
+                                );
+                                anyhow!("Agent method not found: {}", method_name)
+                            })?;
+
+                        DataValue::try_from_untyped(
                             untyped_data_value,
                             agent_method.output_schema.clone(),
                         )
-                        .map_err(|err| anyhow!("DataValue conversion error: {err}"))?)
+                        .map_err(|err| anyhow!("DataValue conversion error: {err}"))
                     }
-                    Value::Result(Err(Some(agent_error_value))) => {
-                        Err(AgentError::from_value(*agent_error_value)
-                            .map_err(|err| anyhow!("Unexpected AgentError value: {err}"))?)
-                    }
-                    _ => Err(anyhow!("Unexpected return value from agent invocation",))?,
-                };
-                Ok(result.map_err(|err| anyhow!("Agent invocation error: {err}"))?)
+                    None => Ok(DataValue::Tuple(
+                        golem_common::base_model::agent::ElementValues { elements: vec![] },
+                    )),
+                }
             }
-            Ok(_) => Err(anyhow!("Unexpected return value from agent invocation")),
-            Err(err) => Err(anyhow!("Agent invocation failed: {err}")),
+            Some(workerexecutor::v1::invoke_agent_response::Result::Failure(error)) => {
+                Err(anyhow!("Agent invocation failed: {error:?}"))
+            }
         }
     }
 
-    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
+    async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
             .revert_worker(RevertWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 target: Some(target.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -504,13 +494,14 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn get_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let mut result = Vec::new();
@@ -521,7 +512,7 @@ impl TestDsl for TestWorkerExecutor {
                 .client
                 .clone()
                 .get_oplog(workerexecutor::v1::GetOplogRequest {
-                    worker_id: Some(worker_id.clone().into()),
+                    agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(latest_version.environment_id.into()),
                     from_oplog_index: from.into(),
                     cursor,
@@ -572,13 +563,14 @@ impl TestDsl for TestWorkerExecutor {
         Ok(result)
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
     async fn search_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let mut result = Vec::new();
@@ -589,7 +581,7 @@ impl TestDsl for TestWorkerExecutor {
                 .client
                 .clone()
                 .search_oplog(SearchOplogRequest {
-                    worker_id: Some(worker_id.clone().into()),
+                    agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(latest_version.environment_id.into()),
                     cursor,
                     count: 100,
@@ -630,23 +622,25 @@ impl TestDsl for TestWorkerExecutor {
         Ok(result)
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, recover_immediately))]
     async fn interrupt_with_optional_recovery(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         recover_immediately: bool,
     ) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
             .interrupt_worker(InterruptWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 recover_immediately,
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -660,19 +654,21 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    async fn resume(&self, worker_id: &WorkerId, force: bool) -> anyhow::Result<()> {
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, force))]
+    async fn resume(&self, agent_id: &AgentId, force: bool) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
             .resume_worker(ResumeWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 force: Some(force),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -686,9 +682,10 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%promise_id))]
     async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_revision(&promise_id.worker_id.component_id)
+            .get_latest_component_revision(&promise_id.agent_id.component_id)
             .await?;
 
         let response = self
@@ -712,22 +709,24 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn make_worker_log_event_stream(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> anyhow::Result<impl WorkerLogEventStream> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let stream = self
             .client
             .clone()
             .connect_worker(ConnectWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -735,26 +734,28 @@ impl TestDsl for TestWorkerExecutor {
         Ok(GrpcWorkerLogEventStream(stream))
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
     async fn auto_update_worker(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
             .update_worker(UpdateWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 target_revision: target_revision.into(),
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
+                principal: None,
             })
             .await?
             .into_inner();
@@ -768,26 +769,28 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
     async fn manual_update_worker(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
             .update_worker(UpdateWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 target_revision: target_revision.into(),
                 mode: UpdateMode::Manual.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
+                principal: None,
             })
             .await?
             .into_inner();
@@ -801,18 +804,20 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
+    async fn delete_worker(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
             .delete_worker(DeleteWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -826,19 +831,20 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn get_worker_metadata_opt(
         &self,
-        worker_id: &WorkerId,
-    ) -> anyhow::Result<Option<WorkerMetadataDto>> {
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Option<AgentMetadataDto>> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
-            .get_worker_metadata(GetWorkerMetadataRequest {
-                worker_id: Some(worker_id.clone().into()),
+            .get_agent_metadata(GetAgentMetadataRequest {
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -849,15 +855,15 @@ impl TestDsl for TestWorkerExecutor {
             None => Err(anyhow!(
                 "No response from golem-worker-executor invoke call"
             )),
-            Some(workerexecutor::v1::get_worker_metadata_response::Result::Success(result)) => {
+            Some(workerexecutor::v1::get_agent_metadata_response::Result::Success(result)) => {
                 Ok(Some(result
                     .try_into()
                     .map_err(|e| anyhow!("Failed converting worker metadata: {e}"))?))
             }
-            Some(workerexecutor::v1::get_worker_metadata_response::Result::Failure(error)) => {
+            Some(workerexecutor::v1::get_agent_metadata_response::Result::Failure(error)) => {
                 match error {
                     golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
-                        error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::WorkerNotFound(_)),
+                        error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::AgentNotFound(_)),
                     } => Ok(None),
                     _ => Err(anyhow!("Failed getting worker metadata: {error:?}")),
                 }
@@ -865,14 +871,15 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%component_id))]
     async fn get_workers_metadata(
         &self,
         component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> anyhow::Result<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
+    ) -> anyhow::Result<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
         let latest_version = self.get_latest_component_revision(component_id).await?;
 
         let response = self
@@ -908,23 +915,25 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn cancel_invocation(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
             .cancel_invocation(CancelInvocationRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -938,24 +947,26 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, path))]
     async fn get_file_system_node(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         path: &str,
     ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let response = self
             .client
             .clone()
             .get_file_system_node(GetFileSystemNodeRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 path: path.to_string(),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -993,20 +1004,22 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes> {
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, path))]
+    async fn get_file_contents(&self, agent_id: &AgentId, path: &str) -> anyhow::Result<Bytes> {
         let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+            .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
         let mut stream = self
             .client
             .clone()
             .get_file_contents(GetFileContentsRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 file_path: path.to_string(),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -1040,31 +1053,33 @@ impl TestDsl for TestWorkerExecutor {
         Ok(Bytes::from(bytes))
     }
 
+    #[tracing::instrument(level = "info", skip_all, fields(%source_agent_id, target_agent_name))]
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
-        target_worker_name: &str,
+        source_agent_id: &AgentId,
+        target_agent_name: &str,
         oplog_index: OplogIndex,
     ) -> anyhow::Result<()> {
         let latest_version = self
-            .get_latest_component_revision(&source_worker_id.component_id)
+            .get_latest_component_revision(&source_agent_id.component_id)
             .await?;
 
-        let target_worker_id = WorkerId {
-            component_id: source_worker_id.component_id,
-            worker_name: target_worker_name.to_string(),
+        let target_agent_id = AgentId {
+            component_id: source_agent_id.component_id,
+            agent_id: target_agent_name.to_string(),
         };
 
         let response = self
             .client
             .clone()
             .fork_worker(ForkWorkerRequest {
-                source_worker_id: Some(source_worker_id.clone().into()),
-                target_worker_id: Some(target_worker_id.into()),
+                source_agent_id: Some(source_agent_id.clone().into()),
+                target_agent_id: Some(target_agent_id.into()),
                 oplog_index_cutoff: oplog_index.into(),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();

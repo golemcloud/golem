@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -97,7 +97,7 @@ impl OplogEntry {
             true
         } else {
             match self {
-                OplogEntry::ImportedFunctionInvoked {
+                OplogEntry::HostCall {
                     durable_function_type,
                     ..
                 } => match durable_function_type {
@@ -116,7 +116,7 @@ impl OplogEntry {
                     DurableFunctionType::ReadRemote => true,
                     _ => false,
                 },
-                OplogEntry::ExportedFunctionCompleted { .. } => false,
+                OplogEntry::AgentInvocationFinished { .. } => false,
                 _ => true,
             }
         }
@@ -127,7 +127,11 @@ impl OplogEntry {
         _idx: OplogIndex,
         persistence_level: &mut PersistenceLevel,
     ) {
-        if let OplogEntry::ChangePersistenceLevel { level, .. } = self {
+        if let OplogEntry::ChangePersistenceLevel {
+            persistence_level: level,
+            ..
+        } = self
+        {
             *persistence_level = *level
         }
     }

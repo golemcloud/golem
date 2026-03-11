@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,10 +15,7 @@
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
 use crate::fs;
 use crate::log::log_warn_action;
-use crate::model::app_raw::{
-    ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
-    InjectToPrebuiltQuickJs,
-};
+use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
 use crate::model::{app_raw, GuestLanguage};
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::agent::AgentTypeName;
@@ -124,46 +121,6 @@ pub struct GenerateQuickJSDTSCommandMarkerHash<'a> {
 impl TaskResultMarkerHashSource for GenerateQuickJSDTSCommandMarkerHash<'_> {
     fn kind() -> &'static str {
         "GenerateQuickJSDTSCommandMarkerHash"
-    }
-
-    fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-
-    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(serde_json::to_string(self)?))
-    }
-}
-
-#[derive(Serialize)]
-pub struct AgentWrapperCommandMarkerHash<'a> {
-    pub build_dir: &'a Path,
-    pub command: &'a GenerateAgentWrapper,
-}
-
-impl TaskResultMarkerHashSource for AgentWrapperCommandMarkerHash<'_> {
-    fn kind() -> &'static str {
-        "AgentWrapperCommandMarkerHash"
-    }
-
-    fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-
-    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(serde_json::to_string(self)?))
-    }
-}
-
-#[derive(Serialize)]
-pub struct ComposeAgentWrapperCommandMarkerHash<'a> {
-    pub build_dir: &'a Path,
-    pub command: &'a ComposeAgentWrapper,
-}
-
-impl TaskResultMarkerHashSource for ComposeAgentWrapperCommandMarkerHash<'_> {
-    fn kind() -> &'static str {
-        "ComposeAgentWrapperCommandMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {

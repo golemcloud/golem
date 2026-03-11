@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -28,15 +28,16 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::Value;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, span, warn, Instrument, Level};
 
 #[async_trait]
@@ -50,47 +51,46 @@ pub trait SchedulerService: Send + Sync {
 /// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
 #[async_trait]
 pub trait SchedulerWorkerAccess {
-    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId);
+    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId);
     async fn open_oplog(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
-    // enqueue and invocation to the worker
+    // enqueue an invocation to the worker
     async fn enqueue_invocation(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        owned_agent_id: &OwnedAgentId,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
-    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId) {
+    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId) {
         self.deref()
-            .activate_worker(created_by, owned_worker_id)
+            .activate_worker(created_by, owned_agent_id)
             .await;
     }
 
     async fn open_oplog(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
                 created_by,
-                owned_worker_id,
+                owned_agent_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                Principal::anonymous(),
             )
             .await?;
         Ok(worker.oplog())
@@ -99,32 +99,24 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
     async fn enqueue_invocation(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        owned_agent_id: &OwnedAgentId,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
                 created_by,
-                owned_worker_id,
+                owned_agent_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                Principal::anonymous(),
             )
             .await?;
 
-        worker
-            .invoke(
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            )
-            .await?;
+        worker.invoke(invocation).await?;
 
         Worker::start_if_needed(worker).await?;
 
@@ -152,6 +144,7 @@ impl SchedulerServiceDefault {
         oplog_service: Arc<dyn OplogService>,
         worker_service: Arc<dyn WorkerService>,
         process_interval: Duration,
+        shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self {
             key_value_storage,
@@ -164,11 +157,24 @@ impl SchedulerServiceDefault {
         };
         let svc = Arc::new(svc);
         let background_handle = {
-            let svc = svc.clone();
+            let svc_weak = Arc::downgrade(&svc);
             tokio::spawn(
                 async move {
                     loop {
-                        tokio::time::sleep(process_interval).await;
+                        tokio::select! {
+                            _ = shutdown_token.cancelled() => {
+                                info!("Shutdown requested, stopping scheduler background loop");
+                                break;
+                            }
+                            _ = tokio::time::sleep(process_interval) => {}
+                        }
+                        let svc = match svc_weak.upgrade() {
+                            Some(s) => s,
+                            None => {
+                                info!("Scheduler service dropped, stopping background loop");
+                                break;
+                            }
+                        };
                         if svc.shard_service.is_ready() {
                             let r = svc.process(Utc::now()).await;
                             if let Err(err) = r {
@@ -230,7 +236,7 @@ impl SchedulerServiceDefault {
             .into_iter()
             .filter(|(_, action)| {
                 self.shard_service
-                    .check_worker(&action.owned_worker_id().worker_id)
+                    .check_worker(&action.owned_agent_id().agent_id)
                     .is_ok()
             })
             .collect::<Vec<_>>();
@@ -244,7 +250,7 @@ impl SchedulerServiceDefault {
                     promise_id,
                     environment_id,
                 } => {
-                    let owned_worker_id = OwnedWorkerId::new(environment_id, &promise_id.worker_id);
+                    let owned_agent_id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
 
                     let result = self
                         .promise_service
@@ -260,11 +266,11 @@ impl SchedulerServiceDefault {
                                 let span = span!(
                                     Level::INFO,
                                     "scheduler",
-                                    worker_id = owned_worker_id.worker_id.to_string()
+                                    agent_id = owned_agent_id.agent_id.to_string()
                                 );
 
                                 self.worker_access
-                                    .activate_worker(account_id, &owned_worker_id)
+                                    .activate_worker(account_id, &owned_agent_id)
                                     .instrument(span)
                                     .await;
                             }
@@ -273,7 +279,7 @@ impl SchedulerServiceDefault {
                         }
                         Err(e) => {
                             error!(
-                                worker_id = owned_worker_id.to_string(),
+                                agent_id = owned_agent_id.to_string(),
                                 promise_id = promise_id.to_string(),
                                 "Failed to complete promise: {e}"
                             );
@@ -282,18 +288,18 @@ impl SchedulerServiceDefault {
                 }
                 ScheduledAction::ArchiveOplog {
                     account_id,
-                    owned_worker_id,
+                    owned_agent_id,
                     last_oplog_index,
                     next_after,
                 } => {
-                    if self.oplog_service.exists(&owned_worker_id).await {
+                    if self.oplog_service.exists(&owned_agent_id).await {
                         let current_last_index =
-                            self.oplog_service.get_last_index(&owned_worker_id).await;
+                            self.oplog_service.get_last_index(&owned_agent_id).await;
                         if current_last_index == last_oplog_index {
                             // Need to create the `Worker` instance to avoid race conditions
                             match self
                                 .worker_access
-                                .open_oplog(account_id, &owned_worker_id)
+                                .open_oplog(account_id, &owned_agent_id)
                                 .await
                             {
                                 Ok(oplog) => {
@@ -305,7 +311,7 @@ impl SchedulerServiceDefault {
                                                 now.add(next_after),
                                                 ScheduledAction::ArchiveOplog {
                                                     account_id,
-                                                    owned_worker_id,
+                                                    owned_agent_id,
                                                     last_oplog_index,
                                                     next_after,
                                                 },
@@ -313,19 +319,19 @@ impl SchedulerServiceDefault {
                                             .await;
                                         } else {
                                             info!(
-                                                worker_id = owned_worker_id.to_string(),
+                                                agent_id = owned_agent_id.to_string(),
                                                 "Deleting cached status of fully archived worker"
                                             );
                                             // The oplog is fully archived, so we can also delete the cached worker status
                                             self.worker_service
-                                                .remove_cached_status(&owned_worker_id)
+                                                .remove_cached_status(&owned_agent_id)
                                                 .await;
                                         }
                                     }
                                 }
                                 Err(error) => {
                                     error!(
-                                        worker_id = owned_worker_id.to_string(),
+                                        agent_id = owned_agent_id.to_string(),
                                         "Failed to activate worker for archiving: {error}"
                                     );
                                 }
@@ -337,30 +343,19 @@ impl SchedulerServiceDefault {
                 }
                 ScheduledAction::Invoke {
                     account_id,
-                    owned_worker_id,
-                    idempotency_key,
-                    full_function_name,
-                    function_input,
-                    invocation_context,
+                    owned_agent_id,
+                    invocation,
                 } => {
                     // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
                     let result = self
                         .worker_access
-                        .enqueue_invocation(
-                            account_id,
-                            &owned_worker_id,
-                            idempotency_key,
-                            full_function_name.clone(),
-                            function_input,
-                            invocation_context,
-                        )
+                        .enqueue_invocation(account_id, &owned_agent_id, *invocation)
                         .await;
 
                     if let Err(e) = result {
                         error!(
-                            worker_id = owned_worker_id.to_string(),
-                            full_function_name = full_function_name,
+                            agent_id = owned_agent_id.to_string(),
                             "Failed to invoke worker with scheduled invocation: {e}"
                         );
                     };
@@ -449,59 +444,81 @@ impl SchedulerService for SchedulerServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::golem_config::GolemConfig;
     use crate::services::oplog::{Oplog, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{
         SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
     };
     use crate::services::shard::{ShardService, ShardServiceDefault};
-    use crate::services::worker::{DefaultWorkerService, WorkerService};
+    use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use async_trait::async_trait;
     use chrono::DateTime;
     use desert_rust::BinarySerializer;
     use golem_common::model::account::AccountId;
+    use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::AgentStatusRecord;
     use golem_common::model::{
-        IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
+        AgentId, AgentInvocation, OwnedAgentId, PromiseId, ScheduledAction, ShardId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use golem_wasm::Value;
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
     use test_r::test;
+    use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
     struct SchedulerWorkerAccessMock;
 
     #[async_trait]
     impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
-        async fn activate_worker(&self, _created_by: AccountId, _owned_worker_id: &OwnedWorkerId) {}
+        async fn activate_worker(&self, _created_by: AccountId, _owned_agent_id: &OwnedAgentId) {}
         async fn open_oplog(
             &self,
             _created_by: AccountId,
-            _owned_worker_id: &OwnedWorkerId,
+            _owned_agent_id: &OwnedAgentId,
         ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
             unimplemented!()
         }
         async fn enqueue_invocation(
             &self,
             _created_by: AccountId,
-            _owned_worker_id: &OwnedWorkerId,
-            _idempotency_key: IdempotencyKey,
-            _full_function_name: String,
-            _function_input: Vec<Value>,
-            _invocation_context: InvocationContextStack,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
+        }
+    }
+
+    struct WorkerServiceMock;
+
+    #[async_trait]
+    impl WorkerService for WorkerServiceMock {
+        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+            unimplemented!()
+        }
+
+        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
+            unimplemented!()
+        }
+
+        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
+
+        async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
+
+        async fn update_cached_status(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _status_value: &AgentStatusRecord,
+            _agent_mode: AgentMode,
+        ) {
         }
     }
 
@@ -538,45 +555,35 @@ mod tests {
         )
     }
 
-    fn create_worker_service_mock(
-        kvs: Arc<InMemoryKeyValueStorage>,
-        shard_service: Arc<dyn ShardService>,
-        oplog_service: Arc<dyn OplogService>,
-        config: Arc<GolemConfig>,
-    ) -> Arc<dyn WorkerService> {
-        Arc::new(DefaultWorkerService::new(
-            kvs,
-            shard_service,
-            oplog_service,
-            config,
-        ))
+    fn create_worker_service_mock() -> Arc<dyn WorkerService> {
+        Arc::new(WorkerServiceMock)
     }
 
     #[test]
     pub async fn promises_added_to_expected_buckets() {
         let uuid = Uuid::new_v4();
         let c1: ComponentId = ComponentId(uuid);
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -586,13 +593,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -602,6 +603,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // not testing process() here
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -686,27 +688,27 @@ mod tests {
     #[test]
     pub async fn cancel_removes_entry() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -716,14 +718,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
 
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -733,6 +729,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // not testing process() here
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -801,27 +798,27 @@ mod tests {
     #[test]
     pub async fn process_current_hours_past_schedules() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -831,13 +828,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -847,6 +838,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -919,27 +911,27 @@ mod tests {
     #[test]
     pub async fn process_past_and_current_hours_past_schedules() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -949,13 +941,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -965,6 +951,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -1030,31 +1017,31 @@ mod tests {
     #[test]
     pub async fn process_past_and_current_hours_past_schedules_2() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
         let p4: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(111),
         };
 
@@ -1064,13 +1051,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -1080,6 +1061,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -1156,27 +1138,27 @@ mod tests {
     #[test]
     pub async fn process_past_and_current_hours_past_schedules_3() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -1186,13 +1168,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -1202,6 +1178,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();

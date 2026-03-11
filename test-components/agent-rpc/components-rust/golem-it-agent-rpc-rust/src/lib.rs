@@ -1,5 +1,5 @@
+use golem_rust::bindings::golem::agent::host::Datetime;
 use golem_rust::{agent_definition, agent_implementation, PromiseId, Schema, Uuid};
-use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Schema)]
@@ -197,8 +197,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 
     fn test3(&mut self) {
-        let mut self_client =
-            ScheduledInvocationClientClient::get(self._name.clone());
+        let mut self_client = ScheduledInvocationClientClient::get(self._name.clone());
         let scheduled_for = datetime_200ms_from_now();
         self_client.schedule_inc_global_by(1, scheduled_for);
     }
@@ -469,4 +468,3 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
         golem_rust::blocking_await_promise(&promise_id);
     }
 }
-

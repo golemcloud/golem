@@ -177,3 +177,27 @@ class MyAgent {
     return Promise.resolve(`Weather in is sunny!`);
   }
 }
+
+export class Secret<T> {}
+
+export class Config<T> {}
+
+type AliasedNested = {
+  c: number;
+};
+
+type AgentConfig = {
+  foo: number;
+  bar: string;
+  secret: Secret<boolean>;
+  nested: {
+    nestedSecret: Secret<number>;
+    a: boolean;
+    b: number[];
+  };
+  aliasedNested: AliasedNested;
+};
+
+export class ConfigAgent {
+  constructor(config: Config<AgentConfig>) {}
+}

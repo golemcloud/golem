@@ -22,24 +22,13 @@ cargo build -p <crate>    # Build specific crate
 
 Always run `cargo make build` before starting work to ensure all dependencies are compiled.
 
-**Note:** The SDKs in `sdks/` are not part of the main build flow. When working on SDKs, follow the specific instructions in `sdks/rust/AGENTS.md` or `sdks/ts/AGENTS.md`.
+**Note:** The SDKs in `sdks/` are not part of the main build flow. Load the `sdk-development` skill when working on SDKs.
 
 ## Testing
 
-Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run:
+Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.
 
-```rust
-use test_r::test;
-
-#[test]
-fn my_test() {
-    // ...
-}
-```
-
-Choose the appropriate test command based on what you're changing:
-
-**Do not run `cargo make test`** - it runs all tests and takes a very long time. Instead, choose the appropriate test command:
+**Do not run `cargo make test`** — it runs all tests and takes a very long time. Instead, choose the appropriate test command:
 
 | Change Type | Test Command |
 |-------------|--------------|
@@ -47,49 +36,36 @@ Choose the appropriate test command based on what you're changing:
 | Worker executor functionality | `cargo make worker-executor-tests` |
 | Service integration | `cargo make integration-tests` |
 | CLI changes | `cargo make cli-tests` |
-| API changes (HTTP) | `cargo make api-tests-http` |
-| API changes (gRPC) | `cargo make api-tests-grpc` |
+
+For specific tests: `cargo test -p <crate> -- <test_name> --report-time`
 
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 
-For specific tests during development:
-```shell
-cargo test -p <crate> <test_module> -- --report-time
-```
-
-Worker executor tests are grouped for parallel CI execution:
-```shell
-cargo make worker-executor-tests-group1  # Run specific group
-```
-
-## Test Components
-
-Worker executor tests and integration tests use pre-compiled WASM files from the `test-components/` directory. These are checked into the repository and **rebuilding them is not automated**. Do not attempt to rebuild test components - use the existing compiled WASM files, EXCEPT if the test component itself has an AGENTS.md file with instructions of how to do so.
-
-**Important:** When modifying SDK code (`sdks/rust/` or `sdks/ts/`), you must rebuild any test components that depend on the changed SDK. For TS SDK changes, you must first rebuild the agent template wasm (`npx pnpm run build-agent-template` in `sdks/ts/`) before rebuilding TS test components. See each test component's `AGENTS.md` for build instructions.
+Load the `testing` skill for detailed guidance on test filtering, debugging failures, test components, and timeouts.
 
 ## Running Locally
-
-Build and run the all-in-one `golem` binary from `cli/golem`:
 
 ```shell
 cargo build -p golem       # Build the golem binary
 ./target/debug/golem       # Run locally
 ```
 
-Or build everything together with `cargo make build` and run the same binary.
+## Skills
 
-## Code Generation
+Load these skills for guided workflows on complex tasks:
 
-When modifying REST API endpoints:
-```shell
-cargo make generate-openapi   # Regenerate OpenAPI specs
-```
-
-When modifying service configuration types:
-```shell
-cargo make generate-configs   # Regenerate config files
-```
+| Skill | When to Use |
+|-------|-------------|
+| `modifying-http-endpoints` | Adding or modifying REST API endpoints (covers OpenAPI regeneration, golem-client rebuild, type mappings) |
+| `adding-dependencies` | Adding or updating crate dependencies (covers workspace dependency management, versioning, features) |
+| `testing` | Running and debugging tests (covers test filtering, debugging failures, test components, timeouts) |
+| `debugging-hanging-tests` | Diagnosing worker executor or integration tests that hang indefinitely |
+| `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
+| `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
+| `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
+| `sdk-development` | Working on the Rust or TypeScript SDKs in `sdks/` |
+| `investigating-executor-performance` | Investigating worker-executor performance with OTLP tracing and Jaeger |
+| `pre-pr-checklist` | Final checks before submitting a pull request |
 
 ## Before Submitting a PR
 
@@ -98,7 +74,7 @@ cargo make generate-configs   # Regenerate config files
 cargo make fix
 ```
 
-This runs `rustfmt` and `clippy` with automatic fixes. Address any remaining warnings or errors.
+This runs `rustfmt` and `clippy` with automatic fixes. Load `pre-pr-checklist` skill for the full workflow.
 
 ## Code Style
 
@@ -107,20 +83,9 @@ This runs `rustfmt` and `clippy` with automatic fixes. Address any remaining war
 - Use existing libraries and utilities from the codebase
 - Security: Never expose or log secrets/keys
 
-## WIT Dependencies
+## Dependency Management
 
-When working with WIT interfaces:
-```shell
-cargo make wit        # Fetch WIT dependencies
-cargo make check-wit  # Verify WIT dependencies are up-to-date
-```
-
-## Debugging Tests
-
-Use `--nocapture` when debugging tests to allow debugger attachment:
-```shell
-cargo test -p <crate> <test> -- --nocapture
-```
+All crate dependencies must have their versions specified in the root workspace `Cargo.toml` under `[workspace.dependencies]`. Workspace members must reference them using `x = { workspace = true }` in their own `Cargo.toml` rather than specifying versions directly.
 
 ## Project Structure
 

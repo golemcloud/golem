@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,13 +16,13 @@ use super::account::{AccountError, AccountService};
 use super::application::{ApplicationError, ApplicationService};
 use super::component::{ComponentError, ComponentService};
 use super::environment::{EnvironmentError, EnvironmentService};
-use crate::model::component::Component;
 use crate::model::component_slug::ComponentSlug;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::component::Component;
 use std::fmt::Debug;
 use std::sync::Arc;
 

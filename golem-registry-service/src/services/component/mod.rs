@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,7 +21,6 @@ pub use self::write::ComponentWriteService;
 use super::component_object_store::ComponentObjectStore;
 use super::deployment::DeploymentService;
 use super::environment::EnvironmentService;
-use crate::model::component::Component;
 use crate::repo::component::ComponentRepo;
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
@@ -32,6 +31,7 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::component::Component;
 use std::sync::Arc;
 use tracing::info;
 
@@ -444,10 +444,7 @@ impl ComponentService {
 
         let stream = self
             .object_store
-            .get_stream(
-                component.environment_id,
-                &component.transformed_object_store_key,
-            )
+            .get_stream(component.environment_id, &component.object_store_key)
             .await?;
 
         Ok(stream)

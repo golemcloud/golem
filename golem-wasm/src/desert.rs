@@ -1,4 +1,4 @@
-use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
+use crate::golem_core_1_5_x::types::NamedWitTypeNode;
 use crate::{ResourceMode, Uri, Value, WitNode, WitType, WitTypeNode, WitValue};
 use desert_rust::adt::{AdtMetadata, AdtSerializer};
 use desert_rust::{

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,12 +16,12 @@ use crate::Tracing;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
-use golem_common::model::OplogIndex;
+use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use log::info;
 use pretty_assertions::{assert_eq, assert_ne};
@@ -29,6 +29,18 @@ use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_update_v1")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -37,49 +49,46 @@ inherit_test_dep!(Tracing);
 async fn revert_successful_invocations(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
-    let agent_id1 = agent_id!("rpc-counter", "counter1");
+    let agent_id1 = agent_id!("RpcCounter", "counter1");
     let worker_id1 = executor
         .start_agent(&component.id, agent_id1.clone())
         .await?;
     executor.log_output(&worker_id1).await?;
 
-    let agent_id2 = agent_id!("rpc-counter", "counter2");
+    let agent_id2 = agent_id!("RpcCounter", "counter2");
     let worker_id2 = executor
         .start_agent(&component.id, agent_id2.clone())
         .await?;
 
     // counter1.inc_by(5)
     executor
-        .invoke_and_await_agent(&component.id, &agent_id1, "inc_by", data_value!(5u64))
+        .invoke_and_await_agent(&component, &agent_id1, "inc_by", data_value!(5u64))
         .await?;
 
     // counter2.inc_by(1)
     executor
-        .invoke_and_await_agent(&component.id, &agent_id2, "inc_by", data_value!(1u64))
+        .invoke_and_await_agent(&component, &agent_id2, "inc_by", data_value!(1u64))
         .await?;
 
     // counter2.inc_by(2)
     executor
-        .invoke_and_await_agent(&component.id, &agent_id2, "inc_by", data_value!(2u64))
+        .invoke_and_await_agent(&component, &agent_id2, "inc_by", data_value!(2u64))
         .await?;
 
     // counter2.get_value() -> 3
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id2, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id2, "get_value", data_value!())
         .await?;
 
     // Revert last 2 invocations on counter2 (undoes inc_by(2) and get_value)
@@ -94,12 +103,12 @@ async fn revert_successful_invocations(
 
     // counter1.get_value() -> 5 (unchanged)
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id1, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id1, "get_value", data_value!())
         .await?;
 
     // counter2.get_value() -> 1 (inc_by(2) was reverted)
     let result2_after = executor
-        .invoke_and_await_agent(&component.id, &agent_id2, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id2, "get_value", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id1).await?;
@@ -128,6 +137,7 @@ async fn revert_successful_invocations(
 async fn revert_failed_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
@@ -136,25 +146,24 @@ async fn revert_failed_worker(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("failing-counter", "revert_failed_worker");
+    let agent_id = agent_id!("FailingCounter", "revert_failed_worker");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(50u64))
         .await;
 
     let result3 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await;
 
     executor
@@ -167,7 +176,7 @@ async fn revert_failed_worker(
         .await?;
 
     let result4 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -189,6 +198,7 @@ async fn revert_failed_worker(
 async fn revert_failed_worker_to_invoke_of_failed_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
@@ -197,28 +207,27 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("failing-counter", "revert_failed_worker");
+    let agent_id = agent_id!("FailingCounter", "revert_failed_worker");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(50u64))
         .await;
 
     let revert_target = {
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         oplog
             .iter()
-            .rfind(|op| matches!(op.entry, PublicOplogEntry::ExportedFunctionInvoked(_)))
+            .rfind(|op| matches!(op.entry, PublicOplogEntry::AgentInvocationStarted(_)))
             .cloned()
             .unwrap()
     };
@@ -233,7 +242,7 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
         .await?;
 
     let result3 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -259,10 +268,11 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("8m")]
 async fn revert_auto_update(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
@@ -271,19 +281,24 @@ async fn revert_auto_update(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor.log_output(&worker_id).await?;
+
+    // Wait for the worker to finish initialization before reading the oplog
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Idle,
+            std::time::Duration::from_secs(10),
+        )
+        .await?;
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -303,7 +318,7 @@ async fn revert_auto_update(
         .await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
     // Revert to just after initialization (not INITIAL), because agents cannot
@@ -318,7 +333,7 @@ async fn revert_auto_update(
         .await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
     info!("result: {result1:?}");

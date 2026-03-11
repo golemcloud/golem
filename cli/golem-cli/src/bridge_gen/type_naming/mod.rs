@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -35,9 +35,21 @@ pub trait TypeName: Debug + Display + Clone + PartialEq + Eq + Hash {
     // result for a type, then no further type naming will be attempted.
     fn from_analysed_type(typ: &AnalysedType) -> Option<Self>;
 
-    fn from_owner_and_name(owner: Option<impl AsRef<str>>, name: impl AsRef<str>) -> Self;
+    /// Creates a type name from an optional owner and a name.
+    /// When `same_language` is true, the metadata names are already in the target language's
+    /// native casing, so no heck transformations should be applied.
+    fn from_owner_and_name(
+        owner: Option<impl AsRef<str>>,
+        name: impl AsRef<str>,
+        same_language: bool,
+    ) -> Self;
 
-    fn from_segments(segments: impl IntoIterator<Item = impl AsRef<str>>) -> Self;
+    /// Creates a type name by joining path segments.
+    /// When `same_language` is true, segments are joined as-is without casing transformations.
+    fn from_segments(
+        segments: impl IntoIterator<Item = impl AsRef<str>>,
+        same_language: bool,
+    ) -> Self;
 
     fn requires_type_name(typ: &AnalysedType) -> bool;
 }
@@ -62,15 +74,17 @@ pub struct TypeNaming<TN: TypeName> {
     anonymous_type_locations: IndexMap<AnalysedType, Vec<TypeLocation>>,
     type_names: HashSet<TN>,
     types: HashMap<AnalysedType, TN>,
+    same_language: bool,
 }
 
 impl<TN: TypeName> TypeNaming<TN> {
-    pub fn new(agent_type: &AgentType) -> anyhow::Result<Self> {
+    pub fn new(agent_type: &AgentType, same_language: bool) -> anyhow::Result<Self> {
         let mut type_naming = Self {
             named_type_locations: Default::default(),
             anonymous_type_locations: Default::default(),
             type_names: HashSet::new(),
             types: HashMap::new(),
+            same_language,
         };
 
         type_naming.collect_all_wit_types(agent_type);
@@ -259,7 +273,11 @@ impl<TN: TypeName> TypeNaming<TN> {
             match typ.name() {
                 Some(name) => self
                     .named_type_locations
-                    .entry(TN::from_owner_and_name(typ.owner(), name))
+                    .entry(TN::from_owner_and_name(
+                        typ.owner(),
+                        name,
+                        self.same_language,
+                    ))
                     .or_default()
                     .entry(typ.clone())
                     .or_default()
@@ -344,6 +362,7 @@ impl<TN: TypeName> TypeNaming<TN> {
                         .iter()
                         .copied()
                         .chain(std::iter::once(candidate.as_str())),
+                    self.same_language,
                 );
                 if !self.type_names.contains(&candidate_type_name) {
                     return Ok(candidate_type_name);

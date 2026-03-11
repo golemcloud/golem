@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,7 +18,7 @@ use crate::model::GuestLanguage;
 
 pub(crate) fn test_type_naming<TN: TypeName>(language: GuestLanguage, agent_name: &str) {
     let agent_type = code_first_snippets_agent_type(language, agent_name);
-    TypeNaming::<TN>::new(&agent_type).unwrap();
+    TypeNaming::<TN>::new(&agent_type, false).unwrap();
 
     /*
     println!("Collected anonymous types:");

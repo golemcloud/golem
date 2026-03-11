@@ -15,6 +15,7 @@ autotests = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true }
+golem-service-base = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
@@ -29,7 +30,7 @@ clap = { workspace = true }
 futures-concurrency = { workspace = true }
 headers = { workspace = true }
 indoc = { workspace = true }
-pretty_assertions = { workspace = true }
+pretty_assertions = { workspace = true, features = [ "unstable" ] }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rlimit = { workspace = true }
@@ -45,6 +46,10 @@ serde_yaml = { workspace = true }
 goldenfile = { workspace = true }
 test-r = { workspace = true }
 wac-graph = { workspace = true }
+assert2 = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+backtrace-on-stack-overflow = { workspace = true }
 
 [lib]
 harness = false

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DataValue, RegisteredAgentType, Uuid } from 'golem:agent/host';
+import { DataValue, RegisteredAgentType, Uuid, WasmRpc } from 'golem:agent/host@1.5.0';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src';
-import { AgentId } from 'golem:rpc/types@0.2.2';
 
-vi.mock('golem:agent/host', () => ({
+vi.mock('golem:agent/host@1.5.0', () => ({
   getAgentType: (agentTypeName: string): RegisteredAgentType | undefined => {
     if (agentTypeName == 'FooAgent') {
       const agentType = AgentTypeRegistry.get(new AgentClassName('FooAgent'));
@@ -40,7 +39,6 @@ vi.mock('golem:agent/host', () => ({
     }
   },
   makeAgentId: (agentTypeName: string, input: DataValue, phantomId: Uuid | undefined): string => {
-    // Not a correct implementation, but good enough for some tests
     let phantomPostfix;
     if (phantomId) {
       phantomPostfix = `[${phantomId.highBits}-${phantomId.lowBits}]`;
@@ -65,10 +63,21 @@ vi.mock('golem:agent/host', () => ({
     }
     return [typeName, input, phantomId];
   },
+  WasmRpc: vi
+    .fn()
+    .mockImplementation(
+      (_agentTypeName: string, _constructor: DataValue, _phantomId: Uuid | undefined) => ({}),
+    ),
 }));
 
-vi.mock('golem:rpc/types@0.2.2', () => ({
-  WasmRpc: vi.fn().mockImplementation((_: AgentId) => ({})),
+vi.mock('golem:core/types@1.5.0', () => ({
+  parseUuid: (uuid: string) => {
+    const parts = uuid.replace(/-/g, '');
+    return {
+      highBits: BigInt('0x' + parts.slice(0, 16)),
+      lowBits: BigInt('0x' + parts.slice(16)),
+    };
+  },
 }));
 
 (globalThis as any).currentAgentId = 'foo-agent(123)';

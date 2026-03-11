@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -24,6 +24,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client
 use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_common::model::RoutingTable;
 use std::collections::HashMap;
+use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -72,8 +73,13 @@ async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Cha
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout).await
+async fn wait_for_startup(
+    host: &str,
+    grpc_port: u16,
+    timeout: Duration,
+    child: Option<&mut Child>,
+) {
+    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout, child).await
 }
 
 async fn env_vars(

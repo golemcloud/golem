@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm::{FutureInvokeResult, RpcError, WitValue};
-use wstd::wasi::io::poll::Pollable;
+use crate::golem_agentic::golem::agent::common::DataValue;
+use crate::golem_agentic::golem::agent::host::{FutureInvokeResult, RpcError};
+use wasip2::io::poll::Pollable;
 
-pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<WitValue, RpcError> {
-    let golem_wasm_pollable = invoke_result.subscribe();
+pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<DataValue, RpcError> {
+    loop {
+        let pollable = invoke_result.subscribe();
+        await_pollable(pollable).await;
 
-    await_pollable(golem_wasm_pollable).await;
-
-    invoke_result.get().expect("RPC invoke failed")
+        if let Some(result) = invoke_result.get() {
+            return result;
+        }
+    }
 }
 
 pub async fn await_pollable(pollable: Pollable) {

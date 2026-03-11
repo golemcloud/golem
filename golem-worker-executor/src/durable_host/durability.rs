@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -192,7 +192,7 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
             "subscribe",
         );
 
-        dynamic_subscribe(self.table(), self_, None)
+        Ok(dynamic_subscribe(self.table(), self_, None)?)
     }
 
     async fn drop(&mut self, rep: Resource<LazyInitializedPollableEntry>) -> anyhow::Result<()> {
@@ -343,7 +343,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .oplog()
-            .add_imported_function_invoked(function_name, request, response, function_type)
+            .add_host_call(function_name, request, response, function_type)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to serialize and store durable function invocation: {err}")
@@ -358,12 +358,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 "Trying to replay an durable invocation in a PersistNothing block",
             ))
         } else {
-            let (_, oplog_entry) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::ImportedFunctionInvoked
-            )?;
+            let (_, oplog_entry) =
+                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
             match oplog_entry {
-                OplogEntry::ImportedFunctionInvoked {
+                OplogEntry::HostCall {
                     timestamp,
                     function_name,
                     durable_function_type,
@@ -378,7 +376,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                         .await
                         .map_err(|err| {
                             WorkerExecutorError::runtime(format!(
-                                "ImportedFunctionInvoked payload cannot be downloaded: {err}"
+                                "HostCall payload cannot be downloaded: {err}"
                             ))
                         })?;
                     Ok(PersistedDurableFunctionInvocation {
@@ -390,7 +388,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                     })
                 }
                 _ => Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "ImportedFunctionInvoked",
+                    "HostCall",
                     format!("{oplog_entry:?}"),
                 )),
             }

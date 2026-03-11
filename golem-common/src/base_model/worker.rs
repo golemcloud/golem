@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,24 +15,13 @@
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::oplog::WorkerResourceId;
+use crate::base_model::oplog::AgentResourceId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{OplogIndex, Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
+use crate::base_model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
 use crate::{declare_enums, declare_structs, declare_unions};
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-pub struct WorkerCreationRequest {
-    pub name: String,
-    pub env: HashMap<String, String>,
-    #[cfg_attr(feature = "full", oai(default))]
-    pub config_vars: BTreeMap<String, String>,
-}
 
 declare_enums! {
     pub enum FlatComponentFileSystemNodeKind {
@@ -66,7 +55,44 @@ declare_unions! {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "raw-local-agent-config-entry", owner = "golem:api@1.5.0/oplog")
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct UntypedParsedWorkerCreationLocalAgentConfigEntry {
+    pub key: Vec<String>,
+    pub value: golem_wasm::Value,
+}
+
 declare_structs! {
+    pub struct WorkerCreationLocalAgentConfigEntry {
+        pub key: Vec<String>,
+        pub value: serde_json::Value
+    }
+
+    #[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", wit(name = "local-agent-config-entry", owner = "golem:api@1.5.0/oplog"))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct ParsedWorkerCreationLocalAgentConfigEntry {
+        pub key: Vec<String>,
+        pub value: golem_wasm::ValueAndType
+    }
+
+    pub struct AgentCreationRequest {
+        pub name: String,
+        pub env: HashMap<String, String>,
+        #[cfg_attr(feature = "full", oai(default))]
+        pub config_vars: BTreeMap<String, String>,
+        #[cfg_attr(feature = "full", oai(default))]
+        pub local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>
+    }
+
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
@@ -84,17 +110,17 @@ declare_structs! {
     }
 
     pub struct ExportedResourceMetadata {
-        pub key: WorkerResourceId,
-        pub description: WorkerResourceDescription,
+        pub key: AgentResourceId,
+        pub description: AgentResourceDescription,
     }
 
-    pub struct WorkerMetadataDto {
-        pub worker_id: WorkerId,
+    pub struct AgentMetadataDto {
+        pub agent_id: AgentId,
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
         pub config_vars: BTreeMap<String, String>,
-        pub status: WorkerStatus,
+        pub status: AgentStatus,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,
         pub pending_invocation_count: u64,
@@ -127,6 +153,7 @@ declare_structs! {
         pub number_of_invocations: u64,
     }
 
+    // TODO: Rename to AgentFileSystemNode
     pub struct FlatComponentFileSystemNode {
         pub name: String,
         pub last_modified: u64,
@@ -137,8 +164,19 @@ declare_structs! {
 }
 
 declare_enums! {
-    pub enum WorkerUpdateMode {
+    pub enum AgentUpdateMode {
         Automatic,
         Manual,
+    }
+}
+
+impl From<ParsedWorkerCreationLocalAgentConfigEntry>
+    for UntypedParsedWorkerCreationLocalAgentConfigEntry
+{
+    fn from(value: ParsedWorkerCreationLocalAgentConfigEntry) -> Self {
+        Self {
+            key: value.key,
+            value: value.value.value,
+        }
     }
 }

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,7 +21,6 @@ use crate::model::agent::test::{
 };
 use crate::model::GuestLanguage;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_client::model::ValueAndType;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,
@@ -33,8 +32,8 @@ use golem_common::model::Empty;
 use golem_wasm::analysis::analysed_type::{bool, f64, field, record, s32, str};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::ValueAndType;
 use golem_wasm::{IntoValueAndType, Value};
-use heck::ToUpperCamelCase;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::io::Write;
@@ -171,6 +170,7 @@ fn ts_counter_agent() -> GeneratedPackage {
     let agent_type = AgentType {
         type_name: AgentTypeName("CounterAgent".to_string()),
         description: "Constructs the agent CounterAgent".to_string(),
+        source_language: "typescript".to_string(),
         constructor: AgentConstructor {
             name: Some("CounterAgent".to_string()),
             description: "Constructs the agent CounterAgent".to_string(),
@@ -191,7 +191,7 @@ fn ts_counter_agent() -> GeneratedPackage {
             input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
             output_schema: DataSchema::Tuple(NamedElementSchemas {
                 elements: vec![NamedElementSchema {
-                    name: "return-value".to_string(),
+                    name: "returnValue".to_string(),
                     schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                         element_type: f64(),
                     }),
@@ -203,6 +203,7 @@ fn ts_counter_agent() -> GeneratedPackage {
         mode: AgentMode::Durable,
         http_mount: None,
         snapshotting: Snapshotting::Disabled(Empty {}),
+        config: Vec::new(),
     };
 
     GeneratedPackage::new(agent_type)
@@ -534,7 +535,7 @@ fn bridge_tests_objectcomplextype(
                 "b": 2.2,
                 "c": false
             },
-            "e": { "tag": "union-type2", "val": 5.5 },
+            "e": { "tag": "UnionType2", "val": 5.5 },
             "f": ["item"],
             "g": [{"a": "obj", "b": 1.1, "c": true}],
             "h": ["str", 2.2, false],
@@ -596,7 +597,7 @@ fn bridge_tests_uniontype(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: 
     assert_function_input_encoding(
         pkg.target_dir(),
         "FunUnionType",
-        json!([{ "tag": "union-type4", "val": true }]),
+        json!([{ "tag": "UnionType4", "val": true }]),
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
@@ -622,7 +623,7 @@ fn bridge_tests_unioncomplextype(
     assert_function_input_encoding(
         pkg.target_dir(),
         "FunUnionComplexType",
-        json!([{ "tag": "union-complex-type10", "val": { "n": 1.2 } }]),
+        json!([{ "tag": "UnionComplexType10", "val": { "n": 1.2 } }]),
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
@@ -836,7 +837,7 @@ fn bridge_tests_unionwithliterals_with_value(
     assert_function_input_encoding(
         pkg.target_dir(),
         "FunUnionWithLiterals",
-        json!([{"tag": "union-with-literals1", "val": true}]),
+        json!([{"tag": "UnionWithLiterals1", "val": true}]),
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
@@ -1280,7 +1281,7 @@ fn bridge_tests_listcomplextype_output(
                                 Value::Bool(false),
                             ]),
                         ]),
-                        pkg.output_element_type_by_name("funListComplexType", "return-value"),
+                        pkg.output_element_type_by_name("funListComplexType", "returnValue"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1307,7 +1308,7 @@ fn bridge_tests_objecttype_output(
                             Value::F64(123.4),
                             Value::Bool(true),
                         ]),
-                        pkg.output_element_type_by_name("funObjectType", "return-value"),
+                        pkg.output_element_type_by_name("funObjectType", "returnValue"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1371,7 +1372,7 @@ fn bridge_tests_objectcomplextype_output(
                             ])]),
                             Value::Record(vec![Value::F64(5.1)]),
                         ]),
-                        pkg.output_element_type_by_name("funObjectComplexType", "return-value"),
+                        pkg.output_element_type_by_name("funObjectComplexType", "returnValue"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1383,7 +1384,7 @@ fn bridge_tests_objectcomplextype_output(
             "b": 42.1,
             "c": false,
             "d": {"a": "nested", "b": 10.1, "c": true},
-            "e": {"tag": "union-type1", "val": "hello"},
+            "e": {"tag": "UnionType1", "val": "hello"},
             "f": ["str1", "str2"],
             "g": [{"a": "item1", "b": 1.1, "c": true}],
             "h": ["t1", 100.1, false],
@@ -1409,14 +1410,14 @@ fn bridge_tests_uniontype_output(
                             case_idx: 3,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
-                        pkg.output_element_type_by_name("funUnionType", "return-value"),
+                        pkg.output_element_type_by_name("funUnionType", "returnValue"),
                     )
                     .to_json_value()
                     .unwrap(),
                 },
             )],
         }),
-        json!({"tag": "union-type4", "val": true}),
+        json!({"tag": "UnionType4", "val": true}),
     );
 }
 
@@ -1439,14 +1440,14 @@ fn bridge_tests_unioncomplextype_output(
                                 Value::Bool(true),
                             ]))),
                         },
-                        pkg.output_element_type_by_name("funUnionComplexType", "return-value"),
+                        pkg.output_element_type_by_name("funUnionComplexType", "returnValue"),
                     )
                     .to_json_value()
                     .unwrap(),
                 },
             )],
         }),
-        json!({"tag": "union-complex-type4", "val": {"a": "hello", "b": 123.4, "c": true}}),
+        json!({"tag": "UnionComplexType4", "val": {"a": "hello", "b": 123.4, "c": true}}),
     );
 }
 
@@ -1469,7 +1470,7 @@ fn bridge_tests_taggedunion_output(
                                 Value::Bool(true),
                             ]))),
                         },
-                        pkg.output_element_type_by_name("funTaggedUnion", "return-value"),
+                        pkg.output_element_type_by_name("funTaggedUnion", "returnValue"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1495,7 +1496,7 @@ fn bridge_tests_unionwithliterals_output(
                             case_idx: 0,
                             case_value: None,
                         },
-                        pkg.output_element_type_by_name("funUnionWithLiterals", "return-value"),
+                        pkg.output_element_type_by_name("funUnionWithLiterals", "returnValue"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1518,7 +1519,7 @@ fn bridge_tests_unionwithonlyliterals_output(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Enum(1),
-                        pkg.output_element_type_by_name("funUnionWithOnlyLiterals", "return-value"),
+                        pkg.output_element_type_by_name("funUnionWithOnlyLiterals", "returnValue"),
                     )
                     .to_json_value()
                     .unwrap(),
@@ -1677,10 +1678,7 @@ fn assert_function_input_encoding(
     let mut child = std::process::Command::new("npm")
         .arg("run")
         .arg("test")
-        .arg(format!(
-            "encode{}Input",
-            function_name.to_upper_camel_case()
-        ))
+        .arg(format!("encode{function_name}Input"))
         .current_dir(target_dir.as_std_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1737,10 +1735,7 @@ fn assert_function_output_decoding(
     let mut child = std::process::Command::new("npm")
         .arg("run")
         .arg("test")
-        .arg(format!(
-            "decode{}Output",
-            function_name.to_upper_camel_case()
-        ))
+        .arg(format!("decode{function_name}Output"))
         .current_dir(target_dir.as_std_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1787,10 +1782,7 @@ fn assert_function_output_decoding_void(target_dir: &Utf8Path, function_name: &s
     let mut child = std::process::Command::new("npm")
         .arg("run")
         .arg("test")
-        .arg(format!(
-            "decode{}Output",
-            function_name.to_upper_camel_case()
-        ))
+        .arg(format!("decode{function_name}Output"))
         .current_dir(target_dir.as_std_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

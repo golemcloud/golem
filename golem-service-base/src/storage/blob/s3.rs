@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,7 +18,7 @@ use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, Exis
 use anyhow::Error;
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
-use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region, RequestChecksumCalculation};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
@@ -73,11 +73,15 @@ impl S3BlobStorage {
 
         let s3_config: aws_sdk_s3::config::Config = (&sdk_config).into();
 
-        let s3_config = if let Some(path_style) = &config.aws_path_style {
-            s3_config.to_builder().force_path_style(*path_style).build()
-        } else {
-            s3_config
-        };
+        let mut s3_config_builder = s3_config
+            .to_builder()
+            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
+
+        if let Some(path_style) = &config.aws_path_style {
+            s3_config_builder = s3_config_builder.force_path_style(*path_style);
+        }
+
+        let s3_config = s3_config_builder.build();
 
         Self {
             client: aws_sdk_s3::Client::from_conf(s3_config),
@@ -117,18 +121,18 @@ impl S3BlobStorage {
             }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
-                worker_id,
+                agent_id,
             } => {
                 let environment_id_string = environment_id.to_string();
-                let worker_id_string = worker_id.to_string();
+                let agent_id_string = agent_id.to_string();
                 if self.config.object_prefix.is_empty() {
                     Path::new(&environment_id_string)
-                        .join(worker_id_string)
+                        .join(agent_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
                         .join(environment_id_string)
-                        .join(worker_id_string)
+                        .join(agent_id_string)
                         .to_path_buf()
                 }
             }

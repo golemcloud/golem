@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ConfigEntry;
 use crate::agentic::AutoInjectedParamType;
 use crate::golem_agentic::golem::agent::common::{
     AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, DataSchema,
@@ -27,12 +28,14 @@ use std::collections::HashSet;
 pub struct ExtendedAgentType {
     pub type_name: String,
     pub description: String,
+    pub source_language: String,
     pub constructor: ExtendedAgentConstructor,
     pub methods: Vec<EnrichedAgentMethod>,
     pub dependencies: Vec<AgentDependency>,
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
     pub snapshotting: Snapshotting,
+    pub config: Vec<ConfigEntry>,
 }
 
 impl ExtendedAgentType {
@@ -55,12 +58,14 @@ impl ExtendedAgentType {
         AgentType {
             type_name: self.type_name.clone(),
             description: self.description.clone(),
+            source_language: self.source_language.clone(),
             constructor: self.constructor.to_agent_constructor(),
             methods: self.methods.iter().map(|m| m.to_agent_method()).collect(),
             dependencies: self.dependencies.clone(),
             mode: self.mode,
             http_mount: self.http_mount.clone(),
-            snapshotting: self.snapshotting.clone(),
+            snapshotting: self.snapshotting,
+            config: self.config.iter().map(|c| c.clone().into()).collect(),
         }
     }
 }

@@ -1,5 +1,5 @@
 package golem:common;
 
 world golem-common {
-  import golem:agent/common;
+  import golem:agent/common@1.5.0;
 }

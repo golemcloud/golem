@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::model::{AgentId, AgentInvocationOutput, IdempotencyKey};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::ValueAndType;
 use tokio::sync::broadcast::error::RecvError;
 
 pub struct Events {
@@ -75,12 +74,12 @@ impl EventsSubscription {
 #[derive(Debug, Clone)]
 pub enum Event {
     InvocationCompleted {
-        worker_id: WorkerId,
+        agent_id: AgentId,
         idempotency_key: IdempotencyKey,
-        result: Result<Option<ValueAndType>, WorkerExecutorError>,
+        result: Result<AgentInvocationOutput, WorkerExecutorError>,
     },
     WorkerLoaded {
-        worker_id: WorkerId,
+        agent_id: AgentId,
         result: Result<(), WorkerExecutorError>,
     },
 }

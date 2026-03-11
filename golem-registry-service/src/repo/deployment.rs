@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,12 +14,14 @@
 
 use super::model::BindFields;
 use super::model::deployment::{
-    CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord,
-    DeploymentRevisionCreationRecord,
+    CurrentDeploymentExtRevisionRecord, DeploymentCompiledMcpRecord,
+    DeploymentCompiledRouteWithSecuritySchemeRecord, DeploymentRevisionCreationRecord,
+    ResolvedAgentTypeRecord,
 };
 use super::model::deployment::{
     DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
-    DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
+    DeploymentHttpApiDeploymentRevisionRecord, DeploymentMcpDeploymentRevisionRecord,
+    DeploymentRegisteredAgentTypeRecord,
 };
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -29,6 +31,7 @@ use crate::repo::model::deployment::{
 };
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
+use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -36,10 +39,11 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
-use indoc::indoc;
+use golem_service_base::repo::{BindingsStack, RepoError, RepoResult, ResultExt};
+use indoc::{formatdoc, indoc};
 use sqlx::{Database, Row};
 use std::fmt::Debug;
+use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -94,6 +98,11 @@ pub trait DeploymentRepo: Send + Sync {
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
 
+    async fn get_active_mcp_for_domain(
+        &self,
+        domain: &str,
+    ) -> RepoResult<Option<DeploymentCompiledMcpRecord>>;
+
     async fn list_compiled_routes_for_domain_and_deployment(
         &self,
         environment_id: Uuid,
@@ -139,6 +148,16 @@ pub trait DeploymentRepo: Send + Sync {
         component_id: &Uuid,
         component_revision_id: i64,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        caller_account_id: Uuid,
+        app_name: &str,
+        env_name: &str,
+        agent_type: &str,
+        deployment_revision: Option<i64>,
+        owner_email: Option<&str>,
+    ) -> RepoResult<Option<ResolvedAgentTypeRecord>>;
 
     async fn set_current_deployment(
         &self,
@@ -296,6 +315,16 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
+    async fn get_active_mcp_for_domain(
+        &self,
+        domain: &str,
+    ) -> RepoResult<Option<DeploymentCompiledMcpRecord>> {
+        self.repo
+            .get_active_mcp_for_domain(domain)
+            .instrument(Self::span_domain(domain))
+            .await
+    }
+
     async fn list_compiled_routes_for_domain_and_deployment(
         &self,
         environment_id: Uuid,
@@ -418,6 +447,33 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
                 environment_id = %environment_id,
                 component_id = %component_id,
                 component_revision_id = %component_revision_id,
+            ))
+            .await
+    }
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        caller_account_id: Uuid,
+        app_name: &str,
+        env_name: &str,
+        agent_type: &str,
+        deployment_revision: Option<i64>,
+        owner_email: Option<&str>,
+    ) -> RepoResult<Option<ResolvedAgentTypeRecord>> {
+        self.repo
+            .resolve_agent_type_by_names(
+                caller_account_id,
+                app_name,
+                env_name,
+                agent_type,
+                deployment_revision,
+                owner_email,
+            )
+            .instrument(info_span!(
+                SPAN_NAME,
+                app_name = %app_name,
+                env_name = %env_name,
+                agent_type = %agent_type,
             ))
             .await
     }
@@ -625,6 +681,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 http_api_deployments: self
                     .get_deployed_http_api_deployments(environment_id, revision_id)
                     .await?,
+                mcp_deployments: self
+                    .get_deployed_mcp_deployments(environment_id, revision_id)
+                    .await?,
             },
         }))
     }
@@ -677,6 +736,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     Self::create_deployment_http_api_deployment_revision(tx, deployment).await?
                 }
 
+                for deployment in &deployment_creation.mcp_deployments {
+                    Self::create_deployment_mcp_deployment_revision(tx, deployment).await?
+                }
+
                 for compiled_route in &deployment_creation.compiled_routes {
                     Self::create_deployment_compiled_route(tx, compiled_route).await?
                 }
@@ -684,6 +747,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 for registered_agent_type in &deployment_creation.registered_agent_types {
                     Self::create_deployment_registered_agent_type(tx, registered_agent_type)
                         .await?;
+                }
+
+                for compiled_mcp in &deployment_creation.compiled_mcp {
+                    Self::create_deployment_mcp(tx, compiled_mcp).await?;
                 }
 
                 let revision = Self::set_current_deployment_internal(
@@ -705,6 +772,51 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .boxed()
         })
         .await
+    }
+
+    async fn get_active_mcp_for_domain(
+        &self,
+        domain: &str,
+    ) -> RepoResult<Option<DeploymentCompiledMcpRecord>> {
+        self.with_ro("get_active_mcp_for_domain")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        cm.account_id,
+                        cm.environment_id,
+                        cm.deployment_revision_id,
+                        cm.domain,
+                        cm.mcp_data
+
+                    FROM deployment_compiled_mcp cm
+
+                    -- active deployment
+                    JOIN current_deployments cd
+                      ON cd.environment_id = cm.environment_id
+                      AND cd.current_revision_id = cm.deployment_revision_id
+
+                    -- parent objects not deleted
+                    JOIN environments e
+                      ON e.environment_id = cm.environment_id
+                      AND e.deleted_at IS NULL
+                    JOIN applications a
+                      ON a.application_id = e.application_id
+                      AND a.deleted_at IS NULL
+                    JOIN accounts ac
+                      ON ac.account_id = a.account_id
+                      AND ac.deleted_at IS NULL
+
+                    -- registered domains
+                    JOIN domain_registrations dr
+                      ON dr.environment_id = cm.environment_id
+                      AND dr.domain = cm.domain
+                      AND dr.deleted_at IS NULL
+
+                    WHERE cm.domain = $1
+                "#})
+                .bind(domain),
+            )
+            .await
     }
 
     async fn list_active_compiled_routes_for_domain(
@@ -847,14 +959,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
-                        AND (r.agent_type_name = $3 OR r.agent_wrapper_type_name = $3)
+                        AND r.agent_type_name = $3
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id)
@@ -875,7 +987,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -902,7 +1014,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -912,7 +1024,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_registered_agent_types r
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
-                    WHERE cd.environment_id = $1 AND (r.agent_type_name = $2 OR r.agent_wrapper_type_name = $2)
+                    WHERE cd.environment_id = $1 AND r.agent_type_name = $2
                 "#})
                 .bind(environment_id)
                 .bind(agent_type_name)
@@ -931,7 +1043,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -946,6 +1058,102 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 "#})
                 .bind(environment_id)
             )
+            .await
+    }
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        caller_account_id: Uuid,
+        app_name: &str,
+        env_name: &str,
+        agent_type: &str,
+        deployment_revision: Option<i64>,
+        owner_email: Option<&str>,
+    ) -> RepoResult<Option<ResolvedAgentTypeRecord>> {
+        let mut binding_stack = BindingsStack::new(5);
+
+        let owner_filter = if let Some(owner_email) = owner_email {
+            let i = binding_stack.push(owner_email);
+            format!("AND email = ${i}")
+        } else {
+            "AND account_id = $1".to_string()
+        };
+
+        let deployment_revision_expr = if let Some(rev) = deployment_revision {
+            let i = binding_stack.push(rev);
+            format!("${i}")
+        } else {
+            indoc! { r#"
+                (SELECT cdr.deployment_revision_id
+                 FROM current_deployments cd
+                 JOIN current_deployment_revisions cdr
+                   ON cdr.environment_id = cd.environment_id
+                  AND cdr.revision_id = cd.current_revision_id
+                 WHERE cd.environment_id = env.environment_id)"#
+            }
+            .to_string()
+        };
+
+        let query = formatdoc! { r#"
+            WITH owner AS (
+              SELECT account_id
+              FROM accounts
+              WHERE deleted_at IS NULL
+                {owner_filter}
+            ),
+            env AS (
+              SELECT e.environment_id, owner.account_id AS owner_account_id
+              FROM owner
+              JOIN applications ap
+                ON ap.account_id = owner.account_id AND ap.deleted_at IS NULL
+              JOIN environments e
+                ON e.application_id = ap.application_id AND e.deleted_at IS NULL
+              WHERE ap.name = $2 AND e.name = $3
+            ),
+            target AS (
+              SELECT
+                env.environment_id,
+                env.owner_account_id,
+                {deployment_revision_expr} AS deployment_revision_id,
+                COALESCE((
+                  SELECT esr.roles
+                  FROM environment_shares es
+                  JOIN environment_share_revisions esr
+                    ON esr.environment_share_id = es.environment_share_id
+                   AND esr.revision_id = es.current_revision_id
+                  WHERE es.environment_id = env.environment_id
+                    AND es.grantee_account_id = $1
+                    AND es.deleted_at IS NULL
+                ), 0) AS roles_bitmask
+              FROM env
+            )
+            SELECT
+              r.environment_id, r.deployment_revision_id,
+              r.agent_type_name, r.canonical_agent_type_name,
+              r.component_id, r.component_revision_id,
+              r.webhook_prefix_authority_and_path, r.agent_type,
+              target.owner_account_id,
+              target.roles_bitmask AS environment_roles_from_shares
+            FROM target
+            JOIN deployment_registered_agent_types r
+              ON r.environment_id = target.environment_id
+             AND r.deployment_revision_id = target.deployment_revision_id
+            WHERE r.agent_type_name = $4
+            LIMIT 1
+        "#};
+
+        let query_as = {
+            let binding_stack = binding_stack;
+            sqlx::query_as(&query)
+                .bind(caller_account_id) // $1
+                .bind(app_name) // $2
+                .bind(env_name) // $3
+                .bind(agent_type) // $4
+                .pipe(|q| binding_stack.apply(q))
+        };
+
+        self.with_ro("resolve_agent_type_by_names")
+            .fetch_optional_as(query_as)
             .await
     }
 
@@ -983,7 +1191,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -996,7 +1204,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             ORDER BY deployment_revision_id DESC
                             LIMIT 1
                         )
-                        AND (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
+                        AND r.agent_type_name = $4
                     ORDER BY r.agent_type_name
                 "#})
                 .bind(environment_id)
@@ -1020,7 +1228,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -1072,6 +1280,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 
+    async fn get_staged_mcp_deployments(
+        tx: &mut Self::Tx,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>>;
+
     async fn create_deployment_component_revision(
         tx: &mut Self::Tx,
         environment_id: Uuid,
@@ -1084,9 +1297,19 @@ trait DeploymentRepoInternal: DeploymentRepo {
         http_api_deployment: &DeploymentHttpApiDeploymentRevisionRecord,
     ) -> RepoResult<()>;
 
+    async fn create_deployment_mcp_deployment_revision(
+        tx: &mut Self::Tx,
+        mcp_deployment: &DeploymentMcpDeploymentRevisionRecord,
+    ) -> RepoResult<()>;
+
     async fn create_deployment_compiled_route(
         tx: &mut Self::Tx,
         compiled_route: &DeploymentCompiledRouteRecord,
+    ) -> RepoResult<()>;
+
+    async fn create_deployment_mcp(
+        tx: &mut Self::Tx,
+        mcp: &DeploymentCompiledMcpRecord,
     ) -> RepoResult<()>;
 
     async fn create_deployment_registered_agent_type(
@@ -1112,6 +1335,12 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
+
+    async fn get_deployed_mcp_deployments(
+        &self,
+        environment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>>;
 
     async fn version_exists(&self, environment_id: Uuid, version: &str) -> RepoResult<bool>;
 }
@@ -1162,6 +1391,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         Ok(DeploymentIdentity {
             components: Self::get_staged_components(tx, environment_id).await?,
             http_api_deployments: Self::get_staged_http_api_deployments(tx, environment_id).await?,
+            mcp_deployments: Self::get_staged_mcp_deployments(tx, environment_id).await?,
         })
     }
 
@@ -1171,7 +1401,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
-                SELECT c.component_id, c.name, cr.revision_id, cr.version, cr.hash
+                SELECT c.component_id, c.name, cr.revision_id, cr.hash
                 FROM components c
                 JOIN component_revisions cr
                     ON cr.component_id = c.component_id
@@ -1193,6 +1423,24 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     FROM http_api_deployments d
                     JOIN http_api_deployment_revisions dr
                         ON d.http_api_deployment_id = dr.http_api_deployment_id
+                        AND d.current_revision_id = dr.revision_id
+                    WHERE d.environment_id = $1 AND d.deleted_at IS NULL
+                "#})
+            .bind(environment_id),
+        )
+        .await
+    }
+
+    async fn get_staged_mcp_deployments(
+        tx: &mut Self::Tx,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>> {
+        tx.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
+                    SELECT d.mcp_deployment_id, d.domain, dr.revision_id, dr.hash
+                    FROM mcp_deployments d
+                    JOIN mcp_deployment_revisions dr
+                        ON d.mcp_deployment_id = dr.mcp_deployment_id
                         AND d.current_revision_id = dr.revision_id
                     WHERE d.environment_id = $1 AND d.deleted_at IS NULL
                 "#})
@@ -1242,6 +1490,47 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         Ok(())
     }
 
+    async fn create_deployment_mcp_deployment_revision(
+        tx: &mut Self::Tx,
+        mcp_deployment: &DeploymentMcpDeploymentRevisionRecord,
+    ) -> RepoResult<()> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_mcp_deployment_revisions
+                    (environment_id, deployment_revision_id, mcp_deployment_id, mcp_deployment_revision_id)
+                VALUES ($1, $2, $3, $4)
+            "#})
+                .bind(mcp_deployment.environment_id)
+                .bind(mcp_deployment.deployment_revision_id)
+                .bind(mcp_deployment.mcp_deployment_id)
+                .bind(mcp_deployment.mcp_deployment_revision_id)
+        )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn create_deployment_mcp(
+        tx: &mut Self::Tx,
+        mcp: &DeploymentCompiledMcpRecord,
+    ) -> RepoResult<()> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_compiled_mcp
+                    (account_id, environment_id, deployment_revision_id, domain, mcp_data)
+                VALUES ($1, $2, $3, $4, $5)
+            "#})
+            .bind(mcp.account_id)
+            .bind(mcp.environment_id)
+            .bind(mcp.deployment_revision_id)
+            .bind(&mcp.domain)
+            .bind(&mcp.mcp_data),
+        )
+        .await?;
+
+        Ok(())
+    }
+
     async fn create_deployment_compiled_route(
         tx: &mut Self::Tx,
         compiled_route: &DeploymentCompiledRouteRecord,
@@ -1272,7 +1561,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             sqlx::query(indoc! { r#"
                 INSERT INTO deployment_registered_agent_types
                     (environment_id, deployment_revision_id,
-                     agent_type_name, agent_wrapper_type_name,
+                     agent_type_name, canonical_agent_type_name,
                      component_id, component_revision_id,
                      webhook_prefix_authority_and_path, agent_type)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -1280,7 +1569,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind(registered_agent_type.environment_id)
             .bind(registered_agent_type.deployment_revision_id)
             .bind(&registered_agent_type.agent_type_name)
-            .bind(&registered_agent_type.agent_wrapper_type_name)
+            .bind(&registered_agent_type.canonical_agent_type_name)
             .bind(registered_agent_type.component_id)
             .bind(registered_agent_type.component_revision_id)
             .bind(&registered_agent_type.webhook_prefix_authority_and_path)
@@ -1353,7 +1642,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         self.with_ro("get_deployed_components")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT c.component_id, c.name, cr.revision_id, cr.version, cr.hash
+                    SELECT c.component_id, c.name, cr.revision_id, cr.hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
                     JOIN deployment_component_revisions dcr
@@ -1383,6 +1672,31 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                             AND dhadr.http_api_deployment_revision_id = hadr.revision_id
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
                     ORDER BY had.domain
+                "#})
+                    .bind(environment_id)
+                    .bind(revision_id),
+            )
+            .await?;
+
+        Ok(deployments)
+    }
+
+    async fn get_deployed_mcp_deployments(
+        &self,
+        environment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>> {
+        let deployments: Vec<McpDeploymentRevisionIdentityRecord> = self.with_ro("get_deployed_mcp_deployments - deployments")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT md.mcp_deployment_id, md.domain, mdr.revision_id, mdr.hash
+                    FROM mcp_deployments md
+                    JOIN mcp_deployment_revisions mdr ON md.mcp_deployment_id = mdr.mcp_deployment_id
+                    JOIN deployment_mcp_deployment_revisions dmdr
+                        ON dmdr.mcp_deployment_id = mdr.mcp_deployment_id
+                            AND dmdr.mcp_deployment_revision_id = mdr.revision_id
+                    WHERE dmdr.environment_id = $1 AND dmdr.deployment_revision_id = $2
+                    ORDER BY md.domain
                 "#})
                     .bind(environment_id)
                     .bind(revision_id),

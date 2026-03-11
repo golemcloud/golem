@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -76,12 +76,13 @@ impl DefaultIdentityProvider {
         &self,
         provider: &Provider,
     ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
-        let provider_metadata = CoreProviderMetadata::discover_async(
-            provider.issuer_url(),
-            openidconnect::reqwest::async_http_client,
-        )
-        .await
-        .map_err(|err| IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string()))?;
+        let http_client = openidconnect::reqwest::Client::new();
+        let provider_metadata =
+            CoreProviderMetadata::discover_async(provider.issuer_url(), &http_client)
+                .await
+                .map_err(|err| {
+                    IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string())
+                })?;
 
         Ok(provider_metadata)
     }
@@ -91,10 +92,12 @@ impl DefaultIdentityProvider {
         client: &OpenIdClient,
         code: &AuthorizationCode,
     ) -> Result<CoreTokenResponse, IdentityProviderError> {
-        let token_response = client
+        let http_client = openidconnect::reqwest::Client::new();
+        let token_response: CoreTokenResponse = client
             .client
             .exchange_code(code.clone())
-            .request_async(openidconnect::reqwest::async_http_client)
+            .map_err(|err| IdentityProviderError::FailedToExchangeCodeForTokens(err.to_string()))?
+            .request_async(&http_client)
             .await
             .map_err(|err| IdentityProviderError::FailedToExchangeCodeForTokens(err.to_string()))?;
 

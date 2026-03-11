@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -15,9 +15,9 @@
 use crate::benchmarks::{delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::agent::AgentId;
-use golem_common::model::component::ComponentId;
-use golem_common::model::WorkerId;
+use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::model::component::ComponentDto;
+use golem_common::model::AgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -197,8 +197,8 @@ impl Benchmark for LatencyMedium {
 
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
-    component_id: ComponentId,
-    agent_ids: Vec<AgentId>,
+    component: ComponentDto,
+    agent_ids: Vec<ParsedAgentId>,
     length: usize,
 }
 
@@ -258,7 +258,7 @@ impl LatencyBenchmark {
 
         IterationContext {
             user,
-            component_id: component.id,
+            component,
             agent_ids,
             length: config.length,
         }
@@ -283,7 +283,7 @@ impl LatencyBenchmark {
 
                 let cold_result = invoke_and_await_agent(
                     &user_clone,
-                    &iteration.component_id,
+                    &iteration.component,
                     agent_id,
                     "echo",
                     data_value!("benchmark"),
@@ -294,7 +294,7 @@ impl LatencyBenchmark {
                 for _ in 0..iteration.length {
                     let hot_result = invoke_and_await_agent(
                         &user_clone,
-                        &iteration.component_id,
+                        &iteration.component,
                         agent_id,
                         "echo",
                         data_value!("benchmark"),
@@ -317,11 +317,11 @@ impl LatencyBenchmark {
     }
 
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
-        let worker_ids: Vec<WorkerId> = iteration
+        let agent_ids: Vec<AgentId> = iteration
             .agent_ids
             .iter()
-            .filter_map(|agent_id| WorkerId::from_agent_id(iteration.component_id, agent_id).ok())
+            .filter_map(|agent_id| AgentId::from_agent_id(iteration.component.id, agent_id).ok())
             .collect();
-        delete_workers(&iteration.user, &worker_ids).await
+        delete_workers(&iteration.user, &agent_ids).await
     }
 }

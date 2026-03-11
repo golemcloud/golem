@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -35,7 +35,10 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
 
         ctx.finish_span(&state.span_id).await?;
     } else {
-        warn!("No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}", current_handle, ctx.state.open_http_requests);
+        warn!(
+            "No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}",
+            current_handle, ctx.state.open_http_requests
+        );
     }
 
     Ok(())
@@ -51,6 +54,9 @@ pub(crate) fn continue_http_request<Ctx: WorkerCtx>(
         state.close_owner = new_close_owner;
         ctx.state.open_http_requests.insert(new_handle, state);
     } else {
-        warn!("No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}", current_handle, ctx.state.open_http_requests);
+        warn!(
+            "No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}",
+            current_handle, ctx.state.open_http_requests
+        );
     }
 }

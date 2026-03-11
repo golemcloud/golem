@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -23,9 +23,9 @@ use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServiceServer;
 use golem_api_grpc::proto::golem::worker::v1::{
-    WorkerError, WorkerExecutionError, worker_error, worker_execution_error,
+    AgentError, WorkerExecutionError, agent_error, worker_execution_error,
 };
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::model::component::ComponentFilePath;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_wasm::json::OptionallyValueAndTypeJson;
@@ -85,75 +85,75 @@ pub async fn start_grpc_server(
     Ok(port)
 }
 
-pub fn validate_protobuf_worker_id(
-    worker_id: Option<golem_api_grpc::proto::golem::worker::WorkerId>,
-) -> Result<WorkerId, WorkerError> {
-    let worker_id = worker_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
-    let worker_id: WorkerId = worker_id
+pub fn validate_protobuf_agent_id(
+    agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
+) -> Result<AgentId, AgentError> {
+    let agent_id = agent_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
+    let agent_id: AgentId = agent_id
         .try_into()
         .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))?;
-    Ok(WorkerId {
-        component_id: worker_id.component_id,
-        worker_name: worker_id.worker_name,
+    Ok(AgentId {
+        component_id: agent_id.component_id,
+        agent_id: agent_id.agent_id,
     })
 }
 
-pub fn validate_component_file_path(file_path: String) -> Result<ComponentFilePath, WorkerError> {
+pub fn validate_component_file_path(file_path: String) -> Result<ComponentFilePath, AgentError> {
     ComponentFilePath::from_abs_str(&file_path).map_err(|_| bad_request_error("Invalid file path"))
 }
 
-pub fn bad_request_error<T>(error: T) -> WorkerError
+pub fn bad_request_error<T>(error: T) -> AgentError
 where
     T: Into<String>,
 {
-    WorkerError {
-        error: Some(worker_error::Error::BadRequest(ErrorsBody {
+    AgentError {
+        error: Some(agent_error::Error::BadRequest(ErrorsBody {
             errors: vec![error.into()],
         })),
     }
 }
 
-pub fn bad_request_errors(errors: Vec<String>) -> WorkerError {
-    WorkerError {
-        error: Some(worker_error::Error::BadRequest(ErrorsBody { errors })),
+pub fn bad_request_errors(errors: Vec<String>) -> AgentError {
+    AgentError {
+        error: Some(agent_error::Error::BadRequest(ErrorsBody { errors })),
     }
 }
 
-pub fn error_to_status(error: WorkerError) -> Status {
+pub fn error_to_status(error: AgentError) -> Status {
     match error.error {
-        Some(worker_error::Error::BadRequest(ErrorsBody { errors })) => {
+        Some(agent_error::Error::BadRequest(ErrorsBody { errors })) => {
             Status::invalid_argument(format!("Bad Request: {errors:?}"))
         }
-        Some(worker_error::Error::Unauthorized(ErrorBody { error })) => {
+        Some(agent_error::Error::Unauthorized(ErrorBody { error })) => {
             Status::unauthenticated(error)
         }
-        Some(worker_error::Error::LimitExceeded(ErrorBody { error })) => {
+        Some(agent_error::Error::LimitExceeded(ErrorBody { error })) => {
             Status::resource_exhausted(error)
         }
-        Some(worker_error::Error::NotFound(ErrorBody { error })) => Status::not_found(error),
-        Some(worker_error::Error::AlreadyExists(ErrorBody { error })) => {
+        Some(agent_error::Error::NotFound(ErrorBody { error })) => Status::not_found(error),
+        Some(agent_error::Error::AlreadyExists(ErrorBody { error })) => {
             Status::already_exists(error)
         }
-        Some(worker_error::Error::InternalError(WorkerExecutionError { error: None })) => {
+        Some(agent_error::Error::InternalError(WorkerExecutionError { error: None })) => {
             Status::unknown("Unknown error")
         }
 
-        Some(worker_error::Error::InternalError(WorkerExecutionError {
+        Some(agent_error::Error::InternalError(WorkerExecutionError {
             error: Some(worker_execution_error),
         })) => {
             let message = match worker_execution_error {
                 worker_execution_error::Error::InvalidRequest(err) => {
                     format!("Invalid Request: {}", err.details)
                 }
-                worker_execution_error::Error::WorkerAlreadyExists(err) => {
-                    format!("Worker Already Exists: Worker ID = {:?}", err.worker_id)
+                worker_execution_error::Error::AgentAlreadyExists(err) => {
+                    format!("Worker Already Exists: Worker ID = {:?}", err.agent_id)
                 }
-                worker_execution_error::Error::WorkerCreationFailed(err) => format!(
+                worker_execution_error::Error::AgentCreationFailed(err) => format!(
                     "Worker Creation Failed: Worker ID = {:?}, Details: {}",
-                    err.worker_id, err.details
+                    err.agent_id, err.details
                 ),
-                worker_execution_error::Error::FailedToResumeWorker(err) => {
-                    format!("Failed To Resume Worker: Worker ID = {:?}", err.worker_id)
+                worker_execution_error::Error::FailedToResumeAgent(err) => {
+                    format!("Failed To Resume Worker: Worker ID = {:?}", err.agent_id)
                 }
                 worker_execution_error::Error::ComponentDownloadFailed(err) => format!(
                     "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
@@ -211,8 +211,8 @@ pub fn error_to_status(error: WorkerError) -> Status {
                     format!("Unknown Error: {}", err.details)
                 }
                 worker_execution_error::Error::InvalidAccount(_) => "Invalid Account".to_string(),
-                worker_execution_error::Error::WorkerNotFound(err) => {
-                    format!("Worker Not Found: Worker ID = {:?}", err.worker_id)
+                worker_execution_error::Error::AgentNotFound(err) => {
+                    format!("Worker Not Found: Worker ID = {:?}", err.agent_id)
                 }
                 worker_execution_error::Error::ShardingNotReady(_) => {
                     "Sharding Not Ready".to_string()
@@ -235,7 +235,7 @@ pub fn error_to_status(error: WorkerError) -> Status {
 
 pub fn parse_json_invoke_parameters(
     parameters: &[String],
-) -> Result<Vec<OptionallyValueAndTypeJson>, WorkerError> {
+) -> Result<Vec<OptionallyValueAndTypeJson>, AgentError> {
     let optionally_typed_parameters: Vec<OptionallyValueAndTypeJson> = parameters
         .iter()
         .map(|param| serde_json::from_str(param))

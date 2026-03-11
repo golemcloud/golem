@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -36,11 +36,8 @@ impl RedisIndexedStorage {
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog { worker_id: _ } => format!("worker:oplog:{key}"),
-            IndexedStorageNamespace::CompressedOpLog {
-                worker_id: _,
-                level,
-            } => {
+            IndexedStorageNamespace::OpLog { agent_id: _ } => format!("worker:oplog:{key}"),
+            IndexedStorageNamespace::CompressedOpLog { agent_id: _, level } => {
                 format!("worker:c{level}-oplog:{key}")
             }
         }

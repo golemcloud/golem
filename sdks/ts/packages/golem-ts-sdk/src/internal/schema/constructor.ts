@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,7 +17,7 @@ import { ClassMetadata, ConstructorArg } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
 import * as WitType from '../mapping/types/WitType';
 
-import { DataSchema } from 'golem:agent/common';
+import { DataSchema } from 'golem:agent/common@1.5.0';
 import {
   getBinaryDescriptor,
   getMultimodalParamDetails,
@@ -71,6 +71,19 @@ const principalHandler: ConstructorParamHandler = {
     });
 
     collection.addPrincipalParameter(param.name);
+  },
+};
+
+const configHandler: ConstructorParamHandler = {
+  canHandle: (param) => param.type.kind === 'config',
+
+  handle: (agentClassName, param, _, collection) => {
+    AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+      tag: 'config',
+      tsType: param.type,
+    });
+
+    collection.addConfigParameter(param.name);
   },
 };
 
@@ -155,6 +168,7 @@ const analysedHandler: ConstructorParamHandler = {
 
 const HANDLERS: readonly ConstructorParamHandler[] = [
   principalHandler,
+  configHandler,
   unstructuredTextHandler,
   unstructuredBinaryHandler,
   analysedHandler,

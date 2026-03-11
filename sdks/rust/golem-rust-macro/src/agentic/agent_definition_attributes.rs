@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -110,7 +110,6 @@ pub fn parse_agent_definition_attributes(
                 }
             }
         }
-
         parse_http_expr(expr, &mut http)?;
     }
 

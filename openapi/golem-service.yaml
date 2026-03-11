@@ -176,7 +176,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/WorkerCreationRequest'
+              $ref: '#/components/schemas/AgentCreationRequest'
         required: true
       responses:
         '200':
@@ -230,7 +230,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}:
+  /v1/components/{component_id}/workers/{agent_name}:
     get:
       tags:
       - Worker
@@ -263,7 +263,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -276,7 +276,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerMetadataDto'
+                $ref: '#/components/schemas/AgentMetadataDto'
         '400':
           description: ''
           content:
@@ -339,7 +339,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -398,204 +398,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/invoke-and-await:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function and await its resolution
-      description: Supply the parameters in the request body as JSON.
-      operationId: invoke_and_await_function
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResult'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/invoke:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function
-      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-      operationId: invoke_function
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        description: name of the exported function to be invoked
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/complete:
+  /v1/components/{component_id}/workers/{agent_name}/complete:
     post:
       tags:
       - Worker
@@ -616,7 +419,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -681,7 +484,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/interrupt:
+  /v1/components/{component_id}/workers/{agent_name}/interrupt:
     post:
       tags:
       - Worker
@@ -703,7 +506,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -864,7 +667,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/resume:
+  /v1/components/{component_id}/workers/{agent_name}/resume:
     post:
       tags:
       - Worker
@@ -881,7 +684,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -940,7 +743,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/update:
+  /v1/components/{component_id}/workers/{agent_name}/update:
     post:
       tags:
       - Worker
@@ -957,7 +760,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1022,7 +825,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/oplog:
+  /v1/components/{component_id}/workers/{agent_name}/oplog:
     get:
       tags:
       - Worker
@@ -1039,7 +842,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1129,7 +932,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/files/{file_name}:
+  /v1/components/{component_id}/workers/{agent_name}/files/{file_name}:
     get:
       tags:
       - Worker
@@ -1146,7 +949,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1213,7 +1016,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/file-contents/{file_name}:
+  /v1/components/{component_id}/workers/{agent_name}/file-contents/{file_name}:
     get:
       tags:
       - Worker
@@ -1230,7 +1033,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1298,7 +1101,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/activate-plugin:
+  /v1/components/{component_id}/workers/{agent_name}/activate-plugin:
     post:
       tags:
       - Worker
@@ -1316,7 +1119,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1387,7 +1190,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/deactivate-plugin:
+  /v1/components/{component_id}/workers/{agent_name}/deactivate-plugin:
     post:
       tags:
       - Worker
@@ -1405,7 +1208,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1476,7 +1279,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/revert:
+  /v1/components/{component_id}/workers/{agent_name}/revert:
     post:
       tags:
       - Worker
@@ -1494,7 +1297,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1559,7 +1362,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/fork:
+  /v1/components/{component_id}/workers/{agent_name}/fork:
     post:
       tags:
       - Worker
@@ -1577,7 +1380,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1642,7 +1445,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/invocations/{idempotency_key}:
+  /v1/components/{component_id}/workers/{agent_name}/invocations/{idempotency_key}:
     delete:
       tags:
       - Worker
@@ -1660,7 +1463,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1727,7 +1530,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/connect:
+  /v1/components/{component_id}/workers/{agent_name}/connect:
     get:
       tags:
       - Worker
@@ -1744,7 +1547,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -2629,6 +2432,372 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/PluginRegistrationDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/agent-secrets:
+    get:
+      tags:
+      - RegistryService
+      - EnvironmentShares
+      - Environment
+      summary: Get all agent secrets of the environment
+      operationId: get_environment_agent_secrets
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_AgentSecretDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - RegistryService
+      - EnvironmentShares
+      - Environment
+      summary: Create a new agent secret
+      operationId: create_agent_secret
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AgentSecretCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AgentSecretDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/agent-secrets/{agent_secret_id}:
+    get:
+      tags:
+      - RegistryService
+      - EnvironmentShares
+      summary: Get agent secret by id.
+      operationId: get_agent_secret
+      parameters:
+      - in: path
+        name: agent_secret_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AgentSecretDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    patch:
+      tags:
+      - RegistryService
+      - EnvironmentShares
+      summary: Update agent secret
+      operationId: update_agent_secret
+      parameters:
+      - in: path
+        name: agent_secret_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AgentSecretUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AgentSecretDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/agent-secret/{agent_secret_id}:
+    delete:
+      tags:
+      - RegistryService
+      - EnvironmentShares
+      summary: Delete agent secret
+      operationId: delete_agent_secret
+      parameters:
+      - in: path
+        name: agent_secret_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/AgentSecretDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6665,6 +6834,691 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/mcp-deployments:
+    get:
+      tags:
+      - RegistryService
+      - McpDeployment
+      - Environment
+      summary: List MCP deployments in the environment
+      operationId: list_mcp_deployments_in_environment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_McpDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - RegistryService
+      - McpDeployment
+      - Environment
+      summary: Create a new MCP deployment in the environment
+      operationId: create_mcp_deployment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/McpDeploymentCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-deployments/{domain}:
+    get:
+      tags:
+      - RegistryService
+      - McpDeployment
+      - Environment
+      summary: Get MCP deployment by domain in the environment
+      operationId: get_mcp_deployment_in_environment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: domain
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/mcp-deployments/{mcp_deployment_id}:
+    get:
+      tags:
+      - RegistryService
+      - McpDeployment
+      summary: Get MCP deployment by ID
+      operationId: get_mcp_deployment
+      parameters:
+      - in: path
+        name: mcp_deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - McpDeployment
+      summary: Delete MCP deployment
+      operationId: delete_mcp_deployment
+      parameters:
+      - in: path
+        name: mcp_deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    patch:
+      tags:
+      - RegistryService
+      - McpDeployment
+      summary: Update MCP deployment
+      operationId: update_mcp_deployment
+      parameters:
+      - in: path
+        name: mcp_deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/McpDeploymentUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/mcp-deployment/{mcp_deployment_id}/revisions/{revision}:
+    get:
+      tags:
+      - RegistryService
+      - McpDeployment
+      summary: Get a specific MCP deployment revision
+      operationId: get_mcp_deployment_revision
+      parameters:
+      - in: path
+        name: mcp_deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-deployments/{domain}:
+    get:
+      tags:
+      - RegistryService
+      - McpDeployment
+      - Environment
+      - Deployment
+      summary: Get MCP deployment by domain in the deployment
+      operationId: get_mcp_deployment_in_deployment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: domain
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-deployments:
+    get:
+      tags:
+      - RegistryService
+      - McpDeployment
+      - Environment
+      - Deployment
+      summary: List MCP deployments by domain in the deployment
+      operationId: list_mcp_deployments_in_deployment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_McpDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/login/oauth2:
     post:
       tags:
@@ -7944,11 +8798,262 @@ components:
     ActivatePluginResponse:
       title: ActivatePluginResponse
       type: object
+    AgentAndFilter:
+      title: AgentAndFilter
+      type: object
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentFilter'
+      required:
+      - filters
+    AgentConfigVarsFilter:
+      title: AgentConfigVarsFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
+    AgentCreatedAtFilter:
+      title: AgentCreatedAtFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: string
+          format: date-time
+      required:
+      - comparator
+      - value
+    AgentCreationRequest:
+      title: AgentCreationRequest
+      type: object
+      properties:
+        name:
+          type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        localAgentConfig:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
+      required:
+      - name
+      - env
+    AgentEnvFilter:
+      title: AgentEnvFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
+    AgentFilter:
+      discriminator:
+        propertyName: type
+        mapping:
+          Name: '#/components/schemas/AgentFilter_AgentNameFilter'
+          Status: '#/components/schemas/AgentFilter_AgentStatusFilter'
+          Revision: '#/components/schemas/AgentFilter_AgentRevisionFilter'
+          CreatedAt: '#/components/schemas/AgentFilter_AgentCreatedAtFilter'
+          Env: '#/components/schemas/AgentFilter_AgentEnvFilter'
+          And: '#/components/schemas/AgentFilter_AgentAndFilter'
+          Or: '#/components/schemas/AgentFilter_AgentOrFilter'
+          Not: '#/components/schemas/AgentFilter_AgentNotFilter'
+          ConfigVars: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AgentFilter_AgentNameFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentStatusFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentRevisionFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentCreatedAtFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentEnvFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentAndFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentOrFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentNotFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+    AgentFilter_AgentAndFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: And
+            type: string
+            enum:
+            - And
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentAndFilter'
+    AgentFilter_AgentConfigVarsFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ConfigVars
+            type: string
+            enum:
+            - ConfigVars
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentConfigVarsFilter'
+    AgentFilter_AgentCreatedAtFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CreatedAt
+            type: string
+            enum:
+            - CreatedAt
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentCreatedAtFilter'
+    AgentFilter_AgentEnvFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Env
+            type: string
+            enum:
+            - Env
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentEnvFilter'
+    AgentFilter_AgentNameFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Name
+            type: string
+            enum:
+            - Name
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentNameFilter'
+    AgentFilter_AgentNotFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Not
+            type: string
+            enum:
+            - Not
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentNotFilter'
+    AgentFilter_AgentOrFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Or
+            type: string
+            enum:
+            - Or
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentOrFilter'
+    AgentFilter_AgentRevisionFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Revision
+            type: string
+            enum:
+            - Revision
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentRevisionFilter'
+    AgentFilter_AgentStatusFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Status
+            type: string
+            enum:
+            - Status
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentStatusFilter'
+    AgentId:
+      title: AgentId
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentId:
+          type: string
+      required:
+      - componentId
+      - agentId
+    AgentInitializationParameters:
+      title: AgentInitializationParameters
+      type: object
+      properties:
+        idempotencyKey:
+          type: string
+        constructorParameters:
+          $ref: '#/components/schemas/DataValue'
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+      required:
+      - idempotencyKey
+      - constructorParameters
+      - traceId
+      - traceStates
+      - invocationContext
     AgentInvocationMode:
       type: string
       enum:
       - await
       - schedule
+    AgentInvocationOutputParameters:
+      title: AgentInvocationOutputParameters
+      type: object
+      properties:
+        output:
+          $ref: '#/components/schemas/DataValue'
+      required:
+      - output
     AgentInvocationRequest:
       title: AgentInvocationRequest
       type: object
@@ -7975,6 +9080,11 @@ components:
           format: date-time
         idempotencyKey:
           type: string
+        deploymentRevision:
+          type: integer
+          format: int64
+        ownerAccountEmail:
+          type: string
       required:
       - appName
       - envName
@@ -7989,6 +9099,211 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
+    AgentMetadataDto:
+      title: AgentMetadataDto
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        environmentId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          $ref: '#/components/schemas/AgentStatus'
+        componentRevision:
+          type: integer
+          format: uint64
+        retryCount:
+          type: integer
+          format: uint32
+        pendingInvocationCount:
+          type: integer
+          format: uint64
+        updates:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateRecord'
+        createdAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+        componentSize:
+          type: integer
+          format: uint64
+        totalLinearMemorySize:
+          type: integer
+          format: uint64
+        exportedResourceInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportedResourceMetadata'
+        activePlugins:
+          type: array
+          items:
+            title: |-
+              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+              There can only be a single plugin with a given priority installed to a component.
+            type: integer
+            format: int32
+        skippedRegions:
+          description: |-
+            Oplog regions that are skipped during the worker's state recovery, but describe
+            the history of the worker. For example if an atomic region gets restarted, its partially
+            recorded oplog entries will be skipped on retry.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+        deletedRegions:
+          description: Oplog regions permanently deleted from the workers using the revert functionality.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+      required:
+      - agentId
+      - environmentId
+      - createdBy
+      - env
+      - configVars
+      - status
+      - componentRevision
+      - retryCount
+      - pendingInvocationCount
+      - updates
+      - createdAt
+      - componentSize
+      - totalLinearMemorySize
+      - exportedResourceInstances
+      - activePlugins
+      - skippedRegions
+      - deletedRegions
+    AgentMethodInvocationParameters:
+      title: AgentMethodInvocationParameters
+      type: object
+      properties:
+        idempotencyKey:
+          type: string
+        methodName:
+          type: string
+        functionInput:
+          $ref: '#/components/schemas/DataValue'
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+      required:
+      - idempotencyKey
+      - methodName
+      - functionInput
+      - traceId
+      - traceStates
+      - invocationContext
+    AgentNameFilter:
+      title: AgentNameFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - comparator
+      - value
+    AgentNotFilter:
+      title: AgentNotFilter
+      type: object
+      properties:
+        filter:
+          $ref: '#/components/schemas/AgentFilter'
+      required:
+      - filter
+    AgentOrFilter:
+      title: AgentOrFilter
+      type: object
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentFilter'
+      required:
+      - filters
+    AgentResourceDescription:
+      title: AgentResourceDescription
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
+    AgentRevisionFilter:
+      title: AgentRevisionFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: integer
+          format: uint64
+      required:
+      - comparator
+      - value
+    AgentStatus:
+      description: |-
+        Represents last known status of a worker
+
+        This is always recorded together with the current oplog index, and it can only be used
+        as a source of truth if there are no newer oplog entries since the record.
+      type: string
+      enum:
+      - Running
+      - Idle
+      - Suspended
+      - Interrupted
+      - Retrying
+      - Failed
+      - Exited
+    AgentStatusFilter:
+      title: AgentStatusFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          $ref: '#/components/schemas/AgentStatus'
+      required:
+      - comparator
+      - value
+    AgentUpdateMode:
+      type: string
+      enum:
+      - automatic
+      - manual
     AnalysedResourceMode:
       type: string
       enum:
@@ -8308,6 +9623,14 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/TypeVariant'
+    BinaryDescriptor:
+      title: BinaryDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/BinaryType'
     BinaryReference:
       discriminator:
         propertyName: type
@@ -8400,12 +9723,112 @@ components:
       enum:
       - read-only
       - read-write
+    ComponentModelElementValue:
+      title: ComponentModelElementValue
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/ValueAndType'
+      required:
+      - value
+    DataValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataValue_ElementValues'
+          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataValue_ElementValues'
+      - $ref: '#/components/schemas/DataValue_NamedElementValues'
+    DataValue_ElementValues:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Tuple
+            type: string
+            enum:
+            - Tuple
+        required:
+        - type
+      - $ref: '#/components/schemas/ElementValues'
+    DataValue_NamedElementValues:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Multimodal
+            type: string
+            enum:
+            - Multimodal
+        required:
+        - type
+      - $ref: '#/components/schemas/NamedElementValues'
     DeactivatePluginResponse:
       title: DeactivatePluginResponse
       type: object
     DeleteWorkerResponse:
       title: DeleteWorkerResponse
       type: object
+    ElementValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementValue_ComponentModelElementValue'
+          UnstructuredText: '#/components/schemas/ElementValue_UnstructuredTextElementValue'
+          UnstructuredBinary: '#/components/schemas/ElementValue_UnstructuredBinaryElementValue'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementValue_ComponentModelElementValue'
+      - $ref: '#/components/schemas/ElementValue_UnstructuredTextElementValue'
+      - $ref: '#/components/schemas/ElementValue_UnstructuredBinaryElementValue'
+    ElementValue_ComponentModelElementValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentModel
+            type: string
+            enum:
+            - ComponentModel
+        required:
+        - type
+      - $ref: '#/components/schemas/ComponentModelElementValue'
+    ElementValue_UnstructuredBinaryElementValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredBinary
+            type: string
+            enum:
+            - UnstructuredBinary
+        required:
+        - type
+      - $ref: '#/components/schemas/UnstructuredBinaryElementValue'
+    ElementValue_UnstructuredTextElementValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredText
+            type: string
+            enum:
+            - UnstructuredText
+        required:
+        - type
+      - $ref: '#/components/schemas/UnstructuredTextElementValue'
+    ElementValues:
+      title: ElementValues
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementValue'
+      required:
+      - elements
     Empty:
       title: Empty
       type: object
@@ -8437,36 +9860,6 @@ components:
             type: string
       required:
       - errors
-    ExportedFunctionParameters:
-      title: ExportedFunctionParameters
-      type: object
-      properties:
-        idempotencyKey:
-          type: string
-        fullFunctionName:
-          type: string
-        functionInput:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
-        traceId:
-          type: string
-        traceStates:
-          type: array
-          items:
-            type: string
-        invocationContext:
-          type: array
-          items:
-            type: array
-            items:
-              $ref: '#/components/schemas/PublicSpanData'
-      required:
-      - idempotencyKey
-      - fullFunctionName
-      - traceId
-      - traceStates
-      - invocationContext
     ExportedResourceMetadata:
       title: ExportedResourceMetadata
       type: object
@@ -8475,7 +9868,7 @@ components:
           type: integer
           format: uint64
         description:
-          $ref: '#/components/schemas/WorkerResourceDescription'
+          $ref: '#/components/schemas/AgentResourceDescription'
       required:
       - key
       - description
@@ -8494,6 +9887,12 @@ components:
       required:
       - timestamp
       - targetRevision
+    FallibleResultParameters:
+      title: FallibleResultParameters
+      type: object
+      properties:
+        error:
+          type: string
     FilterComparator:
       type: string
       enum:
@@ -8532,13 +9931,13 @@ components:
       title: ForkWorkerRequest
       type: object
       properties:
-        targetWorkerId:
-          $ref: '#/components/schemas/WorkerId'
+        targetAgentId:
+          $ref: '#/components/schemas/AgentId'
         oplogIndexCutoff:
           type: integer
           format: uint64
       required:
-      - targetWorkerId
+      - targetAgentId
       - oplogIndexCutoff
     ForkWorkerResponse:
       title: ForkWorkerResponse
@@ -8576,25 +9975,6 @@ components:
     InterruptResponse:
       title: InterruptResponse
       type: object
-    InvokeParameters:
-      title: InvokeParameters
-      type: object
-      properties:
-        params:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndOptionalType'
-      required:
-      - params
-    InvokeResponse:
-      title: InvokeResponse
-      type: object
-    InvokeResult:
-      title: InvokeResult
-      type: object
-      properties:
-        result:
-          $ref: '#/components/schemas/ValueAndType'
     JsonComponentModelValue:
       title: JsonComponentModelValue
       type: object
@@ -8609,6 +9989,14 @@ components:
         data: {}
       required:
       - data
+    LoadSnapshotParameters:
+      title: LoadSnapshotParameters
+      type: object
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/PublicSnapshotData'
+      required:
+      - snapshot
     LogLevel:
       description: Worker log levels including the special stdout and stderr channels
       type: string
@@ -8651,6 +10039,31 @@ components:
       required:
       - name
       - typ
+    NamedElementValue:
+      title: NamedElementValue
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/ElementValue'
+        schemaIndex:
+          type: integer
+          format: uint32
+      required:
+      - name
+      - value
+      - schemaIndex
+    NamedElementValues:
+      title: NamedElementValues
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementValue'
+      required:
+      - elements
     OplogCursor:
       title: OplogCursor
       type: object
@@ -8677,6 +10090,19 @@ components:
       required:
       - start
       - end
+    ParsedWorkerCreationLocalAgentConfigEntry:
+      title: ParsedWorkerCreationLocalAgentConfigEntry
+      type: object
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/ValueAndType'
+      required:
+      - key
+      - value
     PendingUpdate:
       title: PendingUpdate
       type: object
@@ -8719,6 +10145,170 @@ components:
       - pluginName
       - pluginVersion
       - parameters
+    ProcessOplogEntriesParameters:
+      title: ProcessOplogEntriesParameters
+      type: object
+      properties:
+        idempotencyKey:
+          type: string
+      required:
+      - idempotencyKey
+    PublicAgentInvocation:
+      discriminator:
+        propertyName: type
+        mapping:
+          AgentInitialization: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
+          AgentMethodInvocation: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
+          SaveSnapshot: '#/components/schemas/PublicAgentInvocation_Empty'
+          LoadSnapshot: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
+          ManualUpdate: '#/components/schemas/PublicAgentInvocation_ManualUpdateParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_Empty'
+      - $ref: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_ManualUpdateParameters'
+    PublicAgentInvocationResult:
+      discriminator:
+        propertyName: type
+        mapping:
+          AgentInitialization: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+          AgentMethod: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+          ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
+          LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+          SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+    PublicAgentInvocationResult_AgentInvocationOutputParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentMethod
+            type: string
+            enum:
+            - AgentMethod
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentInvocationOutputParameters'
+    PublicAgentInvocationResult_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ManualUpdate
+            type: string
+            enum:
+            - ManualUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicAgentInvocationResult_FallibleResultParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ProcessOplogEntries
+            type: string
+            enum:
+            - ProcessOplogEntries
+        required:
+        - type
+      - $ref: '#/components/schemas/FallibleResultParameters'
+    PublicAgentInvocationResult_SaveSnapshotResultParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SaveSnapshot
+            type: string
+            enum:
+            - SaveSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/SaveSnapshotResultParameters'
+    PublicAgentInvocation_AgentInitializationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInitialization
+            type: string
+            enum:
+            - AgentInitialization
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentInitializationParameters'
+    PublicAgentInvocation_AgentMethodInvocationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentMethodInvocation
+            type: string
+            enum:
+            - AgentMethodInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentMethodInvocationParameters'
+    PublicAgentInvocation_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SaveSnapshot
+            type: string
+            enum:
+            - SaveSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicAgentInvocation_LoadSnapshotParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: LoadSnapshot
+            type: string
+            enum:
+            - LoadSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/LoadSnapshotParameters'
+    PublicAgentInvocation_ManualUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ManualUpdate
+            type: string
+            enum:
+            - ManualUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/ManualUpdateParameters'
+    PublicAgentInvocation_ProcessOplogEntriesParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ProcessOplogEntries
+            type: string
+            enum:
+            - ProcessOplogEntries
+        required:
+        - type
+      - $ref: '#/components/schemas/ProcessOplogEntriesParameters'
     PublicAttribute:
       title: PublicAttribute
       type: object
@@ -8842,9 +10432,9 @@ components:
         propertyName: type
         mapping:
           Create: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
-          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
-          ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
+          HostCall: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
+          AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
+          AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
@@ -8856,7 +10446,7 @@ components:
           EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
           BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
           EndRemoteWrite: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
-          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
+          PendingAgentInvocation: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
           PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
@@ -8882,9 +10472,9 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
@@ -8896,7 +10486,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
@@ -8943,6 +10533,30 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#ActivatePluginParams'
+    PublicOplogEntry_r#AgentInvocationFinishedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInvocationFinished
+            type: string
+            enum:
+            - AgentInvocationFinished
+        required:
+        - type
+      - $ref: '#/components/schemas/r#AgentInvocationFinishedParams'
+    PublicOplogEntry_r#AgentInvocationStartedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInvocationStarted
+            type: string
+            enum:
+            - AgentInvocationStarted
+        required:
+        - type
+      - $ref: '#/components/schemas/r#AgentInvocationStartedParams'
     PublicOplogEntry_r#BeginAtomicRegionParams:
       allOf:
       - type: object
@@ -9123,30 +10737,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#ExitedParams'
-    PublicOplogEntry_r#ExportedFunctionCompletedParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ExportedFunctionCompleted
-            type: string
-            enum:
-            - ExportedFunctionCompleted
-        required:
-        - type
-      - $ref: '#/components/schemas/r#ExportedFunctionCompletedParams'
-    PublicOplogEntry_r#ExportedFunctionInvokedParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ExportedFunctionInvoked
-            type: string
-            enum:
-            - ExportedFunctionInvoked
-        required:
-        - type
-      - $ref: '#/components/schemas/r#ExportedFunctionInvokedParams'
     PublicOplogEntry_r#FailedUpdateParams:
       allOf:
       - type: object
@@ -9183,18 +10773,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#GrowMemoryParams'
-    PublicOplogEntry_r#ImportedFunctionInvokedParams:
+    PublicOplogEntry_r#HostCallParams:
       allOf:
       - type: object
         properties:
           type:
-            example: ImportedFunctionInvoked
+            example: HostCall
             type: string
             enum:
-            - ImportedFunctionInvoked
+            - HostCall
         required:
         - type
-      - $ref: '#/components/schemas/r#ImportedFunctionInvokedParams'
+      - $ref: '#/components/schemas/r#HostCallParams'
     PublicOplogEntry_r#InterruptedParams:
       allOf:
       - type: object
@@ -9243,6 +10833,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#NoOpParams'
+    PublicOplogEntry_r#PendingAgentInvocationParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PendingAgentInvocation
+            type: string
+            enum:
+            - PendingAgentInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/r#PendingAgentInvocationParams'
     PublicOplogEntry_r#PendingUpdateParams:
       allOf:
       - type: object
@@ -9255,18 +10857,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#PendingUpdateParams'
-    PublicOplogEntry_r#PendingWorkerInvocationParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PendingWorkerInvocation
-            type: string
-            enum:
-            - PendingWorkerInvocation
-        required:
-        - type
-      - $ref: '#/components/schemas/r#PendingWorkerInvocationParams'
     PublicOplogEntry_r#PreCommitRemoteTransactionParams:
       allOf:
       - type: object
@@ -9513,40 +11103,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
-    PublicWorkerInvocation:
-      discriminator:
-        propertyName: type
-        mapping:
-          ExportedFunction: '#/components/schemas/PublicWorkerInvocation_ExportedFunctionParameters'
-          ManualUpdate: '#/components/schemas/PublicWorkerInvocation_ManualUpdateParameters'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PublicWorkerInvocation_ExportedFunctionParameters'
-      - $ref: '#/components/schemas/PublicWorkerInvocation_ManualUpdateParameters'
-    PublicWorkerInvocation_ExportedFunctionParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ExportedFunction
-            type: string
-            enum:
-            - ExportedFunction
-        required:
-        - type
-      - $ref: '#/components/schemas/ExportedFunctionParameters'
-    PublicWorkerInvocation_ManualUpdateParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ManualUpdate
-            type: string
-            enum:
-            - ManualUpdate
-        required:
-        - type
-      - $ref: '#/components/schemas/ManualUpdateParameters'
     RawSnapshotData:
       title: RawSnapshotData
       type: object
@@ -9619,6 +11175,14 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/RevertToOplogIndex'
+    SaveSnapshotResultParameters:
+      title: SaveSnapshotResultParameters
+      type: object
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/PublicSnapshotData'
+      required:
+      - snapshot
     ScanCursor:
       title: ScanCursor
       type: object
@@ -9675,6 +11239,14 @@ components:
       required:
       - timestamp
       - targetRevision
+    TextDescriptor:
+      title: TextDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextType'
     TextReference:
       discriminator:
         propertyName: type
@@ -9896,6 +11468,28 @@ components:
             $ref: '#/components/schemas/NameOptionTypePair'
       required:
       - cases
+    UnstructuredBinaryElementValue:
+      title: UnstructuredBinaryElementValue
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/BinaryReference'
+        descriptor:
+          $ref: '#/components/schemas/BinaryDescriptor'
+      required:
+      - value
+      - descriptor
+    UnstructuredTextElementValue:
+      title: UnstructuredTextElementValue
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/TextReference'
+        descriptor:
+          $ref: '#/components/schemas/TextDescriptor'
+      required:
+      - value
+      - descriptor
     UntypedJsonDataValue:
       discriminator:
         propertyName: type
@@ -10062,7 +11656,7 @@ components:
       type: object
       properties:
         mode:
-          $ref: '#/components/schemas/WorkerUpdateMode'
+          $ref: '#/components/schemas/AgentUpdateMode'
         targetRevision:
           type: integer
           format: uint64
@@ -10083,14 +11677,6 @@ components:
           type: string
       required:
       - value
-    ValueAndOptionalType:
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
-      required:
-      - value
     ValueAndType:
       type: object
       properties:
@@ -10108,86 +11694,30 @@ components:
           type: string
       required:
       - version
-    WorkerAndFilter:
-      title: WorkerAndFilter
+    WorkerCreationLocalAgentConfigEntry:
+      title: WorkerCreationLocalAgentConfigEntry
       type: object
       properties:
-        filters:
+        key:
           type: array
           items:
-            $ref: '#/components/schemas/WorkerFilter'
-      required:
-      - filters
-    WorkerConfigVarsFilter:
-      title: WorkerConfigVarsFilter
-      type: object
-      properties:
-        name:
-          type: string
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
-      required:
-      - name
-      - comparator
-      - value
-    WorkerCreatedAtFilter:
-      title: WorkerCreatedAtFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/FilterComparator'
-        value:
-          type: string
-          format: date-time
-      required:
-      - comparator
-      - value
-    WorkerCreationRequest:
-      title: WorkerCreationRequest
-      type: object
-      properties:
-        name:
-          type: string
-        env:
-          type: object
-          additionalProperties:
             type: string
-        configVars:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
+        value: {}
       required:
-      - name
-      - env
+      - key
+      - value
     WorkerCreationResponse:
       title: WorkerCreationResponse
       type: object
       properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         componentRevision:
           type: integer
           format: uint64
       required:
-      - workerId
+      - agentId
       - componentRevision
-    WorkerEnvFilter:
-      title: WorkerEnvFilter
-      type: object
-      properties:
-        name:
-          type: string
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
-      required:
-      - name
-      - comparator
-      - value
     WorkerErrorDetails:
       title: WorkerErrorDetails
       description: Detail in case the error was caused by the worker failing
@@ -10202,332 +11732,12 @@ components:
       required:
       - cause
       - stderr
-    WorkerFilter:
-      discriminator:
-        propertyName: type
-        mapping:
-          Name: '#/components/schemas/WorkerFilter_WorkerNameFilter'
-          Status: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-          Revision: '#/components/schemas/WorkerFilter_WorkerRevisionFilter'
-          CreatedAt: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
-          Env: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
-          And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
-          Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
-          Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
-          ConfigVars: '#/components/schemas/WorkerFilter_WorkerConfigVarsFilter'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerRevisionFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerConfigVarsFilter'
-    WorkerFilter_WorkerAndFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: And
-            type: string
-            enum:
-            - And
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerAndFilter'
-    WorkerFilter_WorkerConfigVarsFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ConfigVars
-            type: string
-            enum:
-            - ConfigVars
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerConfigVarsFilter'
-    WorkerFilter_WorkerCreatedAtFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: CreatedAt
-            type: string
-            enum:
-            - CreatedAt
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerCreatedAtFilter'
-    WorkerFilter_WorkerEnvFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Env
-            type: string
-            enum:
-            - Env
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerEnvFilter'
-    WorkerFilter_WorkerNameFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Name
-            type: string
-            enum:
-            - Name
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerNameFilter'
-    WorkerFilter_WorkerNotFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Not
-            type: string
-            enum:
-            - Not
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerNotFilter'
-    WorkerFilter_WorkerOrFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Or
-            type: string
-            enum:
-            - Or
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerOrFilter'
-    WorkerFilter_WorkerRevisionFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Revision
-            type: string
-            enum:
-            - Revision
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerRevisionFilter'
-    WorkerFilter_WorkerStatusFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Status
-            type: string
-            enum:
-            - Status
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerStatusFilter'
-    WorkerId:
-      title: WorkerId
-      type: object
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        workerName:
-          type: string
-      required:
-      - componentId
-      - workerName
-    WorkerMetadataDto:
-      title: WorkerMetadataDto
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        environmentId:
-          type: string
-          format: uuid
-        createdBy:
-          type: string
-          format: uuid
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
-        status:
-          $ref: '#/components/schemas/WorkerStatus'
-        componentRevision:
-          type: integer
-          format: uint64
-        retryCount:
-          type: integer
-          format: uint32
-        pendingInvocationCount:
-          type: integer
-          format: uint64
-        updates:
-          type: array
-          items:
-            $ref: '#/components/schemas/UpdateRecord'
-        createdAt:
-          type: string
-          format: date-time
-        lastError:
-          type: string
-        componentSize:
-          type: integer
-          format: uint64
-        totalLinearMemorySize:
-          type: integer
-          format: uint64
-        exportedResourceInstances:
-          type: array
-          items:
-            $ref: '#/components/schemas/ExportedResourceMetadata'
-        activePlugins:
-          type: array
-          items:
-            title: |-
-              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-              There can only be a single plugin with a given priority installed to a component.
-            type: integer
-            format: int32
-        skippedRegions:
-          description: |-
-            Oplog regions that are skipped during the worker's state recovery, but describe
-            the history of the worker. For example if an atomic region gets restarted, its partially
-            recorded oplog entries will be skipped on retry.
-          type: array
-          items:
-            $ref: '#/components/schemas/OplogRegion'
-        deletedRegions:
-          description: Oplog regions permanently deleted from the workers using the revert functionality.
-          type: array
-          items:
-            $ref: '#/components/schemas/OplogRegion'
-      required:
-      - workerId
-      - environmentId
-      - createdBy
-      - env
-      - configVars
-      - status
-      - componentRevision
-      - retryCount
-      - pendingInvocationCount
-      - updates
-      - createdAt
-      - componentSize
-      - totalLinearMemorySize
-      - exportedResourceInstances
-      - activePlugins
-      - skippedRegions
-      - deletedRegions
-    WorkerNameFilter:
-      title: WorkerNameFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
-      required:
-      - comparator
-      - value
-    WorkerNotFilter:
-      title: WorkerNotFilter
-      type: object
-      properties:
-        filter:
-          $ref: '#/components/schemas/WorkerFilter'
-      required:
-      - filter
-    WorkerOrFilter:
-      title: WorkerOrFilter
-      type: object
-      properties:
-        filters:
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkerFilter'
-      required:
-      - filters
-    WorkerResourceDescription:
-      title: WorkerResourceDescription
-      type: object
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        resourceOwner:
-          type: string
-        resourceName:
-          type: string
-      required:
-      - createdAt
-      - resourceOwner
-      - resourceName
-    WorkerRevisionFilter:
-      title: WorkerRevisionFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/FilterComparator'
-        value:
-          type: integer
-          format: uint64
-      required:
-      - comparator
-      - value
-    WorkerStatus:
-      description: |-
-        Represents last known status of a worker
-
-        This is always recorded together with the current oplog index, and it can only be used
-        as a source of truth if there are no newer oplog entries since the record.
-      type: string
-      enum:
-      - Running
-      - Idle
-      - Suspended
-      - Interrupted
-      - Retrying
-      - Failed
-      - Exited
-    WorkerStatusFilter:
-      title: WorkerStatusFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/FilterComparator'
-        value:
-          $ref: '#/components/schemas/WorkerStatus'
-      required:
-      - comparator
-      - value
-    WorkerUpdateMode:
-      type: string
-      enum:
-      - automatic
-      - manual
     WorkersMetadataRequest:
       title: WorkersMetadataRequest
       type: object
       properties:
         filter:
-          $ref: '#/components/schemas/WorkerFilter'
+          $ref: '#/components/schemas/AgentFilter'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
         count:
@@ -10542,7 +11752,7 @@ components:
         workers:
           type: array
           items:
-            $ref: '#/components/schemas/WorkerMetadataDto'
+            $ref: '#/components/schemas/AgentMetadataDto'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
       required:
@@ -10573,6 +11783,38 @@ components:
       required:
       - timestamp
       - plugin
+    r#AgentInvocationFinishedParams:
+      title: r#AgentInvocationFinishedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        result:
+          $ref: '#/components/schemas/PublicAgentInvocationResult'
+        consumedFuel:
+          type: integer
+          format: int64
+        componentRevision:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - result
+      - consumedFuel
+      - componentRevision
+    r#AgentInvocationStartedParams:
+      title: r#AgentInvocationStartedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocation:
+          $ref: '#/components/schemas/PublicAgentInvocation'
+      required:
+      - timestamp
+      - invocation
     r#BeginAtomicRegionParams:
       title: r#BeginAtomicRegionParams
       type: object
@@ -10659,8 +11901,8 @@ components:
         timestamp:
           type: string
           format: date-time
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         componentRevision:
           type: integer
           format: uint64
@@ -10675,7 +11917,7 @@ components:
           type: string
           format: uuid
         parent:
-          $ref: '#/components/schemas/WorkerId'
+          $ref: '#/components/schemas/AgentId'
         componentSize:
           type: integer
           format: uint64
@@ -10690,12 +11932,16 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParsedWorkerCreationLocalAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
       required:
       - timestamp
-      - workerId
+      - agentId
       - componentRevision
       - env
       - createdBy
@@ -10704,6 +11950,7 @@ components:
       - initialTotalLinearMemorySize
       - initialActivePlugins
       - configVars
+      - localAgentConfig
     r#CreateResourceParams:
       title: r#CreateResourceParams
       type: object
@@ -10805,56 +12052,6 @@ components:
           format: date-time
       required:
       - timestamp
-    r#ExportedFunctionCompletedParams:
-      title: r#ExportedFunctionCompletedParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        response:
-          $ref: '#/components/schemas/ValueAndType'
-        consumedFuel:
-          type: integer
-          format: int64
-      required:
-      - timestamp
-      - consumedFuel
-    r#ExportedFunctionInvokedParams:
-      title: r#ExportedFunctionInvokedParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        functionName:
-          type: string
-        request:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
-        idempotencyKey:
-          type: string
-        traceId:
-          type: string
-        traceStates:
-          type: array
-          items:
-            type: string
-        invocationContext:
-          type: array
-          items:
-            type: array
-            items:
-              $ref: '#/components/schemas/PublicSpanData'
-      required:
-      - timestamp
-      - functionName
-      - request
-      - idempotencyKey
-      - traceId
-      - traceStates
-      - invocationContext
     r#FailedUpdateParams:
       title: r#FailedUpdateParams
       type: object
@@ -10895,8 +12092,8 @@ components:
       required:
       - timestamp
       - delta
-    r#ImportedFunctionInvokedParams:
-      title: r#ImportedFunctionInvokedParams
+    r#HostCallParams:
+      title: r#HostCallParams
       type: object
       properties:
         timestamp:
@@ -10964,6 +12161,18 @@ components:
           format: date-time
       required:
       - timestamp
+    r#PendingAgentInvocationParams:
+      title: r#PendingAgentInvocationParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocation:
+          $ref: '#/components/schemas/PublicAgentInvocation'
+      required:
+      - timestamp
+      - invocation
     r#PendingUpdateParams:
       title: r#PendingUpdateParams
       type: object
@@ -10980,18 +12189,6 @@ components:
       - timestamp
       - targetRevision
       - description
-    r#PendingWorkerInvocationParams:
-      title: r#PendingWorkerInvocationParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        invocation:
-          $ref: '#/components/schemas/PublicWorkerInvocation'
-      required:
-      - timestamp
-      - invocation
     r#PreCommitRemoteTransactionParams:
       title: r#PreCommitRemoteTransactionParams
       type: object
@@ -11347,6 +12544,57 @@ components:
       enum:
       - Durable
       - Ephemeral
+    AgentSecretCreation:
+      title: AgentSecretCreation
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        secretType:
+          $ref: '#/components/schemas/AnalysedType'
+        secretValue: {}
+      required:
+      - path
+      - secretType
+    AgentSecretDto:
+      title: AgentSecretDto
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        path:
+          type: array
+          items:
+            type: string
+        revision:
+          type: integer
+          format: uint64
+        secretType:
+          $ref: '#/components/schemas/AnalysedType'
+        secretValue: {}
+      required:
+      - id
+      - environmentId
+      - path
+      - revision
+      - secretType
+    AgentSecretUpdate:
+      title: AgentSecretUpdate
+      type: object
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        secretValue:
+          $ref: '#/components/schemas/OptionalFieldUpdate_any'
+      required:
+      - currentRevision
     AgentType:
       title: AgentType
       type: object
@@ -11354,6 +12602,8 @@ components:
         typeName:
           type: string
         description:
+          type: string
+        sourceLanguage:
           type: string
         constructor:
           $ref: '#/components/schemas/AgentConstructor'
@@ -11371,14 +12621,20 @@ components:
           $ref: '#/components/schemas/HttpMountDetails'
         snapshotting:
           $ref: '#/components/schemas/Snapshotting'
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigKeyValueType'
       required:
       - typeName
       - description
+      - sourceLanguage
       - constructor
       - methods
       - dependencies
       - mode
       - snapshotting
+      - config
     AnalysedExport:
       discriminator:
         propertyName: type
@@ -11511,14 +12767,6 @@ components:
           type: string
       required:
       - currentRevision
-    BinaryDescriptor:
-      title: BinaryDescriptor
-      type: object
-      properties:
-        restrictions:
-          type: array
-          items:
-            $ref: '#/components/schemas/BinaryType'
     ComponentCreation:
       title: ComponentCreation
       type: object
@@ -11540,6 +12788,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalAgentConfigEntry'
         agentTypes:
           default: []
           type: array
@@ -11588,10 +12841,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InitialComponentFile'
-        originalFiles:
-          type: array
-          items:
-            $ref: '#/components/schemas/InitialComponentFile'
         installedPlugins:
           type: array
           items:
@@ -11600,18 +12849,14 @@ components:
           type: object
           additionalProperties:
             type: string
-        originalEnv:
-          type: object
-          additionalProperties:
-            type: string
         configVars:
           type: object
           additionalProperties:
             type: string
-        originalConfigVars:
-          type: object
-          additionalProperties:
-            type: string
+        localAgentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalAgentConfigEntry'
         wasmHash:
           type: string
           format: hash
@@ -11627,12 +12872,10 @@ components:
       - metadata
       - createdAt
       - files
-      - originalFiles
       - installedPlugins
       - env
-      - originalEnv
       - configVars
-      - originalConfigVars
+      - localAgentConfig
       - wasmHash
     ComponentFileOptions:
       title: ComponentFileOptions
@@ -11712,6 +12955,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalAgentConfigEntry'
         agentTypes:
           type: array
           items:
@@ -11723,6 +12970,69 @@ components:
             $ref: '#/components/schemas/PluginInstallationAction'
       required:
       - currentRevision
+    ConfigKeyValueType:
+      title: ConfigKeyValueType
+      type: object
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/ConfigValueType'
+      required:
+      - key
+      - value
+    ConfigValueType:
+      discriminator:
+        propertyName: type
+        mapping:
+          Local: '#/components/schemas/ConfigValueType_ConfigValueTypeLocal'
+          Shared: '#/components/schemas/ConfigValueType_ConfigValueTypeShared'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ConfigValueType_ConfigValueTypeLocal'
+      - $ref: '#/components/schemas/ConfigValueType_ConfigValueTypeShared'
+    ConfigValueTypeLocal:
+      title: ConfigValueTypeLocal
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - value
+    ConfigValueTypeShared:
+      title: ConfigValueTypeShared
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - value
+    ConfigValueType_ConfigValueTypeLocal:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Local
+            type: string
+            enum:
+            - Local
+        required:
+        - type
+      - $ref: '#/components/schemas/ConfigValueTypeLocal'
+    ConfigValueType_ConfigValueTypeShared:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Shared
+            type: string
+            enum:
+            - Shared
+        required:
+        - type
+      - $ref: '#/components/schemas/ConfigValueTypeShared'
     CorsOptions:
       title: CorsOptions
       type: object
@@ -11857,10 +13167,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
+        mcpDeployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
       required:
       - deploymentHash
       - components
       - httpApiDeployments
+      - mcpDeployments
     DeploymentPlanComponentEntry:
       title: DeploymentPlanComponentEntry
       type: object
@@ -11883,6 +13198,26 @@ components:
       - hash
     DeploymentPlanHttpApiDeploymentEntry:
       title: DeploymentPlanHttpApiDeploymentEntry
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        domain:
+          type: string
+        hash:
+          type: string
+          format: hash
+      required:
+      - id
+      - revision
+      - domain
+      - hash
+    DeploymentPlanMcpDeploymentEntry:
+      title: DeploymentPlanMcpDeploymentEntry
       type: object
       properties:
         id:
@@ -11933,11 +13268,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
+        mcpDeployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
       required:
       - deploymentRevision
       - deploymentHash
       - components
       - httpApiDeployments
+      - mcpDeployments
     DomainRegistration:
       title: DomainRegistration
       type: object
@@ -12586,6 +13926,83 @@ components:
           type: string
       required:
       - value
+    LocalAgentConfigEntry:
+      title: LocalAgentConfigEntry
+      type: object
+      properties:
+        agent:
+          type: string
+        key:
+          type: array
+          items:
+            type: string
+        value: {}
+      required:
+      - agent
+      - key
+      - value
+    McpDeployment:
+      title: McpDeployment
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        environmentId:
+          type: string
+          format: uuid
+        domain:
+          type: string
+        hash:
+          type: string
+          format: hash
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - revision
+      - environmentId
+      - domain
+      - hash
+      - agents
+      - createdAt
+    McpDeploymentAgentOptions:
+      title: McpDeploymentAgentOptions
+      type: object
+    McpDeploymentCreation:
+      title: McpDeploymentCreation
+      type: object
+      properties:
+        domain:
+          type: string
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentAgentOptions'
+      required:
+      - domain
+      - agents
+    McpDeploymentUpdate:
+      title: McpDeploymentUpdate
+      type: object
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentAgentOptions'
+      required:
+      - currentRevision
     NamedElementSchema:
       title: NamedElementSchema
       type: object
@@ -12662,6 +14079,36 @@ components:
       required:
       - componentId
       - componentRevision
+    OptionalFieldUpdate_any:
+      discriminator:
+        propertyName: op
+        mapping:
+          set: '#/components/schemas/OptionalFieldUpdate_any_Set'
+          unset: '#/components/schemas/OptionalFieldUpdate_any_Unset'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/OptionalFieldUpdate_any_Set'
+      - $ref: '#/components/schemas/OptionalFieldUpdate_any_Unset'
+    OptionalFieldUpdate_any_Set:
+      type: object
+      properties:
+        op:
+          type: string
+          enum:
+          - set
+        value: {}
+      required:
+      - op
+      - value
+    OptionalFieldUpdate_any_Unset:
+      type: object
+      properties:
+        op:
+          type: string
+          enum:
+          - unset
+      required:
+      - op
     Page_AccountSummaryReport:
       title: Page_AccountSummaryReport
       type: object
@@ -12670,6 +14117,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountSummaryReport'
+      required:
+      - values
+    Page_AgentSecretDto:
+      title: Page_AgentSecretDto
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentSecretDto'
       required:
       - values
     Page_Application:
@@ -12770,6 +14227,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HttpApiDeployment'
+      required:
+      - values
+    Page_McpDeployment:
+      title: Page_McpDeployment
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpDeployment'
       required:
       - values
     Page_PluginRegistrationDto:
@@ -13353,14 +14820,6 @@ components:
           type: string
       required:
       - headerName
-    TextDescriptor:
-      title: TextDescriptor
-      type: object
-      properties:
-        restrictions:
-          type: array
-          items:
-            $ref: '#/components/schemas/TextType'
     Token:
       title: Token
       type: object
@@ -13445,9 +14904,9 @@ tags:
 - name: AccountSummary
 - name: Agent
   description: API working on agent instances
+- name: AgentSecrets
 - name: AgentTypes
   description: API working on registered agent types
-- name: ApiCertificate
 - name: ApiDeployment
 - name: ApiDomain
 - name: ApiSecurity
@@ -13458,26 +14917,11 @@ tags:
 - name: Environment
 - name: EnvironmentPluginGrants
 - name: EnvironmentShares
-- name: Grant
 - name: HealthCheck
-- name: HttpApiDefinition
-- name: Limits
-  description: The limits API allows users to query their current resource limits.
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
+- name: McpDeployment
 - name: Plugin
-- name: Project
-  description: |-
-    Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
-
-    Every account has a default project which is assumed when no specific project ID is passed in some component and worker related APIs.
-- name: ProjectGrant
-  description: |-
-    Projects can have grants providing access to other accounts than the project's owner.
-
-    The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
-- name: ProjectPolicy
-  description: Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
 - name: RegistryService
 - name: Reports
 - name: Token

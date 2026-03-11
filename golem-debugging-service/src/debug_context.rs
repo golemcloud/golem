@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,27 +17,31 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
-use golem_common::model::component::{ComponentDto, ComponentRevision};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, Timestamp, WorkerId, WorkerStatusRecord};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::golem_rpc_0_2_x::types::{
-    Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
+use golem_common::model::{
+    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
+    OwnedAgentId, Timestamp,
 };
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{CancellationTokenEntry, Value, ValueAndType};
-use golem_wasm::{HostWasmRpc, RpcError, Uri, WitValue};
+use golem_wasm::Uri;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
-    ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
+    AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
+};
+use golem_worker_executor::preview2::golem::agent::host::{
+    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
+    HostWasmRpc, RpcError, WasmRpc,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
@@ -61,17 +65,17 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 pub struct DebugContext {
@@ -105,12 +109,12 @@ impl ExternalOperations<Self> for DebugContext {
 
     async fn get_last_error_and_retry_count<This: HasAll<Self> + Send + Sync>(
         this: &This,
-        worker_id: &OwnedWorkerId,
-        latest_worker_status: &WorkerStatusRecord,
+        agent_id: &OwnedAgentId,
+        latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Self>::get_last_error_and_retry_count(
             this,
-            worker_id,
+            agent_id,
             latest_worker_status,
         )
         .await
@@ -125,11 +129,11 @@ impl ExternalOperations<Self> for DebugContext {
     }
 
     async fn prepare_instance(
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Self> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::prepare_instance(worker_id, instance, store).await
+        DurableWorkerCtx::<Self>::prepare_instance(agent_id, instance, store).await
     }
 
     async fn on_shard_assignment_changed<This: HasAll<Self> + Send + Sync + 'static>(
@@ -192,13 +196,12 @@ impl StatusManagement for DebugContext {
 
 #[async_trait]
 impl InvocationHooks for DebugContext {
-    async fn on_exported_function_invoked(
+    async fn on_agent_invocation_started(
         &mut self,
-        full_function_name: &str,
-        function_input: &Vec<Value>,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_exported_function_invoked(full_function_name, function_input)
+            .on_agent_invocation_started(invocation)
             .await
     }
 
@@ -212,15 +215,14 @@ impl InvocationHooks for DebugContext {
             .await
     }
 
-    async fn on_invocation_success(
+    async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Value>,
         consumed_fuel: u64,
-        output: Option<ValueAndType>,
+        output: &AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, output)
             .await
     }
 
@@ -304,11 +306,14 @@ impl ResourceLimiterAsync for DebugContext {
         _current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            self.durable_ctx.increase_memory(delta).await?;
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {
             Ok(true)
@@ -320,7 +325,7 @@ impl ResourceLimiterAsync for DebugContext {
         _current: usize,
         _desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         Ok(true)
     }
 }
@@ -328,65 +333,69 @@ impl ResourceLimiterAsync for DebugContext {
 impl HostWasmRpc for DebugContext {
     async fn new(
         &mut self,
-        worker_id: golem_wasm::golem_rpc_0_2_x::types::AgentId,
+        agent_type_name: String,
+        constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        phantom_id: Option<golem_wasm::Uuid>,
     ) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(worker_id).await
+        self.durable_ctx
+            .new(agent_type_name, constructor, phantom_id)
+            .await
     }
 
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Result<WitValue, RpcError>> {
+        method_name: String,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+    ) -> anyhow::Result<
+        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+    > {
         self.durable_ctx
-            .invoke_and_await(self_, function_name, function_params)
+            .invoke_and_await(self_, method_name, input)
             .await
     }
 
     async fn invoke(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Result<(), RpcError>> {
-        self.durable_ctx
-            .invoke(self_, function_name, function_params)
-            .await
+        self.durable_ctx.invoke(self_, method_name, input).await
     }
 
     async fn async_invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
-            .async_invoke_and_await(self_, function_name, function_params)
+            .async_invoke_and_await(self_, method_name, input)
             .await
     }
 
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: Datetime,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        method_name: String,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<()> {
         self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, function_name, function_params)
+            .schedule_invocation(self_, scheduled_time, method_name, input)
             .await
     }
 
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: Datetime,
-        function_name: String,
-        function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Resource<CancellationTokenEntry>> {
+        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        method_name: String,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+    ) -> anyhow::Result<Resource<CancellationToken>> {
         self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, function_name, function_params)
+            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
             .await
     }
 
@@ -399,14 +408,18 @@ impl HostFutureInvokeResult for DebugContext {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
+    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
     async fn get(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Option<Result<WitValue, RpcError>>> {
+    ) -> anyhow::Result<
+        Option<
+            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+        >,
+    > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
 
@@ -415,18 +428,28 @@ impl HostFutureInvokeResult for DebugContext {
     }
 }
 
+impl HostCancellationToken for DebugContext {
+    async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
+        HostCancellationToken::cancel(&mut self.durable_ctx, this).await
+    }
+
+    async fn drop(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
+        HostCancellationToken::drop(&mut self.durable_ctx, this).await
+    }
+}
+
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for DebugContext {
     fn get_environment(
         &mut self,
-    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
     }
 
-    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
     }
 
-    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
     }
 }
@@ -483,12 +506,6 @@ impl InvocationContextManagement for DebugContext {
     }
 }
 
-impl HasConfigVars for DebugContext {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.config_vars()
-    }
-}
-
 #[async_trait]
 impl WorkerCtx for DebugContext {
     type PublicState = PublicDurableWorkerState<Self>;
@@ -497,8 +514,8 @@ impl WorkerCtx for DebugContext {
 
     async fn create(
         _account_id: AccountId,
-        owned_worker_id: OwnedWorkerId,
-        agent_id: Option<AgentId>,
+        owned_agent_id: OwnedAgentId,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -516,7 +533,7 @@ impl WorkerCtx for DebugContext {
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
-        worker_config: WorkerConfig,
+        worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -528,7 +545,7 @@ impl WorkerCtx for DebugContext {
         original_phantom_id: Option<uuid::Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
-            owned_worker_id,
+            owned_agent_id,
             agent_id,
             promise_service,
             worker_service,
@@ -577,16 +594,16 @@ impl WorkerCtx for DebugContext {
         self
     }
 
-    fn worker_id(&self) -> &WorkerId {
-        self.durable_ctx.worker_id()
-    }
-
-    fn owned_worker_id(&self) -> &OwnedWorkerId {
-        self.durable_ctx.owned_worker_id()
-    }
-
-    fn agent_id(&self) -> Option<AgentId> {
+    fn agent_id(&self) -> &AgentId {
         self.durable_ctx.agent_id()
+    }
+
+    fn owned_agent_id(&self) -> &OwnedAgentId {
+        self.durable_ctx.owned_agent_id()
+    }
+
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+        self.durable_ctx.parsed_agent_id()
     }
 
     fn agent_mode(&self) -> AgentMode {
@@ -597,7 +614,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &ComponentDto {
+    fn component_metadata(&self) -> &Component {
         self.durable_ctx.component_metadata()
     }
 

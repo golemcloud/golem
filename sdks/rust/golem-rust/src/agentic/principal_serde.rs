@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 use crate::golem_agentic::golem::agent::common::{
     AgentPrincipal, GolemUserPrincipal, OidcPrincipal, Principal,
 };
-use golem_wasm::golem_rpc_0_2_x::types::{AccountId, AgentId, ComponentId, Uuid};
+use golem_wasm::golem_core_1_5_x::types::{AccountId, AgentId, ComponentId, Uuid};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

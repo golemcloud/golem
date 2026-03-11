@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod compact_value_formatter;
 mod conversions;
 pub mod extraction;
 mod normalisation;
@@ -21,33 +20,34 @@ mod protobuf;
 #[cfg(test)]
 mod tests;
 
-pub mod wit_naming;
+pub mod schema_evolution;
+pub mod structural_format;
+pub mod text_utils;
 
 pub mod bindings {
     wasmtime::component::bindgen!({
           path: "wit",
           world: "golem-common",
-          async: true,
-          trappable_imports: true,
+          imports: {
+            default: async | trappable,
+          },
+          exports: { default: async },
+          require_store_data_send: true,
+          anyhow: true,
           with: {
-            "golem:rpc/types": golem_wasm::golem_rpc_0_2_x::types,
+            "golem:core/types": golem_wasm::golem_core_1_5_x::types,
           },
           wasmtime_crate: ::wasmtime
     });
 }
 
-use crate::model::agent::compact_value_formatter::ToCompactString;
-use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::component_metadata::ComponentMetadata;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{
-    parse_value_and_type, print_value_and_type, FromValue, IntoValue, IntoValueAndType, Value,
-    ValueAndType,
-};
+use golem_wasm::{print_value_and_type, FromValue, IntoValue, Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -127,12 +127,6 @@ impl Display for AgentError {
     }
 }
 
-impl AgentType {
-    pub fn wrapper_type_name(&self) -> String {
-        self.type_name.0.to_wit_naming()
-    }
-}
-
 impl Display for BinaryReference {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -170,69 +164,6 @@ impl DataSchema {
     }
 }
 
-impl DataValue {
-    pub fn parse(s: &str, schema: &DataSchema) -> Result<Self, String> {
-        match schema {
-            DataSchema::Tuple(element_schemas) => {
-                let element_strings = split_top_level_commas(s);
-                if element_strings.len() != element_schemas.elements.len() {
-                    Err(format!(
-                        "Unexpected number of parameters: got {}, expected {}",
-                        element_strings.len(),
-                        element_schemas.elements.len()
-                    ))
-                } else {
-                    let mut element_values = Vec::with_capacity(element_strings.len());
-                    for (s, schema) in element_strings.iter().zip(element_schemas.elements.iter()) {
-                        element_values.push(ElementValue::parse(s, &schema.schema)?);
-                    }
-                    Ok(DataValue::Tuple(ElementValues {
-                        elements: element_values,
-                    }))
-                }
-            }
-            DataSchema::Multimodal(element_schemas) => {
-                let element_strings = split_top_level_commas(s);
-                let mut element_values = Vec::with_capacity(element_strings.len());
-                for s in element_strings {
-                    if let Some((element_name, element_value)) = s.split_once('(') {
-                        if let Some(element_value) = element_value.strip_suffix(')') {
-                            let element_schema = element_schemas
-                                .elements
-                                .iter()
-                                .find(|element_schema| element_schema.name == element_name)
-                                .ok_or_else(|| {
-                                    format!(
-                                        "Unknown multimodal element name: `{}`. Should be one of {}",
-                                        element_name,
-                                        element_schemas.elements.iter().map(|element_schema| element_schema.name.clone()).collect::<Vec<_>>().join(", ")
-                                    )
-                                })?;
-                            let element_value =
-                                ElementValue::parse(element_value, &element_schema.schema)?;
-                            element_values.push(NamedElementValue {
-                                name: element_name.to_string(),
-                                value: element_value,
-                            })
-                        } else {
-                            return Err(format!(
-                                "Multimodal value does not end with `)`: {s}; expected to be `name(value)`"
-                            ));
-                        }
-                    } else {
-                        return Err(format!(
-                            "Invalid multimodal value: {s}; expected to be `name(value)`"
-                        ));
-                    }
-                }
-                Ok(DataValue::Multimodal(NamedElementValues {
-                    elements: element_values,
-                }))
-            }
-        }
-    }
-}
-
 static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
 });
@@ -255,53 +186,48 @@ pub(crate) fn parse_agent_id_parts(s: &str) -> Result<(&str, &str, Option<&str>)
     Ok((agent_type_name, param_list, phantom_id_str))
 }
 
-fn split_top_level_commas(s: &str) -> Vec<&str> {
-    let mut result = Vec::new();
-
-    let chars = s.char_indices();
-    let mut start = 0;
-    let mut nesting = 0;
-    let mut in_string = false;
-    let mut skip_next = false;
-    for (idx, ch) in chars {
-        if !skip_next {
-            match ch {
-                ',' if !in_string => {
-                    if nesting == 0 {
-                        result.push(&s[start..idx]);
-                        start = idx + 1;
-                    }
-                }
-                '\\' if in_string => {
-                    skip_next = true;
-                }
-                '"' => {
-                    in_string = !in_string;
-                }
-                '(' | '[' | '{' if !in_string => {
-                    nesting += 1;
-                }
-                ')' | ']' | '}' if !in_string => {
-                    nesting -= 1;
-                }
-                _ => {}
-            }
-        } else {
-            skip_next = false;
+impl DataValue {
+    pub fn extract_schema(&self) -> DataSchema {
+        match self {
+            DataValue::Tuple(elements) => DataSchema::Tuple(NamedElementSchemas {
+                elements: elements
+                    .elements
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| NamedElementSchema {
+                        name: i.to_string(),
+                        schema: e.extract_schema(),
+                    })
+                    .collect(),
+            }),
+            DataValue::Multimodal(elements) => DataSchema::Multimodal(NamedElementSchemas {
+                elements: elements
+                    .elements
+                    .iter()
+                    .map(|e| NamedElementSchema {
+                        name: e.name.clone(),
+                        schema: e.value.extract_schema(),
+                    })
+                    .collect(),
+            }),
         }
     }
-    if start < s.len() {
-        result.push(&s[start..]);
-    }
-
-    result
 }
 
-impl Display for DataValue {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl ElementValue {
+    pub fn extract_schema(&self) -> ElementSchema {
         match self {
-            DataValue::Tuple(values) => write!(f, "{values}"),
-            DataValue::Multimodal(values) => write!(f, "{values}"),
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: value.typ.clone(),
+                })
+            }
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { descriptor, .. }) => {
+                ElementSchema::UnstructuredText(descriptor.clone())
+            }
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                descriptor, ..
+            }) => ElementSchema::UnstructuredBinary(descriptor.clone()),
         }
     }
 }
@@ -325,40 +251,6 @@ impl IntoValue for DataValue {
             case("tuple", Vec::<ElementValue>::get_type()),
             case("multimodal", Vec::<NamedElementValue>::get_type()),
         ])
-    }
-}
-
-impl Display for ElementValues {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.elements
-                .iter()
-                .map(|element_value| element_value.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    }
-}
-
-impl Display for NamedElementValues {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.elements
-                .iter()
-                .map(|element_value| element_value.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    }
-}
-
-impl Display for NamedElementValue {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", self.name, self.value)
     }
 }
 
@@ -404,134 +296,9 @@ impl FromValue for BinaryReferenceValue {
     }
 }
 
-impl ElementValue {
-    pub fn parse(s: &str, schema: &ElementSchema) -> Result<Self, String> {
-        match schema {
-            ElementSchema::ComponentModel(typ) => {
-                let mut value_and_type = parse_value_and_type(&typ.element_type.to_wit_naming(), s)
-                    .map_err(|e| format!("Failed to parse parameter value {s}: {e}"))?;
-                value_and_type.typ = typ.element_type.clone(); // Store the original type, not the wit-naming one
-                Ok(ElementValue::ComponentModel(value_and_type))
-            }
-            ElementSchema::UnstructuredText(_) => {
-                if s.starts_with('"') && s.ends_with('"') {
-                    let string_value = parse_value_and_type(&str(), s)?;
-                    let data = match string_value.value {
-                        Value::String(data) => data,
-                        _ => unreachable!(),
-                    };
-                    Ok(ElementValue::UnstructuredText(TextReference::Inline(
-                        TextSource {
-                            data,
-                            text_type: None,
-                        },
-                    )))
-                } else if s.starts_with('[') {
-                    if let Some((prefix, rest)) = s.split_once(']') {
-                        if rest.starts_with('"') && rest.ends_with('"') {
-                            let language_code = &prefix[1..];
-                            let string_value = parse_value_and_type(&str(), rest)?;
-                            let data = match string_value.value {
-                                Value::String(data) => data,
-                                _ => unreachable!(),
-                            };
-                            Ok(ElementValue::UnstructuredText(TextReference::Inline(
-                                TextSource {
-                                    data,
-                                    text_type: Some(TextType {
-                                        language_code: language_code.to_string(),
-                                    }),
-                                },
-                            )))
-                        } else {
-                            Err(format!("Invalid unstructured text parameter syntax: {s}"))
-                        }
-                    } else {
-                        Err(format!("Invalid unstructured text parameter syntax: {s}"))
-                    }
-                } else {
-                    let url = ::url::Url::parse(s)
-                        .map_err(|e| format!("Failed to parse parameter value {s} as URL: {e}"))?;
-                    Ok(ElementValue::UnstructuredText(TextReference::Url(Url {
-                        value: url.to_string(),
-                    })))
-                }
-            }
-            ElementSchema::UnstructuredBinary(_) => {
-                if s.starts_with('[') {
-                    if let Some((prefix, rest)) = s.split_once(']') {
-                        if rest.starts_with('"') && rest.ends_with('"') {
-                            let mime_type = &prefix[1..];
-                            let base64_data = &rest[1..rest.len() - 1];
-                            let data = base64::engine::general_purpose::STANDARD
-                                .decode(base64_data.as_bytes())
-                                .map_err(|e| format!("Failed to decode base64 data: {e}"))?;
-                            Ok(ElementValue::UnstructuredBinary(BinaryReference::Inline(
-                                BinarySource {
-                                    data,
-                                    binary_type: BinaryType {
-                                        mime_type: mime_type.to_string(),
-                                    },
-                                },
-                            )))
-                        } else {
-                            Err(format!("Invalid unstructured text parameter syntax: {s}"))
-                        }
-                    } else {
-                        Err(format!("Invalid unstructured text parameter syntax: {s}"))
-                    }
-                } else {
-                    let url = ::url::Url::parse(s)
-                        .map_err(|e| format!("Failed to parse parameter value {s} as URL: {e}"))?;
-                    Ok(ElementValue::UnstructuredBinary(BinaryReference::Url(
-                        Url {
-                            value: url.to_string(),
-                        },
-                    )))
-                }
-            }
-        }
-    }
-}
-
-impl Display for ElementValue {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ElementValue::ComponentModel(value) => {
-                write!(f, "{}", print_value_and_type(value).unwrap_or_default())
-                // NOTE: this is expected to be always working, because we only use values in ElementValues that are printable
-            }
-            ElementValue::UnstructuredText(text_reference) => write!(f, "{text_reference}"),
-            ElementValue::UnstructuredBinary(binary_reference) => write!(f, "{binary_reference}"),
-        }
-    }
-}
-
-impl Display for TextReference {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TextReference::Url(url) => write!(f, "{url}"),
-            TextReference::Inline(text_source) => {
-                write!(f, "{text_source}")
-            }
-        }
-    }
-}
-
 impl Display for Url {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.value)
-    }
-}
-
-impl Display for TextSource {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let encoded_data = print_value_and_type(&self.data.clone().into_value_and_type())
-            .unwrap_or_else(|_| self.data.clone());
-        match &self.text_type {
-            None => write!(f, "{}", encoded_data),
-            Some(text_type) => write!(f, "[{}]{}", text_type.language_code, encoded_data),
-        }
     }
 }
 
@@ -554,18 +321,26 @@ pub struct AgentTypes {
     pub types: Vec<AgentType>,
 }
 
-impl AgentId {
-    pub fn new(agent_type: AgentTypeName, parameters: DataValue, phantom_id: Option<Uuid>) -> Self {
-        let wrapper_agent_type = agent_type.to_wit_naming().0;
-        let mut result = Self {
+impl ParsedAgentId {
+    pub fn new(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+    ) -> Result<Self, String> {
+        use crate::model::agent::structural_format::format_structural;
+
+        let formatted = format_structural(&parameters).map_err(|e| e.to_string())?;
+        let mut as_string = format!("{}({})", agent_type.0, formatted);
+        if let Some(phantom_id) = &phantom_id {
+            use std::fmt::Write;
+            write!(as_string, "[{phantom_id}]").unwrap();
+        }
+        Ok(Self {
             agent_type,
             parameters,
             phantom_id,
-            wrapper_agent_type,
-            as_string: "".to_string(),
-        };
-        result.as_string = result.to_string();
-        result
+            as_string,
+        })
     }
 
     pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
@@ -581,6 +356,10 @@ impl AgentId {
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
     ) -> Result<(Self, AgentType), String> {
+        use crate::model::agent::structural_format::{
+            format_structural, normalize_structural, parse_structural,
+        };
+
         let s = s.as_ref();
         let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
 
@@ -589,29 +368,42 @@ impl AgentId {
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
 
-        let agent_type = resolver
-            .resolve_agent_type_by_wrapper_name(&AgentTypeName(agent_type_name.to_string()))?;
-        let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
+        let agent_type =
+            resolver.resolve_agent_type_by_name(&AgentTypeName(agent_type_name.to_string()))?;
+        let normalized_param_list = normalize_structural(param_list);
+        let value = parse_structural(&normalized_param_list, &agent_type.constructor.input_schema)
+            .map_err(|e| e.to_string())?;
 
-        let mut agent_id = AgentId {
+        let formatted = format_structural(&value).map_err(|e| e.to_string())?;
+        let mut as_string = format!("{}({})", agent_type.type_name.0, formatted);
+        if let Some(phantom_id) = &phantom_id {
+            use std::fmt::Write;
+            write!(as_string, "[{phantom_id}]").unwrap();
+        }
+
+        let agent_id = ParsedAgentId {
             agent_type: agent_type.type_name.clone(),
-            wrapper_agent_type: agent_type.type_name.to_wit_naming().0,
             parameters: value,
             phantom_id,
-            as_string: "".to_string(),
+            as_string,
         };
-        agent_id.as_string = agent_id.to_string();
         Ok((agent_id, agent_type))
     }
 
-    pub fn wrapper_agent_type(&self) -> &str {
-        self.wrapper_agent_type.as_str()
-    }
-
     pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Self {
+        use crate::model::agent::structural_format::format_structural;
+        use std::fmt::Write;
+
+        let formatted = format_structural(&self.parameters).unwrap_or_default();
+        let mut as_string = format!("{}({})", self.agent_type.0, formatted);
+        if let Some(ref id) = phantom_id {
+            write!(as_string, "[{id}]").unwrap();
+        }
         Self {
+            agent_type: self.agent_type.clone(),
+            parameters: self.parameters.clone(),
             phantom_id,
-            ..self.clone()
+            as_string,
         }
     }
 
@@ -622,34 +414,16 @@ impl AgentId {
     }
 }
 
-impl Display for AgentId {
+impl Display for ParsedAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.as_string.is_empty() {
-            write!(
-                f,
-                "{}({})",
-                self.wrapper_agent_type,
-                self.parameters.to_wit_naming().to_compact_string()
-            )?;
-            if let Some(phantom_id) = &self.phantom_id {
-                write!(f, "[{phantom_id}]")?;
-            }
-            Ok(())
-        } else {
-            write!(f, "{}", self.as_string)
-        }
+        write!(f, "{}", self.as_string)
     }
 }
 
 #[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
-    fn resolve_agent_type_by_wrapper_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<AgentType, String> {
-        let result = self
-            .find_agent_type_by_wrapper_name(agent_type)?
-            .to_wit_naming();
-        result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
+    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
+        self.find_agent_type_by_name(agent_type)
+            .ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }

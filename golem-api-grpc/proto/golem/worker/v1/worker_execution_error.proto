@@ -11,9 +11,9 @@ import "golem/worker/worker_error.proto";
 message WorkerExecutionError {
   oneof error {
     InvalidRequest invalid_request = 1;
-    WorkerAlreadyExists worker_already_exists = 2;
-    WorkerCreationFailed worker_creation_failed = 3;
-    FailedToResumeWorker failed_to_resume_worker = 4;
+    AgentAlreadyExists agent_already_exists = 2;
+    AgentCreationFailed agent_creation_failed = 3;
+    FailedToResumeAgent failed_to_resume_agent = 4;
     ComponentDownloadFailed component_download_failed = 5;
     ComponentParseFailed component_parse_failed = 6;
     GetLatestVersionOfComponentFailed get_latest_version_of_component_failed = 7;
@@ -31,7 +31,7 @@ message WorkerExecutionError {
     UnknownError unknown = 19;
     PreviousInvocationExited previous_invocation_exited = 20;
     InvalidAccount invalid_account = 21;
-    WorkerNotFound worker_not_found = 22;
+    AgentNotFound agent_not_found = 22;
     ShardingNotReady sharding_not_ready = 23;
     InitialComponentFileDownloadFailed initial_component_file_download_failed = 24;
     FileSystemError file_system_error = 25;
@@ -43,17 +43,17 @@ message InvalidRequest {
   string details = 1;
 }
 
-message WorkerAlreadyExists {
-  WorkerId worker_id = 1;
+message AgentAlreadyExists {
+  AgentId agent_id = 1;
 }
 
-message WorkerCreationFailed {
-  WorkerId worker_id = 1;
+message AgentCreationFailed {
+  AgentId agent_id = 1;
   string details = 2;
 }
 
-message FailedToResumeWorker {
-  WorkerId worker_id = 1;
+message FailedToResumeAgent {
+  AgentId agent_id = 1;
   WorkerExecutionError reason = 2;
 }
 
@@ -115,7 +115,7 @@ message InvalidShardId {
 }
 
 message PreviousInvocationFailed {
-  WorkerError error = 1;
+  AgentError error = 1;
   string stderr = 2;
 }
 
@@ -127,8 +127,8 @@ message UnknownError {
   string details = 1;
 }
 
-message WorkerNotFound {
-  WorkerId worker_id = 1;
+message AgentNotFound {
+  AgentId agent_id = 1;
 }
 
 message ShardingNotReady {}
@@ -144,6 +144,6 @@ message FileSystemError {
 }
 
 message InvocationFailed {
-  WorkerError error = 1;
+  AgentError error = 1;
   string stderr = 2;
 }

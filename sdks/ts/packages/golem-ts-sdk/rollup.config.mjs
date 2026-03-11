@@ -9,11 +9,12 @@ import path from 'path';
 
 const external = [
   'agent-guest',
-  'golem:agent/common',
-  'golem:agent/host',
-  'golem:api/host@1.3.0',
-  'golem:rpc/types@0.2.2',
+  'golem:agent/common@1.5.0',
+  'golem:agent/host@1.5.0',
+  'golem:api/host@1.5.0',
+  'golem:core/types@1.5.0',
   'wasi:cli/environment@0.2.3',
+  'wasi:clocks/wall-clock@0.2.3',
 ];
 
 export default defineConfig([

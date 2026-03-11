@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,7 +18,7 @@ test_r::enable!();
 mod tests {
     use async_trait::async_trait;
     use golem_api_grpc::proto::golem::worker;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::component::ComponentDto;
     use golem_common::model::IdempotencyKey;
     use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
     use golem_common::{agent_id, data_value};
@@ -27,7 +27,7 @@ mod tests {
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 
-    use golem_common::model::agent::AgentId;
+    use golem_common::model::agent::ParsedAgentId;
     use rand::prelude::*;
     use rand::rng;
     use std::time::Duration;
@@ -40,6 +40,10 @@ mod tests {
 
     impl Tracing {
         pub fn init() -> Self {
+            #[cfg(unix)]
+            unsafe {
+                backtrace_on_stack_overflow::enable()
+            };
             init_tracing_with_default_debug_env_filter(
                 &TracingConfig::test("sharding-tests").with_env_overrides(),
             );
@@ -206,7 +210,7 @@ mod tests {
         _tracing: &Tracing,
     ) {
         deps.reset(16).await;
-        let (component_id, agent_ids) = deps.create_component_and_start_workers(4).await;
+        let (component, agent_ids) = deps.create_component_and_start_workers(4).await;
 
         let deps_clone = deps.clone();
         let (stop_tx, stop_rx) = mpsc::channel(128);
@@ -224,7 +228,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
             info!("Invoking workers ({c})");
-            deps.invoke_and_await_workers(&component_id, &agent_ids)
+            deps.invoke_and_await_workers(&component, &agent_ids)
                 .await
                 .expect("Invocations failed");
             info!("Invoking workers done ({c})");
@@ -242,7 +246,7 @@ mod tests {
         steps: Vec<Step>,
     ) {
         deps.reset(number_of_shard).await;
-        let (component_id, agent_ids) = deps
+        let (component, agent_ids) = deps
             .create_component_and_start_workers(number_of_workers)
             .await;
 
@@ -300,7 +304,7 @@ mod tests {
                     worker_command_tx
                         .send(WorkerCommand::InvokeAndAwaitWorkers {
                             name,
-                            component_id,
+                            component: Box::new(component.clone()),
                             agent_ids: agent_ids.clone(),
                         })
                         .await
@@ -332,13 +336,15 @@ mod tests {
     #[async_trait]
     trait DepsOps {
         async fn reset(&self, number_of_shards: usize);
-        async fn create_component_and_start_workers(&self, n: usize)
-            -> (ComponentId, Vec<AgentId>);
+        async fn create_component_and_start_workers(
+            &self,
+            n: usize,
+        ) -> (ComponentDto, Vec<ParsedAgentId>);
         async fn invoke_and_await_workers(
             &self,
-            component_id: &ComponentId,
-            agent_ids: &[AgentId],
-        ) -> Result<(), worker::v1::worker_error::Error>;
+            component: &ComponentDto,
+            agent_ids: &[ParsedAgentId],
+        ) -> Result<(), worker::v1::agent_error::Error>;
         async fn start_all_worker_executors(&self);
         async fn stop_random_worker_executor(&self);
         async fn start_random_worker_executor(&self);
@@ -371,7 +377,7 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentId, Vec<AgentId>) {
+        ) -> (ComponentDto, Vec<ParsedAgentId>) {
             let admin = self.admin().await;
             let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
@@ -387,7 +393,7 @@ mod tests {
 
             for i in 1..=n {
                 info!("Worker {i} starting");
-                let agent_id = agent_id!("counter", format!("sharding-test-{i}"));
+                let agent_id = agent_id!("Counter", format!("sharding-test-{i}"));
                 admin
                     .start_agent(&component.id, agent_id.clone())
                     .await
@@ -398,28 +404,28 @@ mod tests {
 
             info!("All workers started");
 
-            (component.id, agent_ids)
+            (component, agent_ids)
         }
 
         async fn invoke_and_await_workers(
             &self,
-            component_id: &ComponentId,
-            agent_ids: &[AgentId],
-        ) -> Result<(), worker::v1::worker_error::Error> {
+            component: &ComponentDto,
+            agent_ids: &[ParsedAgentId],
+        ) -> Result<(), worker::v1::agent_error::Error> {
             let mut tasks = JoinSet::new();
             for agent_id in agent_ids {
                 let self_clone = self.admin().await;
                 tasks.spawn({
                     let agent_id = agent_id.clone();
-                    let component_id = *component_id;
+                    let component = component.clone();
                     async move {
                         let idempotency_key = IdempotencyKey::fresh();
                         (
-                            component_id,
+                            component.id,
                             agent_id.clone(),
                             self_clone
                                 .invoke_and_await_agent_with_key(
-                                    &component_id,
+                                    &component,
                                     &agent_id,
                                     &idempotency_key,
                                     "increment",
@@ -660,8 +666,8 @@ mod tests {
     enum WorkerCommand {
         InvokeAndAwaitWorkers {
             name: String,
-            component_id: ComponentId,
-            agent_ids: Vec<AgentId>,
+            component: Box<ComponentDto>,
+            agent_ids: Vec<ParsedAgentId>,
         },
         Stop,
     }
@@ -722,11 +728,11 @@ mod tests {
     ) {
         while let WorkerCommand::InvokeAndAwaitWorkers {
             name,
-            component_id,
+            component,
             agent_ids,
         } = command_rx.recv().await.unwrap()
         {
-            deps.invoke_and_await_workers(&component_id, &agent_ids)
+            deps.invoke_and_await_workers(&component, &agent_ids)
                 .await
                 .expect("Worker invocation failed");
             event_tx

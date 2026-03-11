@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -33,7 +33,7 @@ use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
-use crate::model::worker::{AgentUpdateMode, WorkerName};
+use crate::model::worker::{AgentUpdateMode, RawAgentId};
 use crate::model::GuestLanguage;
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
@@ -95,7 +95,6 @@ impl GolemCliCommand {
                     "preset",
                     "profile",
                     "show_sensitive",
-                    "template_group",
                 ],
                 exclude_hidden: true,
             },
@@ -197,10 +196,6 @@ pub struct GolemCliGlobalFlags {
     /// Enable experimental, development-only features
     #[arg(long, global = true, display_order = 112)]
     pub dev_mode: bool,
-
-    /// Switch to experimental or development-only template groups
-    #[arg(long, global = true, display_order = 113)]
-    pub template_group: Option<String>,
 
     #[command(flatten)]
     verbosity: Verbosity,
@@ -525,8 +520,8 @@ impl GolemCliCommand {
                 found_positional_args: vec!["agent_id"],
                 missing_positional_arg: "function_name",
                 to_partial_match: |args| {
-                    GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName {
-                        worker_name: args[0].clone().into(),
+                    GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName {
+                        agent_name: args[0].clone().into(),
                     }
                 },
             },
@@ -628,7 +623,7 @@ pub enum GolemCliCommandPartialMatch {
     ComponentHelp,
     ComponentMissingSubcommandHelp,
     AgentHelp,
-    WorkerInvokeMissingFunctionName { worker_name: WorkerName },
+    AgentInvokeMissingFunctionName { agent_name: RawAgentId },
     WorkerInvokeMissingWorkerName,
     ProfileSwitchMissingProfileName,
 }
@@ -803,7 +798,7 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
-    use crate::model::worker::{AgentUpdateMode, WorkerName};
+    use crate::model::worker::{AgentUpdateMode, RawAgentId};
     use crate::model::GuestLanguage;
     use clap::Args;
     use golem_common::model::account::AccountId;
@@ -864,7 +859,7 @@ pub mod shared_args {
         ///   - <PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         #[arg(verbatim_doc_comment)]
-        pub agent_id: WorkerName,
+        pub agent_id: RawAgentId,
     }
 
     #[derive(Debug, Args)]
@@ -1081,6 +1076,7 @@ pub mod worker {
         AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
     use crate::model::worker::AgentUpdateMode;
+    use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
     use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -1122,6 +1118,9 @@ pub mod worker {
             stream_args: StreamArgs,
             #[command(flatten)]
             post_deploy_args: Option<PostDeployArgs>,
+            /// Schedule the invocation at a specific time (ISO 8601 / RFC 3339 format, e.g. 2026-03-15T10:30:00Z)
+            #[clap(long, requires = "trigger")]
+            schedule_at: Option<DateTime<Utc>>,
         },
         /// Get agent metadata
         Get {
@@ -1249,7 +1248,7 @@ pub mod worker {
         /// List files in a worker's directory
         Files {
             #[command(flatten)]
-            worker_name: AgentIdArgs,
+            agent_name: AgentIdArgs,
             /// Path to the directory to list files from
             #[arg(default_value = "/")]
             path: String,
@@ -1257,7 +1256,7 @@ pub mod worker {
         /// Get contents of a file in a worker
         FileContents {
             #[command(flatten)]
-            worker_name: AgentIdArgs,
+            agent_name: AgentIdArgs,
             /// Path to the file to get contents from
             path: String,
             /// Local path (including filename) to save the file contents. Optional.
@@ -1569,6 +1568,10 @@ pub mod server {
         #[clap(long)]
         pub custom_request_port: Option<u16>,
 
+        /// Port to serve custom requests on, defaults to 9006
+        #[clap(long)]
+        pub mcp_port: Option<u16>,
+
         /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
         #[clap(long)]
         pub data_dir: Option<PathBuf>,
@@ -1589,6 +1592,9 @@ pub mod server {
 
         pub fn custom_request_port(&self) -> u16 {
             self.custom_request_port.unwrap_or(9006)
+        }
+        pub fn mcp_port(&self) -> u16 {
+            self.mcp_port.unwrap_or(9007)
         }
     }
 

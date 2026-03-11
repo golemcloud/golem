@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -50,6 +50,38 @@ pub struct ResourceTypeId {
     pub name: String,
     /// Owner of the resource, either an interface in a WIT package or a name of a world
     pub owner: String,
+}
+
+impl crate::IntoValue for ResourceTypeId {
+    fn into_value(self) -> crate::Value {
+        crate::Value::Record(vec![
+            crate::Value::String(self.name),
+            crate::Value::String(self.owner),
+        ])
+    }
+
+    fn get_type() -> crate::analysis::AnalysedType {
+        use crate::analysis::analysed_type::*;
+        record(vec![field("name", str()), field("owner", str())])
+            .named("resource-type-id")
+            .owned("golem:api@1.5.0/oplog")
+    }
+}
+
+impl crate::FromValue for ResourceTypeId {
+    fn from_value(value: crate::Value) -> Result<Self, String> {
+        match value {
+            crate::Value::Record(fields) if fields.len() == 2 => {
+                let mut iter = fields.into_iter();
+                let name = <String as crate::FromValue>::from_value(iter.next().unwrap())?;
+                let owner = <String as crate::FromValue>::from_value(iter.next().unwrap())?;
+                Ok(ResourceTypeId { name, owner })
+            }
+            other => Err(format!(
+                "Expected Record with 2 fields for ResourceTypeId, got {other:?}"
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -467,6 +499,11 @@ async fn decode_param_impl(
                 }),
             }
         }
+        Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
+            Err(EncodingError::ParamTypeMismatch {
+                details: format!("in {context} unsupported type (future/stream/error-context)"),
+            })
+        }
         Type::Borrow(_) => match param {
             Value::Handle { uri, resource_id } => {
                 let uri = Uri { value: uri.clone() };
@@ -785,6 +822,11 @@ pub async fn encode_output(
                 resource_id: id,
             })
         }
+        Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => {
+            Err(EncodingError::ValueMismatch {
+                details: "Unsupported value type (future/stream/error-context)".to_string(),
+            })
+        }
     }
 }
 
@@ -856,6 +898,9 @@ pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
         Type::Own(_) => Err("Cannot extract information about owned resource type".to_string()),
         Type::Borrow(_) => {
             Err("Cannot extract information about borrowed resource type".to_string())
+        }
+        Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
+            Err("Cannot extract information about future/stream/error-context type".to_string())
         }
     }
 }

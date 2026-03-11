@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,22 +14,26 @@
 
 mod invocation;
 
-use crate::grpc::invocation::{CanStartWorker, GrpcInvokeRequest};
+use crate::grpc::invocation::{from_proto_invocation_context, CanStartWorker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::model::{LastError, ReadFileResult};
 use crate::services::events::Event;
-use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
+use crate::services::worker_activator::{
+    DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
+};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use chrono::{DateTime, Utc};
 use futures::Stream;
 use futures::StreamExt;
 use gethostname::gethostname;
@@ -43,33 +47,31 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetFileContentsRequest, GetFileContentsResponse, GetFileSystemNodeRequest,
     GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest,
-    InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, InvokeJsonWorkerRequest,
-    InvokeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAgentRequest, InvokeAgentResponse, RevertWorkerRequest, RevertWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, UntypedDataValue};
 use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, Timestamp, TimestampedWorkerInvocation,
-    WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
+    AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
+    AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor,
+    ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
-    proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string,
-    proto_worker_id_string,
+    proto_agent_id_string, proto_component_id_string, proto_idempotency_key_string,
+    proto_promise_id_string,
 };
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::protobuf::Val;
-use golem_wasm::ValueAndType;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -91,6 +93,9 @@ pub struct WorkerExecutorImpl<
 > {
     /// Reference to all the initialized services
     services: Svcs,
+    /// Holds the strong Arc to the worker activator so the Weak reference
+    /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
+    _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
     ctx: PhantomData<Ctx>,
 }
 
@@ -100,6 +105,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn clone(&self) -> Self {
         Self {
             services: self.services.clone(),
+            _worker_activator: self._worker_activator.clone(),
             ctx: PhantomData,
         }
     }
@@ -116,13 +122,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
         port: u16,
     ) -> Result<Self, Error> {
+        let worker_activator: Arc<dyn WorkerActivator<Ctx>> =
+            Arc::new(DefaultWorkerActivator::new(services.clone()));
+
+        lazy_worker_activator.set(worker_activator.clone());
+
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
+            _worker_activator: worker_activator,
             ctx: PhantomData,
         };
-        let worker_activator = Arc::new(DefaultWorkerActivator::new(services.clone()));
-
-        lazy_worker_activator.set(worker_activator);
 
         let host = gethostname().to_string_lossy().to_string();
 
@@ -140,21 +149,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!("Registered worker executor, waiting for shard assignment...");
 
-        Ctx::on_shard_assignment_changed(&worker_executor).await?;
+        Ctx::on_shard_assignment_changed(&worker_executor)
+            .await
+            .map_err(wasmtime::Error::from_anyhow)?;
 
         Ok(worker_executor)
     }
 
     async fn ensure_not_failed(
         &self,
-        owned_worker_id: &OwnedWorkerId,
-        metadata: &WorkerMetadata,
+        owned_agent_id: &OwnedAgentId,
+        metadata: &AgentMetadata,
     ) -> Result<(), WorkerExecutorError> {
         match &metadata.last_known_status.status {
-            WorkerStatus::Failed => {
+            AgentStatus::Failed => {
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
-                    owned_worker_id,
+                    owned_agent_id,
                     &metadata.last_known_status,
                 )
                 .await;
@@ -170,11 +181,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ))
                 }
             }
-            WorkerStatus::Exited => Err(WorkerExecutorError::PreviousInvocationExited),
+            AgentStatus::Exited => Err(WorkerExecutorError::PreviousInvocationExited),
             _ => {
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
-                    owned_worker_id,
+                    owned_agent_id,
                     &metadata.last_known_status,
                 )
                 .await;
@@ -193,19 +204,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     fn ensure_worker_belongs_to_this_executor(
         &self,
-        worker_id: impl AsRef<WorkerId>,
+        agent_id: impl AsRef<AgentId>,
     ) -> Result<(), WorkerExecutorError> {
-        self.shard_service().check_worker(worker_id.as_ref())
+        self.shard_service().check_worker(agent_id.as_ref())
     }
 
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -216,26 +227,47 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        let existing_worker = self.worker_service().get(&owned_worker_id).await;
+        let existing_worker = self.worker_service().get(&owned_agent_id).await;
         if existing_worker.is_some() && !request.ignore_already_existing {
             return Err(WorkerExecutorError::worker_already_exists(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ));
         }
 
-        let env = request.env.into_iter().collect();
+        let principal = extract_principal(&request.principal);
+
+        let env = request
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
 
         let config_vars = request.config_vars.into_iter().collect();
+
+        let local_agent_config = request
+            .local_agent_config
+            .into_iter()
+            .map(WorkerCreationLocalAgentConfigEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Failed parsing local agent config: {err}"
+                ))
+            })?;
+
+        let invocation_context = from_proto_invocation_context(&request.invocation_context);
 
         let worker = Worker::get_or_create_suspended(
             self,
             auth_ctx.account_id(),
-            &owned_worker_id,
+            &owned_agent_id,
             Some(env),
             Some(config_vars),
+            local_agent_config,
             None,
             None,
-            &InvocationContextStack::fresh(),
+            &invocation_context,
+            principal,
         )
         .await?;
 
@@ -244,8 +276,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if worker.is_loading() {
             match subscription
                 .wait_for(|event| match event {
-                    Event::WorkerLoaded { worker_id, result }
-                        if worker_id == &owned_worker_id.worker_id =>
+                    Event::WorkerLoaded { agent_id, result }
+                        if agent_id == &owned_agent_id.agent_id =>
                     {
                         Some(result.clone())
                     }
@@ -285,13 +317,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .as_ref()
             .ok_or(WorkerExecutorError::invalid_request("promise_id not found"))?;
 
-        let owned_worker_id = extract_owned_worker_id(
+        let owned_agent_id = extract_owned_agent_id(
             &(&request, promise_id.clone()),
-            |(_, r)| &r.worker_id,
+            |(_, r)| &r.agent_id,
             |(r, _)| &r.environment_id,
         )?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let data = request.data;
 
@@ -314,9 +346,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: DeleteWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -326,38 +360,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+        if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await
             .is_some()
         {
             let worker = Worker::get_or_create_suspended(
                 self,
                 auth_ctx.account_id(),
-                &owned_worker_id,
+                &owned_agent_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                principal,
             )
             .await?;
 
             info!("Interrupting worker before deletion");
-            if let Some(mut rx) = worker
+            worker
                 .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-                .await
-            {
-                info!("Awaiting interruption");
-                let _ = rx.recv().await;
-                info!("Interrupted");
-            }
+                .await;
             info!("Marking worker for deletion");
             worker.start_deleting().await?;
 
-            self.worker_service().remove(&owned_worker_id).await;
-            self.active_workers()
-                .remove(&owned_worker_id.worker_id)
-                .await;
+            self.worker_service().remove(&owned_agent_id).await;
+            self.active_workers().remove(&owned_agent_id.agent_id).await;
 
             // ensure we are holding the worker while we are doing cleanup.
             drop(worker);
@@ -385,34 +414,34 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let target_worker_id_proto = request
-            .target_worker_id
+        let target_agent_id_proto = request
+            .target_agent_id
             .clone()
-            .ok_or(WorkerExecutorError::invalid_request("worker_id not found"))?;
+            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
 
-        let target_worker_id: WorkerId = target_worker_id_proto
+        let target_agent_id: AgentId = target_agent_id_proto
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_target_worker_id = OwnedWorkerId::new(environment_id, &target_worker_id);
+        let owned_target_agent_id = OwnedAgentId::new(environment_id, &target_agent_id);
 
-        let source_worker_id_proto = request
-            .source_worker_id
+        let source_agent_id_proto = request
+            .source_agent_id
             .clone()
-            .ok_or(WorkerExecutorError::invalid_request("worker_id not found"))?;
+            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
 
-        let source_worker_id: WorkerId = source_worker_id_proto
+        let source_agent_id: AgentId = source_agent_id_proto
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(environment_id, &source_worker_id);
+        let owned_source_agent_id = OwnedAgentId::new(environment_id, &source_agent_id);
 
         self.services
             .worker_fork_service()
             .fork(
                 account_id,
-                &owned_source_worker_id,
-                &owned_target_worker_id.worker_id,
+                &owned_source_agent_id,
+                &owned_target_agent_id.agent_id,
                 OplogIndex::from_u64(request.oplog_index_cutoff),
             )
             .await?;
@@ -430,10 +459,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: RevertWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -451,26 +482,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let metadata = self.worker_service().get(&owned_worker_id).await;
+        let metadata = self.worker_service().get(&owned_agent_id).await;
 
         match metadata {
             Some(_) => {
                 let worker = Worker::get_or_create_suspended(
                     self,
                     auth_ctx.account_id(),
-                    &owned_worker_id,
+                    &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal,
                 )
                 .await?;
                 worker.revert(target).await?;
                 Ok(())
             }
             None => Err(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             )),
         }
     }
@@ -479,10 +512,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: CancelInvocationRequest,
     ) -> Result<bool, WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -499,10 +534,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ))?
             .into();
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await
             .ok_or(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ))?;
 
         if metadata
@@ -514,12 +549,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker = Worker::get_or_create_suspended(
                 self,
                 auth_ctx.account_id(),
-                &owned_worker_id,
+                &owned_agent_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                principal,
             )
             .await?;
             worker.cancel_invocation(idempotency_key).await?;
@@ -539,10 +576,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::v1::InterruptWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -552,33 +591,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await;
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id).await;
 
         if let Some(metadata) = metadata {
             match &metadata.last_known_status.status {
-                WorkerStatus::Exited => {
+                AgentStatus::Exited => {
                     warn!("Attempted interrupting worker which already exited")
                 }
-                WorkerStatus::Idle => {
+                AgentStatus::Idle => {
                     warn!("Attempted interrupting worker which is idle")
                 }
-                WorkerStatus::Failed => {
+                AgentStatus::Failed => {
                     warn!("Attempted interrupting worker which is failed")
                 }
-                WorkerStatus::Interrupted => {
+                AgentStatus::Interrupted => {
                     warn!("Attempted interrupting worker which is already interrupted")
                 }
-                WorkerStatus::Suspended => {
+                AgentStatus::Suspended => {
                     debug!("Marking suspended worker as interrupted");
                     let worker = Worker::get_or_create_suspended(
                         self,
                         auth_ctx.account_id(),
-                        &owned_worker_id,
+                        &owned_agent_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
+                        principal.clone(),
                     )
                     .await?;
                     if let Some(mut await_interruption) = worker
@@ -588,21 +629,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         await_interruption.recv().await.unwrap();
                     };
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers()
-                        .remove(&owned_worker_id.worker_id)
-                        .await;
+                    self.active_workers().remove(&owned_agent_id.agent_id).await;
                 }
-                WorkerStatus::Retrying => {
+                AgentStatus::Retrying => {
                     debug!("Marking worker scheduled to be retried as interrupted");
                     let worker = Worker::get_or_create_suspended(
                         self,
                         auth_ctx.account_id(),
-                        &owned_worker_id,
+                        &owned_agent_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
+                        principal.clone(),
                     )
                     .await?;
                     if let Some(mut await_interruption) = worker
@@ -612,20 +653,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         await_interruption.recv().await.unwrap();
                     };
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers()
-                        .remove(&owned_worker_id.worker_id)
-                        .await;
+                    self.active_workers().remove(&owned_agent_id.agent_id).await;
                 }
-                WorkerStatus::Running => {
+                AgentStatus::Running => {
                     let worker = Worker::get_or_create_suspended(
                         self,
                         auth_ctx.account_id(),
-                        &owned_worker_id,
+                        &owned_agent_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
+                        principal,
                     )
                     .await?;
                     if let Some(mut await_interruption) = worker
@@ -640,9 +681,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     };
 
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers()
-                        .remove(&owned_worker_id.worker_id)
-                        .await;
+                    self.active_workers().remove(&owned_agent_id.agent_id).await;
                 }
             }
         }
@@ -653,10 +692,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::v1::ResumeWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -668,101 +709,60 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let force_resume = request.force.unwrap_or(false);
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await
             .ok_or(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_worker_id, &metadata).await?;
+        self.ensure_not_failed(&owned_agent_id, &metadata).await?;
 
         match &metadata.last_known_status.status {
-            WorkerStatus::Suspended | WorkerStatus::Interrupted | WorkerStatus::Idle => {
+            AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
                 info!(
-                    "Activating {:?} worker {owned_worker_id} due to explicit resume request",
+                    "Activating {:?} worker {owned_agent_id} due to explicit resume request",
                     metadata.last_known_status.status
                 );
                 let _ = Worker::get_or_create_running(
                     &self.services,
                     auth_ctx.account_id(),
-                    &owned_worker_id,
+                    &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal.clone(),
                 )
                 .await?;
                 Ok(())
             }
             _ if force_resume => {
                 info!(
-                    "Force activating {:?} worker {owned_worker_id} due to explicit resume request",
+                    "Force activating {:?} worker {owned_agent_id} due to explicit resume request",
                     metadata.last_known_status.status
                 );
                 let _ = Worker::get_or_create_running(
                     &self.services,
                     auth_ctx.account_id(),
-                    &owned_worker_id,
+                    &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal,
                 )
                 .await?;
                 Ok(())
             }
             _ => Err(WorkerExecutorError::invalid_request(format!(
-                "Worker {worker_id} is not suspended, interrupted or idle",
-                worker_id = owned_worker_id.worker_id
+                "Worker {agent_id} is not suspended, interrupted or idle",
+                agent_id = owned_agent_id.agent_id
             ))),
         }
-    }
-
-    async fn invoke_and_await_worker_internal_proto<Req: GrpcInvokeRequest>(
-        &self,
-        request: &Req,
-    ) -> Result<Option<Val>, WorkerExecutorError> {
-        let result = self.invoke_and_await_worker_internal_typed(request).await?;
-        let value = result
-            .map(golem_wasm::Value::try_from)
-            .transpose()
-            .map_err(|e| WorkerExecutorError::unknown(e.to_string()))?
-            .map(|value| value.into());
-        Ok(value)
-    }
-
-    async fn invoke_and_await_worker_internal_typed<Req: GrpcInvokeRequest>(
-        &self,
-        request: &Req,
-    ) -> Result<Option<ValueAndType>, WorkerExecutorError> {
-        let full_function_name = request.name();
-
-        let worker = self.get_or_create(request).await?;
-
-        let idempotency_key = request
-            .idempotency_key()?
-            .unwrap_or(IdempotencyKey::fresh());
-
-        let params_val = request.input(&worker).await?;
-
-        let function_input = params_val
-            .into_iter()
-            .map(|val| val.clone().try_into())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|msg| WorkerExecutorError::ValueMismatch { details: msg })?;
-
-        let value = worker
-            .invoke_and_await(
-                idempotency_key,
-                full_function_name,
-                function_input,
-                request.invocation_context(),
-            )
-            .await?;
-
-        Ok(value)
     }
 
     async fn get_or_create<Req: CanStartWorker>(
@@ -778,18 +778,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let worker_id = request.worker_id()?;
+        let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
 
-        let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
-        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        self.ensure_worker_belongs_to_this_executor(&agent_id)?;
 
         let auth_ctx = request.auth_ctx()?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id).await;
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await;
 
         if let Some(metadata) = &metadata {
-            self.ensure_not_failed(&owned_worker_id, metadata).await?;
+            self.ensure_not_failed(&owned_agent_id, metadata).await?;
         }
 
         let invocation_context = request
@@ -799,46 +799,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::get_or_create_suspended(
             self,
             auth_ctx.account_id(),
-            &owned_worker_id,
+            &owned_agent_id,
             request.env(),
             request.config_vars()?,
+            request.local_agent_config(),
             None,
             request.parent(),
             &invocation_context,
+            request.principal(),
         )
         .await
-    }
-
-    async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
-        &self,
-        request: &Req,
-    ) -> Result<(), WorkerExecutorError> {
-        let full_function_name = request.name();
-
-        let worker = self.get_or_create(request).await?;
-
-        let idempotency_key = request
-            .idempotency_key()?
-            .unwrap_or(IdempotencyKey::fresh());
-
-        let function_input = request
-            .input(&worker)
-            .await?
-            .iter()
-            .map(|val| val.clone().try_into())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|msg| WorkerExecutorError::ValueMismatch { details: msg })?;
-
-        worker
-            .invoke(
-                idempotency_key,
-                full_function_name,
-                function_input,
-                request.invocation_context(),
-            )
-            .await?;
-
-        Ok(())
     }
 
     async fn revoke_shards_internal(
@@ -851,8 +821,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service().revoke_shards(&shard_ids)?;
 
-        for (worker_id, worker_details) in self.active_workers().snapshot().await {
-            if self.shard_service().check_worker(&worker_id).is_err() {
+        for (agent_id, worker_details) in self.active_workers().snapshot().await {
+            if self.shard_service().check_worker(&agent_id).is_err() {
                 if let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
                     .await
@@ -879,26 +849,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
-    async fn get_worker_metadata_internal(
+    async fn get_agent_metadata_internal(
         &self,
-        request: golem::workerexecutor::v1::GetWorkerMetadataRequest,
-    ) -> Result<golem::worker::WorkerMetadata, WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        request: golem::workerexecutor::v1::GetAgentMetadataRequest,
+    ) -> Result<golem::worker::AgentMetadata, WorkerExecutorError> {
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
             .await
             .ok_or(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ))?;
 
-        let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
-            self,
-            &owned_worker_id,
-            &metadata.last_known_status,
-        )
-        .await;
+        let last_error_and_retry_count =
+            Ctx::get_last_error_and_retry_count(self, &owned_agent_id, &metadata.last_known_status)
+                .await;
 
         Self::create_proto_metadata(metadata, last_error_and_retry_count)
     }
@@ -906,13 +873,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_running_workers_metadata_internal(
         &self,
         request: GetRunningWorkersMetadataRequest,
-    ) -> Result<Vec<golem::worker::WorkerMetadata>, WorkerExecutorError> {
+    ) -> Result<Vec<golem::worker::AgentMetadata>, WorkerExecutorError> {
         let component_id: ComponentId = request
             .component_id
             .and_then(|t| t.try_into().ok())
             .ok_or(WorkerExecutorError::invalid_request("Invalid component id"))?;
 
-        let filter: Option<WorkerFilter> = match request.filter {
+        let filter: Option<AgentFilter> = match request.filter {
             Some(f) => Some(f.try_into().map_err(WorkerExecutorError::invalid_request)?),
             _ => None,
         };
@@ -922,7 +889,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .get(&component_id, filter)
             .await?;
 
-        let result: Vec<golem::worker::WorkerMetadata> = workers
+        let result: Vec<golem::worker::AgentMetadata> = workers
             .into_iter()
             .map(|worker_metadata| Self::create_proto_metadata(worker_metadata, None))
             .collect::<Result<Vec<_>, _>>()?;
@@ -933,7 +900,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_workers_metadata_internal(
         &self,
         request: GetWorkersMetadataRequest,
-    ) -> Result<(Option<Cursor>, Vec<golem::worker::WorkerMetadata>), WorkerExecutorError> {
+    ) -> Result<(Option<Cursor>, Vec<golem::worker::AgentMetadata>), WorkerExecutorError> {
         let component_id: ComponentId = request
             .component_id
             .and_then(|t| t.try_into().ok())
@@ -944,7 +911,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .and_then(|t| t.try_into().ok())
             .ok_or(WorkerExecutorError::invalid_request("Invalid project id"))?;
 
-        let filter: Option<WorkerFilter> = match request.filter {
+        let filter: Option<AgentFilter> = match request.filter {
             Some(f) => Some(f.try_into().map_err(WorkerExecutorError::invalid_request)?),
             _ => None,
         };
@@ -973,7 +940,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for worker_metadata in workers {
             let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
                 self,
-                &worker_metadata.owned_worker_id(),
+                &worker_metadata.owned_agent_id(),
                 &worker_metadata.last_known_status,
             )
             .await;
@@ -995,8 +962,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: UpdateWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -1013,12 +982,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ))
         })?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
             .await
             .ok_or(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ))?;
 
         if metadata.last_known_status.component_revision == target_revision {
@@ -1030,16 +999,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_metadata = self
             .component_service()
             .get_metadata(
-                owned_worker_id.worker_id.component_id,
+                owned_agent_id.agent_id.component_id,
                 Some(metadata.last_known_status.component_revision),
             )
             .await?;
 
-        if let Ok(agent_id) = AgentId::parse(
-            &owned_worker_id.worker_id.worker_name,
+        if let Ok(agent_id) = ParsedAgentId::parse(
+            &owned_agent_id.agent_id.agent_id,
             &component_metadata.metadata,
         ) {
-            if let Ok(Some(agent_type)) = component_metadata
+            if let Some(agent_type) = component_metadata
                 .metadata
                 .find_agent_type_by_name(&agent_id.agent_type)
             {
@@ -1069,25 +1038,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
 
                 match &metadata.last_known_status.status {
-                    WorkerStatus::Exited => {
+                    AgentStatus::Exited => {
                         warn!("Attempted updating worker which already exited")
                     }
-                    WorkerStatus::Interrupted
-                    | WorkerStatus::Suspended
-                    | WorkerStatus::Retrying
-                    | WorkerStatus::Failed => {
+                    AgentStatus::Interrupted
+                    | AgentStatus::Suspended
+                    | AgentStatus::Retrying
+                    | AgentStatus::Failed => {
                         // The worker is not active.
 
                         debug!("Activating worker for update",);
                         let worker = Worker::get_or_create_suspended(
                             self,
                             auth_ctx.account_id(),
-                            &owned_worker_id,
+                            &owned_agent_id,
                             None,
                             None,
+                            Vec::new(),
                             Some(metadata.last_known_status.component_revision),
                             None,
                             &InvocationContextStack::fresh(),
+                            principal.clone(),
                         )
                         .await?;
 
@@ -1101,19 +1072,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             Worker::start_if_needed(worker.clone()).await?;
                         }
                     }
-                    WorkerStatus::Running | WorkerStatus::Idle => {
+                    AgentStatus::Running | AgentStatus::Idle => {
                         // If the worker is already running we need to write to its oplog the
                         // update attempt, and then interrupt it and have it immediately restarting
                         // to begin the update.
                         let worker = Worker::get_or_create_suspended(
                             self,
                             auth_ctx.account_id(),
-                            &owned_worker_id,
+                            &owned_agent_id,
                             None,
                             None,
+                            Vec::new(),
                             None,
                             None,
                             &InvocationContextStack::fresh(),
+                            principal.clone(),
                         )
                         .await?;
 
@@ -1130,7 +1103,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             UpdateMode::Manual => {
                 if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_revision: update_target_revision, .. }, ..} if *update_target_revision == target_revision)
+                    matches!(invocation, TimestampedAgentInvocation { invocation: AgentInvocation::ManualUpdate { target_revision: update_target_revision, .. }, ..} if *update_target_revision == target_revision)
                 ) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
@@ -1144,12 +1117,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker = Worker::get_or_create_suspended(
                     self,
                     auth_ctx.account_id(),
-                    &owned_worker_id,
+                    &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal,
                 )
                 .await?;
                 worker.enqueue_manual_update(target_revision).await?;
@@ -1169,10 +1144,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: ConnectWorkerRequest,
     ) -> ResponseResult<<Self as WorkerExecutor>::ConnectWorkerStream> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -1182,24 +1159,26 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
             .await
             .ok_or(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_worker_id, &metadata).await?;
+        self.ensure_not_failed(&owned_agent_id, &metadata).await?;
 
-        if metadata.last_known_status.status != WorkerStatus::Interrupted {
+        if metadata.last_known_status.status != AgentStatus::Interrupted {
             let event_service = Worker::get_or_create_suspended(
                 self,
                 auth_ctx.account_id(),
-                &owned_worker_id,
+                &owned_agent_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                principal,
             )
             .await?
             .event_service();
@@ -1223,9 +1202,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: GetOplogRequest,
     ) -> Result<GetOplogResponse, WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let agent_type_name =
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1239,7 +1221,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 get_public_oplog_chunk(
                     self.component_service(),
                     self.oplog_service(),
-                    &owned_worker_id,
+                    &owned_agent_id,
+                    agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
                     min(
@@ -1253,13 +1236,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None => {
                 let start = OplogIndex::from_u64(request.from_oplog_index);
                 let initial_component_revision =
-                    find_component_revision_at(self.oplog_service(), &owned_worker_id, start)
+                    find_component_revision_at(self.oplog_service(), &owned_agent_id, start)
                         .await?;
 
                 get_public_oplog_chunk(
                     self.component_service(),
                     self.oplog_service(),
-                    &owned_worker_id,
+                    &owned_agent_id,
+                    agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
                     min(
@@ -1304,10 +1288,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: SearchOplogRequest,
     ) -> Result<SearchOplogResponse, WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let agent_type_name =
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1321,7 +1308,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 search_public_oplog(
                     self.component_service(),
                     self.oplog_service(),
-                    &owned_worker_id,
+                    &owned_agent_id,
+                    agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
                     min(
@@ -1336,12 +1324,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None => {
                 let start = OplogIndex::INITIAL;
                 let initial_component_revision =
-                    find_component_revision_at(self.oplog_service(), &owned_worker_id, start)
+                    find_component_revision_at(self.oplog_service(), &owned_agent_id, start)
                         .await?;
                 search_public_oplog(
                     self.component_service(),
                     self.oplog_service(),
-                    &owned_worker_id,
+                    &owned_agent_id,
+                    agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
                     min(
@@ -1512,10 +1501,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: ActivatePluginRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -1527,7 +1518,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
-        let metadata = Worker::get_latest_metadata(&self.services, &owned_worker_id).await;
+        let metadata = Worker::get_latest_metadata(&self.services, &owned_agent_id).await;
 
         match metadata {
             Some(metadata) => {
@@ -1543,7 +1534,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            owned_worker_id.worker_id.component_id,
+                            owned_agent_id.agent_id.component_id,
                             Some(metadata.last_known_status.component_revision),
                         )
                         .await?;
@@ -1556,12 +1547,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let worker = Worker::get_or_create_suspended(
                             self,
                             auth_ctx.account_id(),
-                            &owned_worker_id,
+                            &owned_agent_id,
                             None,
                             None,
+                            Vec::new(),
                             None,
                             None,
                             &InvocationContextStack::fresh(),
+                            principal,
                         )
                         .await?;
                         worker.activate_plugin(plugin_priority).await?;
@@ -1574,7 +1567,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
             None => Err(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             )),
         }
     }
@@ -1583,9 +1576,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: DeactivatePluginRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -1597,10 +1592,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority = PluginPriority(request.plugin_priority);
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await
             .ok_or(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ))?;
 
         // Worker exists
@@ -1615,7 +1610,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let component_metadata = self
                 .component_service()
                 .get_metadata(
-                    owned_worker_id.worker_id.component_id,
+                    owned_agent_id.agent_id.component_id,
                     Some(metadata.last_known_status.component_revision),
                 )
                 .await?;
@@ -1628,12 +1623,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker = Worker::get_or_create_suspended(
                     self,
                     auth_ctx.account_id(),
-                    &owned_worker_id,
+                    &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal,
                 )
                 .await?;
                 worker.deactivate_plugin(plugin_priority).await?;
@@ -1646,17 +1643,108 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn invoke_agent_internal(
+        &self,
+        request: InvokeAgentRequest,
+    ) -> Result<Option<AgentInvocationOutput>, WorkerExecutorError> {
+        let method_name = request.method_name.clone();
+
+        let method_parameters: UntypedDataValue = request
+            .method_parameters
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request(
+                "method_parameters not found",
+            ))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(
+                    "failed converting method_parameters: {e}"
+                ))
+            })?;
+
+        let idempotency_key: Option<IdempotencyKey> =
+            request.idempotency_key.clone().map(|k| k.into());
+
+        let mode = request.mode();
+
+        let schedule_at: Option<DateTime<Utc>> = request
+            .schedule_at
+            .and_then(|ts| DateTime::from_timestamp(ts.seconds, ts.nanos as u32));
+
+        let account_id: AccountId = request
+            .component_owner_account_id
+            .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("Invalid account id: {e}"))
+            })?;
+
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+
+        let principal: Principal = request
+            .principal
+            .clone()
+            .map(|p| p.try_into())
+            .transpose()
+            .map_err(|e: String| {
+                WorkerExecutorError::invalid_request(format!("failed converting principal: {e}"))
+            })?
+            .unwrap_or_else(Principal::anonymous);
+
+        let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+        let invocation_context = from_proto_invocation_context(&request.context);
+
+        let invocation = AgentInvocation::AgentMethod {
+            idempotency_key: ik,
+            method_name,
+            input: method_parameters,
+            invocation_context,
+            principal,
+        };
+
+        match mode {
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
+                let worker = self.get_or_create(&request).await?;
+                let invocation_output = worker.invoke_and_await(invocation).await?;
+                Ok(Some(invocation_output))
+            }
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
+                match schedule_at {
+                    Some(scheduled_time) => {
+                        self.scheduler_service()
+                            .schedule(
+                                scheduled_time,
+                                ScheduledAction::Invoke {
+                                    account_id,
+                                    owned_agent_id,
+                                    invocation: Box::new(invocation),
+                                },
+                            )
+                            .await;
+                        Ok(None)
+                    }
+                    None => {
+                        let worker = self.get_or_create(&request).await?;
+                        worker.invoke(invocation).await?;
+                        Ok(None)
+                    }
+                }
+            }
+        }
+    }
+
     fn create_proto_metadata(
-        metadata: WorkerMetadata,
+        metadata: AgentMetadata,
         last_error_and_retry_count: Option<LastError>,
-    ) -> Result<golem::worker::WorkerMetadata, WorkerExecutorError> {
+    ) -> Result<golem::worker::AgentMetadata, WorkerExecutorError> {
         let mut updates = Vec::new();
 
         let latest_status = metadata.last_known_status;
         for pending_invocation in &latest_status.pending_invocations {
-            if let TimestampedWorkerInvocation {
+            if let TimestampedAgentInvocation {
                 timestamp,
-                invocation: WorkerInvocation::ManualUpdate { target_revision },
+                invocation: AgentInvocation::ManualUpdate { target_revision },
             } = pending_invocation
             {
                 updates.push(golem::worker::UpdateRecord {
@@ -1709,14 +1797,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let active_plugins = latest_status.active_plugins;
 
-        Ok(golem::worker::WorkerMetadata {
-            worker_id: Some(metadata.worker_id.into()),
+        Ok(golem::worker::AgentMetadata {
+            agent_id: Some(metadata.agent_id.into()),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             config_vars: metadata.config_vars.into_iter().collect(),
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
-            status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
+            status: Into::<golem::worker::AgentStatus>::into(latest_status.status.clone()).into(),
             retry_count: last_error_and_retry_count
                 .as_ref()
                 .and_then(|last_error| {
@@ -1770,7 +1858,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "create_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         match self
@@ -1802,206 +1890,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn invoke_and_await_worker(
-        &self,
-        request: Request<InvokeAndAwaitWorkerRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_and_await_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self.invoke_and_await_worker_internal_proto(&request).instrument(record.span.clone()).await {
-            Ok(output) => {
-                let result = InvokeAndAwaitWorkerSuccess { output };
-
-                record.succeed(Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response::Result::Success(result),
-                        ),
-                    },
-                )))
-            }
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_and_await_worker_typed(
-        &self,
-        request: Request<InvokeAndAwaitWorkerRequest>,
-    ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_and_await_worker_typed",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
-            Ok(value_and_type) => {
-                let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                    output: value_and_type.map(|vnt| vnt.into())
-                };
-
-                record.succeed(Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(result),
-                        ),
-                    },
-                )))
-            }
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_worker(
-        &self,
-        request: Request<golem::workerexecutor::v1::InvokeWorkerRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::InvokeWorkerResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            function = request.name,
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self
-            .invoke_worker_internal(&request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::invoke_worker_response::Result::Success(
-                            golem::common::Empty {},
-                        ),
-                    ),
-                },
-            ))),
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_worker_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_and_await_worker_json(
-        &self,
-        request: Request<InvokeAndAwaitWorkerJsonRequest>,
-    ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_and_await_worker_json",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
-            Ok(value_and_type) => {
-                let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                    output: value_and_type.map(|vnt| vnt.into())
-                };
-
-                record.succeed(Ok(Response::new(
-                    InvokeAndAwaitWorkerResponseTyped {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(result),
-                        ),
-                    },
-                )))
-            }
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_worker_json(
-        &self,
-        request: Request<InvokeJsonWorkerRequest>,
-    ) -> Result<Response<InvokeWorkerResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_worker_json",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            function = request.name,
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self
-            .invoke_worker_internal(&request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::invoke_worker_response::Result::Success(
-                            golem::common::Empty {},
-                        ),
-                    ),
-                },
-            ))),
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_worker_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
     type ConnectWorkerStream = ResponseStream;
 
     async fn connect_worker(
@@ -2011,7 +1899,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "connect_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         self.connect_worker_internal(request)
@@ -2026,7 +1914,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "delete_worker",
-            worker_id = proto_worker_id_string(&request.worker_id)
+            agent_id = proto_agent_id_string(&request.agent_id)
         );
 
         match self
@@ -2104,7 +1992,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "interrupt_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         match self
@@ -2208,45 +2096,45 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn get_worker_metadata(
+    async fn get_agent_metadata(
         &self,
-        request: Request<golem::workerexecutor::v1::GetWorkerMetadataRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::GetWorkerMetadataResponse>, Status> {
+        request: Request<golem::workerexecutor::v1::GetAgentMetadataRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::GetAgentMetadataResponse>, Status> {
         let request = request.into_inner();
 
         let record = recorded_grpc_api_request!(
-            "get_worker_metadata",
-            worker_id = proto_worker_id_string(&request.worker_id)
+            "get_agent_metadata",
+            agent_id = proto_agent_id_string(&request.agent_id)
         );
 
         let result = self
-            .get_worker_metadata_internal(request)
+            .get_agent_metadata_internal(request)
             .instrument(record.span.clone())
             .await;
         match result {
             Ok(result) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::GetWorkerMetadataResponse {
+                golem::workerexecutor::v1::GetAgentMetadataResponse {
                     result: Some(
-                        golem::workerexecutor::v1::get_worker_metadata_response::Result::Success(
+                        golem::workerexecutor::v1::get_agent_metadata_response::Result::Success(
                             result,
                         ),
                     ),
                 },
             ))),
-            Err(err @ WorkerExecutorError::WorkerNotFound { .. }) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::GetWorkerMetadataResponse {
+            Err(err @ WorkerExecutorError::AgentNotFound { .. }) => record.succeed(Ok(
+                Response::new(golem::workerexecutor::v1::GetAgentMetadataResponse {
                     result: Some(
-                        golem::workerexecutor::v1::get_worker_metadata_response::Result::Failure(
+                        golem::workerexecutor::v1::get_agent_metadata_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),
-                },
-            ))),
+                }),
+            )),
             Err(mut err) => record.fail(
                 Ok(Response::new(
-                    golem::workerexecutor::v1::GetWorkerMetadataResponse {
+                    golem::workerexecutor::v1::GetAgentMetadataResponse {
                         result: Some(
-                            golem::workerexecutor::v1::get_worker_metadata_response::Result::Failure(
+                            golem::workerexecutor::v1::get_agent_metadata_response::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),
@@ -2264,7 +2152,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "resume_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         match self
@@ -2384,7 +2272,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "update_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
             target_revision = request.target_revision,
         );
 
@@ -2420,7 +2308,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_oplog",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         let result = self
@@ -2449,7 +2337,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "search_oplog",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         let result = self
@@ -2479,8 +2367,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let record = recorded_grpc_api_request!(
             "fork_worker",
-            source_worker_id = proto_worker_id_string(&request.source_worker_id),
-            target_worker_id = proto_worker_id_string(&request.target_worker_id),
+            source_agent_id = proto_agent_id_string(&request.source_agent_id),
+            target_agent_id = proto_agent_id_string(&request.target_agent_id),
         );
 
         let result = self
@@ -2517,7 +2405,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let record = recorded_grpc_api_request!(
             "revert_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         let result = self
@@ -2554,7 +2442,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let record = recorded_grpc_api_request!(
             "cancel_invocation",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
         );
 
@@ -2591,7 +2479,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_file_system_node",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
             path = request.path,
         );
 
@@ -2624,7 +2512,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_file_contents",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
             path = request.file_path,
         );
 
@@ -2660,7 +2548,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "activate_plugin",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
             plugin_priority = request.plugin_priority
         );
 
@@ -2697,7 +2585,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "deactivate_plugin",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
             plugin_priority = request.plugin_priority
         );
 
@@ -2718,6 +2606,63 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(Response::new(DeactivatePluginResponse {
                     result: Some(
                         golem::workerexecutor::v1::deactivate_plugin_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn invoke_agent(
+        &self,
+        request: Request<InvokeAgentRequest>,
+    ) -> Result<Response<InvokeAgentResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invoke_agent",
+            agent_id = proto_agent_id_string(&request.agent_id),
+            method_name = request.method_name.clone(),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+        );
+
+        match self
+            .invoke_agent_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => {
+                let (result_value, fuel_consumed, component_revision) = match result {
+                    Some(output) => {
+                        let value = match output.result {
+                            AgentInvocationResult::AgentMethod { output } => Some(output.into()),
+                            _ => None,
+                        };
+                        (
+                            value,
+                            output.consumed_fuel,
+                            output.component_revision.map(|r| r.get()),
+                        )
+                    }
+                    None => (None, None, None),
+                };
+                record.succeed(Ok(Response::new(InvokeAgentResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::invoke_agent_response::Result::Success(
+                            golem::workerexecutor::v1::InvokeAgentSuccess {
+                                result: result_value,
+                                fuel_consumed,
+                                component_revision,
+                            },
+                        ),
+                    ),
+                })))
+            }
+            Err(mut err) => record.fail(
+                Ok(Response::new(InvokeAgentResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::invoke_agent_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),
@@ -2748,10 +2693,10 @@ impl Stream for WorkerEventStream {
         let WorkerEventStream { inner } = self.get_mut();
         match inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
-                Poll::Ready(Some(Ok(WorkerEvent::from(event).try_into().unwrap())))
+                Poll::Ready(Some(Ok(AgentEvent::from(event).try_into().unwrap())))
             }
             Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(n)))) => {
-                Poll::Ready(Some(Ok(WorkerEvent::ClientLagged {
+                Poll::Ready(Some(Ok(AgentEvent::ClientLagged {
                     number_of_missed_messages: n,
                 }
                 .try_into()
@@ -2763,15 +2708,27 @@ impl Stream for WorkerEventStream {
     }
 }
 
-fn extract_owned_worker_id<T>(
-    request: &T,
-    get_worker_id: impl FnOnce(&T) -> &Option<golem::worker::WorkerId>,
-    get_environment_id: impl FnOnce(&T) -> &Option<golem::common::EnvironmentId>,
-) -> Result<OwnedWorkerId, WorkerExecutorError> {
-    let worker_id = get_worker_id(request)
+fn extract_principal(
+    proto_principal: &Option<golem_api_grpc::proto::golem::component::Principal>,
+) -> Principal {
+    proto_principal
         .as_ref()
-        .ok_or(WorkerExecutorError::invalid_request("worker_id not found"))?;
-    let worker_id = worker_id
+        .and_then(|p| {
+            let result: Result<Principal, String> = p.clone().try_into();
+            result.ok()
+        })
+        .unwrap_or_else(Principal::anonymous)
+}
+
+fn extract_owned_agent_id<T>(
+    request: &T,
+    get_agent_id: impl FnOnce(&T) -> &Option<golem::worker::AgentId>,
+    get_environment_id: impl FnOnce(&T) -> &Option<golem::common::EnvironmentId>,
+) -> Result<OwnedAgentId, WorkerExecutorError> {
+    let agent_id = get_agent_id(request)
+        .as_ref()
+        .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
+    let agent_id = agent_id
         .clone()
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
@@ -2786,5 +2743,5 @@ fn extract_owned_worker_id<T>(
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 
-    Ok(OwnedWorkerId::new(environment_id, &worker_id))
+    Ok(OwnedAgentId::new(environment_id, &agent_id))
 }

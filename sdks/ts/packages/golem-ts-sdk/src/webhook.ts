@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createWebhook as createWebhookHost, PromiseId } from 'golem:agent/host';
-import { createPromise, getPromise, GetPromiseResult } from 'golem:api/host@1.3.0';
+import { createWebhook as createWebhookHost, PromiseId } from 'golem:agent/host@1.5.0';
+import { createPromise, getPromise, GetPromiseResult } from 'golem:api/host@1.5.0';
 import { awaitPromise } from './host/hostapi';
 
 export function createWebhook(): WebhookHandler {

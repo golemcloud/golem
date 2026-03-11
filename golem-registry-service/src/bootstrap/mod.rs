@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,6 +18,7 @@ use self::login::LoginSystem;
 use crate::config::RegistryServiceConfig;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
+use crate::repo::agent_secret::{AgentSecretRepo, DbAgentSecretRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
@@ -28,15 +29,17 @@ use crate::repo::environment_plugin_grant::{
 };
 use crate::repo::environment_share::{DbEnvironmentShareRepo, EnvironmentShareRepo};
 use crate::repo::http_api_deployment::{DbHttpApiDeploymentRepo, HttpApiDeploymentRepo};
+use crate::repo::mcp_deployment::{DbMcpDeploymentRepo, McpDeploymentRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::plugin::{DbPluginRepo, PluginRepo};
-use crate::repo::reports::{DbReportsRepo, ReportsRepo};
+use crate::repo::report::{DbReportRepo, ReportRepo};
 use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
 use crate::services::account_usage::AccountUsageService;
+use crate::services::agent_secret::AgentSecretService;
 use crate::services::application::ApplicationService;
 use crate::services::auth::AuthService;
 use crate::services::component::{ComponentService, ComponentWriteService};
@@ -44,13 +47,14 @@ use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{
-    DeployedRoutesService, DeploymentService, DeploymentWriteService,
+    DeployedMcpService, DeployedRoutesService, DeploymentService, DeploymentWriteService,
 };
 use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
+use crate::services::mcp_deployment::McpDeploymentService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use crate::services::reports::ReportsService;
@@ -76,6 +80,7 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 pub struct Services {
     pub account_service: Arc<AccountService>,
     pub account_usage_service: Arc<AccountUsageService>,
+    pub agent_secret_service: Arc<AgentSecretService>,
     pub application_service: Arc<ApplicationService>,
     pub auth_service: Arc<AuthService>,
     pub component_compilation_service: Arc<dyn ComponentCompilationService>,
@@ -83,6 +88,7 @@ pub struct Services {
     pub component_service: Arc<ComponentService>,
     pub component_write_service: Arc<ComponentWriteService>,
     pub deployed_routes_service: Arc<DeployedRoutesService>,
+    pub deployed_mcp_service: Arc<DeployedMcpService>,
     pub deployment_service: Arc<DeploymentService>,
     pub deployment_write_service: Arc<DeploymentWriteService>,
     pub domain_registration_service: Arc<DomainRegistrationService>,
@@ -90,6 +96,7 @@ pub struct Services {
     pub environment_service: Arc<EnvironmentService>,
     pub environment_share_service: Arc<EnvironmentShareService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
+    pub mcp_deployment_service: Arc<McpDeploymentService>,
     pub login_system: LoginSystem,
     pub plan_service: Arc<PlanService>,
     pub plugin_registration_service: Arc<PluginRegistrationService>,
@@ -101,6 +108,7 @@ pub struct Services {
 struct Repos {
     account_repo: Arc<dyn AccountRepo>,
     account_usage_repo: Arc<dyn AccountUsageRepo>,
+    agent_secret_repo: Arc<dyn AgentSecretRepo>,
     application_repo: Arc<dyn ApplicationRepo>,
     component_repo: Arc<dyn ComponentRepo>,
     deployment_repo: Arc<dyn DeploymentRepo>,
@@ -109,11 +117,12 @@ struct Repos {
     environment_repo: Arc<dyn EnvironmentRepo>,
     environment_share_repo: Arc<dyn EnvironmentShareRepo>,
     http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
+    mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
     oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     plan_repo: Arc<dyn PlanRepo>,
     plugin_repo: Arc<dyn PluginRepo>,
-    reports_repo: Arc<dyn ReportsRepo>,
+    reports_repo: Arc<dyn ReportRepo>,
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     token_repo: Arc<dyn TokenRepo>,
 }
@@ -264,19 +273,35 @@ impl Services {
             domain_registration_service.clone(),
         ));
 
+        let mcp_deployment_service = Arc::new(McpDeploymentService::new(
+            repos.mcp_deployment_repo.clone(),
+            environment_service.clone(),
+            deployment_service.clone(),
+            domain_registration_service.clone(),
+        ));
+
         let deployment_write_service = Arc::new(DeploymentWriteService::new(
             environment_service.clone(),
             repos.deployment_repo.clone(),
             component_service.clone(),
             http_api_deployment_service.clone(),
+            mcp_deployment_service.clone(),
         ));
 
         let deployed_routes_service =
             Arc::new(DeployedRoutesService::new(repos.deployment_repo.clone()));
 
+        let deployed_mcp_service = Arc::new(DeployedMcpService::new(repos.deployment_repo.clone()));
+
+        let agent_secret_service = Arc::new(AgentSecretService::new(
+            repos.agent_secret_repo.clone(),
+            environment_service.clone(),
+        ));
+
         Ok(Self {
             account_service,
             account_usage_service,
+            agent_secret_service,
             application_service,
             auth_service,
             component_compilation_service,
@@ -284,6 +309,7 @@ impl Services {
             component_service,
             component_write_service,
             deployed_routes_service,
+            deployed_mcp_service,
             deployment_service,
             deployment_write_service,
             domain_registration_service,
@@ -291,6 +317,7 @@ impl Services {
             environment_service,
             environment_share_service,
             http_api_deployment_service,
+            mcp_deployment_service,
             login_system,
             plan_service,
             plugin_registration_service,
@@ -314,6 +341,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
 
             let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
+            let agent_secret_repo = Arc::new(DbAgentSecretRepo::logged(db_pool.clone()));
             let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
@@ -323,7 +351,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let oauth2_webflow_state_repo =
                 Arc::new(DbOAuth2WebflowStateRepo::logged(db_pool.clone()));
             let environment_share_repo = Arc::new(DbEnvironmentShareRepo::logged(db_pool.clone()));
-            let reports_repo = Arc::new(DbReportsRepo::logged(db_pool.clone()));
+            let reports_repo = Arc::new(DbReportRepo::logged(db_pool.clone()));
             let plugin_repo = Arc::new(DbPluginRepo::logged(db_pool.clone()));
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
@@ -333,10 +361,12 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
+            let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
                 account_usage_repo,
+                agent_secret_repo,
                 application_repo,
                 component_repo,
                 deployment_repo,
@@ -345,6 +375,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 environment_repo,
                 environment_share_repo,
                 http_api_deployment_repo,
+                mcp_deployment_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
                 plan_repo,
@@ -363,6 +394,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
 
             let account_repo = Arc::new(DbAccountRepo::logged(db_pool.clone()));
             let account_usage_repo = Arc::new(DbAccountUsageRepo::logged(db_pool.clone()));
+            let agent_secret_repo = Arc::new(DbAgentSecretRepo::logged(db_pool.clone()));
             let application_repo = Arc::new(DbApplicationRepo::logged(db_pool.clone()));
             let component_repo = Arc::new(DbComponentRepo::logged(db_pool.clone()));
             let environment_repo = Arc::new(DbEnvironmentRepo::logged(db_pool.clone()));
@@ -372,7 +404,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let oauth2_webflow_state_repo =
                 Arc::new(DbOAuth2WebflowStateRepo::logged(db_pool.clone()));
             let environment_share_repo = Arc::new(DbEnvironmentShareRepo::logged(db_pool.clone()));
-            let reports_repo = Arc::new(DbReportsRepo::logged(db_pool.clone()));
+            let reports_repo = Arc::new(DbReportRepo::logged(db_pool.clone()));
             let plugin_repo = Arc::new(DbPluginRepo::logged(db_pool.clone()));
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
@@ -382,10 +414,12 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
+            let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
                 account_usage_repo,
+                agent_secret_repo,
                 application_repo,
                 component_repo,
                 deployment_repo,
@@ -394,6 +428,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 environment_repo,
                 environment_share_repo,
                 http_api_deployment_repo,
+                mcp_deployment_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
                 plan_repo,

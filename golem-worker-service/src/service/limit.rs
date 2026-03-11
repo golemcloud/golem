@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -43,14 +43,14 @@ pub trait LimitService: Send + Sync {
     async fn update_worker_limit(
         &self,
         account_id: AccountId,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         added: bool,
     ) -> Result<(), LimitServiceError>;
 
     async fn update_worker_connection_limit(
         &self,
         account_id: AccountId,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         added: bool,
     ) -> Result<(), LimitServiceError>;
 }
@@ -70,11 +70,11 @@ impl LimitService for RemoteLimitService {
     async fn update_worker_limit(
         &self,
         account_id: AccountId,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         added: bool,
     ) -> Result<(), LimitServiceError> {
         self.client
-            .update_worker_limit(account_id, worker_id, added)
+            .update_worker_limit(account_id, agent_id, added)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),
@@ -86,11 +86,11 @@ impl LimitService for RemoteLimitService {
     async fn update_worker_connection_limit(
         &self,
         account_id: AccountId,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         added: bool,
     ) -> Result<(), LimitServiceError> {
         self.client
-            .update_worker_connection_limit(account_id, worker_id, added)
+            .update_worker_connection_limit(account_id, agent_id, added)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),

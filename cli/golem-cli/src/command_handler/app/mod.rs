@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
-use crate::app_template::add_component_by_template;
-use crate::app_template::model::{Template, TemplateName};
+use crate::app::template::{AppTemplateCommon, AppTemplateComponent, AppTemplateName};
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -32,8 +31,8 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
-    log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
+    log_action, log_anyhow_error, log_error, log_failed_to, log_finished_ok,
+    log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
     logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{
@@ -57,6 +56,7 @@ use futures_util::{stream, StreamExt, TryStreamExt};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
@@ -70,7 +70,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use strum::IntoEnumIterator;
 use tracing::debug;
@@ -160,73 +160,42 @@ impl AppCommandHandler {
             ),
         );
 
-        if components.is_empty() {
-            let common_templates = languages
-                .iter()
-                .map(|language| {
-                    self.get_template(language.id(), self.ctx.dev_mode())
-                        .map(|(common, _component)| common)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+        let app_template_repo = self.ctx.app_template_repo()?;
 
+        if components.is_empty() {
             {
                 let _indent = LogIndent::new();
-                // TODO: cleanup add_component_by_example, so we don't have to pass a dummy arg
-                let component_name = ComponentName::try_from("dummy:comp")
-                    .expect("Failed to parse dummy component name.");
-                for common_template in common_templates.into_iter().flatten() {
-                    match add_component_by_template(
-                        Some(common_template),
-                        None,
-                        &app_dir,
-                        &application_name,
-                        &component_name,
-                        Some(self.ctx.template_sdk_overrides()),
-                    ) {
-                        Ok(()) => {
-                            log_action(
-                                "Added",
-                                format!(
-                                    "common template for {}",
-                                    common_template.language.name().log_color_highlight()
-                                ),
-                            );
-                        }
-                        Err(error) => {
-                            bail!("Failed to add common template for new app: {:#}", error)
+                for language in &languages {
+                    if let Some(common_template) = app_template_repo.common_template(*language)? {
+                        match common_template.generate(
+                            &application_name,
+                            &app_dir,
+                            self.ctx.sdk_overrides(),
+                        ) {
+                            Ok(()) => {
+                                log_action(
+                                    "Added",
+                                    format!(
+                                        "common template for {}",
+                                        common_template.0.language.name().log_color_highlight()
+                                    ),
+                                );
+                            }
+                            Err(error) => {
+                                bail!("Failed to add common template for new app: {:#}", error)
+                            }
                         }
                     }
                 }
             }
         } else {
-            for (template, component_name) in &components {
+            for (template_name, component_name) in &components {
                 log_action(
                     "Adding",
                     format!("component {}", component_name.0.log_color_highlight()),
                 );
-                let (common_template, component_template) =
-                    self.get_template(template, self.ctx.dev_mode())?;
-                match add_component_by_template(
-                    common_template,
-                    Some(component_template),
-                    &app_dir,
-                    &application_name,
-                    component_name,
-                    Some(self.ctx.template_sdk_overrides()),
-                ) {
-                    Ok(()) => {
-                        log_action(
-                            "Added",
-                            format!(
-                                "new app component {}",
-                                component_name.0.log_color_highlight()
-                            ),
-                        );
-                    }
-                    Err(error) => {
-                        bail!("Failed to create new app component: {}", error)
-                    }
-                }
+
+                self.generate_component(&application_name, component_name, &app_dir, template_name)?
             }
         }
 
@@ -926,6 +895,23 @@ impl AppCommandHandler {
             }
         }
 
+        // Emit schema evolution warnings
+        for (component_name, new_props) in &deploy_diff.deployable_components {
+            if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
+                let warnings = validate_schema_evolution(old_agent_types, &new_props.agent_types);
+                for w in &warnings {
+                    log_warn_action(
+                        "Schema evolution",
+                        format!(
+                            "component {}: {}",
+                            component_name.0.log_color_highlight(),
+                            w
+                        ),
+                    );
+                }
+            }
+        }
+
         Ok(Some(deploy_diff))
     }
 
@@ -943,6 +929,12 @@ impl AppCommandHandler {
             .ctx
             .api_deployment_handler()
             .deployable_manifest_api_deployments(&environment.environment_name)
+            .await?;
+
+        let deployable_manifest_mcp_deployments = self
+            .ctx
+            .api_deployment_handler()
+            .deployable_manifest_mcp_deployments(&environment.environment_name)
             .await?;
 
         let diffable_local_components = {
@@ -984,9 +976,25 @@ impl AppCommandHandler {
             diffable_local_http_api_deployments
         };
 
+        let diffable_local_mcp_deployments = {
+            let mut diffable_local_mcp_deployments =
+                BTreeMap::<String, diff::HashOf<diff::McpDeployment>>::new();
+            for (domain, mcp_deployment) in &deployable_manifest_mcp_deployments {
+                let agents = mcp_deployment
+                    .agents
+                    .iter()
+                    .map(|(k, v)| (k.0.clone(), v.to_diffable()))
+                    .collect();
+                diffable_local_mcp_deployments
+                    .insert(domain.0.clone(), diff::McpDeployment { agents }.into());
+            }
+            diffable_local_mcp_deployments
+        };
+
         let diffable_local_deployment = diff::Deployment {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
+            mcp_deployments: diffable_local_mcp_deployments,
         };
 
         let local_deployment_hash = diffable_local_deployment.hash();
@@ -995,6 +1003,7 @@ impl AppCommandHandler {
             environment,
             deployable_manifest_components,
             deployable_manifest_http_api_deployments,
+            deployable_manifest_mcp_deployments,
             diffable_local_deployment,
             local_deployment_hash,
         })
@@ -1052,6 +1061,7 @@ impl AppCommandHandler {
             deployable_components: deploy_quick_diff.deployable_manifest_components,
             deployable_http_api_deployments: deploy_quick_diff
                 .deployable_manifest_http_api_deployments,
+            deployable_mcp_deployments: deploy_quick_diff.deployable_manifest_mcp_deployments,
             diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
             local_deployment_hash: deploy_quick_diff.local_deployment_hash,
             current_deployment,
@@ -1405,6 +1415,7 @@ impl AppCommandHandler {
             Ok(())
         };
 
+        // TODO
         for (component_name, component_diff) in &diff_stage.components {
             approve()?;
 
@@ -1468,6 +1479,53 @@ impl AppCommandHandler {
                             deploy_diff.staged_http_api_deployment_identity(&domain),
                             deploy_diff.deployable_manifest_http_api_deployment(&domain),
                             http_api_definition_diff,
+                        )
+                        .await?
+                }
+            }
+        }
+
+        for (domain, mcp_deployment_diff) in &diff_stage.mcp_deployments {
+            approve()?;
+
+            let domain = Domain(domain.to_string());
+
+            match mcp_deployment_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    mcp_deployment_handler
+                        .create_staged_mcp_deployment(
+                            &deploy_diff.environment,
+                            &domain,
+                            deploy_diff.deployable_manifest_mcp_deployment(&domain),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    mcp_deployment_handler
+                        .delete_staged_mcp_deployment(
+                            deploy_diff.staged_mcp_deployment_identity(&domain),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(mcp_deployment_diff) => {
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);
+                    let agents = mcp_deployment
+                        .agents.keys().map(|k| (k.clone(), golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default()))
+                        .collect();
+
+                    mcp_deployment_handler
+                        .update_staged_mcp_deployment(
+                            deploy_diff.staged_mcp_deployment_identity(&domain),
+                            &golem_common::model::mcp_deployment::McpDeploymentUpdate {
+                                current_revision: deploy_diff
+                                    .staged_mcp_deployment_identity(&domain)
+                                    .revision,
+                                agents: Some(agents),
+                            },
+                            mcp_deployment_diff,
                         )
                         .await?
                 }
@@ -1877,11 +1935,10 @@ impl AppCommandHandler {
         Ok(true)
     }
 
-    pub fn get_template(
+    pub fn get_templates(
         &self,
         requested_template_name: &str,
-        dev_mode: bool,
-    ) -> anyhow::Result<(Option<&Template>, &Template)> {
+    ) -> anyhow::Result<(Option<&AppTemplateCommon>, &AppTemplateComponent)> {
         let segments = requested_template_name.split("/").collect::<Vec<_>>();
         let (language, template_name): (String, Option<String>) = match segments.len() {
             1 => (segments[0].to_string(), None),
@@ -1895,7 +1952,7 @@ impl AppCommandHandler {
             }),
             _ => {
                 log_error("Failed to parse template name");
-                self.log_templates_help(None, None, self.ctx.dev_mode());
+                self.log_templates_help(None, None)?;
                 bail!(NonSuccessfulExit);
             }
         };
@@ -1904,39 +1961,71 @@ impl AppCommandHandler {
             Some(language) => language,
             None => {
                 log_error("Failed to parse language part of the template!");
-                self.log_templates_help(None, None, self.ctx.dev_mode());
+                self.log_templates_help(None, None)?;
                 bail!(NonSuccessfulExit);
             }
         };
+
         let template_name = template_name
-            .map(TemplateName::from)
-            .unwrap_or_else(|| TemplateName::from("default"));
+            .map(AppTemplateName::from)
+            .unwrap_or_else(|| AppTemplateName::from("default"));
 
-        let Some(lang_templates) = self.ctx.templates(dev_mode).get(&language) else {
-            log_error(format!("No templates found for language: {language}").as_str());
-            self.log_templates_help(None, None, self.ctx.dev_mode());
-            bail!(NonSuccessfulExit);
+        let app_template_repo = self.ctx.app_template_repo()?;
+
+        let common_template = match app_template_repo.common_template(language) {
+            Ok(common_template) => common_template.as_ref(),
+            Err(err) => {
+                log_anyhow_error(&err);
+                self.log_templates_help(None, None)?;
+                bail!(NonSuccessfulExit);
+            }
         };
 
-        let lang_templates = lang_templates
-            .get(self.ctx.template_group())
-            .ok_or_else(|| {
-                anyhow!(
-                    "No templates found for group: {}",
-                    self.ctx.template_group().as_str().log_color_highlight()
-                )
-            })?;
+        let component_template =
+            match app_template_repo.component_template(language, &template_name) {
+                Ok(component_template) => component_template,
+                Err(err) => {
+                    log_anyhow_error(&err);
+                    self.log_templates_help(None, None)?;
+                    bail!(NonSuccessfulExit);
+                }
+            };
 
-        let Some(component_template) = lang_templates.components.get(&template_name) else {
-            log_error(format!(
-                "Template {} not found!",
-                requested_template_name.log_color_highlight()
-            ));
-            self.log_templates_help(None, None, self.ctx.dev_mode());
-            bail!(NonSuccessfulExit);
-        };
+        Ok((common_template, component_template))
+    }
 
-        Ok((lang_templates.common.as_ref(), component_template))
+    pub fn generate_component(
+        &self,
+        application_name: &ApplicationName,
+        component_name: &ComponentName,
+        app_dir: &Path,
+        template_name: &str,
+    ) -> anyhow::Result<()> {
+        let (common_template, component_template) = self.get_templates(template_name)?;
+
+        if let Some(common_template) = common_template {
+            common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())?;
+        }
+
+        match component_template.generate(
+            application_name,
+            component_name,
+            app_dir,
+            self.ctx.sdk_overrides(),
+        ) {
+            Ok(()) => {
+                log_action(
+                    "Added",
+                    format!(
+                        "new app component {}",
+                        component_name.0.log_color_highlight()
+                    ),
+                );
+            }
+            Err(error) => bail!("Failed to create new app component: {}", error),
+        }
+
+        Ok(())
     }
 
     pub fn log_languages_help(&self) {
@@ -1954,8 +2043,7 @@ impl AppCommandHandler {
         &self,
         language_filter: Option<GuestLanguage>,
         template_filter: Option<&str>,
-        dev_mode: bool,
-    ) {
+    ) -> anyhow::Result<()> {
         if language_filter.is_none() && template_filter.is_none() {
             logln(format!(
                 "\n{}",
@@ -1967,70 +2055,30 @@ impl AppCommandHandler {
 
         let templates = self
             .ctx
-            .templates(dev_mode)
-            .iter()
-            .filter_map(|(language, templates)| {
-                templates
-                    .get(self.ctx.template_group())
-                    .and_then(|templates| {
-                        let matches_lang = language_filter
-                            .map(|language_filter| language_filter == *language)
-                            .unwrap_or(true);
-
-                        if matches_lang {
-                            let templates = templates
-                                .components
-                                .iter()
-                                .filter(|(template_name, template)| {
-                                    template_filter
-                                        .map(|template_filter| {
-                                            template_name
-                                                .as_str()
-                                                .to_lowercase()
-                                                .contains(template_filter)
-                                                || template
-                                                    .description
-                                                    .to_lowercase()
-                                                    .contains(template_filter)
-                                        })
-                                        .unwrap_or(true)
-                                })
-                                .collect::<Vec<_>>();
-
-                            (!templates.is_empty()).then_some(templates)
-                        } else {
-                            None
-                        }
-                    })
-                    .map(|templates| (language, templates))
-            })
-            .collect::<Vec<_>>();
+            .app_template_repo()?
+            .search_component_templates(language_filter, template_filter);
 
         for (language, templates) in templates {
-            if let Some(language_filter) = language_filter {
-                if language_filter != *language {
-                    continue;
-                }
-            }
-
             logln(format!("- {}", language.to_string().bold()));
             for (template_name, template) in templates {
                 if template_name.as_str() == "default" {
                     logln(format!(
                         "  - {}: {}",
                         language.id().bold(),
-                        template.description,
+                        template.0.description(),
                     ));
                 } else {
                     logln(format!(
                         "  - {}/{}: {}",
                         language.id().bold(),
-                        template.name.as_str().bold(),
-                        template.description,
+                        template.0.name.as_str().bold(),
+                        template.0.description(),
                     ));
                 }
             }
         }
+
+        Ok(())
     }
 
     pub async fn diagnose(

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,6 +14,7 @@
 
 use crate::services::account::AccountError;
 use crate::services::account_usage::error::LimitExceededError;
+use crate::services::agent_secret::AgentSecretError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
@@ -23,6 +24,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
 use crate::services::http_api_deployment::HttpApiDeploymentError;
+use crate::services::mcp_deployment::McpDeploymentError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
@@ -264,6 +266,8 @@ impl From<ComponentError> for ApiError {
             | ComponentError::InvalidPluginScope { .. }
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. }
+            | ComponentError::AgentConfigDuplicateValue { .. }
+            | ComponentError::AgentConfigTypeMismatch { .. }
             | ComponentError::EnvironmentPluginNotFound(_) => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 cause: None,
@@ -273,6 +277,9 @@ impl From<ComponentError> for ApiError {
             | ComponentError::ComponentVersionAlreadyExists(_)
             | ComponentError::ConflictingPluginPriority(_)
             | ComponentError::ConflictingEnvironmentPluginGrantId(_)
+            | ComponentError::AgentConfigNotDeclared { .. }
+            | ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed { .. }
+            | ComponentError::AgentConfigOldConfigNotValid { .. }
             | ComponentError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
@@ -583,6 +590,54 @@ impl From<HttpApiDeploymentError> for ApiError {
 
             HttpApiDeploymentError::Unauthorized(inner) => inner.into(),
             HttpApiDeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<McpDeploymentError> for ApiError {
+    fn from(value: McpDeploymentError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            McpDeploymentError::ParentEnvironmentNotFound(_)
+            | McpDeploymentError::DeploymentRevisionNotFound(_)
+            | McpDeploymentError::McpDeploymentNotFound(_)
+            | McpDeploymentError::McpDeploymentByDomainNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            McpDeploymentError::DomainNotRegistered(_)
+            | McpDeploymentError::McpDeploymentForDomainAlreadyExists(_)
+            | McpDeploymentError::ConcurrentUpdate => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            McpDeploymentError::Unauthorized(inner) => inner.into(),
+            McpDeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<AgentSecretError> for ApiError {
+    fn from(value: AgentSecretError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            AgentSecretError::ConcurrentModification
+            | AgentSecretError::AgentSecretForPathAlreadyExists { .. }
+            | AgentSecretError::AgentSecretValueDoesNotMatchType { .. } => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+            AgentSecretError::AgentSecretNotFound(_)
+            | AgentSecretError::ParentEnvironmentNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            AgentSecretError::Unauthorized(inner) => inner.into(),
+            AgentSecretError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),

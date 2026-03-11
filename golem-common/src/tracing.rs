@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -44,6 +44,7 @@ pub enum Output {
     Stderr,
     File,
     TracingConsole,
+    Otlp,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -52,6 +53,7 @@ pub struct OutputConfig {
     pub json: bool,
     pub json_flatten: bool,
     pub json_flatten_span: bool,
+    pub json_source_location: bool,
     pub ansi: bool,
     pub compact: bool,
     pub pretty: bool,
@@ -71,6 +73,7 @@ impl OutputConfig {
             json: false,
             json_flatten: true,
             json_flatten_span: true,
+            json_source_location: false,
             ansi: false,
             compact: false,
             pretty: false,
@@ -86,6 +89,7 @@ impl OutputConfig {
             json: false,
             json_flatten: true,
             json_flatten_span: true,
+            json_source_location: false,
             ansi: true,
             compact: false,
             pretty: false,
@@ -101,6 +105,7 @@ impl OutputConfig {
             json: true,
             json_flatten: false,
             json_flatten_span: false,
+            json_source_location: false,
             ansi: false,
             compact: false,
             pretty: false,
@@ -116,6 +121,7 @@ impl OutputConfig {
             json: true,
             json_flatten: true,
             json_flatten_span: false,
+            json_source_location: false,
             ansi: false,
             compact: false,
             pretty: false,
@@ -131,6 +137,7 @@ impl OutputConfig {
             json: true,
             json_flatten: true,
             json_flatten_span: true,
+            json_source_location: false,
             ansi: false,
             compact: false,
             pretty: false,
@@ -159,6 +166,9 @@ impl SafeDisplay for OutputConfig {
         }
         if self.json_flatten_span {
             flags.push("json_flatten_span");
+        }
+        if self.json_source_location {
+            flags.push("json_source_location");
         }
         if self.pretty {
             flags.push("pretty");
@@ -401,6 +411,7 @@ pub mod directive {
             warn("wasmtime_environ"),
             warn("wit_parser"),
             warn("golem_client"),
+            warn("bollard"),
         ]
     }
 }
@@ -513,7 +524,7 @@ where
         let telemetry = tracing_opentelemetry::layer().with_tracer(tracer.clone());
         result_tracer = Some(tracer);
 
-        layers.push(telemetry.boxed());
+        layers.push(telemetry.with_filter(make_filter(Output::Otlp)).boxed());
     }
 
     if config.stdout.enabled {
@@ -623,6 +634,8 @@ where
             tracing_subscriber::fmt::layer()
                 .json()
                 .flatten_event(config.json_flatten)
+                .with_file(config.json_source_location)
+                .with_line_number(config.json_source_location)
                 .with_span_events(span_events)
                 .with_writer(writer)
                 .with_filter(filter)

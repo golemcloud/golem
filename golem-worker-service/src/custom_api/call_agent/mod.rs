@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -27,14 +27,13 @@ use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::agent::{
-    AgentId, BinaryReference, BinaryReferenceValue, DataValue, ElementValue, ElementValues,
-    OidcPrincipal, Principal, UntypedDataValue, UntypedElementValue,
+    BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue, ElementValue,
+    ElementValues, OidcPrincipal, ParsedAgentId, Principal, UntypedDataValue, UntypedElementValue,
 };
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::{IntoValue, ValueAndType};
+use golem_wasm::ValueAndType;
 use std::sync::Arc;
 use tracing::debug;
 use uuid::Uuid;
@@ -54,7 +53,7 @@ impl CallAgentHandler {
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let worker_id = self.build_worker_id(resolved_route, behaviour)?;
+        let agent_id = self.build_agent_id(resolved_route, behaviour)?;
 
         let parsed_body = request
             .parse_request_body(&resolved_route.route.body)
@@ -63,38 +62,59 @@ impl CallAgentHandler {
         let method_params =
             self.resolve_method_arguments(resolved_route, request, behaviour, parsed_body)?;
 
-        debug!("Invoking agent {worker_id}");
+        debug!("Invoking agent {agent_id}");
+
+        let method_params_data_value = UntypedDataValue::Tuple(method_params);
+
+        let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
+            method_params_data_value.into();
+
+        let invocation_context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+            parent: None,
+            env: Default::default(),
+            config_vars: Default::default(),
+            tracing: Some(request.invocation_context().into()),
+        });
+
+        let principal = principal_from_request(request)?;
+        debug!("Using principal for invocation: {principal:?}");
+        let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
 
         let agent_response = self
+            .worker_service
             .invoke_agent(
-                &worker_id,
-                resolved_route,
-                method_params,
-                behaviour,
-                request,
+                &agent_id,
+                behaviour.method_name.clone(),
+                proto_method_parameters,
+                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32,
+                None,
+                Some(IdempotencyKey::fresh()),
+                invocation_context,
+                AuthCtx::impersonated_user(resolved_route.route.account_id),
+                proto_principal,
             )
             .await?;
 
         debug!("Received agent response: {agent_response:?}");
 
-        debug!(
-            "Json agent response: {}",
-            agent_response.clone().unwrap().to_json_value().unwrap()
-        );
+        let agent_result = match agent_response.result {
+            golem_common::model::AgentInvocationResult::AgentMethod { output } => Some(output),
+            _ => None,
+        };
 
         let route_result =
-            interpret_agent_response(agent_response, &behaviour.expected_agent_response)?;
+            interpret_agent_response(agent_result, &behaviour.expected_agent_response)?;
 
         debug!("Returning call agent route result: {route_result:?}");
 
         Ok(route_result)
     }
 
-    fn build_worker_id(
+    fn build_agent_id(
         &self,
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
-    ) -> Result<WorkerId, RequestHandlerError> {
+    ) -> Result<AgentId, RequestHandlerError> {
         let CallAgentBehaviour {
             component_id,
             agent_type,
@@ -117,10 +137,9 @@ impl CallAgentHandler {
 
                     let value = parse_path_segment_value_to_component_model(raw, parameter_type)?;
 
-                    values.push(ElementValue::ComponentModel(ValueAndType::new(
-                        value,
-                        parameter_type.into(),
-                    )));
+                    values.push(ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType::new(value, parameter_type.into()),
+                    }));
                 }
             }
         }
@@ -129,11 +148,12 @@ impl CallAgentHandler {
 
         let phantom_id = phantom.then(Uuid::new_v4);
 
-        let agent_id = AgentId::new(agent_type.clone(), data_value, phantom_id);
+        let agent_id = ParsedAgentId::new(agent_type.clone(), data_value, phantom_id)
+            .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
-        Ok(WorkerId {
+        Ok(AgentId {
             component_id: *component_id,
-            worker_name: agent_id.to_string(),
+            agent_id: agent_id.to_string(),
         })
     }
 
@@ -236,44 +256,6 @@ impl CallAgentHandler {
         }
 
         Ok(values)
-    }
-
-    async fn invoke_agent(
-        &self,
-        worker_id: &WorkerId,
-        resolved_route: &ResolvedRouteEntry,
-        params: Vec<UntypedElementValue>,
-        behaviour: &CallAgentBehaviour,
-        request: &RichRequest,
-    ) -> Result<Option<golem_wasm::ValueAndType>, RequestHandlerError> {
-        let method_params_data_value = UntypedDataValue::Tuple(params);
-        tracing::debug!("Using params for invocation: {method_params_data_value:?}");
-
-        let principal = principal_from_request(request)?;
-        tracing::debug!("Using principal for invocation: {principal:?}");
-
-        self.worker_service
-            .invoke_and_await_owned_agent(
-                worker_id,
-                Some(IdempotencyKey::fresh()),
-                "golem:agent/guest.{invoke}".to_string(),
-                vec![
-                    golem_wasm::protobuf::Val::from(behaviour.method_name.clone().into_value()),
-                    golem_wasm::protobuf::Val::from(method_params_data_value.into_value()),
-                    golem_wasm::protobuf::Val::from(principal.into_value()),
-                ],
-                Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                    parent: None,
-                    env: Default::default(),
-                    config_vars: Default::default(),
-                    tracing: Some(request.invocation_context().into()),
-                }),
-                resolved_route.route.environment_id,
-                resolved_route.route.account_id,
-                AuthCtx::impersonated_user(resolved_route.route.account_id),
-            )
-            .await
-            .map_err(Into::into)
     }
 }
 

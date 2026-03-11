@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -23,12 +23,11 @@ use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, Sq
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhoooks::WebhookCallbackHandler;
+use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
-use crate::service::worker::{
-    AgentsService, WorkerClient, WorkerExecutorWorkerClient, WorkerService,
-};
+use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient, WorkerService};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
@@ -45,7 +44,7 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
-    pub agents_service: Arc<AgentsService>,
+    pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
 }
 
 impl Services {
@@ -87,6 +86,7 @@ impl Services {
         ));
 
         let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
+            registry_service_client.clone(),
             component_service.clone(),
             auth_service.clone(),
             limit_service.clone(),
@@ -100,6 +100,10 @@ impl Services {
         let route_resolver = Arc::new(RouteResolver::new(
             &config.route_resolver,
             api_definition_lookup_service.clone(),
+        ));
+
+        let mcp_capability_lookup = Arc::new(RegistryServiceMcpCapabilityLookup::new(
+            registry_service_client.clone(),
         ));
 
         let call_agent_handler = Arc::new(CallAgentHandler::new(worker_service.clone()));
@@ -151,19 +155,13 @@ impl Services {
             webhook_callback_handler.clone(),
         ));
 
-        let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new(
-            registry_service_client.clone(),
-            component_service.clone(),
-            worker_service.clone(),
-        ));
-
         Ok(Self {
             auth_service,
             limit_service,
             component_service,
             worker_service,
             request_handler,
-            agents_service,
+            mcp_capability_lookup,
         })
     }
 }

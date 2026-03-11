@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -145,6 +145,13 @@ impl ApiEndpointError {
         }))
     }
 
+    pub fn conflict_message(error: impl ToString) -> Self {
+        Self::Conflict(Json(ErrorBody {
+            error: error.to_string(),
+            cause: None,
+        }))
+    }
+
     pub fn limit_exceeded<T: SafeDisplay>(error: T) -> Self {
         Self::LimitExceeded(Json(ErrorBody {
             error: error.to_safe_string(),
@@ -166,7 +173,7 @@ impl From<WorkerServiceError> for ApiEndpointError {
 
             WorkerServiceError::ComponentNotFound(_)
             | WorkerServiceError::AccountIdNotFound(_)
-            | WorkerServiceError::WorkerNotFound(_) => Self::not_found(error),
+            | WorkerServiceError::AgentNotFound(_) => Self::not_found(error),
 
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
@@ -208,7 +215,7 @@ impl From<CallWorkerExecutorError> for ApiEndpointError {
 impl From<WorkerExecutorError> for ApiEndpointError {
     fn from(error: WorkerExecutorError) -> Self {
         match error {
-            WorkerExecutorError::WorkerNotFound { .. } => Self::not_found(error),
+            WorkerExecutorError::AgentNotFound { .. } => Self::not_found(error),
             WorkerExecutorError::InvocationFailed { error, stderr } => {
                 Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
                     error: "Invocation Failed".to_string(),

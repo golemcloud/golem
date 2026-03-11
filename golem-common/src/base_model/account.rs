@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,7 +18,7 @@ use crate::{declare_revision, declare_structs, declare_transparent_newtypes, new
 use derive_more::Display;
 use uuid::uuid;
 
-newtype_uuid!(AccountId, golem_api_grpc::proto::golem::common::AccountId);
+newtype_uuid!(AccountId, wit_name: "account-id", wit_owner: "golem:core@1.5.0/types", golem_api_grpc::proto::golem::common::AccountId);
 
 impl AccountId {
     pub const SYSTEM: Self = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));

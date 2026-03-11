@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,7 +16,7 @@ import { describe, it } from 'vitest';
 import { getHttpMountDetails } from '../src/internal/http/mount';
 import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/internal/http/query';
-import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
+import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@1.5.0';
 import { validateHttpEndpoint, validateHttpMount } from '../src/internal/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -39,6 +39,7 @@ use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::worker::AgentUpdateMode;
+use crate::model::GuestLanguage;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use futures_util::future::OptionFuture;
@@ -50,9 +51,6 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
-
-use crate::app_template::add_component_by_template;
-use crate::model::GuestLanguage;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
@@ -74,47 +72,49 @@ impl ComponentCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: ComponentSubcommand) -> anyhow::Result<()> {
-        match subcommand {
-            ComponentSubcommand::New {
-                component_template,
-                component_name,
-            } => self.cmd_new(component_template, component_name).await,
-            ComponentSubcommand::Templates { filter } => {
-                self.cmd_templates(filter);
-                Ok(())
-            }
-            ComponentSubcommand::List => self.cmd_list().await,
-            ComponentSubcommand::Get {
-                component_name,
-                revision,
-            } => self.cmd_get(component_name.component_name, revision).await,
+    pub fn handle_command(
+        &self,
+        subcommand: ComponentSubcommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
+        Box::pin(async move {
+            match subcommand {
+                ComponentSubcommand::New {
+                    component_template,
+                    component_name,
+                } => self.cmd_new(component_template, component_name).await,
+                ComponentSubcommand::Templates { filter } => self.cmd_templates(filter),
+                ComponentSubcommand::List => self.cmd_list().await,
+                ComponentSubcommand::Get {
+                    component_name,
+                    revision,
+                } => self.cmd_get(component_name.component_name, revision).await,
 
-            ComponentSubcommand::UpdateAgents {
-                component_name,
-                update_mode,
-                r#await,
-                disable_wakeup,
-            } => {
-                self.cmd_update_workers(
-                    component_name.component_name,
+                ComponentSubcommand::UpdateAgents {
+                    component_name,
                     update_mode,
                     r#await,
                     disable_wakeup,
-                )
-                .await
-            }
-            ComponentSubcommand::RedeployAgents { component_name } => {
-                self.cmd_redeploy_workers(component_name.component_name)
+                } => {
+                    self.cmd_update_workers(
+                        component_name.component_name,
+                        update_mode,
+                        r#await,
+                        disable_wakeup,
+                    )
                     .await
+                }
+                ComponentSubcommand::RedeployAgents { component_name } => {
+                    self.cmd_redeploy_workers(component_name.component_name)
+                        .await
+                }
+                ComponentSubcommand::Diagnose { component_name } => {
+                    self.cmd_diagnose(component_name).await
+                }
+                ComponentSubcommand::ManifestTrace { component_name } => {
+                    self.cmd_manifest_trace(component_name).await
+                }
             }
-            ComponentSubcommand::Diagnose { component_name } => {
-                self.cmd_diagnose(component_name).await
-            }
-            ComponentSubcommand::ManifestTrace { component_name } => {
-                self.cmd_manifest_trace(component_name).await
-            }
-        }
+        })
     }
 
     async fn cmd_new(
@@ -156,9 +156,7 @@ impl ComponentCommandHandler {
         }) else {
             log_error("Both TEMPLATE and COMPONENT_NAME are required in non-interactive mode");
             logln("");
-            self.ctx
-                .app_handler()
-                .log_templates_help(None, None, self.ctx.dev_mode());
+            self.ctx.app_handler().log_templates_help(None, None)?;
             logln("");
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
@@ -173,56 +171,30 @@ impl ComponentCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        let app_handler = self.ctx.app_handler();
-        let (common_template, component_template) =
-            app_handler.get_template(&template, self.ctx.dev_mode())?;
-
-        match add_component_by_template(
-            common_template,
-            Some(component_template),
-            &PathBuf::from("."),
+        self.ctx.app_handler().generate_component(
             &application_name,
             &component_name,
-            Some(self.ctx.template_sdk_overrides()),
-        ) {
-            Ok(()) => {
-                log_action(
-                    "Added",
-                    format!(
-                        "new app component {}",
-                        component_name.0.log_color_highlight()
-                    ),
-                );
-            }
-            Err(error) => {
-                bail!("Failed to create new app component: {}", error)
-            }
-        }
+            &PathBuf::from("."),
+            template.as_str(),
+        )?;
 
         Ok(())
     }
 
-    fn cmd_templates(&self, filter: Option<String>) {
+    fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
         match filter {
             Some(filter) => {
                 if let Some(language) = GuestLanguage::from_string(filter.clone()) {
-                    self.ctx.app_handler().log_templates_help(
-                        Some(language),
-                        None,
-                        self.ctx.dev_mode(),
-                    );
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(Some(language), None)
                 } else {
-                    self.ctx.app_handler().log_templates_help(
-                        None,
-                        Some(&filter),
-                        self.ctx.dev_mode(),
-                    );
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(None, Some(&filter))
                 }
             }
-            None => self
-                .ctx
-                .app_handler()
-                .log_templates_help(None, None, self.ctx.dev_mode()),
+            None => self.ctx.app_handler().log_templates_help(None, None),
         }
     }
 
@@ -842,10 +814,10 @@ impl ComponentCommandHandler {
         match (component, component_revision_selection) {
             (Some(component), Some(component_revision_selection)) => {
                 let revision = match component_revision_selection {
-                    ComponentRevisionSelection::ByWorkerName(worker_name) => self
+                    ComponentRevisionSelection::ByAgentName(agent_name) => self
                         .ctx
                         .worker_handler()
-                        .worker_metadata(component.id.0, &component.component_name, worker_name)
+                        .worker_metadata(component.id.0, &component.component_name, agent_name)
                         .await
                         .ok()
                         .map(|worker_metadata| worker_metadata.component_revision),
@@ -1010,7 +982,6 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             metadata: diff::ComponentMetadata {
-                version: Some("".to_string()), // TODO: atomic
                 env: properties
                     .env
                     .iter()
@@ -1026,6 +997,8 @@ impl ComponentCommandHandler {
             wasm_hash: component_binary_hash.into(),
             files_by_path,
             plugins_by_grant_id,
+            // FIXME: agent-config
+            local_agent_config_ordered_by_agent_and_key: Vec::new(),
         })
     }
 
@@ -1072,6 +1045,8 @@ impl ComponentCommandHandler {
                         .unwrap_or_default(),
                     env: component_stager.env(),
                     config_vars: component_stager.config_vars(),
+                    // FIXME: agent-config
+                    local_agent_config: Vec::new(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
@@ -1166,6 +1141,8 @@ impl ComponentCommandHandler {
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
                     config_vars: component_stager.config_vars_if_changed(),
+                    // FIXME: agent-config
+                    local_agent_config: None,
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),

@@ -17,12 +17,13 @@ wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
 uuid = { version = "1.10", features = ["v4"] }
 
 [package.metadata.component.bindings]
+generate_unused_types = true
 
 [package.metadata.component.target]
 path = "wit"
 
 [package.metadata.component.target.dependencies]
+"golem:core" = { path = "wit/deps/golem-core" }
 "golem:api" = { path = "wit/deps/golem-1.x" }
-"golem:rpc" = { path = "wit/deps/golem-rpc" }
 "wasi:io" = { path = "wit/deps/io" }
 "wasi:clocks" = { path = "wit/deps/clocks" }

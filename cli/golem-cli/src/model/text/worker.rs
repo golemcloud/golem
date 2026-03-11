@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,24 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::SourceLanguage;
 use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkersMetadataResponseView,
+    RawAgentId, WorkerMetadata, WorkerMetadataView, WorkerNameMatch, WorkersMetadataResponseView,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use chrono::DateTime;
 use cli_table::{format::Justify, Table};
 use colored::Colorize;
-use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
+use golem_common::model::agent::{
+    BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
+    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, PublicWorkerInvocation, StringAttributeValue,
+    PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
+    PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::model::worker::UpdateRecord;
 use golem_common::model::Timestamp;
@@ -42,15 +46,15 @@ use std::fmt::Write;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerCreateView {
     pub component_name: ComponentName,
-    pub worker_name: Option<WorkerName>,
+    pub agent_name: Option<RawAgentId>,
 }
 
 impl MessageWithFields for WorkerCreateView {
     fn message(&self) -> String {
-        if let Some(worker_name) = &self.worker_name {
+        if let Some(agent_name) = &self.agent_name {
             format!(
                 "Created new agent {}",
-                format_message_highlight(&worker_name)
+                format_message_highlight(&agent_name)
             )
         } else {
             // TODO: review: do we really want to hide the worker name? it is provided now
@@ -67,7 +71,7 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field_option("Agent name", &self.worker_name, format_worker_name);
+            .fmt_field_option("Agent name", &self.agent_name, format_agent_name);
 
         fields.build()
     }
@@ -99,7 +103,7 @@ impl MessageWithFields for WorkerGetView {
     fn message(&self) -> String {
         format!(
             "Got metadata for agent {}",
-            format_message_highlight(&self.metadata.worker_name)
+            format_message_highlight(&self.metadata.agent_name)
         )
     }
 
@@ -159,7 +163,7 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_revision,
                 format_id,
             )
-            .fmt_field("Agent name", &self.metadata.worker_name, format_worker_name)
+            .fmt_field("Agent name", &self.metadata.agent_name, format_agent_name)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
                 "Component size",
@@ -216,7 +220,7 @@ struct WorkerMetadataTableView {
     #[table(title = "Component name")]
     pub component_name: ComponentName,
     #[table(title = "Agent name")]
-    pub worker_name: String,
+    pub agent_name: String,
     #[table(title = "Component\nrevision", justify = "Justify::Right")]
     pub component_revision: ComponentRevision,
     #[table(title = "Status", justify = "Justify::Right")]
@@ -232,7 +236,7 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
         Self {
             component_name: value.component_name.clone(),
             // TODO: pretty print, once we have "metadata-less" agent-type parsing
-            worker_name: textwrap::wrap(&value.worker_name.0, 30).join("\n"),
+            agent_name: textwrap::wrap(&value.agent_name.0, 30).join("\n"),
             status: format_status(&value.status),
             component_revision: value.component_revision,
             created_at: value.created_at,
@@ -268,7 +272,7 @@ impl TextView for InvokeResultView {
     fn log(&self) {
         fn log_results_format(format: &str) {
             logln(format!(
-                "Invocation results in {} format:",
+                "Invocation results in {}:",
                 format_message_highlight(format),
             ))
         }
@@ -281,7 +285,7 @@ impl TextView for InvokeResultView {
             if wave_values.is_empty() {
                 logln("Empty result.")
             } else {
-                log_results_format("WAVE");
+                log_results_format(&self.result_format);
                 for wave in wave_values {
                     logln(format!("  - {wave}"));
                 }
@@ -289,8 +293,8 @@ impl TextView for InvokeResultView {
         } else if let Some(json) = &self.result_json {
             logln(format_warn(indoc!(
                 "
-                Failed to convert invocation result to WAVE format.
-                At the moment WAVE does not support Handle (aka Resource) data type.
+                Failed to convert invocation result to the requested format.
+                At the moment it does not support Handle (aka Resource) data type.
                 "
             )));
             log_results_format("JSON");
@@ -339,7 +343,7 @@ impl TextView for PublicOplogEntry {
                     log_plugin_description(&inner_pad, plugin);
                 }
             }
-            PublicOplogEntry::ImportedFunctionInvoked(params) => {
+            PublicOplogEntry::HostCall(params) => {
                 logln(format!(
                     "{} {}",
                     format_message_highlight("CALL"),
@@ -358,26 +362,37 @@ impl TextView for PublicOplogEntry {
                     value_to_string(&params.response)
                 ));
             }
-            PublicOplogEntry::ExportedFunctionInvoked(params) => {
-                logln(format!(
-                    "{} {}",
-                    format_message_highlight("INVOKE"),
-                    format_id(&params.function_name),
-                ));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}idempotency key:   {}",
-                    format_id(&params.idempotency_key),
-                ));
-                logln(format!("{pad}input:"));
-                for param in &params.request {
-                    logln(format!("{pad}  - {}", value_to_string(param)));
+            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(inner) => {
+                    logln(format!(
+                        "{} {}",
+                        format_message_highlight("INVOKE"),
+                        format_id(&inner.method_name),
+                    ));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}idempotency key:   {}",
+                        format_id(&inner.idempotency_key),
+                    ));
+                    logln(format!("{pad}input:"));
+                    log_data_value(pad, &inner.function_input, &SourceLanguage::default());
                 }
-            }
-            PublicOplogEntry::ExportedFunctionCompleted(params) => {
+                other => {
+                    logln(format!(
+                        "{} {:?}",
+                        format_message_highlight("INVOKE"),
+                        other,
+                    ));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+            },
+            PublicOplogEntry::AgentInvocationFinished(params) => {
                 logln(format_message_highlight("INVOKE COMPLETED"));
                 logln(format!(
                     "{pad}at:                {}",
@@ -387,14 +402,7 @@ impl TextView for PublicOplogEntry {
                     "{pad}consumed fuel:     {}",
                     format_id(&params.consumed_fuel),
                 ));
-                logln(format!(
-                    "{pad}result:            {}",
-                    params
-                        .response
-                        .as_ref()
-                        .map(value_to_string)
-                        .unwrap_or_else(|| "()".to_string())
-                ));
+                logln(format!("{pad}result:            {:?}", params.result));
             }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
@@ -519,12 +527,23 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.begin_index)
                 ));
             }
-            PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
-                PublicWorkerInvocation::ExportedFunction(inner_params) => {
+            PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
+                PublicAgentInvocation::AgentInitialization(inner_params) => {
+                    logln(format_message_highlight("ENQUEUED AGENT INITIALIZATION"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}idempotency key:   {}",
+                        format_id(&inner_params.idempotency_key),
+                    ));
+                }
+                PublicAgentInvocation::AgentMethodInvocation(inner_params) => {
                     logln(format!(
                         "{} {}",
                         format_message_highlight("ENQUEUED INVOCATION"),
-                        format_id(&inner_params.full_function_name),
+                        format_id(&inner_params.method_name),
                     ));
                     logln(format!(
                         "{pad}at:                {}",
@@ -534,14 +553,29 @@ impl TextView for PublicOplogEntry {
                         "{pad}idempotency key:   {}",
                         format_id(&inner_params.idempotency_key),
                     ));
-                    if let Some(input) = &inner_params.function_input {
-                        logln(format!("{pad}input:"));
-                        for param in input {
-                            logln(format!("{pad}  - {}", value_to_string(param)));
-                        }
-                    }
                 }
-                PublicWorkerInvocation::ManualUpdate(inner_params) => {
+                PublicAgentInvocation::SaveSnapshot(_) => {
+                    logln(format_message_highlight("ENQUEUED SAVE SNAPSHOT"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+                PublicAgentInvocation::LoadSnapshot(_) => {
+                    logln(format_message_highlight("ENQUEUED LOAD SNAPSHOT"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+                PublicAgentInvocation::ProcessOplogEntries(_) => {
+                    logln(format_message_highlight("ENQUEUED PROCESS OPLOG ENTRIES"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+                PublicAgentInvocation::ManualUpdate(inner_params) => {
                     logln(format_message_highlight("ENQUEUED MANUAL UPDATE"));
                     logln(format!(
                         "{pad}at:                {}",
@@ -888,23 +922,27 @@ fn value_to_string(value: &ValueAndType) -> String {
 }
 
 // TODO: pretty print
-fn format_worker_name(worker_name: &WorkerName) -> String {
-    textwrap::wrap(&worker_name.to_string(), 80).join("\n")
+fn format_agent_name(agent_name: &RawAgentId) -> String {
+    textwrap::wrap(&agent_name.to_string(), 80).join("\n")
 }
 
-#[allow(dead_code)]
-fn log_data_value(pad: &str, value: &DataValue) {
-    match value {
-        DataValue::Tuple(values) => {
-            logln(format!("{pad}  tuple:"));
-            for value in &values.elements {
-                log_element_value(&format!("{pad}    "), value);
+fn log_data_value(pad: &str, value: &DataValue, source_language: &SourceLanguage) {
+    if source_language.is_known() {
+        let rendered = crate::agent_id_display::render_data_value(value, source_language);
+        logln(format!("{pad}  {rendered}"));
+    } else {
+        match value {
+            DataValue::Tuple(values) => {
+                logln(format!("{pad}  tuple:"));
+                for value in &values.elements {
+                    log_element_value(&format!("{pad}    "), value);
+                }
             }
-        }
-        DataValue::Multimodal(values) => {
-            logln(format!("{pad}  multi-modal:"));
-            for value in &values.elements {
-                log_element_value(&format!("{pad}    "), &value.value);
+            DataValue::Multimodal(values) => {
+                logln(format!("{pad}  multi-modal:"));
+                for value in &values.elements {
+                    log_element_value(&format!("{pad}    "), &value.value);
+                }
             }
         }
     }
@@ -913,10 +951,10 @@ fn log_data_value(pad: &str, value: &DataValue) {
 #[allow(dead_code)]
 fn log_element_value(pad: &str, value: &ElementValue) {
     match value {
-        ElementValue::ComponentModel(value) => {
+        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
             logln(format!("{pad}- {}", value_to_string(value)));
         }
-        ElementValue::UnstructuredText(value) => match value {
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
             TextReference::Url(url) => {
                 logln(format!("{pad}- URL: {}", format_id(&url.value)));
             }
@@ -930,21 +968,23 @@ fn log_element_value(pad: &str, value: &ElementValue) {
                 }
             }
         },
-        ElementValue::UnstructuredBinary(value) => match value {
-            BinaryReference::Url(url) => {
-                logln(format!("{pad}- URL: {}", format_id(&url.value)));
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            match value {
+                BinaryReference::Url(url) => {
+                    logln(format!("{pad}- URL: {}", format_id(&url.value)));
+                }
+                BinaryReference::Inline(inline) => {
+                    logln(format!(
+                        "{pad}- Inline: {} bytes",
+                        format_id(&inline.data.len().to_string())
+                    ));
+                    logln(format!(
+                        "{pad}  MIME type: {}",
+                        format_id(&inline.binary_type.mime_type)
+                    ));
+                }
             }
-            BinaryReference::Inline(inline) => {
-                logln(format!(
-                    "{pad}- Inline: {} bytes",
-                    format_id(&inline.data.len().to_string())
-                ));
-                logln(format!(
-                    "{pad}  MIME type: {}",
-                    format_id(&inline.binary_type.mime_type)
-                ));
-            }
-        },
+        }
     }
 }
 
@@ -1007,10 +1047,10 @@ pub fn format_timestamp(timestamp: u64) -> String {
     }
 }
 
-pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
+pub fn format_agent_name_match(agent_name_match: &WorkerNameMatch) -> String {
     format!(
         "{}{}/{}",
-        match &worker_name_match.environment_reference() {
+        match &agent_name_match.environment_reference() {
             Some(environment_reference) => {
                 match environment_reference {
                     EnvironmentReference::Environment { environment_name } => {
@@ -1042,7 +1082,7 @@ pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
             }
             None => "".to_string(),
         },
-        worker_name_match.component_name.0.blue().bold(),
-        worker_name_match.worker_name.0.green().bold(),
+        agent_name_match.component_name.0.blue().bold(),
+        agent_name_match.agent_name.0.green().bold(),
     )
 }

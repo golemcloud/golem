@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,14 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use openidconnect::core::{CoreClient, CoreIdTokenVerifier};
+use openidconnect::core::{
+    CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreIdTokenVerifier,
+    CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreRevocableToken,
+    CoreRevocationErrorResponse, CoreTokenIntrospectionResponse, CoreTokenResponse,
+};
+use openidconnect::{
+    Client, EmptyAdditionalClaims, EndpointMaybeSet, EndpointNotSet, EndpointSet,
+    StandardErrorResponse,
+};
+
+pub type ConfiguredCoreClient = Client<
+    EmptyAdditionalClaims,
+    CoreAuthDisplay,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJsonWebKey,
+    CoreAuthPrompt,
+    StandardErrorResponse<CoreErrorResponseType>,
+    CoreTokenResponse,
+    CoreTokenIntrospectionResponse,
+    CoreRevocableToken,
+    CoreRevocationErrorResponse,
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointMaybeSet,
+    EndpointMaybeSet,
+>;
+
 #[derive(Clone, Debug)]
 pub struct OpenIdClient {
-    pub client: CoreClient,
+    pub client: ConfiguredCoreClient,
 }
 
 impl OpenIdClient {
-    pub fn new(client: CoreClient) -> Self {
+    pub fn new(client: ConfiguredCoreClient) -> Self {
         OpenIdClient { client }
     }
 

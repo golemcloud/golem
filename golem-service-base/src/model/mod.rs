@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agent_secret;
 pub mod auth;
+pub mod component;
 pub mod plugin_registration;
 
 use derive_more::Display;
@@ -24,11 +26,9 @@ use golem_common::model::component::{
 };
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
-    FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind, WorkerUpdateMode,
+    AgentUpdateMode, FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind,
 };
-use golem_common::model::{OplogIndex, ScanCursor, WorkerFilter, WorkerId};
-use golem_wasm::ValueAndType;
-use golem_wasm::json::OptionallyValueAndTypeJson;
+use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ use std::time::{Duration, SystemTime};
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerCreationResponse {
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub component_revision: ComponentRevision,
 }
 
@@ -59,21 +59,11 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct InvokeParameters {
-    pub params: Vec<OptionallyValueAndTypeJson>,
-}
-
-// TODO: move these reponse types to common and configure the client generator to use them.
+// TODO: move these response types to common and configure the client generator to use them.
 // TODO: replace empty responses with NoContentResponse
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct DeleteWorkerResponse {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct InvokeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct InterruptResponse {}
@@ -122,7 +112,7 @@ pub struct GetFilesResponse {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct UpdateWorkerRequest {
-    pub mode: WorkerUpdateMode,
+    pub mode: AgentUpdateMode,
     pub target_revision: ComponentRevision,
     #[serde(default)]
     #[oai(default)]
@@ -133,7 +123,7 @@ pub struct UpdateWorkerRequest {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ForkWorkerRequest {
-    pub target_worker_id: WorkerId,
+    pub target_agent_id: AgentId,
     pub oplog_index_cutoff: OplogIndex,
 }
 
@@ -141,17 +131,10 @@ pub struct ForkWorkerRequest {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkersMetadataRequest {
-    pub filter: Option<WorkerFilter>,
+    pub filter: Option<AgentFilter>,
     pub cursor: Option<ScanCursor>,
     pub count: Option<u64>,
     pub precise: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct InvokeResult {
-    pub result: Option<ValueAndType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

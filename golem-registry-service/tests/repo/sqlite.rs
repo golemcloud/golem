@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -19,8 +19,11 @@ use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
+use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
+use golem_registry_service::repo::environment_share::DbEnvironmentShareRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
+use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
@@ -86,7 +89,10 @@ async fn deps(db: &SqliteDb) -> Deps {
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
+        mcp_deployment_repo: Box::new(DbMcpDeploymentRepo::logged(db.pool.clone())),
         deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
+        full_deployment_repo: Box::new(DbDeploymentRepo::logged(db.pool.clone())),
+        environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(db.pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
     };
     deps.setup().await;
@@ -148,4 +154,44 @@ async fn test_http_api_deployment_stage(deps: &Deps) {
 #[test]
 async fn test_account_usage(deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_owner_no_email(deps: &Deps) {
+    crate::repo::common::test_resolve_agent_type_owner_no_email(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_shared_with_email(deps: &Deps) {
+    crate::repo::common::test_resolve_agent_type_shared_with_email(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_no_share_returns_zero_roles(deps: &Deps) {
+    crate::repo::common::test_resolve_agent_type_no_share_returns_zero_roles(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_no_deployment_returns_none(deps: &Deps) {
+    crate::repo::common::test_resolve_agent_type_no_deployment_returns_none(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_nonexistent_revision_returns_none(deps: &Deps) {
+    crate::repo::common::test_resolve_agent_type_nonexistent_revision_returns_none(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_unknown_email_returns_none(deps: &Deps) {
+    crate::repo::common::test_resolve_agent_type_unknown_email_returns_none(deps).await;
+}
+
+#[test]
+async fn test_mcp_deployment_create_and_update(deps: &Deps) {
+    crate::repo::common::test_mcp_deployment_create_and_update(deps).await;
+}
+
+#[test]
+async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
+    crate::repo::common::test_mcp_deployment_list_and_delete(deps).await;
 }

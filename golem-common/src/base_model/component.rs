@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,6 +20,7 @@ use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::plugin_registration::PluginRegistrationId;
 use crate::base_model::{diff, validate_lower_kebab_case_identifier};
+use crate::model::agent::AgentTypeName;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -33,6 +34,8 @@ use typed_path::Utf8UnixPathBuf;
 
 newtype_uuid!(
     ComponentId,
+    wit_name: "component-id",
+    wit_owner: "golem:core@1.5.0/types",
     golem_api_grpc::proto::golem::component::ComponentId
 );
 
@@ -110,6 +113,12 @@ impl AsRef<str> for ComponentName {
 }
 
 declare_structs! {
+    pub struct LocalAgentConfigEntry {
+        pub agent: AgentTypeName,
+        pub key: Vec<String>,
+        pub value: serde_json::Value
+    }
+
     pub struct ComponentDto {
         pub id: ComponentId,
         pub revision: ComponentRevision,
@@ -122,12 +131,10 @@ declare_structs! {
         pub metadata: ComponentMetadata,
         pub created_at: chrono::DateTime<chrono::Utc>,
         pub files: Vec<InitialComponentFile>,
-        pub original_files: Vec<InitialComponentFile>,
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
-        pub original_env: BTreeMap<String, String>,
         pub config_vars: BTreeMap<String, String>,
-        pub original_config_vars: BTreeMap<String, String>,
+        pub local_agent_config: Vec<LocalAgentConfigEntry>,
         pub wasm_hash: diff::Hash,
     }
 
@@ -142,6 +149,9 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub config_vars: BTreeMap<String, String>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub local_agent_config: Vec<LocalAgentConfigEntry>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_types: Vec<AgentType>,
@@ -160,6 +170,7 @@ declare_structs! {
         pub new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         pub env: Option<BTreeMap<String, String>>,
         pub config_vars: Option<BTreeMap<String, String>>,
+        pub local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
         pub agent_types: Option<Vec<AgentType>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,11 +16,10 @@ use crate::auth::{Auth, Authentication};
 use crate::config::{AuthenticationConfigWithSource, ClientConfig, HttpClientConfig};
 use anyhow::bail;
 use golem_client::api::{
-    AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiDeploymentClientLive,
-    ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive, ComponentClientLive,
-    DeploymentClientLive, EnvironmentClientLive, GrantClientLive, HealthCheckClientLive,
-    HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive, PluginClientLive,
-    TokenClientLive, WorkerClientLive,
+    AccountClientLive, AccountSummaryClientLive, AgentClientLive, AgentTypesClientLive,
+    ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive,
+    ComponentClientLive, DeploymentClientLive, EnvironmentClientLive, HealthCheckClientLive,
+    LoginClientLive, McpDeploymentClientLive, PluginClientLive, TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::model::account::AccountId;
@@ -33,8 +32,8 @@ pub struct GolemClients {
 
     pub account: AccountClientLive,
     pub account_summary: AccountSummaryClientLive,
+    pub agent: AgentClientLive,
     pub agent_types: AgentTypesClientLive,
-    pub api_definition: HttpApiDefinitionClientLive,
     pub api_deployment: ApiDeploymentClientLive,
     pub api_domain: ApiDomainClientLive,
     pub api_security: ApiSecurityClientLive,
@@ -43,9 +42,8 @@ pub struct GolemClients {
     pub component_healthcheck: HealthCheckClientLive,
     pub deployment: DeploymentClientLive,
     pub environment: EnvironmentClientLive,
-    pub grant: GrantClientLive,
-    pub limits: LimitsClientLive,
     pub login: LoginClientLive,
+    pub mcp_deployment: McpDeploymentClientLive,
     pub plugin: PluginClientLive,
     pub token: TokenClientLive,
     pub worker: WorkerClientLive,
@@ -116,10 +114,10 @@ impl GolemClients {
             account_summary: AccountSummaryClientLive {
                 context: registry_context(),
             },
-            agent_types: AgentTypesClientLive {
-                context: registry_context(),
+            agent: AgentClientLive {
+                context: worker_invoke_context(),
             },
-            api_definition: HttpApiDefinitionClientLive {
+            agent_types: AgentTypesClientLive {
                 context: registry_context(),
             },
             api_deployment: ApiDeploymentClientLive {
@@ -146,14 +144,11 @@ impl GolemClients {
             environment: EnvironmentClientLive {
                 context: registry_context(),
             },
-            grant: GrantClientLive {
-                context: registry_context(),
-            },
-            limits: LimitsClientLive {
-                context: worker_context(),
-            },
             login: LoginClientLive {
                 context: login_context(),
+            },
+            mcp_deployment: McpDeploymentClientLive {
+                context: registry_context(),
             },
             plugin: PluginClientLive {
                 context: registry_context(),
