@@ -543,6 +543,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        debug!(
+            worker_id = %self.owned_agent_id.agent_id,
+            function_type = ?function_type,
+            is_live = self.state.is_live(),
+            "begin_function called"
+        );
         if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
             || matches!(
                 *function_type,
@@ -555,10 +561,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .worker()
                     .add_and_commit_oplog(OplogEntry::begin_remote_write())
                     .await;
+                debug!(
+                    worker_id = %self.owned_agent_id.agent_id,
+                    begin_index = %begin_index,
+                    "begin_function (live): wrote BeginRemoteWrite"
+                );
                 Ok(begin_index)
             } else {
                 let (begin_index, _) =
                     crate::get_oplog_entry!(self.state.replay_state, OplogEntry::BeginRemoteWrite)?;
+                debug!(
+                    worker_id = %self.owned_agent_id.agent_id,
+                    begin_index = %begin_index,
+                    assume_idempotence = self.state.assume_idempotence,
+                    "begin_function (replay): got BeginRemoteWrite"
+                );
                 if !self.state.assume_idempotence {
                     let end_index = self
                         .state
@@ -672,6 +689,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
+        debug!(
+            worker_id = %self.owned_agent_id.agent_id,
+            function_type = ?function_type,
+            begin_index = %begin_index,
+            is_live = self.is_live(),
+            "end_function called"
+        );
         if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
             || matches!(
                 *function_type,
@@ -679,14 +703,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
         {
             if self.is_live() {
+                debug!(
+                    worker_id = %self.owned_agent_id.agent_id,
+                    begin_index = %begin_index,
+                    "end_function (live): writing EndRemoteWrite"
+                );
                 self.state
                     .oplog
                     .add(OplogEntry::end_remote_write(begin_index))
                     .await;
                 Ok(())
             } else {
-                let (_, _) =
+                debug!(
+                    worker_id = %self.owned_agent_id.agent_id,
+                    begin_index = %begin_index,
+                    "end_function (replay): looking for EndRemoteWrite"
+                );
+                let (end_idx, _) =
                     crate::get_oplog_entry!(self.state.replay_state, OplogEntry::EndRemoteWrite)?;
+                debug!(
+                    worker_id = %self.owned_agent_id.agent_id,
+                    begin_index = %begin_index,
+                    end_index = %end_idx,
+                    "end_function (replay): found EndRemoteWrite"
+                );
                 Ok(())
             }
         } else {
@@ -2827,10 +2867,16 @@ struct HttpRequestState {
     /// this records the IncomingBody handle so that on stream close we can transfer
     /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
     pub body_handle: Option<u32>,
+    /// The outgoing body resource handle associated with this request, set when
+    /// outgoing_handler::handle() resolves the pending body mapping.
+    pub outgoing_body_rep: Option<u32>,
+    /// The outgoing body output stream resource handle, set when outgoing_body::write()
+    /// creates the stream from the outgoing body.
+    pub output_stream_rep: Option<u32>,
 }
 
-/// State associated with an HTTP outgoing body output stream, tracking the
-/// begin_index and request info for durable persistence of stream operations.
+/// Extracted view of the begin_index and request from an HttpRequestState,
+/// used when processing outgoing body output stream operations.
 #[derive(Debug, Clone)]
 pub(crate) struct HttpOutputStreamState {
     pub begin_index: OplogIndex,
@@ -2868,15 +2914,9 @@ struct PrivateDurableWorkerState {
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
 
-    /// State of ongoing http outgoing body output streams, keyed by the output stream resource handle.
-    /// Tracks begin_index and request info for durable persistence of output stream operations.
-    open_http_output_streams: HashMap<u32, HttpOutputStreamState>,
-
     /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
+    /// before outgoing_handler::handle() is called and the HttpRequestState is created.
     pending_http_outgoing_request_body: HashMap<u32, u32>,
-
-    /// Maps outgoing body rep → (begin_index, request), set during outgoing_handler::handle()
-    pending_http_outgoing_body: HashMap<u32, HttpOutputStreamState>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -3012,9 +3052,7 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
-            open_http_output_streams: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
-            pending_http_outgoing_body: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,
             total_linear_memory_size,
@@ -3041,6 +3079,22 @@ impl PrivateDurableWorkerState {
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
         }
+    }
+
+    /// Find the open_http_requests entry key for a given outgoing body rep.
+    fn find_request_handle_by_outgoing_body(&self, body_rep: u32) -> Option<u32> {
+        self.open_http_requests
+            .iter()
+            .find(|(_, state)| state.outgoing_body_rep == Some(body_rep))
+            .map(|(&handle, _)| handle)
+    }
+
+    /// Find the open_http_requests entry key for a given output stream rep.
+    fn find_request_handle_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
+        self.open_http_requests
+            .iter()
+            .find(|(_, state)| state.output_stream_rep == Some(stream_rep))
+            .map(|(&handle, _)| handle)
     }
 
     /// In live mode it returns the last oplog index (index of the entry last added).
