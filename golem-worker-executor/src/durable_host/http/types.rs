@@ -653,8 +653,7 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         let result = HostOutgoingBody::write(&mut self.as_wasi_http_view(), self_);
         if let Ok(Ok(ref stream)) = result {
             // Associate the output stream with the HttpRequestState that owns this body
-            if let Some(request_handle) =
-                self.state.find_request_handle_by_outgoing_body(body_rep)
+            if let Some(request_handle) = self.state.find_request_handle_by_outgoing_body(body_rep)
             {
                 let stream_rep = stream.rep();
                 if let Some(state) = self.state.open_http_requests.get_mut(&request_handle) {
