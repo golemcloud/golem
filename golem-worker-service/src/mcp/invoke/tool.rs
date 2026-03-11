@@ -17,12 +17,10 @@ use crate::mcp::invoke::agent_method_input::get_agent_method_input;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
 use crate::mcp::invoke::response_mapping::element_value_to_mcp_json;
 use crate::service::worker::WorkerService;
-use base64::Engine;
 use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
-use rmcp::model::{CallToolResult, Content, JsonObject};
+use rmcp::model::{CallToolResult, JsonObject};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -113,11 +111,20 @@ pub fn map_agent_response_to_tool_result(
             ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
         })?;
 
+    // Note that, according to MCP specification, the output schema for a tool must be a JsonObject,
+    // And as part of tool result, we simply ensure to respond according to the advertised output schema.
+    // This is why even for multimodal response, we convert to structured format with "parts" array.
+    // See `element_value_to_mcp_json` for more info.
+    // We deal with actual content (text or binary) when it comes to "resource" results, where it doesn't
+    // need to adhere to `mcp-schema`
     match typed_value {
         DataValue::Tuple(ElementValues { elements }) => match elements.len() {
             0 => Ok(CallToolResult::success(vec![])),
-            1 => element_value_to_content(elements.into_iter().next().unwrap())
-                .map(|content| CallToolResult::success(vec![content])),
+            1 => {
+                let element = elements.into_iter().next().unwrap();
+                let json_value = element_value_to_mcp_json(&element)?;
+                Ok(CallToolResult::structured(json_value))
+            }
             _ => Err(ErrorData::internal_error(
                 "Unexpected number of response tuple elements".to_string(),
                 None,
@@ -125,7 +132,6 @@ pub fn map_agent_response_to_tool_result(
         },
         DataValue::Multimodal(NamedElementValues { elements }) => {
             let mut parts = Vec::new();
-            let mut contents = Vec::new();
 
             for named in elements {
                 let value_json = element_value_to_mcp_json(&named.value)?;
@@ -133,44 +139,16 @@ pub fn map_agent_response_to_tool_result(
                     "name": named.name,
                     "value": value_json,
                 }));
-                contents.push(element_value_to_content(named.value)?);
             }
 
             let structured = json!({ "parts" : parts });
 
             Ok(CallToolResult {
-                content: contents,
+                content: vec![],
                 structured_content: Some(structured),
                 is_error: Some(false),
                 meta: None,
             })
-        }
-    }
-}
-
-fn element_value_to_content(element: ElementValue) -> Result<Content, ErrorData> {
-    match element {
-        ElementValue::ComponentModel(component_model_value) => {
-            let json_value = component_model_value.value.to_json_value().map_err(|e| {
-                ErrorData::internal_error(
-                    format!("Failed to serialize component model response: {e}"),
-                    None,
-                )
-            })?;
-            Ok(Content::text(json_value.to_string()))
-        }
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
-            TextReference::Inline(TextSource { data, .. }) => Ok(Content::text(data)),
-            TextReference::Url(url) => Ok(Content::text(url.value)),
-        },
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
-            match value {
-                BinaryReference::Inline(BinarySource { data, binary_type }) => {
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                    Ok(Content::image(b64, binary_type.mime_type))
-                }
-                BinaryReference::Url(url) => Ok(Content::text(url.value)),
-            }
         }
     }
 }
