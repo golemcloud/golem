@@ -344,10 +344,7 @@ impl ServerHandler for GolemAgentMcpServer {
             .get_by_name(&request.name)
             .map(|p| p.get_prompt_result())
             .ok_or_else(|| {
-                McpError::invalid_params(
-                    format!("Prompt not found: {}", request.name),
-                    None,
-                )
+                McpError::invalid_params(format!("Prompt not found: {}", request.name), None)
             })
     }
 

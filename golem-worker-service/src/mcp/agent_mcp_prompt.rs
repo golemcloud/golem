@@ -15,7 +15,9 @@
 use golem_common::base_model::agent::{
     AgentConstructor, AgentMethod, AgentTypeName, DataSchema, ElementSchema, NamedElementSchema,
 };
-use rmcp::model::{GetPromptResult, Prompt, PromptMessage, PromptMessageContent, PromptMessageRole};
+use rmcp::model::{
+    GetPromptResult, Prompt, PromptMessage, PromptMessageContent, PromptMessageRole,
+};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,11 +38,7 @@ impl AgentMcpPrompt {
     ) -> Self {
         let name = PromptName(agent_type_name.0.clone());
 
-        let prompt = Prompt::new(
-            name.0.clone(),
-            Some(description.to_string()),
-            None,
-        );
+        let prompt = Prompt::new(name.0.clone(), Some(description.to_string()), None);
 
         AgentMcpPrompt {
             name,
@@ -72,11 +70,7 @@ impl AgentMcpPrompt {
             text.push_str(&format!("\n\n{}", output_desc));
         }
 
-        let prompt = Prompt::new(
-            prompt_name,
-            Some(method.description.clone()),
-            None,
-        );
+        let prompt = Prompt::new(prompt_name, Some(method.description.clone()), None);
 
         AgentMcpPrompt {
             name,
@@ -100,9 +94,7 @@ impl AgentMcpPrompt {
 
 fn constructor_arg_names(schema: &DataSchema) -> Vec<String> {
     match schema {
-        DataSchema::Tuple(schemas) => {
-            schemas.elements.iter().map(|e| e.name.clone()).collect()
-        }
+        DataSchema::Tuple(schemas) => schemas.elements.iter().map(|e| e.name.clone()).collect(),
         DataSchema::Multimodal(_) => vec![],
     }
 }
@@ -127,8 +119,7 @@ fn describe_input(
             }
         }
         DataSchema::Multimodal(schemas) => {
-            let part_names: Vec<&str> =
-                schemas.elements.iter().map(|e| e.name.as_str()).collect();
+            let part_names: Vec<&str> = schemas.elements.iter().map(|e| e.name.as_str()).collect();
 
             let mut all_property_names: Vec<&str> =
                 constructor_arg_names.iter().map(|s| s.as_str()).collect();
@@ -153,11 +144,7 @@ fn describe_input(
                 ));
             }
 
-            if desc.is_empty() {
-                None
-            } else {
-                Some(desc)
-            }
+            if desc.is_empty() { None } else { Some(desc) }
         }
     }
 }
@@ -175,10 +162,7 @@ fn describe_output(schema: &DataSchema) -> Option<String> {
     match schema {
         DataSchema::Tuple(schemas) => match schemas.elements.as_slice() {
             [] => None,
-            [single] => Some(format!(
-                "Output: {}",
-                describe_element(single)
-            )),
+            [single] => Some(format!("Output: {}", describe_element(single))),
             _ => None,
         },
         DataSchema::Multimodal(schemas) => {
@@ -254,10 +238,7 @@ mod tests {
 
         let result = prompt.get_prompt_result();
         assert_eq!(result.messages.len(), 1);
-        assert!(matches!(
-            result.messages[0].role,
-            PromptMessageRole::User
-        ));
+        assert!(matches!(result.messages[0].role, PromptMessageRole::User));
         match &result.messages[0].content {
             PromptMessageContent::Text { text } => {
                 assert_eq!(text, "Do something useful");
@@ -323,17 +304,13 @@ mod tests {
             input_schema: DataSchema::Tuple(NamedElementSchemas {
                 elements: vec![NamedElementSchema {
                     name: "location".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor {
-                        restrictions: None,
-                    }),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
                 }],
             }),
             output_schema: DataSchema::Tuple(NamedElementSchemas {
                 elements: vec![NamedElementSchema {
                     name: "report".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor {
-                        restrictions: None,
-                    }),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
                 }],
             }),
             http_endpoint: vec![],
@@ -346,7 +323,10 @@ mod tests {
             "Fetch the weather",
         );
 
-        assert_eq!(prompt.name, PromptName("WeatherAgent-get_weather".to_string()));
+        assert_eq!(
+            prompt.name,
+            PromptName("WeatherAgent-get_weather".to_string())
+        );
         assert_eq!(prompt.prompt.name, "WeatherAgent-get_weather");
         assert_eq!(prompt.prompt.description.as_deref(), Some("Gets weather"));
     }
@@ -389,9 +369,7 @@ mod tests {
             output_schema: DataSchema::Tuple(NamedElementSchemas {
                 elements: vec![NamedElementSchema {
                     name: "result".to_string(),
-                    schema: ElementSchema::UnstructuredText(TextDescriptor {
-                        restrictions: None,
-                    }),
+                    schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
                 }],
             }),
             http_endpoint: vec![],
@@ -406,7 +384,9 @@ mod tests {
 
         assert!(prompt.prompt_text.starts_with("Run analysis"));
         assert!(
-            prompt.prompt_text.contains("Expected JSON input properties: tenant, query, image"),
+            prompt
+                .prompt_text
+                .contains("Expected JSON input properties: tenant, query, image"),
             "got: {}",
             prompt.prompt_text
         );
