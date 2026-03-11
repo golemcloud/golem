@@ -61,6 +61,7 @@ pub struct GolemConfig {
     pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
     pub grpc: GrpcApiConfig,
+    pub http_client: HttpClientConfig,
     pub http_address: String,
     pub http_port: u16,
 }
@@ -180,6 +181,13 @@ impl SafeDisplay for GolemConfig {
         let _ = writeln!(&mut result, "grpc:");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
 
+        let _ = writeln!(&mut result, "http client:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.http_client.to_safe_string_indented()
+        );
+
         let _ = writeln!(&mut result, "HTTP address: {}", self.http_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
 
@@ -220,6 +228,7 @@ impl Default for GolemConfig {
             },
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
+            http_client: HttpClientConfig::default(),
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
         }
@@ -1274,6 +1283,103 @@ impl Default for AgentTypesServiceGrpcConfig {
         }
     }
 }
+
+/// Configuration for the HTTP connection pool used by outgoing wasi:http requests.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum HttpClientConfig {
+    Enabled(HttpClientEnabledConfig),
+    Disabled(HttpClientDisabledConfig),
+}
+
+impl Default for HttpClientConfig {
+    fn default() -> Self {
+        HttpClientConfig::Enabled(HttpClientEnabledConfig::default())
+    }
+}
+
+impl SafeDisplay for HttpClientConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            HttpClientConfig::Enabled(enabled) => {
+                let _ = writeln!(&mut result, "enabled:");
+                let _ = writeln!(&mut result, "{}", enabled.to_safe_string_indented());
+            }
+            HttpClientConfig::Disabled(_) => {
+                let _ = writeln!(&mut result, "disabled");
+            }
+        }
+        result
+    }
+}
+
+/// Configuration for the shared HTTP connection pool.
+///
+/// A shared connection pool is created at executor startup and reused across
+/// all workers, reducing TCP+TLS connection overhead.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HttpClientEnabledConfig {
+    /// Maximum number of idle connections per host.
+    pub max_idle_per_host: usize,
+    /// How long idle connections remain in the pool before being closed.
+    #[serde(with = "humantime_serde")]
+    pub idle_timeout: Duration,
+    /// Timeout for establishing new TCP connections via the pool.
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
+    /// Maximum number of concurrent in-flight connections per host.
+    pub max_connections_per_host: usize,
+    /// Maximum total number of concurrent in-flight connections across all hosts.
+    pub max_total_connections: usize,
+    /// Maximum number of distinct host entries tracked in the per-host semaphore map.
+    pub max_host_entries: usize,
+}
+
+impl Default for HttpClientEnabledConfig {
+    fn default() -> Self {
+        Self {
+            max_idle_per_host: 8,
+            idle_timeout: Duration::from_secs(90),
+            connect_timeout: Duration::from_secs(30),
+            max_connections_per_host: 20,
+            max_total_connections: 200,
+            max_host_entries: 1024,
+        }
+    }
+}
+
+impl SafeDisplay for HttpClientEnabledConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "max idle per host: {}", self.max_idle_per_host);
+        let _ = writeln!(
+            &mut result,
+            "idle timeout: {}s",
+            self.idle_timeout.as_secs()
+        );
+        let _ = writeln!(
+            &mut result,
+            "connect timeout: {}s",
+            self.connect_timeout.as_secs()
+        );
+        let _ = writeln!(
+            &mut result,
+            "max connections per host: {}",
+            self.max_connections_per_host
+        );
+        let _ = writeln!(
+            &mut result,
+            "max total connections: {}",
+            self.max_total_connections
+        );
+        let _ = writeln!(&mut result, "max host entries: {}", self.max_host_entries);
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HttpClientDisabledConfig {}
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
     ConfigLoader::new_with_examples(Path::new("config/worker-executor.toml"))
