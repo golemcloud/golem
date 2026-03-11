@@ -15,7 +15,7 @@
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::agent_secret::AgentSecretRepo;
 use crate::repo::model::agent_secrets::{
-    AgentSecretData, AgentSecretRepoError, AgentSecretRevisionRecord,
+    AgentSecretCreationRecord, AgentSecretRepoError, AgentSecretRevisionRecord,
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use golem_common::model::agent_secret::{
@@ -26,10 +26,8 @@ use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
-use golem_service_base::repo::blob::Blob;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use sqlx::types::Json;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -113,18 +111,17 @@ impl AgentSecretService {
             .map(|vat| vat.value);
 
         let id = AgentSecretId::new();
-        let record = AgentSecretRevisionRecord::creation(id, secret_value, auth.account_id());
 
         let result = self
             .agent_secret_repo
-            .create(
-                environment_id.0,
-                record,
-                Json(data.path.clone()),
-                Blob::new(AgentSecretData {
-                    secret_type: data.secret_type,
-                }),
-            )
+            .create(AgentSecretCreationRecord::new(
+                id,
+                environment_id,
+                data.path.clone(),
+                data.secret_type,
+                secret_value,
+                auth.account_id(),
+            ))
             .await;
 
         match result {
@@ -235,7 +232,7 @@ impl AgentSecretService {
         Ok(environment_share)
     }
 
-    pub async fn get_agent_secrets_in_environment(
+    pub async fn list_in_environment(
         &self,
         environment_id: EnvironmentId,
         auth: &AuthCtx,
@@ -251,6 +248,14 @@ impl AgentSecretService {
                 other => other.into(),
             })?;
 
+        self.list_in_fetched_environment(&environment, auth).await
+    }
+
+    pub async fn list_in_fetched_environment(
+        &self,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<Vec<AgentSecret>, AgentSecretError> {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
@@ -259,7 +264,7 @@ impl AgentSecretService {
 
         let result = self
             .agent_secret_repo
-            .get_for_environment(environment_id.0)
+            .get_for_environment(environment.id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())
