@@ -93,7 +93,7 @@ impl McpAgentCapability {
             let constructor_param_names = AgentMcpResource::constructor_param_names(constructor);
             let name = AgentMcpResource::resource_name(agent_type_name, method);
 
-            let mime_type = resource_mime_type(&method.output_schema);
+            let mime_type = output_resource_mime_type(&method.output_schema);
 
             let kind = if constructor_param_names.is_empty() {
                 let uri = AgentMcpResource::static_uri(agent_type_name, method);
@@ -149,20 +149,20 @@ fn get_tool_name(agent_type_name: &AgentTypeName, method: &AgentMethod) -> Strin
     format!("{}-{}", agent_type_name.0, method.name)
 }
 
-fn resource_mime_type(output_schema: &DataSchema) -> Option<String> {
+fn output_resource_mime_type(output_schema: &DataSchema) -> Option<String> {
     match output_schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => match elements.as_slice() {
             [single] => match &single.schema {
                 ElementSchema::ComponentModel(_) => Some("application/json".to_string()),
                 ElementSchema::UnstructuredText(_) => Some("text/plain".to_string()),
-                ElementSchema::UnstructuredBinary(descriptor) => descriptor
-                    .restrictions
-                    .as_ref()
-                    .and_then(|r| r.first())
-                    .map(|bt| bt.mime_type.clone()),
+                // The actual mime type
+                ElementSchema::UnstructuredBinary(_) => None,
             },
-            _ => Some("application/json".to_string()),
+            _ => None,
         },
-        DataSchema::Multimodal(_) => Some("application/json".to_string()),
+
+        // Each individual resource contents could have its own mime type, so we can't assign a single mime type to the whole output
+        // when it comes to multimodal output schemas.
+        DataSchema::Multimodal(_) => None,
     }
 }

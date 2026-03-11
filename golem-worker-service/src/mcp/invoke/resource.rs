@@ -181,13 +181,8 @@ fn convert_to_resource_content(
         ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
             match value {
                 TextReference::Inline(TextSource { data, .. }) => {
-                    Ok(ResourceContents::TextResourceContents {
-                        // Note that languageCode cannot be encoded in the output to MCP clients when they act as resources
-                        uri: uri.to_string(), // This is not the text-reference uri, but rather the original uri of the resource
-                        mime_type: Some("text/plain".to_string()),
-                        text: data.to_string(),
-                        meta: None,
-                    })
+                    // Note that languageCode cannot be encoded in the output to MCP clients when they act as resources
+                    Ok(ResourceContents::text(uri.to_string(), data.to_string()))
                 }
                 TextReference::Url(url) => {
                     // This cannot be possible according to MCP spec
