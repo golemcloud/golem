@@ -187,7 +187,8 @@ fn convert_to_resource_content(
             match value {
                 TextReference::Inline(TextSource { data, .. }) => {
                     // Note that languageCode cannot be encoded in the output to MCP clients when they act as resources
-                    Ok(ResourceContents::text(uri.to_string(), data.to_string()))
+                    // ResourceContents::text(text, uri) — first param is text content, second is URI
+                    Ok(ResourceContents::text(data.to_string(), uri.to_string()))
                 }
                 TextReference::Url(url) => {
                     // This cannot be possible according to MCP spec

@@ -31,12 +31,27 @@ const MCP_PORT: u16 = 9007;
 
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
-/// A minimal MCP client that speaks JSON-RPC over HTTP POST,
-/// avoiding rmcp's transport layer (which requires reqwest 0.13).
+/// A minimal MCP client that speaks JSON-RPC over Streamable HTTP (SSE),
+/// avoiding rmcp's client transport (which requires reqwest 0.13).
 struct McpClient {
     http: reqwest::Client,
     url: String,
     session_id: Option<String>,
+}
+
+/// Parse the first JSON-RPC message from an SSE response body.
+/// The MCP Streamable HTTP transport returns SSE events, each with a `data:` line
+/// containing a JSON-RPC message.
+fn parse_sse_json(body: &str) -> anyhow::Result<Value> {
+    for line in body.lines() {
+        if let Some(data) = line.strip_prefix("data:") {
+            let data = data.trim();
+            if !data.is_empty() {
+                return Ok(serde_json::from_str(data)?);
+            }
+        }
+    }
+    anyhow::bail!("No data line found in SSE response: {}", body)
 }
 
 impl McpClient {
@@ -77,7 +92,9 @@ impl McpClient {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        let _init_result: Value = resp.json().await?;
+        // Response is SSE, parse the JSON from it
+        let body = resp.text().await?;
+        let _init_result = parse_sse_json(&body)?;
 
         // Send initialized notification
         let notif = json!({
@@ -123,13 +140,14 @@ impl McpClient {
         }
 
         let resp = builder.json(&req_body).send().await?;
-        let body: Value = resp.json().await?;
+        let body = resp.text().await?;
+        let json_body = parse_sse_json(&body)?;
 
-        if let Some(error) = body.get("error") {
+        if let Some(error) = json_body.get("error") {
             anyhow::bail!("MCP error: {}", error);
         }
 
-        Ok(body["result"].clone())
+        Ok(json_body["result"].clone())
     }
 
     async fn list_tools(&self) -> anyhow::Result<Vec<Value>> {
@@ -218,19 +236,19 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
         domain: domain.clone(),
         agents: BTreeMap::from_iter(vec![
             (
-                AgentTypeName("weather-agent".to_string()),
+                AgentTypeName("WeatherAgent".to_string()),
                 McpDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("weather-agent-singleton".to_string()),
+                AgentTypeName("WeatherAgentSingleton".to_string()),
                 McpDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("static-resource".to_string()),
+                AgentTypeName("StaticResource".to_string()),
                 McpDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("dynamic-resource".to_string()),
+                AgentTypeName("DynamicResource".to_string()),
                 McpDeploymentAgentOptions::default(),
             ),
         ]),
@@ -556,13 +574,9 @@ async fn read_static_resource_unstructured_text(ctx: &McpTestContext) -> anyhow:
     let contents = result["contents"].as_array().unwrap();
     assert_eq!(contents.len(), 1);
 
-    // ResourceContents::text() in resource.rs has swapped args (uri, data),
-    // so text field contains the URI and uri field contains the data.
-    // We verify against actual behavior.
     let text = contents[0]["text"].as_str().unwrap();
     assert!(
-        text == "golem://StaticResource/get_static_weather_report_text"
-            || text.contains("unstructured weather report"),
+        text.contains("unstructured weather report"),
         "Unexpected text content: {}",
         text
     );
@@ -605,8 +619,7 @@ async fn read_static_resource_multimodal(ctx: &McpTestContext) -> anyhow::Result
     // First: text part
     let text = contents[0]["text"].as_str().unwrap();
     assert!(
-        text.contains("snow fall in Sydney")
-            || text == "golem://StaticResource/get_static_weather_report_with_images",
+        text.contains("snow fall in Sydney"),
         "Unexpected text: {}",
         text
     );

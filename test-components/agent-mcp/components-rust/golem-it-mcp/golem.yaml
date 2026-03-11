@@ -11,10 +11,10 @@ mcp:
     local:
       - domain: localhost:9007
         agents:
-          dynamic-resource: {}
-          static-resource: {}
-          weather-agent: {}
-          weather-agent-singleton: {}
+          DynamicResource: {}
+          StaticResource: {}
+          WeatherAgent: {}
+          WeatherAgentSingleton: {}
 
 components:
   golem-it:mcp:
