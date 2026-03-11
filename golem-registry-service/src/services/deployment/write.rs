@@ -116,8 +116,6 @@ pub enum DeployValidationError {
     InvalidHttpCorsBindingExpr(String),
     #[error("Component {0} not found in deployment")]
     ComponentNotFound(ComponentName),
-    #[error("Agent type name {0} is provided by multiple components")]
-    AmbiguousAgentTypeName(AgentTypeName),
     #[error("No security scheme configured for agent {0} but agent has methods that require auth")]
     NoSecuritySchemeConfigured(AgentTypeName),
     #[error(
@@ -167,6 +165,14 @@ pub enum DeployValidationError {
     },
     #[error("Invalid http method: {method:?}")]
     InvalidHttpMethod { method: HttpMethod },
+    #[error(
+        "Agent type names '{name1}' and '{name2}' conflict: both normalize to '{normalized}' in kebab-case"
+    )]
+    ConflictingAgentTypeNames {
+        name1: AgentTypeName,
+        name2: AgentTypeName,
+        normalized: String,
+    },
 }
 
 impl SafeDisplay for DeployValidationError {

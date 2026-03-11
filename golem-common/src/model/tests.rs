@@ -16,8 +16,8 @@ use crate::model::component::{ComponentFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::{
-    AccountId, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, AgentFilter, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, ComponentId,
+    FilterComparator, IdempotencyKey, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -70,26 +70,26 @@ fn account_id_json_serialization() {
 #[test]
 fn worker_filter_parse() {
     assert_eq!(
-        WorkerFilter::from_str(" name =  worker-1").unwrap(),
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::from_str(" name =  worker-1").unwrap(),
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
     );
 
     assert_eq!(
-        WorkerFilter::from_str("status == Running").unwrap(),
-        WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running)
+        AgentFilter::from_str("status == Running").unwrap(),
+        AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running)
     );
 
     assert_eq!(
-        WorkerFilter::from_str("revision >= 10").unwrap(),
-        WorkerFilter::new_revision(
+        AgentFilter::from_str("revision >= 10").unwrap(),
+        AgentFilter::new_revision(
             FilterComparator::GreaterEqual,
             ComponentRevision::new(10).unwrap()
         )
     );
 
     assert_eq!(
-        WorkerFilter::from_str("env.tag1 == abc ").unwrap(),
-        WorkerFilter::new_env(
+        AgentFilter::from_str("env.tag1 == abc ").unwrap(),
+        AgentFilter::new_env(
             "tag1".to_string(),
             StringFilterComparator::Equal,
             "abc".to_string(),
@@ -100,102 +100,102 @@ fn worker_filter_parse() {
 #[test]
 fn worker_filter_combination() {
     assert_eq!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).not(),
-        WorkerFilter::new_not(WorkerFilter::new_name(
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).not(),
+        AgentFilter::new_not(AgentFilter::new_name(
             StringFilterComparator::Equal,
             "worker-1".to_string(),
         ))
     );
 
     assert_eq!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).and(
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running)
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).and(
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running)
         ),
-        WorkerFilter::new_and(vec![
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
+        AgentFilter::new_and(vec![
+            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
         ])
     );
 
     assert_eq!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-            .and(WorkerFilter::new_status(
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+            .and(AgentFilter::new_status(
                 FilterComparator::Equal,
-                WorkerStatus::Running,
+                AgentStatus::Running,
             ))
-            .and(WorkerFilter::new_revision(
+            .and(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             )),
-        WorkerFilter::new_and(vec![
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
-            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
+        AgentFilter::new_and(vec![
+            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
+            AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
     assert_eq!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).or(
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running)
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).or(
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running)
         ),
-        WorkerFilter::new_or(vec![
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
+        AgentFilter::new_or(vec![
+            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
         ])
     );
 
     assert_eq!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-            .or(WorkerFilter::new_status(
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+            .or(AgentFilter::new_status(
                 FilterComparator::NotEqual,
-                WorkerStatus::Running,
+                AgentStatus::Running,
             ))
-            .or(WorkerFilter::new_revision(
+            .or(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             )),
-        WorkerFilter::new_or(vec![
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-            WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
-            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
+        AgentFilter::new_or(vec![
+            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
+            AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
     assert_eq!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-            .and(WorkerFilter::new_status(
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+            .and(AgentFilter::new_status(
                 FilterComparator::NotEqual,
-                WorkerStatus::Running,
+                AgentStatus::Running,
             ))
-            .or(WorkerFilter::new_revision(
+            .or(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             )),
-        WorkerFilter::new_or(vec![
-            WorkerFilter::new_and(vec![
-                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
+        AgentFilter::new_or(vec![
+            AgentFilter::new_and(vec![
+                AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
             ]),
-            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
+            AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
     assert_eq!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-            .or(WorkerFilter::new_status(
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+            .or(AgentFilter::new_status(
                 FilterComparator::NotEqual,
-                WorkerStatus::Running,
+                AgentStatus::Running,
             ))
-            .and(WorkerFilter::new_revision(
+            .and(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             )),
-        WorkerFilter::new_and(vec![
-            WorkerFilter::new_or(vec![
-                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
+        AgentFilter::new_and(vec![
+            AgentFilter::new_or(vec![
+                AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
             ]),
-            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
+            AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 }
@@ -203,9 +203,9 @@ fn worker_filter_combination() {
 #[test]
 fn worker_filter_matches() {
     let component_id = ComponentId::new();
-    let worker_metadata = WorkerMetadata {
-        worker_id: WorkerId {
-            worker_name: "worker-1".to_string(),
+    let worker_metadata = AgentMetadata {
+        agent_id: AgentId {
+            agent_id: "worker-1".to_string(),
             component_id,
         },
         env: vec![
@@ -215,51 +215,52 @@ fn worker_filter_matches() {
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
         config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
+        local_agent_config: Vec::new(),
         created_at: Timestamp::now_utc(),
         parent: None,
-        last_known_status: WorkerStatusRecord {
+        last_known_status: AgentStatusRecord {
             component_revision: ComponentRevision::new(1).unwrap(),
-            ..WorkerStatusRecord::default()
+            ..AgentStatusRecord::default()
         },
         original_phantom_id: None,
     };
 
     assert!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-            .and(WorkerFilter::new_status(
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+            .and(AgentFilter::new_status(
                 FilterComparator::Equal,
-                WorkerStatus::Idle,
+                AgentStatus::Idle,
             ))
             .matches(&worker_metadata)
     );
 
-    assert!(WorkerFilter::new_env(
+    assert!(AgentFilter::new_env(
         "env1".to_string(),
         StringFilterComparator::Equal,
         "value1".to_string(),
     )
-    .and(WorkerFilter::new_status(
+    .and(AgentFilter::new_status(
         FilterComparator::Equal,
-        WorkerStatus::Idle,
+        AgentStatus::Idle,
     ))
     .matches(&worker_metadata));
 
-    assert!(WorkerFilter::new_env(
+    assert!(AgentFilter::new_env(
         "env1".to_string(),
         StringFilterComparator::Equal,
         "value2".to_string(),
     )
     .not()
     .and(
-        WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running).or(
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Idle)
+        AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running).or(
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Idle)
         )
     )
     .matches(&worker_metadata));
 
     assert!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-            .and(WorkerFilter::new_revision(
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+            .and(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             ))
@@ -267,36 +268,36 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        WorkerFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
-            .or(WorkerFilter::new_revision(
+        AgentFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
+            .or(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
             ))
             .matches(&worker_metadata)
     );
 
-    assert!(WorkerFilter::new_revision(
+    assert!(AgentFilter::new_revision(
         FilterComparator::GreaterEqual,
         ComponentRevision::new(1).unwrap()
     )
-    .and(WorkerFilter::new_revision(
+    .and(AgentFilter::new_revision(
         FilterComparator::Less,
         ComponentRevision::new(2).unwrap()
     ))
-    .or(WorkerFilter::new_name(
+    .or(AgentFilter::new_name(
         StringFilterComparator::Equal,
         "worker-2".to_string(),
     ))
     .matches(&worker_metadata));
 
-    assert!(WorkerFilter::new_config_vars(
+    assert!(AgentFilter::new_config_vars(
         "var1".to_string(),
         StringFilterComparator::Equal,
         "value1".to_string(),
     )
     .matches(&worker_metadata));
 
-    assert!(!WorkerFilter::new_config_vars(
+    assert!(!AgentFilter::new_config_vars(
         "var1".to_string(),
         StringFilterComparator::Equal,
         "value2".to_string(),

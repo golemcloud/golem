@@ -455,6 +455,8 @@ impl IntoValue for crate::WitValue {
             "nodes",
             list(crate::WitNode::get_type()),
         )])
+        .named("wit-value")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -600,6 +602,8 @@ impl IntoValue for crate::WitNode {
                 tuple(vec![crate::Uri::get_type(), analysed_type::u64()]),
             ),
         ])
+        .named("wit-node")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -611,6 +615,8 @@ impl IntoValue for crate::Uri {
 
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![analysed_type::field("value", analysed_type::str())])
+            .named("uri")
+            .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -625,6 +631,8 @@ impl IntoValue for crate::WitType {
             "nodes",
             list(crate::golem_core_1_5_x::types::NamedWitTypeNode::get_type()),
         )])
+        .named("wit-type")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -644,6 +652,8 @@ impl IntoValue for crate::golem_core_1_5_x::types::NamedWitTypeNode {
             analysed_type::field("owner", option(analysed_type::str())),
             analysed_type::field("type", crate::WitTypeNode::get_type()),
         ])
+        .named("named-wit-type-node")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -782,6 +792,8 @@ impl IntoValue for crate::WitTypeNode {
                 tuple(vec![analysed_type::u64(), crate::ResourceMode::get_type()]),
             ),
         ])
+        .named("wit-type-node")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -816,6 +828,8 @@ impl IntoValue for crate::ResourceMode {
 
     fn get_type() -> AnalysedType {
         analysed_type::r#enum(&["owned", "borrowed"])
+            .named("resource-mode")
+            .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -830,8 +844,10 @@ impl IntoValue for ValueAndType {
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("value", crate::WitValue::get_type()),
-            analysed_type::field("type", crate::WitType::get_type()),
+            analysed_type::field("typ", crate::WitType::get_type()),
         ])
+        .named("value-and-type")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -881,7 +897,9 @@ fn build_tree(
                     analysed_type::field(name, field_type)
                 })
                 .collect();
-            analysed_type::record(fields).with_optional_name(node.name.clone())
+            analysed_type::record(fields)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::VariantType(cases) => {
             let cases = cases
@@ -894,7 +912,9 @@ fn build_tree(
                     None => analysed_type::unit_case(name),
                 })
                 .collect();
-            variant(cases).with_optional_name(node.name.clone())
+            variant(cases)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::EnumType(names) => AnalysedType::Enum(crate::analysis::TypeEnum {
             cases: names.clone(),
@@ -911,31 +931,45 @@ fn build_tree(
                 .iter()
                 .map(|idx| build_tree(&nodes[*idx as usize], nodes))
                 .collect();
-            tuple(types).with_optional_name(node.name.clone())
+            tuple(types)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::ListType(elem_type) => {
             let elem_type = build_tree(&nodes[*elem_type as usize], nodes);
-            list(elem_type).with_optional_name(node.name.clone())
+            list(elem_type)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::OptionType(inner_type) => {
             let inner_type = build_tree(&nodes[*inner_type as usize], nodes);
-            option(inner_type).with_optional_name(node.name.clone())
+            option(inner_type)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::ResultType((ok_type, err_type)) => match (ok_type, err_type) {
             (Some(ok_type), Some(err_type)) => {
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
                 let err_type = build_tree(&nodes[*err_type as usize], nodes);
-                result(ok_type, err_type).with_optional_name(node.name.clone())
+                result(ok_type, err_type)
+                    .with_optional_name(node.name.clone())
+                    .with_optional_owner(node.owner.clone())
             }
             (None, Some(err_type)) => {
                 let err_type = build_tree(&nodes[*err_type as usize], nodes);
-                result_err(err_type).with_optional_name(node.name.clone())
+                result_err(err_type)
+                    .with_optional_name(node.name.clone())
+                    .with_optional_owner(node.owner.clone())
             }
             (Some(ok_type), None) => {
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
-                result_ok(ok_type).with_optional_name(node.name.clone())
+                result_ok(ok_type)
+                    .with_optional_name(node.name.clone())
+                    .with_optional_owner(node.owner.clone())
             }
-            (None, None) => analysed_type::unit_result().with_optional_name(node.name.clone()),
+            (None, None) => analysed_type::unit_result()
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone()),
         },
         crate::WitTypeNode::PrimU8Type => analysed_type::u8(),
         crate::WitTypeNode::PrimU16Type => analysed_type::u16(),
@@ -957,7 +991,8 @@ fn build_tree(
                 crate::ResourceMode::Borrowed => crate::analysis::AnalysedResourceMode::Borrowed,
             },
         )
-        .with_optional_name(node.name.clone()),
+        .with_optional_name(node.name.clone())
+        .with_optional_owner(node.owner.clone()),
     }
 }
 
@@ -1202,6 +1237,7 @@ impl IntoValue for Url {
 mod tests {
     use crate::analysis::AnalysedType;
     use crate::{IntoValue, WitType, WitValue};
+    use pretty_assertions::assert_eq;
     use test_r::test;
 
     #[test]

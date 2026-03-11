@@ -44,7 +44,7 @@ async fn test_rust_counter() {
                 flag::YES,
                 cmd::AGENT,
                 cmd::INVOKE,
-                &format!("app:counter/counter-agent(\"{uuid}\")"),
+                &format!("app:counter/CounterAgent(\"{uuid}\")"),
                 "increment",
             ])
             .await;
@@ -173,7 +173,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("rust:agent/foo-agent(some(\"{uuid}\"))");
+        let agent_constructor = format!("rust:agent/FooAgent(Some(\"{uuid}\"))");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -182,17 +182,17 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         assert!(outputs.success_or_dump(), "function {func} failed");
     }
 
-    run_and_assert(&ctx, "get-id", &[]).await;
+    run_and_assert(&ctx, "get_id", &[]).await;
 
-    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-string}", &["\"sample\""]).await;
+    run_and_assert(&ctx, "rust:agent/FooAgent.{fun_string}", &["\"sample\""]).await;
 
     // A char type
-    run_and_assert(&ctx, "fun-char", &[r#"'a'"#]).await;
+    run_and_assert(&ctx, "fun_char", &[r#"'a'"#]).await;
 
     // Testing trigger invocation
     run_and_assert(
         &ctx,
-        "rust:agent/foo-agent.{fun-string-fire-and-forget}",
+        "rust:agent/FooAgent.{fun_string_fire_and_forget}",
         &["\"sample\""],
     )
     .await;
@@ -200,32 +200,32 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     // Testing scheduled invocation
     run_and_assert(
         &ctx,
-        "rust:agent/foo-agent.{fun-string-later}",
+        "rust:agent/FooAgent.{fun_string_later}",
         &["\"sample\""],
     )
     .await;
 
-    run_and_assert(&ctx, "fun-u8", &["42"]).await;
+    run_and_assert(&ctx, "fun_u8", &["42"]).await;
 
-    run_and_assert(&ctx, "fun-i8", &["--", "-42"]).await;
+    run_and_assert(&ctx, "fun_i8", &["--", "-42"]).await;
 
-    run_and_assert(&ctx, "fun-u16", &["42"]).await;
+    run_and_assert(&ctx, "fun_u16", &["42"]).await;
 
-    run_and_assert(&ctx, "fun-i16", &["--", "-42"]).await;
+    run_and_assert(&ctx, "fun_i16", &["--", "-42"]).await;
 
-    run_and_assert(&ctx, "fun-i32", &["--", "-42"]).await;
+    run_and_assert(&ctx, "fun_i32", &["--", "-42"]).await;
 
-    run_and_assert(&ctx, "fun-u32", &["42"]).await;
+    run_and_assert(&ctx, "fun_u32", &["42"]).await;
 
-    run_and_assert(&ctx, "fun-u64", &["42"]).await;
+    run_and_assert(&ctx, "fun_u64", &["42"]).await;
 
-    run_and_assert(&ctx, "fun-i64", &["--", "-42"]).await;
+    run_and_assert(&ctx, "fun_i64", &["--", "-42"]).await;
 
-    run_and_assert(&ctx, "fun-f32", &["3.14"]).await;
+    run_and_assert(&ctx, "fun_f32", &["3.14"]).await;
 
-    run_and_assert(&ctx, "fun-f64", &["3.1415926535"]).await;
+    run_and_assert(&ctx, "fun_f64", &["3.1415926535"]).await;
 
-    run_and_assert(&ctx, "fun-boolean", &["true"]).await;
+    run_and_assert(&ctx, "fun_boolean", &["true"]).await;
 
     let all_primitives_arg = r#"
     {
@@ -245,34 +245,34 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     }
     "#;
 
-    run_and_assert(&ctx, "fun-all-primitives", &[all_primitives_arg]).await;
+    run_and_assert(&ctx, "fun_all_primitives", &[all_primitives_arg]).await;
 
-    run_and_assert(&ctx, "fun-tuple-simple", &[r#"("sample", 3.14, true)"#]).await;
+    run_and_assert(&ctx, "fun_tuple_simple", &[r#"("sample", 3.14, true)"#]).await;
 
     run_and_assert(
         &ctx,
-        "fun-tuple-complex",
+        "fun_tuple_complex",
         &[&format!("(\"sample\", 3.14, {all_primitives_arg}, true)")],
     )
     .await;
 
     run_and_assert(
         &ctx,
-        "fun-map",
+        "fun_map",
         &[r#"[("foo", 1), ("bar", 2), ("baz", 3)]"#],
     )
     .await;
 
     let collections_arg = r#"
     {
-        list-u8: [1, 2, 3, 4, 5],
-        list-str: ["foo", "bar", "baz"],
-        map-num: [("pi", 3.14), ("e", 2.71), ("phi", 1.61)],
-        map-text: [(1, "one"), (2, "two"), (3, "three")]
+        list_u8: [1, 2, 3, 4, 5],
+        list_str: ["foo", "bar", "baz"],
+        map_num: [("pi", 3.14), ("e", 2.71), ("phi", 1.61)],
+        map_text: [(1, "one"), (2, "two"), (3, "three")]
     }
     "#;
 
-    run_and_assert(&ctx, "fun-collections", &[collections_arg]).await;
+    run_and_assert(&ctx, "fun_collections", &[collections_arg]).await;
 
     let simple_struct_arg = r#"
     {
@@ -283,7 +283,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     }
     "#;
 
-    run_and_assert(&ctx, "fun-struct-simple", &[simple_struct_arg]).await;
+    run_and_assert(&ctx, "fun_struct_simple", &[simple_struct_arg]).await;
 
     let nested_struct_arg = r#"
     {
@@ -309,12 +309,12 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             }
         ],
         map: [("a", 1), ("b", 2)],
-        option: some("optional value"),
-        result: ok("result value")
+        option: Some("optional value"),
+        result: Ok("result value")
     }
     "#;
 
-    run_and_assert(&ctx, "fun-struct-nested", &[nested_struct_arg]).await;
+    run_and_assert(&ctx, "fun_struct_nested", &[nested_struct_arg]).await;
 
     let complex_struct_arg = r#"
     {
@@ -333,15 +333,15 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             charv: 'c',
             stringv: "complex"
         },
-        options-results-bounds: {
-            option-u8: some(128),
-            option-str: some("option value"),
-            res-ok: ok("success"),
-            res-num-err: err("number error"),
-            res-unit-ok: ok("b"),
-            res-unit-err: err("a"),
-            bound-u8: included(1),
-            bound-str: excluded("z")
+        options_results_bounds: {
+            option_u8: Some(128),
+            option_str: Some("option value"),
+            res_ok: Ok("success"),
+            res_num_err: Err("number error"),
+            res_unit_ok: Ok("b"),
+            res_unit_err: Err("a"),
+            bound_u8: Included(1),
+            bound_str: Excluded("z")
         },
         tuples: {
             pair: ("pair", 2.22),
@@ -349,18 +349,18 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             mixed: ( -8, 16, 4.4)
         },
         collections: {
-            list-u8: [10, 20, 30],
-            list-str: ["x", "y", "z"],
-            map-num: [("a", 1.11), ("b", 2.22), ("c", 3.33)],
-            map-text: [(100, "hundred"), (200, "two hundred"), (300, "three hundred")]
+            list_u8: [10, 20, 30],
+            list_str: ["x", "y", "z"],
+            map_num: [("a", 1.11), ("b", 2.22), ("c", 3.33)],
+            map_text: [(100, "hundred"), (200, "two hundred"), (300, "three hundred")]
         },
-        simple-struct: {
+        simple_struct: {
             name: "comp_simple",
             value: 5.55,
             flag: false,
             symbol: 's',
         },
-        nested-struct: {
+        nested_struct: {
             id: "comp_nested",
             simple: {
                 name: "comp_inner",
@@ -370,41 +370,56 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             },
             list: [],
             map: [],
-            option: none,
-            result: ok("nested result")
+            option: None,
+            result: Ok("nested result")
         },
-        enum-simple: u8(100),
-        enum-collections: vec([1, 2, 3]),
-        enum-complex: unit-a
+        enum_simple: U8(100),
+        enum_collections: Vec([1, 2, 3]),
+        enum_complex: UnitA
     }
     "#;
 
-    run_and_assert(&ctx, "fun-struct-complex", &[complex_struct_arg]).await;
+    run_and_assert(&ctx, "fun_struct_complex", &[complex_struct_arg]).await;
 
-    run_and_assert(&ctx, "fun-simple-enum", &["i64(-12345)"]).await;
+    run_and_assert(&ctx, "fun_simple_enum", &["I64(-12345)"]).await;
 
     // cli invoke gets confused with `fun-result` and `fun-result-unit-left` etc, and therefore fully qualified function name.
     run_and_assert(
         &ctx,
-        "rust:agent/foo-agent.{fun-result}",
-        &["ok(\"success\")"],
+        "rust:agent/FooAgent.{fun_result}",
+        &["Ok(\"success\")"],
     )
     .await;
     run_and_assert(
         &ctx,
-        "rust:agent/foo-agent.{fun-result}",
-        &["err(\"failed\")"],
+        "rust:agent/FooAgent.{fun_result}",
+        &["Err(\"failed\")"],
     )
     .await;
 
-    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-ok}", &["ok"]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/FooAgent.{fun_result_unit_ok}",
+        &["Ok(())"],
+    )
+    .await;
 
-    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-err}", &["err"]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/FooAgent.{fun_result_unit_err}",
+        &["Err(())"],
+    )
+    .await;
 
-    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-both}", &["ok"]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/FooAgent.{fun_result_unit_both}",
+        &["Ok(())"],
+    )
+    .await;
 
     let result_complex_arg = r#"
-    ok({
+    Ok({
         id: "res_comp",
         simple: {
             name: "res_inner",
@@ -414,22 +429,22 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         },
         list: [],
         map: [],
-        option: none,
-        result: ok("result in nested")
+        option: None,
+        result: Ok("result in nested")
     })
     "#;
 
-    run_and_assert(&ctx, "fun-result-complex", &[result_complex_arg]).await;
+    run_and_assert(&ctx, "fun_result_complex", &[result_complex_arg]).await;
 
     run_and_assert(
         &ctx,
-        "rust:agent/foo-agent.{fun-option}",
-        &["some(\"optional value\")"],
+        "rust:agent/FooAgent.{fun_option}",
+        &["Some(\"optional value\")"],
     )
     .await;
 
     let option_complex_arg = r#"
-    some({
+    Some({
         id: "opt_comp",
         simple: {
             name: "opt_inner",
@@ -439,66 +454,66 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         },
         list: [],
         map: [],
-        option: none,
-        result: err("error in nested")
+        option: None,
+        result: Err("error in nested")
     })
     "#;
 
     run_and_assert(
         &ctx,
-        "rust:agent/foo-agent.{fun-option-complex}",
+        "rust:agent/FooAgent.{fun_option_complex}",
         &[option_complex_arg],
     )
     .await;
 
-    run_and_assert(&ctx, "fun-enum-with-only-literals", &["a"]).await;
+    run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
     // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/foo-agent.{fun-multi-modal}",
+    //     "rust:agent/FooAgent.{fun_multi_modal}",
     //     &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/foo-agent.{fun-multi-modal-basic}",
+    //     "rust:agent/FooAgent.{fun_multi_modal_basic}",
     //     &[r#"[text(url("foo"))]"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/foo-agent.{fun-unstructured-text}",
+    //     "rust:agent/FooAgent.{fun_unstructured_text}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/foo-agent.{fun-unstructured-text}",
+    //     "rust:agent/FooAgent.{fun_unstructured_text}",
     //     &[r#"inline({data: "foo", text-type: none})"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/foo-agent.{fun-unstructured-text-lc}",
+    //     "rust:agent/FooAgent.{fun_unstructured_text_lc}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/foo-agent.{fun-unstructured-text-lc}",
+    //     "rust:agent/FooAgent.{fun_unstructured_text_lc}",
     //     &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/foo-agent.{fun-unstructured-binary}",
+    //     "rust:agent/FooAgent.{fun_unstructured_binary}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
@@ -529,7 +544,7 @@ async fn test_ts_counter() {
                 flag::YES,
                 cmd::AGENT,
                 cmd::INVOKE,
-                &format!("app:counter/counter-agent(\"{uuid}\")"),
+                &format!("app:counter/CounterAgent(\"{uuid}\")"),
                 "increment",
             ])
             .await;
@@ -661,7 +676,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("ts:agent/foo-agent(\"{uuid}\")");
+        let agent_constructor = format!("ts:agent/FooAgent(\"{uuid}\")");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -671,189 +686,189 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     }
 
     // fun with void return
-    run_and_assert(&ctx, "fun-void-return", &["\"sample\""]).await;
+    run_and_assert(&ctx, "funVoidReturn", &["\"sample\""]).await;
 
     // fun without return type
-    run_and_assert(&ctx, "fun-no-return", &["\"sample\""]).await;
+    run_and_assert(&ctx, "funNoReturn", &["\"sample\""]).await;
 
     // function optional (that has null, defined as union)
     run_and_assert(
         &ctx,
-        "ts:agent/foo-agent.{fun-optional}",
+        "ts:agent/FooAgent.{funOptional}",
         &[
-            "some(case1(\"foo\"))",
-            "{a: some(\"foo\")}",
-            "{a: some(case1(\"foo\"))}",
-            "{a: some(case1(\"foo\"))}",
-            "{a: some(\"foo\")}",
-            "some(\"foo\")",
-            "some(case3(\"foo\"))",
+            r#"{tag: "case1", value: "foo"}"#,
+            r#"{a: "foo"}"#,
+            r#"{a: {tag: "case1", value: "foo"}}"#,
+            r#"{a: {tag: "case1", value: "foo"}}"#,
+            r#"{a: "foo"}"#,
+            r#""foo""#,
+            r#"{tag: "case3", value: "foo"}"#,
         ],
     )
     .await;
 
-    run_and_assert(&ctx, "fun-optional-q-mark", &["x", "none", r#"some("y")"#]).await;
+    run_and_assert(&ctx, "funOptionalQMark", &[r#""x""#, "null", r#""y""#]).await;
 
     // function with a simple object
-    run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
+    run_and_assert(&ctx, "funObjectType", &[r#"{a: "foo", b: 42, c: true}"#]).await;
 
     // function with a very complex object
     let argument = r#"
-      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}
+      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}
     "#;
 
-    run_and_assert(&ctx, "fun-object-complex-type", &[argument]).await;
+    run_and_assert(&ctx, "funObjectComplexType", &[argument]).await;
 
     // union type that has anonymous terms
-    run_and_assert(&ctx, "fun-union-type", &[r#"union-type1("foo")"#]).await;
+    run_and_assert(
+        &ctx,
+        "funUnionType",
+        &[r#"{tag: "UnionType1", value: "foo"}"#],
+    )
+    .await;
 
     // A complex union type
     run_and_assert(
         &ctx,
-        "fun-union-complex-type",
-        &[r#"union-complex-type1("foo")"#],
+        "funUnionComplexType",
+        &[r#"{tag: "UnionComplexType1", value: "foo"}"#],
     )
     .await;
 
     // Union that includes literals and boolean (string literal input)
-    run_and_assert(&ctx, "fun-union-with-literals", &[r#"lit1"#]).await;
+    run_and_assert(&ctx, "funUnionWithLiterals", &[r#"{tag: "lit1"}"#]).await;
 
     // Union that includes literals and boolean (boolean input)
     run_and_assert(
         &ctx,
-        "fun-union-with-literals",
-        &[r#"union-with-literals1(true)"#],
+        "funUnionWithLiterals",
+        &[r#"{tag: "UnionWithLiterals1", value: true}"#],
     )
     .await;
 
     // Union that has only literals
-    run_and_assert(&ctx, "fun-union-with-only-literals", &["foo"]).await;
+    run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""foo""#]).await;
 
     // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
     // // Unstructured text type
-    // run_and_assert(&ctx, "fun-unstructured-text", &["url(\"foo\")"]).await;
+    // run_and_assert(&ctx, "funUnstructuredText", &["url(\"foo\")"]).await;
     //
     // // Unstructured binary
-    // run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
+    // run_and_assert(&ctx, "funUnstructuredBinary", &["url(\"foo\")"]).await;
     //
     // // Multimodal
     // run_and_assert(
     //     &ctx,
-    //     "ts:agent/foo-agent.{fun-multimodal}",
+    //     "ts:agent/FooAgent.{funMultimodal}",
     //     &["[text(inline({data: \"data\", text-type: none}))]"],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "ts:agent/foo-agent.{fun-multimodal-advanced}",
+    //     "ts:agent/FooAgent.{funMultimodalAdvanced}",
     //     &["[text(\"foo\")]"],
     // )
     // .await;
 
     // Union that has only literals
-    run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
+    run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""bar""#]).await;
 
     // Union that has only literals
-    run_and_assert(&ctx, "fun-union-with-only-literals", &["baz"]).await;
+    run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""baz""#]).await;
 
     // A number type
-    run_and_assert(&ctx, "fun-number", &["42"]).await;
+    run_and_assert(&ctx, "funNumber", &["42"]).await;
 
     // A string type
-    run_and_assert(&ctx, "fun-string", &[r#""foo""#]).await;
+    run_and_assert(&ctx, "funString", &[r#""foo""#]).await;
 
     // A boolean type
-    run_and_assert(&ctx, "fun-boolean", &["true"]).await;
+    run_and_assert(&ctx, "funBoolean", &["true"]).await;
 
     // A map type
-    run_and_assert(&ctx, "fun-map", &[r#"[("foo", 42), ("bar", 42)]"#]).await;
+    run_and_assert(&ctx, "funMap", &[r#"[["foo", 42], ["bar", 42]]"#]).await;
 
     assert!(outputs.success_or_dump());
 
     // A tagged union
-    run_and_assert(&ctx, "fun-tagged-union", &[r#"a("foo")"#]).await;
+    run_and_assert(&ctx, "funTaggedUnion", &[r#"{tag: "a", value: "foo"}"#]).await;
 
     assert!(outputs.success_or_dump());
 
     // A simple tuple type
-    run_and_assert(&ctx, "fun-tuple-type", &[r#"("foo", 42, true)"#]).await;
+    run_and_assert(&ctx, "funTupleType", &[r#"["foo", 42, true]"#]).await;
 
     // A complex tuple type
     run_and_assert(
         &ctx,
-        "fun-tuple-complex-type",
-        &[r#"("foo", 42, {a: "foo", b: 42, c: true})"#],
+        "funTupleComplexType",
+        &[r#"["foo", 42, {a: "foo", b: 42, c: true}]"#],
     )
     .await;
 
     // A list complex type
     run_and_assert(
         &ctx,
-        "fun-list-complex-type",
+        "funListComplexType",
         &[r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#],
     ).await;
 
     // A function with null return
-    run_and_assert(&ctx, "fun-null-return", &[r#""foo""#]).await;
+    run_and_assert(&ctx, "funNullReturn", &[r#""foo""#]).await;
 
     // A function with undefined return
-    run_and_assert(&ctx, "fun-undefined-return", &[r#""foo""#]).await;
+    run_and_assert(&ctx, "funUndefinedReturn", &[r#""foo""#]).await;
 
     // A function with result type
-    run_and_assert(&ctx, "fun-result-exact", &[r#"ok("foo")"#]).await;
+    run_and_assert(&ctx, "funResultExact", &[r#"{ok: "foo"}"#]).await;
 
     // A function with (untagged) result-like type - but not result
-    run_and_assert(
-        &ctx,
-        "fun-either-optional",
-        &[r#"{ok: some("foo"), err: none}"#],
-    )
-    .await;
+    run_and_assert(&ctx, "funEitherOptional", &[r#"{ok: "foo", err: null}"#]).await;
 
     // Functions using the builtin result type
-    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"ok"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"err("foo")"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{ok: null}"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{error: "foo"}"#]).await;
 
-    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"ok("foo")"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"err"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultSV", &[r#"{ok: "foo"}"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultSV", &[r#"{error: null}"#]).await;
 
-    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"ok("yay")"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"err(42)"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultSN", &[r#"{ok: "yay"}"#]).await;
+    run_and_assert(&ctx, "funBuiltinResultSN", &[r#"{error: 42}"#]).await;
 
-    run_and_assert(&ctx, "fun-result-like-with-void", &[r#"err"#]).await;
-    run_and_assert(&ctx, "fun-result-like-with-void", &[r#"ok"#]).await;
+    run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{error: null}"#]).await;
+    run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{ok: null}"#]).await;
 
     // TODO: fix root cause for this
     // An arrow function
-    // run_and_assert(&ctx, "fun-arrow-sync", &[r#""foo""#]).await;
+    // run_and_assert(&ctx, "funArrowSync", &[r#""foo""#]).await;
 
     // A function that takes many inputs
     run_and_assert(
         &ctx,
-        "fun-all",
+        "funAll",
         &[
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}"#,
-            r#"union-type1("foo")"#,
-            r#"union-complex-type1("foo")"#,
+            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}"#,
+            r#"{tag: "UnionType1", value: "foo"}"#,
+            r#"{tag: "UnionComplexType1", value: "foo"}"#,
             r#"42"#,
             r#""foo""#,
             r#"true"#,
-            r#"[("foo", 42), ("foo", 42), ("foo", 42)]"#,
-            r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
-            r#"("foo", 42, true)"#,
+            r#"[["foo", 42], ["foo", 42], ["foo", 42]]"#,
+            r#"["foo", 42, {a: "foo", b: 42, c: true}]"#,
+            r#"["foo", 42, true]"#,
             r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
             r#"{a: "foo", b: 42, c: true}"#,
-            r#"okay("foo")"#,
-            r#"{ok: some("foo"), err: some("foo")}"#,
-            r#"some(case1("foo"))"#,
-            r#"{a: some("foo")}"#,
-            r#"{a: some(case1("foo"))}"#,
-            r#"{a: some(case1("foo"))}"#,
-            r#"{a: some("foo")}"#,
-            r#"some("foo")"#,
-            r#"some(case3("foo"))"#,
-            r#"a("foo")"#
+            r#"{tag: "okay", value: "foo"}"#,
+            r#"{ok: "foo", err: "foo"}"#,
+            r#"{tag: "case1", value: "foo"}"#,
+            r#"{a: "foo"}"#,
+            r#"{a: {tag: "case1", value: "foo"}}"#,
+            r#"{a: {tag: "case1", value: "foo"}}"#,
+            r#"{a: "foo"}"#,
+            r#""foo""#,
+            r#"{tag: "case3", value: "foo"}"#,
+            r#"{tag: "a", value: "foo"}"#
         ],
     )
         .await;
@@ -1204,15 +1219,15 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
             cmd::AGENT,
             cmd::INVOKE,
             flag::YES,
-            r#"long-agent-name({one-field: "1212", another-field: 100})"#,
+            r#"LongAgentName({oneField: "1212", anotherField: 100})"#,
             "ask",
-            r#"{one-field: "1", another-field: 2}"#,
+            r#"{oneField: "1", anotherField: 2}"#,
         ])
         .await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
-        r#"long-agent-name({one-field:"1212",another-field:100})"#,
-        r#"({one-field: "1212", another-field: 100}, {one-field: "1", another-field: 2})"#,
+        r#"LongAgentName(("1212",100.0))"#,
+        r#"[{ oneField: "1212", anotherField: 100.0 }, { oneField: "1", anotherField: 2.0 }]"#,
     ]));
 
     let outputs = ctx
@@ -1283,8 +1298,8 @@ async fn test_naming_extremes() {
             cmd::AGENT,
             cmd::INVOKE,
             flag::YES,
-            r#"test-agent("x")"#,
-            "test-all",
+            r#"TestAgent("x")"#,
+            "testAll",
         ])
         .await;
     assert!(outputs.success_or_dump());
@@ -1293,7 +1308,7 @@ async fn test_naming_extremes() {
         .cli([
             cmd::AGENT,
             cmd::GET,
-            &format!("string-agent(    \"{}\"    )", " ".repeat(447)), // HTTP API should normalize it
+            &format!("StringAgent(    \"{}\"    )", " ".repeat(447)), // HTTP API should normalize it
         ])
         .await;
     assert!(outputs.success_or_dump());
@@ -1303,7 +1318,7 @@ async fn test_naming_extremes() {
             cmd::AGENT,
             cmd::GET,
             &format!(
-                "struct-agent(  {{x:\"{}\"  ,  y    : \"{}\", z: \"{}\" }})", // HTTP API should normalize it
+                "StructAgent(  {{x:\"{}\"  ,  y    : \"{}\", z: \"{}\" }})", // HTTP API should normalize it
                 " ".repeat(102),
                 " ".repeat(102),
                 "/".repeat(102)

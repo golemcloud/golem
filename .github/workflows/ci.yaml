@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.0.23"
+  WASM_RQUICKJS_VERSION: "0.0.24"
 
 jobs:
   build-and-store:
@@ -279,7 +279,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
       - uses: davidB/rust-cargo-make@v1
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
@@ -338,7 +338,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 20
+        timeout-minutes: 30
       - name: Publish Test Report
         uses: ctrf-io/github-test-reporter@v1
         if: always()
@@ -381,7 +381,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo binstall --force cargo-component@0.21.1
@@ -461,7 +461,7 @@ jobs:
         with:
           version: latest
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
         run: cargo binstall --force cargo-component@0.21.1

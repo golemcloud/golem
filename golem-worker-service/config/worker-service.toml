@@ -27,6 +27,7 @@ key_prefix = ""
 pending_login_expiration = "1h"
 pool_size = 8
 port = 6380
+tls = false
 tracing = false
 
 [gateway_session_storage.config.retries]

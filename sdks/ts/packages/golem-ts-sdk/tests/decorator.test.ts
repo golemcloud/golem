@@ -235,7 +235,8 @@ describe('Agent decorator should register the agent class and its methods into A
     const expectedWit = {
       nodes: [
         {
-          name: 'tagged-union',
+          name: 'TaggedUnion',
+          owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
@@ -252,23 +253,25 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-f64-type' } },
-        { type: { tag: 'prim-bool-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
         {
-          name: 'union-type',
+          name: 'UnionType',
+          owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
-              ['union-type1', 1],
-              ['union-type2', 2],
-              ['union-type3', 5],
-              ['union-type4', 3],
+              ['UnionType1', 1],
+              ['UnionType2', 2],
+              ['UnionType3', 5],
+              ['UnionType4', 3],
             ],
           },
         },
         {
-          name: 'object-type',
+          name: 'ObjectType',
+          owner: undefined,
           type: {
             tag: 'record-type',
             val: [
@@ -278,10 +281,11 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { name: 'list-type', type: { tag: 'list-type', val: 1 } },
-        { name: 'tuple-type', type: { tag: 'tuple-type', val: [1, 2, 3] } },
+        { name: 'ListType', owner: undefined, type: { tag: 'list-type', val: 1 } },
+        { name: 'TupleType', owner: undefined, type: { tag: 'tuple-type', val: [1, 2, 3] } },
         {
-          name: 'simple-interface-type',
+          name: 'SimpleInterfaceType',
+          owner: undefined,
           type: { tag: 'record-type', val: [['n', 2]] },
         },
       ],
@@ -296,7 +300,8 @@ describe('Agent decorator should register the agent class and its methods into A
     const expectedWit = {
       nodes: [
         {
-          name: 'union-with-only-literals',
+          name: 'UnionWithOnlyLiterals',
+          owner: undefined,
           type: { tag: 'enum-type', val: ['foo', 'bar', 'baz'] },
         },
       ],
@@ -311,7 +316,7 @@ describe('Agent decorator should register the agent class and its methods into A
     const expectedWit = {
       nodes: [
         {
-          name: 'union-with-literals',
+          name: 'UnionWithLiterals',
           owner: undefined,
           type: {
             tag: 'variant-type',
@@ -319,7 +324,7 @@ describe('Agent decorator should register the agent class and its methods into A
               ['a', undefined],
               ['b', undefined],
               ['c', undefined],
-              ['union-with-literals1', 1],
+              ['UnionWithLiterals1', 1],
             ],
           },
         },
@@ -337,11 +342,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expectedWit = {
       nodes: [
         {
-          name: 'result-type-exact-both',
+          name: 'ResultTypeExactBoth',
+          owner: undefined,
           type: { tag: 'result-type', val: [1, 2] },
         },
-        { type: { tag: 'prim-f64-type' } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -354,11 +360,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expectedWit = {
       nodes: [
         {
-          name: 'result-type-non-exact',
+          name: 'ResultTypeNonExact',
+          owner: undefined,
           type: { tag: 'result-type', val: [1, 2] },
         },
-        { type: { tag: 'prim-f64-type' } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -371,11 +378,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expectedWit = {
       nodes: [
         {
-          name: 'result-type-non-exact2',
+          name: 'ResultTypeNonExact2',
+          owner: undefined,
           type: { tag: 'result-type', val: [1, 2] },
         },
-        { type: { tag: 'prim-f64-type' } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -387,8 +395,10 @@ describe('Agent decorator should register the agent class and its methods into A
 
     const expectedWit = {
       nodes: [
-        { type: { tag: 'option-type', val: 1 } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
         {
+          name: undefined,
+          owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
@@ -399,10 +409,11 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
         {
-          name: 'object-type',
+          name: 'ObjectType',
+          owner: undefined,
           type: {
             tag: 'record-type',
             val: [
@@ -412,7 +423,7 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-bool-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
       ],
     };
 
@@ -424,8 +435,10 @@ describe('Agent decorator should register the agent class and its methods into A
 
     const expectedWit = {
       nodes: [
-        { type: { tag: 'option-type', val: 1 } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
         {
+          name: undefined,
+          owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
@@ -436,10 +449,11 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
         {
-          name: 'object-type',
+          name: 'ObjectType',
+          owner: undefined,
           type: {
             tag: 'record-type',
             val: [
@@ -449,7 +463,7 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-bool-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
       ],
     };
 
@@ -488,11 +502,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'object-with-union-with-undefined1',
+          name: 'ObjectWithUnionWithUndefined1',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -505,11 +520,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'interface-with-union-with-undefined1',
+          name: 'InterfaceWithUnionWithUndefined1',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -525,11 +541,14 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'object-with-union-with-undefined2',
+          name: 'ObjectWithUnionWithUndefined2',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
         {
+          name: undefined,
+          owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
@@ -538,8 +557,8 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
       ],
     };
 
@@ -552,11 +571,14 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'interface-with-union-with-undefined2',
+          name: 'InterfaceWithUnionWithUndefined2',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
         {
+          name: undefined,
+          owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
@@ -565,8 +587,8 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
       ],
     };
 
@@ -582,11 +604,14 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'object-with-union-with-undefined3',
+          name: 'ObjectWithUnionWithUndefined3',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
         {
+          name: undefined,
+          owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
@@ -595,8 +620,8 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
       ],
     };
 
@@ -609,11 +634,14 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'interface-with-union-with-undefined3',
+          name: 'InterfaceWithUnionWithUndefined3',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
         {
+          name: undefined,
+          owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
@@ -622,8 +650,8 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
       ],
     };
 
@@ -639,11 +667,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'object-with-union-with-undefined4',
+          name: 'ObjectWithUnionWithUndefined4',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -656,11 +685,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'interface-with-union-with-undefined4',
+          name: 'InterfaceWithUnionWithUndefined4',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -673,11 +703,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'object-with-option',
+          name: 'ObjectWithOption',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -690,11 +721,12 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'interface-with-option',
+          name: 'InterfaceWithOption',
+          owner: undefined,
           type: { tag: 'record-type', val: [['a', 1]] },
         },
-        { type: { tag: 'option-type', val: 2 } },
-        { type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
       ],
     };
 
@@ -804,7 +836,7 @@ describe('Annotated FooAgent class', () => {
       lowBits: BigInt(5678),
     };
 
-    (globalThis as any).currentAgentId = `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+    (globalThis as any).currentAgentId = `FooAgent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
 
     const fooResult = initiator.initiate(
       {
@@ -870,7 +902,7 @@ describe('Annotated SingletonAgent class', () => {
       val: [],
     };
 
-    (globalThis as any).currentAgentId = `singleton-agent(${JSON.stringify(params)})`;
+    (globalThis as any).currentAgentId = `SingletonAgent(${JSON.stringify(params)})`;
 
     const singleton = initiator.initiate(params, { tag: 'anonymous' });
     expect(singleton.tag).toEqual('ok');

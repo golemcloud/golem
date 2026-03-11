@@ -105,6 +105,8 @@ criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
+rustls-pemfile = { workspace = true }
 tempfile.workspace = true
 test-r = { workspace = true }
 tryhard = { workspace = true }

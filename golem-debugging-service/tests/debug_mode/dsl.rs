@@ -1,7 +1,7 @@
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
 use async_trait::async_trait;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_debugging_service::model::params::{
     ConnectParams, ConnectResult, ForkParams, ForkResult, PlaybackOverride, PlaybackParams,
     PlaybackResult, RewindParams, RewindResult,
@@ -9,7 +9,7 @@ use golem_debugging_service::model::params::{
 
 #[async_trait]
 pub trait TestDslDebugMode {
-    async fn connect(&mut self, worker_id: &WorkerId) -> anyhow::Result<ConnectResult>;
+    async fn connect(&mut self, agent_id: &AgentId) -> anyhow::Result<ConnectResult>;
 
     async fn playback(
         &mut self,
@@ -21,7 +21,7 @@ pub trait TestDslDebugMode {
 
     async fn fork(
         &mut self,
-        target_worker_id: &WorkerId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> anyhow::Result<ForkResult>;
 
@@ -30,12 +30,12 @@ pub trait TestDslDebugMode {
 
 #[async_trait]
 impl TestDslDebugMode for DebugWorkerExecutorClient {
-    async fn connect(&mut self, worker_id: &WorkerId) -> anyhow::Result<ConnectResult> {
+    async fn connect(&mut self, agent_id: &AgentId) -> anyhow::Result<ConnectResult> {
         let id = self
             .send_jrpc_msg(
                 "connect",
                 ConnectParams {
-                    worker_id: worker_id.clone(),
+                    agent_id: agent_id.clone(),
                 },
             )
             .await?;
@@ -78,14 +78,14 @@ impl TestDslDebugMode for DebugWorkerExecutorClient {
 
     async fn fork(
         &mut self,
-        target_worker_id: &WorkerId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> anyhow::Result<ForkResult> {
         let id = self
             .send_jrpc_msg(
                 "fork",
                 ForkParams {
-                    target_worker_id: target_worker_id.clone(),
+                    target_agent_id: target_agent_id.clone(),
                     oplog_index_cut_off,
                 },
             )

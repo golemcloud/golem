@@ -47,8 +47,8 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
     HostResponseGolemApiFork, OplogEntry, OplogIndex, OplogIndexRange,
 };
-use golem_common::model::{OwnedWorkerId, WorkerId};
-use golem_common::model::{Timestamp, WorkerMetadata};
+use golem_common::model::{AgentId, OwnedAgentId};
+use golem_common::model::{AgentMetadata, Timestamp};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -61,8 +61,8 @@ pub trait WorkerForkService: Send + Sync {
     async fn fork(
         &self,
         fork_account_id: AccountId,
-        source_worker_id: &OwnedWorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &OwnedAgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(), WorkerExecutorError>;
 
@@ -70,8 +70,8 @@ pub trait WorkerForkService: Send + Sync {
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: AccountId,
-        source_worker_id: &OwnedWorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &OwnedAgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         forked_phantom_id: Uuid,
     ) -> Result<(), WorkerExecutorError>;
@@ -395,10 +395,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     async fn validate_worker_forking(
         &self,
         environment_id: EnvironmentId,
-        source_worker_id: &WorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &AgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(OwnedWorkerId, OwnedWorkerId), WorkerExecutorError> {
+    ) -> Result<(OwnedAgentId, OwnedAgentId), WorkerExecutorError> {
         let second_index = OplogIndex::INITIAL.next();
 
         if oplog_index_cut_off < second_index {
@@ -407,61 +407,62 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             ));
         }
 
-        let owned_target_worker_id = OwnedWorkerId::new(environment_id, target_worker_id);
+        let owned_target_agent_id = OwnedAgentId::new(environment_id, target_agent_id);
 
-        let target_metadata = self.worker_service.get(&owned_target_worker_id).await;
+        let target_metadata = self.worker_service.get(&owned_target_agent_id).await;
 
         // We allow forking only if the target worker does not exist
         if target_metadata.is_some() {
             return Err(WorkerExecutorError::worker_already_exists(
-                target_worker_id.clone(),
+                target_agent_id.clone(),
             ));
         }
 
         // We assume the source worker belongs to this executor
-        self.shard_service.check_worker(source_worker_id)?;
+        self.shard_service.check_worker(source_agent_id)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(environment_id, source_worker_id);
+        let owned_source_agent_id = OwnedAgentId::new(environment_id, source_agent_id);
 
         self.worker_service
-            .get(&owned_source_worker_id)
+            .get(&owned_source_agent_id)
             .await
             .ok_or(WorkerExecutorError::worker_not_found(
-                source_worker_id.clone(),
+                source_agent_id.clone(),
             ))?;
 
-        Ok((owned_source_worker_id, owned_target_worker_id))
+        Ok((owned_source_agent_id, owned_target_agent_id))
     }
 
     async fn copy_source_oplog(
         &self,
         fork_account_id: AccountId,
-        source_worker_id: &OwnedWorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &OwnedAgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_worker_call("fork");
 
-        tracing::debug!("Copying source oplog of worker {fork_account_id}/{source_worker_id} to {target_worker_id} up to index {oplog_index_cut_off}");
+        tracing::debug!("Copying source oplog of worker {fork_account_id}/{source_agent_id} to {target_agent_id} up to index {oplog_index_cut_off}");
 
-        let (owned_source_worker_id, owned_target_worker_id) = self
+        let (owned_source_agent_id, owned_target_agent_id) = self
             .validate_worker_forking(
-                source_worker_id.environment_id,
-                &source_worker_id.worker_id,
-                target_worker_id,
+                source_agent_id.environment_id,
+                &source_agent_id.agent_id,
+                target_agent_id,
                 oplog_index_cut_off,
             )
             .await?;
 
-        let target_worker_id = owned_target_worker_id.worker_id.clone();
-        let environment_id = owned_target_worker_id.environment_id;
+        let target_agent_id = owned_target_agent_id.agent_id.clone();
+        let environment_id = owned_target_agent_id.environment_id;
 
         let source_worker_instance = Worker::get_or_create_suspended(
             self,
             fork_account_id,
-            &owned_source_worker_id,
+            &owned_source_agent_id,
             None,
             None,
+            Vec::new(),
             None,
             None,
             &InvocationContextStack::fresh(),
@@ -471,12 +472,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let initial_source_worker_metadata = source_worker_instance.get_initial_worker_metadata();
 
-        let target_worker_metadata = WorkerMetadata {
-            worker_id: target_worker_id.clone(),
+        let target_worker_metadata = AgentMetadata {
+            agent_id: target_agent_id.clone(),
             created_by: fork_account_id,
             environment_id,
-            env: initial_source_worker_metadata.env.clone(),
-            config_vars: initial_source_worker_metadata.config_vars.clone(),
+            env: initial_source_worker_metadata.env,
+            config_vars: initial_source_worker_metadata.config_vars,
+            local_agent_config: initial_source_worker_metadata.local_agent_config,
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
@@ -489,7 +491,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         // Update the oplog initial entry with the new worker
         let target_initial_oplog_entry =
-            Self::update_worker_id(initial_oplog_entry, &target_worker_id).ok_or(
+            Self::update_agent_id(initial_oplog_entry, &target_agent_id).ok_or(
                 WorkerExecutorError::unknown("Failed to update worker id in oplog entry"),
             )?;
 
@@ -497,11 +499,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let new_oplog = self
             .oplog_service
             .create(
-                &owned_target_worker_id,
+                &owned_target_agent_id,
                 target_initial_oplog_entry,
                 target_worker_metadata,
                 read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
-                    initial_source_worker_metadata.last_known_status.clone(),
+                    initial_source_worker_metadata.last_known_status,
                 ))),
                 read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
                     ExecutionStatus::Suspended {
@@ -522,7 +524,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         Ok(new_oplog)
     }
 
-    pub fn update_worker_id(entry: OplogEntry, worker_id: &WorkerId) -> Option<OplogEntry> {
+    pub fn update_agent_id(entry: OplogEntry, agent_id: &AgentId) -> Option<OplogEntry> {
         match entry {
             OplogEntry::Create {
                 timestamp,
@@ -535,11 +537,12 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
-                worker_id: _,
+                local_agent_config,
+                agent_id: _,
                 original_phantom_id,
             } => Some(OplogEntry::Create {
                 timestamp,
-                worker_id: worker_id.clone(),
+                agent_id: agent_id.clone(),
                 component_revision,
                 env,
                 environment_id,
@@ -549,6 +552,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 original_phantom_id,
             }),
             _ => None,
@@ -561,15 +565,15 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
         &self,
         fork_account_id: AccountId,
-        source_worker_id: &OwnedWorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &OwnedAgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(
                 fork_account_id,
-                source_worker_id,
-                target_worker_id,
+                source_agent_id,
+                target_agent_id,
                 oplog_index_cut_off,
             )
             .await?;
@@ -581,10 +585,10 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_worker_id, true, fork_account_id)
+            .resume(target_agent_id, true, fork_account_id)
             .await
             .map_err(|err| {
-                WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())
+                WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())
             })?;
 
         Ok(())
@@ -593,16 +597,16 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: AccountId,
-        source_worker_id: &OwnedWorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &OwnedAgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
         forked_phantom_id: Uuid,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(
                 fork_account_id,
-                source_worker_id,
-                target_worker_id,
+                source_agent_id,
+                target_agent_id,
                 oplog_index_cut_off,
             )
             .await?;
@@ -635,10 +639,10 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_worker_id, true, fork_account_id)
+            .resume(target_agent_id, true, fork_account_id)
             .await
             .map_err(|err| {
-                WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())
+                WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())
             })?;
 
         Ok(())

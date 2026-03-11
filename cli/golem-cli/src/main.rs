@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "512"]
+
 use crate::hooks::NoHooks;
 use golem_cli::command_handler::CommandHandler;
 use golem_cli::main_wrapper;

@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod agent;
+pub mod agent_secret;
 pub mod application;
 pub mod auth;
 pub mod base64;
@@ -33,6 +34,7 @@ pub mod invocation_context;
 pub mod login;
 pub mod mcp_deployment;
 pub mod oplog;
+pub mod optional_field_update;
 pub mod plan;
 pub mod plugin_registration;
 pub mod regions;
@@ -197,21 +199,21 @@ impl ShardId {
         Self { value }
     }
 
-    pub fn from_worker_id(worker_id: &WorkerId, number_of_shards: usize) -> Self {
-        let hash = Self::hash_worker_id(worker_id);
+    pub fn from_agent_id(agent_id: &AgentId, number_of_shards: usize) -> Self {
+        let hash = Self::hash_agent_id(agent_id);
         let value = hash.abs() % number_of_shards as i64;
         Self { value }
     }
 
-    pub fn hash_worker_id(worker_id: &WorkerId) -> i64 {
+    pub fn hash_agent_id(agent_id: &AgentId) -> i64 {
         let (high_bits, low_bits) = (
-            (worker_id.component_id.0.as_u128() >> 64) as i64,
-            worker_id.component_id.0.as_u128() as i64,
+            (agent_id.component_id.0.as_u128() >> 64) as i64,
+            agent_id.component_id.0.as_u128() as i64,
         );
         let high = Self::hash_string(&high_bits.to_string());
-        let worker_name = &worker_id.worker_name;
-        let component_worker_name = format!("{low_bits}{worker_name}");
-        let low = Self::hash_string(&component_worker_name);
+        let agent_name = &agent_id.agent_id;
+        let component_agent_name = format!("{low_bits}{agent_name}");
+        let low = Self::hash_string(&component_agent_name);
         ((high as i64) << 32) | ((low as i64) & 0xFFFFFFFF)
     }
 
@@ -267,23 +269,22 @@ impl golem_wasm::IntoValue for ShardId {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[wit(name = "agent-id", owner = "golem:core@1.5.0/types")]
-pub struct WorkerId {
+pub struct AgentId {
     pub component_id: ComponentId,
-    #[wit_field(rename = "agent-id")]
-    pub worker_name: String,
+    pub agent_id: String,
 }
 
-impl WorkerId {
+impl AgentId {
     pub fn to_redis_key(&self) -> String {
-        format!("{}:{}", self.component_id.0, self.worker_name)
+        format!("{}:{}", self.component_id.0, self.agent_id)
     }
 
-    pub fn to_worker_urn(&self) -> String {
-        format!("urn:worker:{}/{}", self.component_id, self.worker_name)
+    pub fn to_agent_urn(&self) -> String {
+        format!("urn:worker:{}/{}", self.component_id, self.agent_id)
     }
 }
 
-impl FromStr for WorkerId {
+impl FromStr for AgentId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -292,27 +293,27 @@ impl FromStr for WorkerId {
             let component_id_uuid = Uuid::from_str(parts[0])
                 .map_err(|_| format!("invalid component id: {s} - expected uuid"))?;
             let component_id = ComponentId(component_id_uuid);
-            let worker_name = parts[1].to_string();
+            let agent_name = parts[1].to_string();
             Ok(Self {
                 component_id,
-                worker_name,
+                agent_id: agent_name,
             })
         } else {
             Err(format!(
-                "invalid worker id: {s} - expected format: <component_id>:<worker_name>"
+                "invalid agent id: {s} - expected format: <component_id>:<agent_name>"
             ))
         }
     }
 }
 
-impl Display for WorkerId {
+impl Display for AgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{}/{}", self.component_id, self.worker_name))
+        f.write_str(&format!("{}/{}", self.component_id, self.agent_id))
     }
 }
 
-impl AsRef<WorkerId> for &WorkerId {
-    fn as_ref(&self) -> &WorkerId {
+impl AsRef<AgentId> for &AgentId {
+    fn as_ref(&self) -> &AgentId {
         self
     }
 }
@@ -326,19 +327,19 @@ impl AsRef<WorkerId> for &WorkerId {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PromiseId {
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub oplog_idx: OplogIndex,
 }
 
 impl PromiseId {
     pub fn to_redis_key(&self) -> String {
-        format!("{}:{}", self.worker_id.to_redis_key(), self.oplog_idx)
+        format!("{}:{}", self.agent_id.to_redis_key(), self.oplog_idx)
     }
 }
 
 impl Display for PromiseId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.worker_id, self.oplog_idx)
+        write!(f, "{}/{}", self.agent_id, self.oplog_idx)
     }
 }
 
@@ -614,7 +615,7 @@ impl FromStr for IdempotencyKey {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerResourceDescription {
+pub struct AgentResourceDescription {
     pub created_at: Timestamp,
     pub resource_owner: String,
     pub resource_name: String,
@@ -627,7 +628,7 @@ pub struct WorkerResourceDescription {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub enum WorkerStatus {
+pub enum AgentStatus {
     /// The worker is running an invoked function
     Running,
     /// The worker is ready to run an invoked function
@@ -644,13 +645,13 @@ pub enum WorkerStatus {
     Exited,
 }
 
-impl PartialOrd for WorkerStatus {
+impl PartialOrd for AgentStatus {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for WorkerStatus {
+impl Ord for AgentStatus {
     fn cmp(&self, other: &Self) -> Ordering {
         let v1: i32 = self.clone().into();
         let v2: i32 = other.clone().into();
@@ -658,64 +659,64 @@ impl Ord for WorkerStatus {
     }
 }
 
-impl FromStr for WorkerStatus {
+impl FromStr for AgentStatus {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "running" => Ok(WorkerStatus::Running),
-            "idle" => Ok(WorkerStatus::Idle),
-            "suspended" => Ok(WorkerStatus::Suspended),
-            "interrupted" => Ok(WorkerStatus::Interrupted),
-            "retrying" => Ok(WorkerStatus::Retrying),
-            "failed" => Ok(WorkerStatus::Failed),
-            "exited" => Ok(WorkerStatus::Exited),
+            "running" => Ok(AgentStatus::Running),
+            "idle" => Ok(AgentStatus::Idle),
+            "suspended" => Ok(AgentStatus::Suspended),
+            "interrupted" => Ok(AgentStatus::Interrupted),
+            "retrying" => Ok(AgentStatus::Retrying),
+            "failed" => Ok(AgentStatus::Failed),
+            "exited" => Ok(AgentStatus::Exited),
             _ => Err(format!("Unknown worker status: {s}")),
         }
     }
 }
 
-impl Display for WorkerStatus {
+impl Display for AgentStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerStatus::Running => write!(f, "Running"),
-            WorkerStatus::Idle => write!(f, "Idle"),
-            WorkerStatus::Suspended => write!(f, "Suspended"),
-            WorkerStatus::Interrupted => write!(f, "Interrupted"),
-            WorkerStatus::Retrying => write!(f, "Retrying"),
-            WorkerStatus::Failed => write!(f, "Failed"),
-            WorkerStatus::Exited => write!(f, "Exited"),
+            AgentStatus::Running => write!(f, "Running"),
+            AgentStatus::Idle => write!(f, "Idle"),
+            AgentStatus::Suspended => write!(f, "Suspended"),
+            AgentStatus::Interrupted => write!(f, "Interrupted"),
+            AgentStatus::Retrying => write!(f, "Retrying"),
+            AgentStatus::Failed => write!(f, "Failed"),
+            AgentStatus::Exited => write!(f, "Exited"),
         }
     }
 }
 
-impl TryFrom<i32> for WorkerStatus {
+impl TryFrom<i32> for AgentStatus {
     type Error = String;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(WorkerStatus::Running),
-            1 => Ok(WorkerStatus::Idle),
-            2 => Ok(WorkerStatus::Suspended),
-            3 => Ok(WorkerStatus::Interrupted),
-            4 => Ok(WorkerStatus::Retrying),
-            5 => Ok(WorkerStatus::Failed),
-            6 => Ok(WorkerStatus::Exited),
+            0 => Ok(AgentStatus::Running),
+            1 => Ok(AgentStatus::Idle),
+            2 => Ok(AgentStatus::Suspended),
+            3 => Ok(AgentStatus::Interrupted),
+            4 => Ok(AgentStatus::Retrying),
+            5 => Ok(AgentStatus::Failed),
+            6 => Ok(AgentStatus::Exited),
             _ => Err(format!("Unknown worker status: {value}")),
         }
     }
 }
 
-impl From<WorkerStatus> for i32 {
-    fn from(value: WorkerStatus) -> Self {
+impl From<AgentStatus> for i32 {
+    fn from(value: AgentStatus) -> Self {
         match value {
-            WorkerStatus::Running => 0,
-            WorkerStatus::Idle => 1,
-            WorkerStatus::Suspended => 2,
-            WorkerStatus::Interrupted => 3,
-            WorkerStatus::Retrying => 4,
-            WorkerStatus::Failed => 5,
-            WorkerStatus::Exited => 6,
+            AgentStatus::Running => 0,
+            AgentStatus::Idle => 1,
+            AgentStatus::Suspended => 2,
+            AgentStatus::Interrupted => 3,
+            AgentStatus::Retrying => 4,
+            AgentStatus::Failed => 5,
+            AgentStatus::Exited => 6,
         }
     }
 }

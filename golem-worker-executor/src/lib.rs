@@ -65,6 +65,7 @@ use crate::services::{
     HasWorkerActivator, HasWorkerService,
 };
 use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
+use crate::storage::indexed::postgres::PostgresIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -391,6 +392,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             let pool = RedisPool::configured(redis).await?;
             Arc::new(RedisIndexedStorage::new(pool.clone()))
         }
+        IndexedStorageConfig::Postgres(postgres) => {
+            Arc::new(
+                PostgresIndexedStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            )
+        }
         IndexedStorageConfig::KVStoreSqlite(_) => {
             let sqlite = sqlite
                 .clone()
@@ -602,6 +610,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         key_value_storage.clone(),
         shard_service.clone(),
         oplog_service.clone(),
+        component_service.clone(),
         golem_config.clone(),
     ));
     let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(

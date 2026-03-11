@@ -16,7 +16,8 @@ use crate::custom_api::CompiledRoutes;
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::mcp::CompiledMcp;
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
-use crate::model::{AccountResourceLimits, AgentDeploymentDetails, Component, ResourceLimits};
+use crate::model::component::Component;
+use crate::model::{AccountResourceLimits, AgentDeploymentDetails, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
@@ -39,7 +40,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     update_worker_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
@@ -82,14 +83,14 @@ pub trait RegistryService: Send + Sync {
     async fn update_worker_limit(
         &self,
         account_id: AccountId,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         added: bool,
     ) -> Result<(), RegistryServiceError>;
 
     async fn update_worker_connection_limit(
         &self,
         account_id: AccountId,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         added: bool,
     ) -> Result<(), RegistryServiceError>;
 
@@ -352,7 +353,7 @@ impl RegistryService for GrpcRegistryService {
     async fn update_worker_limit(
         &self,
         account_id: AccountId,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         added: bool,
     ) -> Result<(), RegistryServiceError> {
         let response = self
@@ -360,7 +361,7 @@ impl RegistryService for GrpcRegistryService {
             .call("update_worker_limit", move |client| {
                 let request = UpdateWorkerLimitRequest {
                     account_id: Some(account_id.into()),
-                    worker_id: Some(worker_id.clone().into()),
+                    agent_id: Some(agent_id.clone().into()),
                     added,
                 };
 
@@ -379,7 +380,7 @@ impl RegistryService for GrpcRegistryService {
     async fn update_worker_connection_limit(
         &self,
         account_id: AccountId,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         added: bool,
     ) -> Result<(), RegistryServiceError> {
         let response = self
@@ -387,7 +388,7 @@ impl RegistryService for GrpcRegistryService {
             .call("update_worker_connection_limit", move |client| {
                 let request = UpdateWorkerConnectionLimitRequest {
                     account_id: Some(account_id.into()),
-                    worker_id: Some(worker_id.clone().into()),
+                    agent_id: Some(agent_id.clone().into()),
                     added,
                 };
 

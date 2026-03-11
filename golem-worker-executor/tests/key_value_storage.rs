@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
@@ -85,6 +85,7 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
             key_prefix: random_prefix.to_string(),
             username: None,
             password: None,
+            tls: false,
         })
         .await
         .unwrap();
@@ -181,9 +182,9 @@ struct Namespaces {
 fn ns() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::Worker {
-            worker_id: WorkerId {
+            agent_id: AgentId {
                 component_id: ComponentId::new(),
-                worker_name: "test".to_string(),
+                agent_id: "test".to_string(),
             },
         },
         ns2: KeyValueStorageNamespace::UserDefined {
@@ -201,9 +202,9 @@ fn ns2() -> Namespaces {
             bucket: "test-bucket".to_string(),
         },
         ns2: KeyValueStorageNamespace::Worker {
-            worker_id: WorkerId {
+            agent_id: AgentId {
                 component_id: ComponentId::new(),
-                worker_name: "test".to_string(),
+                agent_id: "test".to_string(),
             },
         },
     }

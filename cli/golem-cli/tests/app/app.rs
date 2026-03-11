@@ -69,7 +69,6 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // First build
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Executing external command 'cargo-component build'"));
     assert!(outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     check_component_metadata(
@@ -82,25 +81,21 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // Rebuild - 1
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Executing external command 'cargo-component build'"));
     assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 2
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Executing external command 'cargo-component build'"));
     assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 3 - force, but cargo is smart to skip actual compile
     let outputs = ctx.cli([cmd::BUILD, flag::FORCE_BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Executing external command 'cargo-component build'"));
     assert!(outputs.stdout_contains("Finished `dev` profile"));
 
     // Rebuild - 4
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Executing external command 'cargo-component build'"));
     assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Clean
@@ -110,7 +105,6 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // Rebuild - 5
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Executing external command 'cargo-component build'"));
     assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 }
 
