@@ -802,25 +802,42 @@ mod tests {
     // Oplog processor plugin helpers for sharding tests
     // ========================================================================
 
-    fn extract_function_names(invocations: &[String]) -> Vec<String> {
-        invocations
-            .iter()
-            .map(|s| {
-                let parts: Vec<&str> = s.split('/').collect();
-                parts[parts.len() - 1].to_string()
-            })
-            .collect()
+    #[derive(Clone, Debug, serde::Deserialize)]
+    struct BatchCallback {
+        #[allow(dead_code)]
+        source_worker_id: String,
+        #[allow(dead_code)]
+        account_id: String,
+        #[allow(dead_code)]
+        component_id: String,
+        first_entry_index: u64,
+        entry_count: u64,
+        invocations: Vec<InvocationRecord>,
     }
 
-    fn assert_unique_oplog_indices(invocations: &[String]) {
-        let indices: Vec<u64> = invocations
+    #[derive(Clone, Debug, serde::Deserialize)]
+    struct InvocationRecord {
+        oplog_index: u64,
+        fn_name: String,
+    }
+
+    fn invocation_count(batches: &[BatchCallback]) -> usize {
+        batches.iter().map(|b| b.invocations.len()).sum()
+    }
+
+    fn extract_function_names(batches: &[BatchCallback]) -> Vec<String> {
+        let mut all: Vec<_> = batches
             .iter()
-            .map(|s| {
-                let parts: Vec<&str> = s.split('/').collect();
-                parts[parts.len() - 2]
-                    .parse::<u64>()
-                    .unwrap_or_else(|_| panic!("Invalid oplog index in: {s}"))
-            })
+            .flat_map(|b| b.invocations.iter())
+            .collect();
+        all.sort_by_key(|i| i.oplog_index);
+        all.into_iter().map(|i| i.fn_name.clone()).collect()
+    }
+
+    fn assert_unique_oplog_indices(batches: &[BatchCallback]) {
+        let indices: Vec<u64> = batches
+            .iter()
+            .flat_map(|b| b.invocations.iter().map(|i| i.oplog_index))
             .collect();
         let unique: HashSet<u64> = indices.iter().copied().collect();
         assert_eq!(
@@ -831,8 +848,8 @@ mod tests {
         );
     }
 
-    async fn start_callback_server() -> (String, Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
-        let received: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    async fn start_callback_server() -> (String, Arc<Mutex<Vec<BatchCallback>>>, JoinHandle<()>) {
+        let received: Arc<Mutex<Vec<BatchCallback>>> = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
@@ -844,9 +861,9 @@ mod tests {
                 post(move |body: Bytes| {
                     async move {
                         let body_str = String::from_utf8(body.to_vec()).unwrap();
-                        let items: Vec<String> = serde_json::from_str(&body_str).unwrap();
-                        let mut inv = received_clone.lock().unwrap();
-                        inv.extend(items);
+                        let batch: BatchCallback = serde_json::from_str(&body_str).unwrap();
+                        let mut batches = received_clone.lock().unwrap();
+                        batches.push(batch);
                         "ok"
                     }
                     .in_current_span()
@@ -863,22 +880,24 @@ mod tests {
     }
 
     async fn wait_for_invocations(
-        received: &Arc<Mutex<Vec<String>>>,
+        received: &Arc<Mutex<Vec<BatchCallback>>>,
         expected_count: usize,
         timeout: Duration,
-    ) -> Vec<String> {
+    ) -> Vec<BatchCallback> {
         let start = tokio::time::Instant::now();
         loop {
-            let invocations = received.lock().unwrap().clone();
-            if invocations.len() >= expected_count {
-                return invocations;
+            let batches = received.lock().unwrap().clone();
+            let count = invocation_count(&batches);
+            if count >= expected_count {
+                return batches;
             }
             if start.elapsed() > timeout {
                 panic!(
-                    "Timed out waiting for callbacks (got {} of {}: {:?})",
-                    invocations.len(),
+                    "Timed out waiting for callbacks (got {} of {} expected, {} batches: {:?})",
+                    count,
                     expected_count,
-                    invocations,
+                    batches.len(),
+                    batches,
                 );
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -992,8 +1011,8 @@ mod tests {
             .unwrap();
         }
 
-        let invocations = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
-        let fn_names = extract_function_names(&invocations);
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 6 adds, no duplicates across shard reassignment.
         // Current bug: no checkpoint, so shard reassignment causes re-delivery.
         assert_eq!(
@@ -1004,7 +1023,7 @@ mod tests {
             1
         );
         assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 6);
-        assert_unique_oplog_indices(&invocations);
+        assert_unique_oplog_indices(&batches);
     }
 
     // ========================================================================
@@ -1110,8 +1129,8 @@ mod tests {
             .unwrap();
         }
 
-        let invocations = wait_for_invocations(&received, 5, Duration::from_secs(60)).await;
-        let fn_names = extract_function_names(&invocations);
+        let batches = wait_for_invocations(&received, 5, Duration::from_secs(60)).await;
+        let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 4 adds, no duplicates across shard move.
         // Current bug: no checkpoint, in-flight batch may be re-delivered.
         assert_eq!(
@@ -1122,7 +1141,7 @@ mod tests {
             1
         );
         assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 4);
-        assert_unique_oplog_indices(&invocations);
+        assert_unique_oplog_indices(&batches);
     }
 
     // ========================================================================
@@ -1230,8 +1249,8 @@ mod tests {
             .unwrap();
         }
 
-        let invocations = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
-        let fn_names = extract_function_names(&invocations);
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 6 adds, no duplicates after locality recovery.
         // Current bug: no checkpoint, so shard reassignment causes re-delivery.
         assert_eq!(
@@ -1242,7 +1261,7 @@ mod tests {
             1
         );
         assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 6);
-        assert_unique_oplog_indices(&invocations);
+        assert_unique_oplog_indices(&batches);
     }
 
     // ========================================================================
@@ -1355,8 +1374,8 @@ mod tests {
 
         // Exactly-once: exactly 1 init + 20 adds, no duplicates despite crash + executor restart.
         // Current bug: no checkpoint, crash and executor stop/start cause re-delivery.
-        let invocations = wait_for_invocations(&received, 21, Duration::from_secs(120)).await;
-        let fn_names = extract_function_names(&invocations);
+        let batches = wait_for_invocations(&received, 21, Duration::from_secs(120)).await;
+        let fn_names = extract_function_names(&batches);
         assert_eq!(
             fn_names
                 .iter()
@@ -1365,6 +1384,6 @@ mod tests {
             1
         );
         assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 20);
-        assert_unique_oplog_indices(&invocations);
+        assert_unique_oplog_indices(&batches);
     }
 }

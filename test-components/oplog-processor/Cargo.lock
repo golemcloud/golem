@@ -401,6 +401,7 @@ name = "oplog_processor"
 version = "0.0.1"
 dependencies = [
  "golem-rust",
+ "serde",
  "serde_json",
  "uuid",
  "wstd",
