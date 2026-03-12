@@ -1107,15 +1107,7 @@ impl AgentInvocation {
     }
 
     pub fn has_idempotency_key(&self, key: &IdempotencyKey) -> bool {
-        match self {
-            Self::AgentMethod {
-                idempotency_key, ..
-            } => idempotency_key == key,
-            Self::AgentInitialization {
-                idempotency_key, ..
-            } => idempotency_key == key,
-            _ => false,
-        }
+        self.idempotency_key() == Some(key)
     }
 
     pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
