@@ -329,7 +329,7 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -435,7 +435,7 @@ async fn oplog_processor_in_different_env_after_unregistering(
         .await?;
     client_2.delete_plugin(&oplog_processor_plugin.id.0).await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let _worker_id = user_1.start_agent(&component.id, repo_id.clone()).await?;
 
     user_1
@@ -523,7 +523,7 @@ async fn oplog_processor_crash_after_confirmed_flush(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -663,7 +663,7 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Phase 1: Initial invocations with default thresholds — establishes the
@@ -881,7 +881,7 @@ async fn oplog_processor_no_duplicates_after_crash(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -1022,7 +1022,7 @@ async fn oplog_processor_multiple_plugins_independent(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let _worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -1149,7 +1149,7 @@ async fn oplog_processor_partial_plugin_failure(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -1217,7 +1217,7 @@ async fn oplog_processor_activation_mid_stream(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Invoke twice BEFORE plugin is activated
@@ -1369,7 +1369,7 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -1502,7 +1502,7 @@ async fn oplog_processor_idle_worker_timer_flush(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let _worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Just one invocation (+ init) — small batch, must be delivered by timer (5s)
@@ -1584,7 +1584,7 @@ async fn oplog_processor_rapid_invocations(deps: &EnvBasedTestDependencies) -> a
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let _worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Rapid-fire 50 parallel invocations to stress the oplog processor
@@ -1683,7 +1683,7 @@ async fn oplog_processor_no_resend_after_confirmed(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "worker1");
+    let repo_id = agent_id!("Repository", "worker1");
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(

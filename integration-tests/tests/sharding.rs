@@ -966,7 +966,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_id = agent_id!("repository", "worker1");
+        let repo_id = agent_id!("Repository", "worker1");
         let worker_id = user
             .start_agent(&component.id, repo_id.clone())
             .await
@@ -1088,7 +1088,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_id = agent_id!("repository", "worker1");
+        let repo_id = agent_id!("Repository", "worker1");
         let worker_id = user
             .start_agent(&component.id, repo_id.clone())
             .await
@@ -1206,7 +1206,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_id = agent_id!("repository", "worker1");
+        let repo_id = agent_id!("Repository", "worker1");
         let worker_id = user
             .start_agent(&component.id, repo_id.clone())
             .await
@@ -1326,7 +1326,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_id = agent_id!("repository", "worker1");
+        let repo_id = agent_id!("Repository", "worker1");
         let worker_id = user
             .start_agent(&component.id, repo_id.clone())
             .await
