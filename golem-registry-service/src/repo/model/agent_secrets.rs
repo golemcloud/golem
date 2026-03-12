@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentSecretRepoError {
-    #[error("There is already a share for this path in this environment")]
+    #[error("There is already a secret for this path in this environment")]
     SecretViolatesUniqueness,
     #[error("Concurrent modification")]
     ConcurrentModification,
@@ -38,6 +38,38 @@ pub enum AgentSecretRepoError {
 }
 
 error_forwarding!(AgentSecretRepoError, RepoError);
+
+#[derive(Debug, Clone)]
+pub struct AgentSecretCreationRecord {
+    pub environment_id: Uuid,
+    pub path: Json<Vec<String>>,
+    pub agent_secret_data: Blob<AgentSecretData>,
+
+    pub revision: AgentSecretRevisionRecord,
+}
+
+impl AgentSecretCreationRecord {
+    pub fn new(
+        id: AgentSecretId,
+        environment_id: EnvironmentId,
+        path: Vec<String>,
+        secret_type: AnalysedType,
+        secret_value: Option<golem_wasm::Value>,
+        actor: AccountId,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            path: Json(path),
+            agent_secret_data: Blob::new(AgentSecretData { secret_type }),
+            revision: AgentSecretRevisionRecord {
+                agent_secret_id: id.0,
+                revision_id: AgentSecretRevision::INITIAL.into(),
+                agent_secret_revision_data: Blob::new(AgentSecretRevisionData { secret_value }),
+                audit: DeletableRevisionAuditFields::new(actor.0),
+            },
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
@@ -77,19 +109,6 @@ pub struct AgentSecretRevisionRecord {
 }
 
 impl AgentSecretRevisionRecord {
-    pub fn creation(
-        id: AgentSecretId,
-        secret_value: Option<golem_wasm::Value>,
-        actor: AccountId,
-    ) -> Self {
-        Self {
-            agent_secret_id: id.0,
-            revision_id: AgentSecretRevision::INITIAL.into(),
-            agent_secret_revision_data: Blob::new(AgentSecretRevisionData { secret_value }),
-            audit: DeletableRevisionAuditFields::new(actor.0),
-        }
-    }
-
     pub fn from_model(value: AgentSecret, audit: DeletableRevisionAuditFields) -> Self {
         Self {
             agent_secret_id: value.id.0,
