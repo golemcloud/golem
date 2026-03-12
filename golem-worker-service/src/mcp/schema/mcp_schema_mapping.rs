@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::schema::mcp_schema::McpSchema;
+use crate::mcp::schema::mcp_schema::McpInputSchema;
 use golem_common::base_model::agent::DataSchema;
 
-pub fn get_mcp_schema(data_schema: &DataSchema) -> McpSchema {
+pub fn get_mcp_schema(data_schema: &DataSchema) -> McpInputSchema {
     match data_schema {
-        DataSchema::Tuple(schemas) => McpSchema::from_named_element_schemas(&schemas.elements),
+        DataSchema::Tuple(schemas) => McpInputSchema::from_named_element_schemas(&schemas.elements),
 
         DataSchema::Multimodal(schemas) => {
-            McpSchema::from_multimodal_element_schemas(&schemas.elements)
+            McpInputSchema::from_multimodal_element_schemas(&schemas.elements)
         }
     }
 }

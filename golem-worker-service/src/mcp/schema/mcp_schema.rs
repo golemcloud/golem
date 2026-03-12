@@ -19,13 +19,13 @@ use golem_wasm::analysis::AnalysedType;
 use serde_json::{Map, Value, json};
 
 #[derive(Default)]
-pub struct McpSchema {
+pub struct McpInputSchema {
     pub properties: Map<FieldName, JsonTypeDescription>,
     pub required: Vec<FieldName>,
 }
 
-impl From<McpSchema> for rmcp::model::JsonObject {
-    fn from(value: McpSchema) -> Self {
+impl From<McpInputSchema> for rmcp::model::JsonObject {
+    fn from(value: McpInputSchema) -> Self {
         let json_value = json!({
             "type": "object",
             "properties": value.properties,
@@ -36,8 +36,8 @@ impl From<McpSchema> for rmcp::model::JsonObject {
     }
 }
 
-impl McpSchema {
-    pub fn prepend_schema(&mut self, mut new_schema: McpSchema) {
+impl McpInputSchema {
+    pub fn prepend_schema(&mut self, mut new_schema: McpInputSchema) {
         new_schema
             .properties
             .extend(std::mem::take(&mut self.properties));
@@ -49,7 +49,7 @@ impl McpSchema {
         *self = new_schema;
     }
 
-    pub fn from_named_element_schemas(schemas: &[NamedElementSchema]) -> McpSchema {
+    pub fn from_named_element_schemas(schemas: &[NamedElementSchema]) -> McpInputSchema {
         let mut properties: Map<String, JsonTypeDescription> = Map::new();
         let mut required = Vec::new();
 
@@ -105,13 +105,13 @@ impl McpSchema {
             properties.insert(s.name.clone(), schema);
         }
 
-        McpSchema {
+        McpInputSchema {
             properties,
             required,
         }
     }
 
-    pub fn from_multimodal_element_schemas(schemas: &[NamedElementSchema]) -> McpSchema {
+    pub fn from_multimodal_element_schemas(schemas: &[NamedElementSchema]) -> McpInputSchema {
         let one_of: Vec<Value> = schemas
             .iter()
             .map(|s| {
@@ -138,13 +138,13 @@ impl McpSchema {
         let mut properties: Map<String, JsonTypeDescription> = Map::new();
         properties.insert("parts".to_string(), array_schema);
 
-        McpSchema {
+        McpInputSchema {
             properties,
             required: vec!["parts".to_string()],
         }
     }
 
-    pub fn from_record_fields(fields: &[(&str, &AnalysedType)]) -> McpSchema {
+    pub fn from_record_fields(fields: &[(&str, &AnalysedType)]) -> McpInputSchema {
         let mut properties: Map<String, JsonTypeDescription> = Map::new();
         let mut required = Vec::new();
 
@@ -155,7 +155,7 @@ impl McpSchema {
             }
         }
 
-        McpSchema {
+        McpInputSchema {
             properties,
             required,
         }
@@ -251,7 +251,7 @@ fn analysed_type_to_json_schema(analysed_type: &AnalysedType) -> JsonTypeDescrip
                 .map(|f| (f.name.as_str(), &f.typ))
                 .collect();
 
-            let schema = McpSchema::from_record_fields(&fields);
+            let schema = McpInputSchema::from_record_fields(&fields);
 
             json!({
                 "type": "object",

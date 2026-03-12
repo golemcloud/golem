@@ -127,9 +127,24 @@ pub fn map_agent_response_to_tool_result(
         DataValue::Tuple(ElementValues { elements }) => match elements.len() {
             0 => Ok(CallToolResult::success(vec![])),
             1 => {
+                let element_name = match expected_type {
+                    DataSchema::Tuple(NamedElementSchemas { elements: schemas }) => {
+                        schemas.first().map(|s| s.name.clone())
+                    }
+                    _ => None,
+                };
+
                 let element = elements.into_iter().next().unwrap();
                 let json_value = convert_elem_value_to_mcp_tool_response(&element)?;
-                Ok(CallToolResult::structured(json_value))
+
+                // Wrap in an object keyed by the schema element name to match the
+                // advertised outputSchema (which must be type: object per MCP spec).
+                let structured = match element_name {
+                    Some(name) => json!({ name: json_value }),
+                    None => json_value,
+                };
+
+                Ok(CallToolResult::structured(structured))
             }
             _ => Err(ErrorData::internal_error(
                 "Unexpected number of response tuple elements".to_string(),
@@ -245,7 +260,7 @@ mod tests {
             Value::String("hello".to_string()),
         )]);
         let result = map_agent_response_to_tool_result(response, &str_output_schema()).unwrap();
-        assert_eq!(result.structured_content, Some(json!("hello")));
+        assert_eq!(result.structured_content, Some(json!({"result": "hello"})));
         assert_eq!(result.is_error, Some(false));
     }
 
@@ -278,8 +293,8 @@ mod tests {
         )]);
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
         let structured = result.structured_content.unwrap();
-        assert_eq!(structured["data"], "weather is sunny");
-        assert_eq!(structured["languageCode"], "en");
+        assert_eq!(structured["report"]["data"], "weather is sunny");
+        assert_eq!(structured["report"]["languageCode"], "en");
     }
 
     #[test]
@@ -302,8 +317,8 @@ mod tests {
         )]);
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
         let structured = result.structured_content.unwrap();
-        assert_eq!(structured["data"], "AQID");
-        assert_eq!(structured["mimeType"], "image/png");
+        assert_eq!(structured["image"]["data"], "AQID");
+        assert_eq!(structured["image"]["mimeType"], "image/png");
     }
 
     #[test]
