@@ -64,7 +64,7 @@ impl Benchmark for LatencySmall {
         LatencyBenchmark::new(
             "benchmark_agent_rust_release",
             "benchmark:agent-rust",
-            "rust-benchmark-agent",
+            "RustBenchmarkAgent",
             mode,
             verbosity,
             cluster_size,

@@ -963,13 +963,14 @@ mod test {
     use crate::services::{HasConfig, HasOplogService};
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
+        calculate_oplog_processor_checkpoints,
     };
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{Principal, UntypedDataValue, UntypedElementValue};
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-    use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -980,8 +981,9 @@ mod test {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
-        AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey, OwnedAgentId,
-        RetryConfig, ScanCursor, SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
+        AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
+        OplogProcessorCheckpointState, OwnedAgentId, RetryConfig, ScanCursor,
+        SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -2091,5 +2093,380 @@ mod test {
                 "Calculating the last known status from oplog index {idx}"
             )
         }
+    }
+
+    // --------------------------------------------------------------------------
+    // U2: Checkpoint state tracking — calculate_oplog_processor_checkpoints
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn checkpoint_latest_per_grant_id_wins() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let target = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "target-worker".to_string(),
+        };
+        let active_plugins = HashSet::from([grant_id]);
+        let deleted_regions = DeletedRegions::default();
+
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                    target_agent_id: target.clone(),
+                    confirmed_up_to: OplogIndex::from_u64(5),
+                    sending_up_to: OplogIndex::from_u64(10),
+                },
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                    target_agent_id: target.clone(),
+                    confirmed_up_to: OplogIndex::from_u64(10),
+                    sending_up_to: OplogIndex::from_u64(20),
+                },
+            ),
+        ]);
+
+        let result =
+            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+
+        assert_eq!(result.len(), 1);
+        let state = result.get(&grant_id).unwrap();
+        assert_eq!(state.confirmed_up_to, OplogIndex::from_u64(10));
+        assert_eq!(state.sending_up_to, OplogIndex::from_u64(20));
+        assert_eq!(state.target_agent_id, Some(target));
+    }
+
+    #[test]
+    fn checkpoint_different_plugins_tracked_independently() {
+        let grant_id_a = EnvironmentPluginGrantId::new();
+        let grant_id_b = EnvironmentPluginGrantId::new();
+        let target_a = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "target-a".to_string(),
+        };
+        let target_b = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "target-b".to_string(),
+        };
+        let active_plugins = HashSet::from([grant_id_a, grant_id_b]);
+        let deleted_regions = DeletedRegions::default();
+
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id_a,
+                    target_agent_id: target_a.clone(),
+                    confirmed_up_to: OplogIndex::from_u64(5),
+                    sending_up_to: OplogIndex::from_u64(10),
+                },
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id_b,
+                    target_agent_id: target_b.clone(),
+                    confirmed_up_to: OplogIndex::from_u64(3),
+                    sending_up_to: OplogIndex::from_u64(7),
+                },
+            ),
+        ]);
+
+        let result =
+            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+
+        assert_eq!(result.len(), 2);
+
+        let state_a = result.get(&grant_id_a).unwrap();
+        assert_eq!(state_a.confirmed_up_to, OplogIndex::from_u64(5));
+        assert_eq!(state_a.target_agent_id, Some(target_a));
+
+        let state_b = result.get(&grant_id_b).unwrap();
+        assert_eq!(state_b.confirmed_up_to, OplogIndex::from_u64(3));
+        assert_eq!(state_b.target_agent_id, Some(target_b));
+    }
+
+    #[test]
+    fn checkpoint_target_agent_id_preserved() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let target = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "specific-target".to_string(),
+        };
+        let active_plugins = HashSet::from([grant_id]);
+        let deleted_regions = DeletedRegions::default();
+
+        let entries = BTreeMap::from([(
+            OplogIndex::from_u64(1),
+            OplogEntry::OplogProcessorCheckpoint {
+                timestamp: Timestamp::now_utc(),
+                plugin_grant_id: grant_id,
+                target_agent_id: target.clone(),
+                confirmed_up_to: OplogIndex::from_u64(5),
+                sending_up_to: OplogIndex::from_u64(5),
+            },
+        )]);
+
+        let result =
+            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+
+        let state = result.get(&grant_id).unwrap();
+        assert_eq!(state.target_agent_id, Some(target));
+    }
+
+    // --------------------------------------------------------------------------
+    // U3: Checkpoint cleanup — deactivated plugins evicted, in-flight retained
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn deactivated_plugin_evicted_from_checkpoints() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        // Plugin is no longer active
+        let active_plugins = HashSet::new();
+        let deleted_regions = DeletedRegions::default();
+
+        // Pre-seed with a checkpoint that is fully confirmed (not in-flight)
+        let initial = HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "old-target".to_string(),
+                }),
+                confirmed_up_to: OplogIndex::from_u64(10),
+                sending_up_to: OplogIndex::from_u64(10),
+            },
+        )]);
+
+        let entries = BTreeMap::new();
+        let result =
+            calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+
+        assert!(
+            result.get(&grant_id).is_none(),
+            "Deactivated plugin with no in-flight batch should be evicted"
+        );
+    }
+
+    #[test]
+    fn deactivated_plugin_retained_when_in_flight() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        // Plugin is no longer active
+        let active_plugins = HashSet::new();
+        let deleted_regions = DeletedRegions::default();
+
+        // Pre-seed with a checkpoint that has in-flight batch (sending_up_to > confirmed_up_to)
+        let initial = HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "target".to_string(),
+                }),
+                confirmed_up_to: OplogIndex::from_u64(5),
+                sending_up_to: OplogIndex::from_u64(15),
+            },
+        )]);
+
+        let entries = BTreeMap::new();
+        let result =
+            calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+
+        assert!(
+            result.get(&grant_id).is_some(),
+            "Deactivated plugin with in-flight batch should be retained"
+        );
+        let state = result.get(&grant_id).unwrap();
+        assert_eq!(state.confirmed_up_to, OplogIndex::from_u64(5));
+        assert_eq!(state.sending_up_to, OplogIndex::from_u64(15));
+    }
+
+    #[test]
+    fn successful_update_drops_old_grant_retains_new() {
+        let old_grant = EnvironmentPluginGrantId::new();
+        let new_grant = EnvironmentPluginGrantId::new();
+        let deleted_regions = DeletedRegions::default();
+        // After SuccessfulUpdate, only new_grant is active
+        let active_plugins = HashSet::from([new_grant]);
+
+        // Pre-seed old checkpoint
+        let initial = HashMap::from([(
+            old_grant,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "old".to_string(),
+                }),
+                confirmed_up_to: OplogIndex::from_u64(10),
+                sending_up_to: OplogIndex::from_u64(10),
+            },
+        )]);
+
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(11),
+                OplogEntry::SuccessfulUpdate {
+                    timestamp: Timestamp::now_utc(),
+                    target_revision: ComponentRevision::new(2).unwrap(),
+                    new_component_size: 200,
+                    new_active_plugins: HashSet::from([new_grant]),
+                },
+            ),
+            (
+                OplogIndex::from_u64(12),
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: new_grant,
+                    target_agent_id: AgentId {
+                        component_id: ComponentId::new(),
+                        agent_id: "new-target".to_string(),
+                    },
+                    confirmed_up_to: OplogIndex::from_u64(12),
+                    sending_up_to: OplogIndex::from_u64(12),
+                },
+            ),
+        ]);
+
+        let result =
+            calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+
+        assert!(
+            result.get(&old_grant).is_none(),
+            "Old grant should be dropped after SuccessfulUpdate with different active set"
+        );
+        assert!(
+            result.get(&new_grant).is_some(),
+            "New grant should be present"
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // U4: Activation initialization — ActivatePlugin seeds checkpoint
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn activate_plugin_initializes_checkpoint() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let active_plugins = HashSet::from([grant_id]);
+        let deleted_regions = DeletedRegions::default();
+
+        let activation_index = OplogIndex::from_u64(5);
+        let entries = BTreeMap::from([(
+            activation_index,
+            OplogEntry::ActivatePlugin {
+                timestamp: Timestamp::now_utc(),
+                plugin_grant_id: grant_id,
+            },
+        )]);
+
+        let result =
+            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+
+        assert_eq!(result.len(), 1);
+        let state = result.get(&grant_id).unwrap();
+        assert_eq!(
+            state.confirmed_up_to, activation_index,
+            "confirmed_up_to should be set to the activation index"
+        );
+        assert_eq!(
+            state.sending_up_to, activation_index,
+            "sending_up_to should be set to the activation index"
+        );
+        assert_eq!(
+            state.target_agent_id, None,
+            "target_agent_id should be None for freshly activated plugin"
+        );
+    }
+
+    #[test]
+    fn activate_plugin_does_not_overwrite_existing_checkpoint() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let target = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "existing-target".to_string(),
+        };
+        let active_plugins = HashSet::from([grant_id]);
+        let deleted_regions = DeletedRegions::default();
+
+        // Pre-seed with an existing checkpoint
+        let initial = HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(target.clone()),
+                confirmed_up_to: OplogIndex::from_u64(3),
+                sending_up_to: OplogIndex::from_u64(8),
+            },
+        )]);
+
+        let entries = BTreeMap::from([(
+            OplogIndex::from_u64(10),
+            OplogEntry::ActivatePlugin {
+                timestamp: Timestamp::now_utc(),
+                plugin_grant_id: grant_id,
+            },
+        )]);
+
+        let result =
+            calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+
+        let state = result.get(&grant_id).unwrap();
+        assert_eq!(
+            state.target_agent_id,
+            Some(target),
+            "ActivatePlugin should not overwrite existing checkpoint (or_insert semantics)"
+        );
+        assert_eq!(state.confirmed_up_to, OplogIndex::from_u64(3));
+        assert_eq!(state.sending_up_to, OplogIndex::from_u64(8));
+    }
+
+    #[test]
+    fn deactivate_then_reactivate_seeds_new_checkpoint() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let active_plugins = HashSet::from([grant_id]);
+        let deleted_regions = DeletedRegions::default();
+
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::ActivatePlugin {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                },
+            ),
+            (
+                OplogIndex::from_u64(7),
+                OplogEntry::DeactivatePlugin {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                },
+            ),
+            (
+                OplogIndex::from_u64(10),
+                OplogEntry::ActivatePlugin {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant_id,
+                },
+            ),
+        ]);
+
+        let result =
+            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+
+        let state = result.get(&grant_id).unwrap();
+        assert_eq!(
+            state.confirmed_up_to,
+            OplogIndex::from_u64(10),
+            "After deactivate+reactivate, checkpoint should be seeded at new activation index"
+        );
+        assert_eq!(state.sending_up_to, OplogIndex::from_u64(10));
+        assert_eq!(state.target_agent_id, None);
     }
 }

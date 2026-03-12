@@ -122,19 +122,19 @@ impl Benchmark for DurabilityOverhead {
 
         for n in 0..self.config.size {
             durable_persistent_agent_ids.push(agent_id!(
-                "rust-benchmark-agent",
+                "RustBenchmarkAgent",
                 format!("test-{n}-persistent")
             ));
             durable_nonpersistent_agent_ids.push(agent_id!(
-                "rust-benchmark-agent",
+                "RustBenchmarkAgent",
                 format!("test-{n}-nonpersistent")
             ));
             ephemeral_agent_ids.push(agent_id!(
-                "rust-ephemeral-benchmark-agent",
+                "RustEphemeralBenchmarkAgent",
                 format!("test-{n}-ephemeral")
             ));
             durable_persistent_commit_agent_ids.push(agent_id!(
-                "rust-benchmark-agent",
+                "RustBenchmarkAgent",
                 format!("test-{n}-persistent-commit")
             ));
         }
