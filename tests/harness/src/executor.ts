@@ -7,7 +7,18 @@ import { AgentDriver } from './driver/base.js';
 import { SkillWatcher } from './watcher.js';
 import { evaluate, ExpectSchema, type AssertionContext } from './assertions.js';
 
-// --- Schemas (#2887, #2890, #2893, #2894) ---
+// --- Schemas (#2887, #2890, #2893, #2894, #2911, #2916) ---
+
+const MatrixSchema = z.object({
+  agents: z.array(z.string()).optional(),
+  languages: z.array(z.string()).optional(),
+  os: z.array(z.string()).optional(),
+});
+
+const RetrySchema = z.object({
+  attempts: z.number().int().min(1),
+  delay: z.number().min(0),
+});
 
 const InvokeSchema = z.object({
   agent: z.string(),
@@ -56,6 +67,7 @@ const StepSpecSchema = z.object({
   trigger: TriggerSchema.optional(),
   create_agent: CreateAgentSchema.optional(),
   delete_agent: DeleteAgentSchema.optional(),
+  retry: RetrySchema.optional(),
 });
 
 const SettingsSchema = z.object({
@@ -75,6 +87,7 @@ const ScenarioSpecSchema = z.object({
   name: z.string({ required_error: 'Scenario must have a "name" field' }),
   settings: SettingsSchema,
   prerequisites: PrerequisitesSchema,
+  matrix: MatrixSchema.optional(),
   steps: z.array(StepSpecSchema).min(1, 'Scenario must have at least one step'),
 });
 
@@ -115,6 +128,10 @@ export interface StepSpec {
   delete_agent?: {
     name: string;
   };
+  retry?: {
+    attempts: number;
+    delay: number;
+  };
 }
 
 export interface ScenarioSpec {
@@ -129,6 +146,11 @@ export interface ScenarioSpec {
   };
   prerequisites?: {
     env?: Record<string, string>;
+  };
+  matrix?: {
+    agents?: string[];
+    languages?: string[];
+    os?: string[];
   };
   steps: StepSpec[];
 }
@@ -146,6 +168,23 @@ export class ScenarioLoader {
     }
     return result.data;
   }
+
+  static matchesMatrix(spec: ScenarioSpec, agent: string, language: string): boolean {
+    if (!spec.matrix) return true;
+    const currentOs = process.platform;
+    if (spec.matrix.agents && !spec.matrix.agents.includes(agent)) return false;
+    if (spec.matrix.languages && !spec.matrix.languages.includes(language)) return false;
+    if (spec.matrix.os && !spec.matrix.os.includes(currentOs)) return false;
+    return true;
+  }
+}
+
+export interface StepAttemptResult {
+  attemptNumber: number;
+  success: boolean;
+  durationSeconds: number;
+  error?: string;
+  activatedSkills: string[];
 }
 
 export interface StepResult {
@@ -155,6 +194,7 @@ export interface StepResult {
   expectedSkills: string[];
   activatedSkills: string[];
   error?: string;
+  attempts?: StepAttemptResult[];
 }
 
 export interface ScenarioRunResult {
@@ -167,6 +207,8 @@ export interface ScenarioRunResult {
 
 export interface ScenarioExecutorOptions {
   globalTimeoutSeconds?: number;
+  resumeFromStepId?: string;
+  skipCleanup?: boolean;
 }
 
 export class ScenarioExecutor {
@@ -193,7 +235,15 @@ export class ScenarioExecutor {
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
     const results: StepResult[] = [];
     const savedEnv: Record<string, string | undefined> = {};
-    const shouldCleanup = spec.settings?.cleanup !== false;
+    const shouldCleanup = spec.settings?.cleanup !== false && !this.options.skipCleanup;
+
+    // Validate resumeFromStepId if set (#2915)
+    if (this.options.resumeFromStepId) {
+      const found = spec.steps.some(s => s.id === this.options.resumeFromStepId);
+      if (!found) {
+        throw new Error(`Resume step "${this.options.resumeFromStepId}" not found in scenario "${spec.name}"`);
+      }
+    }
 
     // Set prerequisites env vars (#2887)
     if (spec.prerequisites?.env) {
@@ -222,214 +272,66 @@ export class ScenarioExecutor {
 
     const startTime = Date.now();
     let isFirstPrompt = true;
+    let resumeReached = !this.options.resumeFromStepId;
     try {
       for (const step of spec.steps) {
-        const stepStartTime = Date.now();
-        let stepSuccess = true;
-        const stepErrors: string[] = [];
-        const stepTimeoutSeconds = step.timeout
-          ?? spec.settings?.timeout_per_subprompt
-          ?? this.options.globalTimeoutSeconds
-          ?? 300;
-        const stepBaseline = this.watcher.markBaseline();
-        await this.watcher.snapshotAtimes();
-        console.log(`Step ${step.id ?? '(unnamed)'}: starting (timeout=${stepTimeoutSeconds}s)`);
-
-        // Sleep action (#2893)
-        if (step.sleep !== undefined) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: sleeping for ${step.sleep}s`);
-          await new Promise(resolve => setTimeout(resolve, step.sleep! * 1000));
-        }
-
-        // Create agent action (#2894)
-        if (step.create_agent) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: creating agent "${step.create_agent.name}"`);
-          const createResult = await this.runLocalCommand(
-            'golem', ['agent', 'new', step.create_agent.name],
-            stepTimeoutSeconds, this.workspace, commandEnv
-          );
-          if (!createResult.success) {
-            stepSuccess = false;
-            stepErrors.push(`CREATE_AGENT_FAILED: ${createResult.output}`);
-          }
-        }
-
-        // Delete agent action (#2894)
-        if (step.delete_agent) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: deleting agent "${step.delete_agent.name}"`);
-          const deleteResult = await this.runLocalCommand(
-            'golem', ['agent', 'delete', step.delete_agent.name],
-            stepTimeoutSeconds, this.workspace, commandEnv
-          );
-          if (!deleteResult.success) {
-            stepSuccess = false;
-            stepErrors.push(`DELETE_AGENT_FAILED: ${deleteResult.output}`);
-          }
-        }
-
-        // Shell action (#2893)
-        if (step.shell) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: running shell command "${step.shell.command}"`);
-          const shellCwd = step.shell.cwd
-            ? path.resolve(this.workspace, step.shell.cwd)
-            : this.workspace;
-          const shellResult = await this.runLocalCommand(
-            step.shell.command, step.shell.args ?? [],
-            stepTimeoutSeconds, shellCwd, commandEnv
-          );
-
-          if (step.expect) {
-            const ctx: AssertionContext = {
-              stdout: shellResult.output,
-              stderr: '',
-              exitCode: shellResult.exitCode,
-            };
-            const assertionResults = evaluate(ctx, step.expect);
-            for (const ar of assertionResults) {
-              if (!ar.passed) {
-                stepSuccess = false;
-                stepErrors.push(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
-              }
-            }
-          } else if (!shellResult.success) {
-            stepSuccess = false;
-            stepErrors.push(`SHELL_FAILED: ${shellResult.output}`);
-          }
-        }
-
-        // Trigger action (#2893) — fire-and-forget
-        if (step.trigger) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: triggering ${step.trigger.agent}.${step.trigger.function}`);
-          const triggerArgs = ['agent', 'invoke', step.trigger.agent, step.trigger.function, '--trigger'];
-          if (step.trigger.args) triggerArgs.push(step.trigger.args);
-          // Fire and forget — don't await completion
-          this.runLocalCommand('golem', triggerArgs, stepTimeoutSeconds, this.workspace, commandEnv)
-            .catch(() => { /* fire and forget */ });
-        }
-
-        // Execute prompt if present (#2887 continue_session)
-        if (step.prompt) {
-          const useContinueSession = step.continue_session !== false && !isFirstPrompt;
-          if (useContinueSession) {
-            console.log(`Step ${step.id ?? '(unnamed)'}: sending followup prompt`);
-            const agentResult = await this.driver.sendFollowup(step.prompt, stepTimeoutSeconds);
-            if (!agentResult.success) {
-              stepSuccess = false;
-              stepErrors.push(`Agent failed: ${agentResult.output}`);
-            }
+        // Resume-from: skip steps before the target (#2915)
+        if (!resumeReached) {
+          if (step.id === this.options.resumeFromStepId) {
+            resumeReached = true;
           } else {
-            console.log(`Step ${step.id ?? '(unnamed)'}: sending prompt`);
-            const agentResult = await this.driver.sendPrompt(step.prompt, stepTimeoutSeconds);
-            if (!agentResult.success) {
-              stepSuccess = false;
-              stepErrors.push(`Agent failed: ${agentResult.output}`);
-            }
-          }
-          isFirstPrompt = false;
-        }
-
-        // Invoke action (#2890)
-        if (step.invoke) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: invoking ${step.invoke.agent}.${step.invoke.function}`);
-          const invokeArgs = ['agent', 'invoke', step.invoke.agent, step.invoke.function];
-          if (step.invoke.args) invokeArgs.push(step.invoke.args);
-          const invokeResult = await this.runLocalCommand(
-            'golem', invokeArgs, stepTimeoutSeconds, this.workspace, commandEnv
-          );
-
-          if (step.expect) {
-            let resultJson: unknown = undefined;
-            try {
-              resultJson = JSON.parse(invokeResult.output);
-            } catch {
-              // Not JSON — that's fine
-            }
-            const ctx: AssertionContext = {
-              stdout: invokeResult.output,
-              stderr: '',
-              exitCode: invokeResult.exitCode,
-              resultJson,
-            };
-            const assertionResults = evaluate(ctx, step.expect);
-            for (const ar of assertionResults) {
-              if (!ar.passed) {
-                stepSuccess = false;
-                stepErrors.push(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
-              }
-            }
-          } else if (!invokeResult.success) {
-            stepSuccess = false;
-            stepErrors.push(`INVOKE_FAILED: ${invokeResult.output}`);
+            console.log(`Step ${step.id ?? '(unnamed)'}: skipped (before resume point)`);
+            results.push({
+              step,
+              success: true,
+              durationSeconds: 0,
+              expectedSkills: step.expectedSkills ?? [],
+              activatedSkills: [],
+            });
+            continue;
           }
         }
 
-        // Verify skills activation — merge fswatch events + atime changes
-        const watcherEvents = this.watcher.getActivatedEventsSince(stepBaseline);
-        const atimeResults = await this.watcher.getSkillsWithChangedAtime();
-        for (const evt of watcherEvents) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: fswatch detected "${evt.skillName}" via ${evt.path}`);
-        }
-        for (const res of atimeResults) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: atime detected "${res.skillName}" via ${res.path}`);
-        }
-        const activatedSkills = Array.from(new Set([
-          ...watcherEvents.map(e => e.skillName),
-          ...atimeResults.map(r => r.skillName),
-        ]));
-        console.log(`Step ${step.id ?? '(unnamed)'}: activated skills [${activatedSkills.join(', ')}]`);
-        const assertionError = this.assertSkillActivation(step, activatedSkills);
-        if (assertionError) {
-          stepSuccess = false;
-          stepErrors.push(assertionError);
-        }
+        const maxAttempts = step.retry?.attempts ?? 1;
+        const retryDelay = step.retry?.delay ?? 0;
+        const attempts: StepAttemptResult[] = [];
+        let finalResult: { success: boolean; errors: string[]; activatedSkills: string[]; isFirstPrompt: boolean } | undefined;
 
-        // Build verification
-        if (step.verify?.build) {
-          const buildDir = await this.findGolemProjectDir();
-          console.log(`Step ${step.id ?? '(unnamed)'}: running golem build in ${buildDir}`);
-          const buildResult = await this.runLocalCommand('golem', ['build'], 600, buildDir, commandEnv);
-          if (!buildResult.success) {
-            stepSuccess = false;
-            stepErrors.push(`BUILD_FAILED: ${buildResult.output}`);
-          }
-        }
-
-        // Deploy verification (#2889)
-        if (step.verify?.deploy) {
-          // Deploy implies build — run build first if not already run
-          if (!step.verify?.build) {
-            const buildDir = await this.findGolemProjectDir();
-            console.log(`Step ${step.id ?? '(unnamed)'}: running implicit golem build before deploy in ${buildDir}`);
-            const buildResult = await this.runLocalCommand('golem', ['build'], 600, buildDir, commandEnv);
-            if (!buildResult.success) {
-              stepSuccess = false;
-              stepErrors.push(`BUILD_FAILED: ${buildResult.output}`);
-            }
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          if (attempt > 1) {
+            console.log(`Step ${step.id ?? '(unnamed)'}: retry attempt ${attempt}/${maxAttempts} (delay=${retryDelay}s)`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay * 1000));
           }
 
-          if (stepSuccess) {
-            const deployDir = await this.findGolemProjectDir();
-            console.log(`Step ${step.id ?? '(unnamed)'}: running golem deploy in ${deployDir}`);
-            const deployResult = await this.runLocalCommand(
-              'golem', ['deploy', '--yes'], 600, deployDir, commandEnv
-            );
-            if (!deployResult.success) {
-              stepSuccess = false;
-              stepErrors.push(`DEPLOY_FAILED: ${deployResult.output}`);
-            }
-          }
+          const attemptStart = Date.now();
+          const bodyResult = await this.executeStepBody(step, spec, commandEnv, isFirstPrompt);
+          const attemptDuration = (Date.now() - attemptStart) / 1000;
+          isFirstPrompt = bodyResult.isFirstPrompt;
+
+          attempts.push({
+            attemptNumber: attempt,
+            success: bodyResult.success,
+            durationSeconds: attemptDuration,
+            error: bodyResult.errors.length > 0 ? bodyResult.errors.join('\n') : undefined,
+            activatedSkills: bodyResult.activatedSkills,
+          });
+
+          finalResult = bodyResult;
+          if (bodyResult.success) break;
         }
 
+        const stepStartTime = attempts.reduce((sum, a) => sum + a.durationSeconds, 0);
         results.push({
           step,
-          success: stepSuccess,
-          durationSeconds: (Date.now() - stepStartTime) / 1000,
+          success: finalResult!.success,
+          durationSeconds: stepStartTime,
           expectedSkills: step.expectedSkills ?? [],
-          activatedSkills,
-          error: stepErrors.length > 0 ? stepErrors.join('\n') : undefined
+          activatedSkills: finalResult!.activatedSkills,
+          error: finalResult!.errors.length > 0 ? finalResult!.errors.join('\n') : undefined,
+          attempts: maxAttempts > 1 ? attempts : undefined,
         });
 
-        if (!stepSuccess) break; // Stop on failure
+        if (!finalResult!.success) break; // Stop on failure
       }
     } finally {
       // Restore env vars (#2887)
@@ -451,6 +353,215 @@ export class ScenarioExecutor {
       stepResults: results,
       artifactPaths: [this.workspace],
       workspace: this.workspace,
+    };
+  }
+
+  private async executeStepBody(
+    step: StepSpec,
+    spec: ScenarioSpec,
+    commandEnv: Record<string, string>,
+    isFirstPrompt: boolean
+  ): Promise<{ success: boolean; errors: string[]; activatedSkills: string[]; isFirstPrompt: boolean }> {
+    let stepSuccess = true;
+    const stepErrors: string[] = [];
+    const stepTimeoutSeconds = step.timeout
+      ?? spec.settings?.timeout_per_subprompt
+      ?? this.options.globalTimeoutSeconds
+      ?? 300;
+    const stepBaseline = this.watcher.markBaseline();
+    await this.watcher.snapshotAtimes();
+    console.log(`Step ${step.id ?? '(unnamed)'}: starting (timeout=${stepTimeoutSeconds}s)`);
+
+    // Sleep action (#2893)
+    if (step.sleep !== undefined) {
+      console.log(`Step ${step.id ?? '(unnamed)'}: sleeping for ${step.sleep}s`);
+      await new Promise(resolve => setTimeout(resolve, step.sleep! * 1000));
+    }
+
+    // Create agent action (#2894)
+    if (step.create_agent) {
+      console.log(`Step ${step.id ?? '(unnamed)'}: creating agent "${step.create_agent.name}"`);
+      const createResult = await this.runLocalCommand(
+        'golem', ['agent', 'new', step.create_agent.name],
+        stepTimeoutSeconds, this.workspace, commandEnv
+      );
+      if (!createResult.success) {
+        stepSuccess = false;
+        stepErrors.push(`CREATE_AGENT_FAILED: ${createResult.output}`);
+      }
+    }
+
+    // Delete agent action (#2894)
+    if (step.delete_agent) {
+      console.log(`Step ${step.id ?? '(unnamed)'}: deleting agent "${step.delete_agent.name}"`);
+      const deleteResult = await this.runLocalCommand(
+        'golem', ['agent', 'delete', step.delete_agent.name],
+        stepTimeoutSeconds, this.workspace, commandEnv
+      );
+      if (!deleteResult.success) {
+        stepSuccess = false;
+        stepErrors.push(`DELETE_AGENT_FAILED: ${deleteResult.output}`);
+      }
+    }
+
+    // Shell action (#2893)
+    if (step.shell) {
+      console.log(`Step ${step.id ?? '(unnamed)'}: running shell command "${step.shell.command}"`);
+      const shellCwd = step.shell.cwd
+        ? path.resolve(this.workspace, step.shell.cwd)
+        : this.workspace;
+      const shellResult = await this.runLocalCommand(
+        step.shell.command, step.shell.args ?? [],
+        stepTimeoutSeconds, shellCwd, commandEnv
+      );
+
+      if (step.expect) {
+        const ctx: AssertionContext = {
+          stdout: shellResult.output,
+          stderr: '',
+          exitCode: shellResult.exitCode,
+        };
+        const assertionResults = evaluate(ctx, step.expect);
+        for (const ar of assertionResults) {
+          if (!ar.passed) {
+            stepSuccess = false;
+            stepErrors.push(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
+          }
+        }
+      } else if (!shellResult.success) {
+        stepSuccess = false;
+        stepErrors.push(`SHELL_FAILED: ${shellResult.output}`);
+      }
+    }
+
+    // Trigger action (#2893) — fire-and-forget
+    if (step.trigger) {
+      console.log(`Step ${step.id ?? '(unnamed)'}: triggering ${step.trigger.agent}.${step.trigger.function}`);
+      const triggerArgs = ['agent', 'invoke', step.trigger.agent, step.trigger.function, '--trigger'];
+      if (step.trigger.args) triggerArgs.push(step.trigger.args);
+      // Fire and forget — don't await completion
+      this.runLocalCommand('golem', triggerArgs, stepTimeoutSeconds, this.workspace, commandEnv)
+        .catch(() => { /* fire and forget */ });
+    }
+
+    // Execute prompt if present (#2887 continue_session)
+    if (step.prompt) {
+      const useContinueSession = step.continue_session !== false && !isFirstPrompt;
+      if (useContinueSession) {
+        console.log(`Step ${step.id ?? '(unnamed)'}: sending followup prompt`);
+        const agentResult = await this.driver.sendFollowup(step.prompt, stepTimeoutSeconds);
+        if (!agentResult.success) {
+          stepSuccess = false;
+          stepErrors.push(`Agent failed: ${agentResult.output}`);
+        }
+      } else {
+        console.log(`Step ${step.id ?? '(unnamed)'}: sending prompt`);
+        const agentResult = await this.driver.sendPrompt(step.prompt, stepTimeoutSeconds);
+        if (!agentResult.success) {
+          stepSuccess = false;
+          stepErrors.push(`Agent failed: ${agentResult.output}`);
+        }
+      }
+      isFirstPrompt = false;
+    }
+
+    // Invoke action (#2890)
+    if (step.invoke) {
+      console.log(`Step ${step.id ?? '(unnamed)'}: invoking ${step.invoke.agent}.${step.invoke.function}`);
+      const invokeArgs = ['agent', 'invoke', step.invoke.agent, step.invoke.function];
+      if (step.invoke.args) invokeArgs.push(step.invoke.args);
+      const invokeResult = await this.runLocalCommand(
+        'golem', invokeArgs, stepTimeoutSeconds, this.workspace, commandEnv
+      );
+
+      if (step.expect) {
+        let resultJson: unknown = undefined;
+        try {
+          resultJson = JSON.parse(invokeResult.output);
+        } catch {
+          // Not JSON — that's fine
+        }
+        const ctx: AssertionContext = {
+          stdout: invokeResult.output,
+          stderr: '',
+          exitCode: invokeResult.exitCode,
+          resultJson,
+        };
+        const assertionResults = evaluate(ctx, step.expect);
+        for (const ar of assertionResults) {
+          if (!ar.passed) {
+            stepSuccess = false;
+            stepErrors.push(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
+          }
+        }
+      } else if (!invokeResult.success) {
+        stepSuccess = false;
+        stepErrors.push(`INVOKE_FAILED: ${invokeResult.output}`);
+      }
+    }
+
+    // Verify skills activation — merge fswatch events + atime changes
+    const watcherEvents = this.watcher.getActivatedEventsSince(stepBaseline);
+    const atimeResults = await this.watcher.getSkillsWithChangedAtime();
+    for (const evt of watcherEvents) {
+      console.log(`Step ${step.id ?? '(unnamed)'}: fswatch detected "${evt.skillName}" via ${evt.path}`);
+    }
+    for (const res of atimeResults) {
+      console.log(`Step ${step.id ?? '(unnamed)'}: atime detected "${res.skillName}" via ${res.path}`);
+    }
+    const activatedSkills = Array.from(new Set([
+      ...watcherEvents.map(e => e.skillName),
+      ...atimeResults.map(r => r.skillName),
+    ]));
+    console.log(`Step ${step.id ?? '(unnamed)'}: activated skills [${activatedSkills.join(', ')}]`);
+    const assertionError = this.assertSkillActivation(step, activatedSkills);
+    if (assertionError) {
+      stepSuccess = false;
+      stepErrors.push(assertionError);
+    }
+
+    // Build verification
+    if (step.verify?.build) {
+      const buildDir = await this.findGolemProjectDir();
+      console.log(`Step ${step.id ?? '(unnamed)'}: running golem build in ${buildDir}`);
+      const buildResult = await this.runLocalCommand('golem', ['build'], 600, buildDir, commandEnv);
+      if (!buildResult.success) {
+        stepSuccess = false;
+        stepErrors.push(`BUILD_FAILED: ${buildResult.output}`);
+      }
+    }
+
+    // Deploy verification (#2889)
+    if (step.verify?.deploy) {
+      // Deploy implies build — run build first if not already run
+      if (!step.verify?.build) {
+        const buildDir = await this.findGolemProjectDir();
+        console.log(`Step ${step.id ?? '(unnamed)'}: running implicit golem build before deploy in ${buildDir}`);
+        const buildResult = await this.runLocalCommand('golem', ['build'], 600, buildDir, commandEnv);
+        if (!buildResult.success) {
+          stepSuccess = false;
+          stepErrors.push(`BUILD_FAILED: ${buildResult.output}`);
+        }
+      }
+
+      if (stepSuccess) {
+        const deployDir = await this.findGolemProjectDir();
+        console.log(`Step ${step.id ?? '(unnamed)'}: running golem deploy in ${deployDir}`);
+        const deployResult = await this.runLocalCommand(
+          'golem', ['deploy', '--yes'], 600, deployDir, commandEnv
+        );
+        if (!deployResult.success) {
+          stepSuccess = false;
+          stepErrors.push(`DEPLOY_FAILED: ${deployResult.output}`);
+        }
+      }
+    }
+
+    return {
+      success: stepSuccess,
+      errors: stepErrors,
+      activatedSkills,
+      isFirstPrompt,
     };
   }
 
