@@ -14,10 +14,11 @@
 
 import { PathSegment } from 'golem:agent/common@1.5.0';
 import { rejectEmptyString } from './validation';
+import { invalidInput } from '../agentError';
 
 export function parsePath(path: string): PathSegment[] {
   if (!path.startsWith('/')) {
-    throw new Error(`HTTP mount must start with "/"`);
+    throw invalidInput(`HTTP mount must start with "/"`);
   }
 
   if (path === '/') {
@@ -31,23 +32,23 @@ export function parsePath(path: string): PathSegment[] {
 
 function parseSegment(segment: string, isLast: boolean): PathSegment {
   if (!segment) {
-    throw new Error(`Empty path segment ("//") is not allowed`);
+    throw invalidInput(`Empty path segment ("//") is not allowed`);
   }
 
   if (segment !== segment.trim()) {
-    throw new Error(`Whitespace is not allowed in path segments`);
+    throw invalidInput(`Whitespace is not allowed in path segments`);
   }
 
   if (segment.startsWith('{') && segment.endsWith('}')) {
     const name = segment.slice(1, -1);
 
     if (!name) {
-      throw new Error(`Empty path variable "{}" is not allowed`);
+      throw invalidInput(`Empty path variable "{}" is not allowed`);
     }
 
     if (name.startsWith('*')) {
       if (!isLast) {
-        throw new Error(
+        throw invalidInput(
           `Remaining path variable "{${name}}" is only allowed as the last path segment`,
         );
       }
@@ -77,7 +78,7 @@ function parseSegment(segment: string, isLast: boolean): PathSegment {
   }
 
   if (segment.includes('{') || segment.includes('}')) {
-    throw new Error(
+    throw invalidInput(
       `Path segment "${segment}" must be a whole variable like "{id}" and cannot mix literals and variables`,
     );
   }

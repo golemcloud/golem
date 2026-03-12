@@ -18,6 +18,17 @@ import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/internal/http/query';
 import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@1.5.0';
 import { validateHttpEndpoint, validateHttpMount } from '../src/internal/http/validation';
+import { isAgentError } from '../src/internal/agentError';
+
+function expectAgentError(fn: () => void, expectedMessage: string) {
+  try {
+    fn();
+    expect.unreachable('Expected function to throw');
+  } catch (e) {
+    expect(isAgentError(e)).toBe(true);
+    expect((e as { val: string }).val).toContain(expectedMessage);
+  }
+}
 
 describe('getHttpMountDetails – basic behavior', () => {
   it('returns undefined when mount is not provided', () => {
@@ -106,30 +117,37 @@ describe('getHttpMountDetails – webhook suffix', () => {
 
 describe('getHttpMountDetails – validation errors', () => {
   it('rejects mount with query parameters', () => {
-    expect(() => getHttpMountDetails({ mount: '/chats?id={chatId}' })).toThrow(
+    expectAgentError(
+      () => getHttpMountDetails({ mount: '/chats?id={chatId}' }),
       'HTTP mount must not contain query parameters',
     );
   });
 
   it('rejects webhook suffix with query parameters', () => {
-    expect(() =>
-      getHttpMountDetails({
-        mount: '/chats',
-        webhookSuffix: '/hook?event={event}',
-      }),
-    ).toThrow('HTTP webhook suffix must not contain query parameters');
+    expectAgentError(
+      () =>
+        getHttpMountDetails({
+          mount: '/chats',
+          webhookSuffix: '/hook?event={event}',
+        }),
+      'HTTP webhook suffix must not contain query parameters',
+    );
   });
 
   it('rejects mount without leading slash', () => {
-    expect(() => getHttpMountDetails({ mount: 'chats' })).toThrow('HTTP mount must start with "/"');
+    expectAgentError(
+      () => getHttpMountDetails({ mount: 'chats' }),
+      'HTTP mount must start with "/"',
+    );
   });
 
   it('rejects empty path segments', () => {
-    expect(() => getHttpMountDetails({ mount: '/chats//foo' })).toThrow('Empty path segment');
+    expectAgentError(() => getHttpMountDetails({ mount: '/chats//foo' }), 'Empty path segment');
   });
 
   it('rejects unclosed path variable', () => {
-    expect(() => getHttpMountDetails({ mount: '/chats/{id' })).toThrow(
+    expectAgentError(
+      () => getHttpMountDetails({ mount: '/chats/{id' }),
       'Path segment "{id" must be a whole variable like "{id}" and cannot mix literals and variables',
     );
   });
@@ -179,7 +197,8 @@ describe('validateHttpMountWithConstructor', () => {
     const agentMount = mount(['chatId']);
     const agentConstructor = constructorVars('chatId', 'tenant');
 
-    expect(() => validateHttpMount('Foo', agentMount, agentConstructor)).toThrow(
+    expectAgentError(
+      () => validateHttpMount('Foo', agentMount, agentConstructor),
       "Agent constructor variable 'tenant' is not provided by the HTTP mount path.",
     );
   });
@@ -188,7 +207,8 @@ describe('validateHttpMountWithConstructor', () => {
     const agentMount = mount(['chatId']);
     const agentConstructor = constructorVars();
 
-    expect(() => validateHttpMount('Foo', agentMount, agentConstructor)).toThrow(
+    expectAgentError(
+      () => validateHttpMount('Foo', agentMount, agentConstructor),
       "HTTP mount path variable 'chatId' (in path segment 0) is not defined in the agent constructor.",
     );
   });
@@ -258,7 +278,8 @@ describe('validateHttpEndpoint', () => {
   it('fails when endpoint path variable is not part of method input', () => {
     const agentMethod = method([], [endpoint(['id'])]);
 
-    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).toThrow(
+    expectAgentError(
+      () => validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
       "HTTP endpoint path variable 'id' is not defined in method input parameters.",
     );
   });
@@ -266,7 +287,8 @@ describe('validateHttpEndpoint', () => {
   it('fails when endpoint query variable is not part of method input', () => {
     const agentMethod = method([], [endpoint([], ['limit'])]);
 
-    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).toThrow(
+    expectAgentError(
+      () => validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
       "HTTP endpoint query variable 'limit' is not defined in method input parameters.",
     );
   });
@@ -274,7 +296,8 @@ describe('validateHttpEndpoint', () => {
   it('fails when endpoint header variable is not part of method input', () => {
     const agentMethod = method([], [endpoint([], [], ['tenant'])]);
 
-    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).toThrow(
+    expectAgentError(
+      () => validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
       "HTTP endpoint header variable 'tenant' is not defined in method input parameters.",
     );
   });
@@ -288,7 +311,8 @@ describe('validateHttpEndpoint', () => {
       ],
     );
 
-    expect(() => validateHttpEndpoint(agentName, agentMethod, httpMountDetails)).toThrow(
+    expectAgentError(
+      () => validateHttpEndpoint(agentName, agentMethod, httpMountDetails),
       "HTTP endpoint path variable 'foo' is not defined in method input parameters.",
     );
   });
@@ -296,7 +320,8 @@ describe('validateHttpEndpoint', () => {
   it('endpoints with no mount details', () => {
     const agentMethod = method(['id'], [endpoint(['id'])]);
 
-    expect(() => validateHttpEndpoint(agentName, agentMethod, undefined)).toThrow(
+    expectAgentError(
+      () => validateHttpEndpoint(agentName, agentMethod, undefined),
       "Agent method 'doThing' of 'TestAgent' defines HTTP endpoints but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.",
     );
   });

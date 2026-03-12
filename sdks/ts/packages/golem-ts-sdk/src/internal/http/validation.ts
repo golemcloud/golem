@@ -22,6 +22,7 @@ import {
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 import { TypeInfoInternal } from '../typeInfoInternal';
+import { invalidInput } from '../agentError';
 
 export function validateHttpMount(
   agentClassName: string,
@@ -65,13 +66,13 @@ export function validateHttpEndpoint(
 
 export function rejectEmptyString(name: string, entityName: string) {
   if (name.length === 0) {
-    throw new Error(`HTTP ${entityName} must not be empty`);
+    throw invalidInput(`HTTP ${entityName} must not be empty`);
   }
 }
 
 export function rejectQueryParamsInPath(path: string, entityName: string) {
   if (path.includes('?')) {
-    throw new Error(`HTTP ${entityName} must not contain query parameters`);
+    throw invalidInput(`HTTP ${entityName} must not contain query parameters`);
   }
 }
 
@@ -85,7 +86,7 @@ function validateMountIsDefinedForHttpEndpoint(
   httpMountDetails: HttpMountDetails | undefined,
 ) {
   if (!httpMountDetails && agentMethod.httpEndpoint.length > 0) {
-    throw new Error(
+    throw invalidInput(
       `Agent method '${agentMethod.name}' of '${agentClassName}' defines HTTP endpoints ` +
         `but the agent is not mounted over HTTP. Please specify mount details in 'agent' decorator.`,
     );
@@ -98,7 +99,7 @@ function validateNoCatchAllInHttpMount(agentClassName: string, agentMount: HttpM
   );
 
   if (catchAllSegment) {
-    throw new Error(
+    throw invalidInput(
       `HTTP mount for agent '${agentClassName}' cannot contain catch-all path variable '${catchAllSegment.val.variableName}'`,
     );
   }
@@ -118,17 +119,17 @@ function validateEndpointVariables(
     binaryError: string,
   ) {
     if (principalParams.has(variableName)) {
-      throw new Error(
+      throw invalidInput(
         `HTTP endpoint ${location} variable '${variableName}' cannot be used for parameters of type 'Principal'`,
       );
     }
 
     if (unstructuredBinaryParams.has(variableName)) {
-      throw new Error(binaryError);
+      throw invalidInput(binaryError);
     }
 
     if (!methodVars.has(variableName)) {
-      throw new Error(
+      throw invalidInput(
         `HTTP endpoint ${location} variable '${variableName}' is not defined in method input parameters.`,
       );
     }
@@ -197,7 +198,7 @@ function validateConstructorParamsAreHttpSafe(
 ) {
   for (const [paramName, paramSchema] of agentConstructor.inputSchema.val) {
     if (paramSchema.tag === 'unstructured-binary') {
-      throw new Error(
+      throw invalidInput(
         `HTTP mount path variable '${paramName}' cannot be used for constructor parameters of type 'UnstructuredBinary'`,
       );
     }
@@ -212,7 +213,7 @@ function validateMountVariablesAreNotPrincipal(
     if (segment.tag === 'path-variable') {
       const variableName = segment.val.variableName;
       if (parametersForPrincipal.has(variableName)) {
-        throw new Error(
+        throw invalidInput(
           `HTTP mount path variable '${variableName}' cannot be used for constructor parameters of type 'Principal'`,
         );
       }
@@ -229,7 +230,7 @@ function validateMountVariablesExistInConstructor(
       const variableName = segment.val.variableName;
 
       if (!constructorVars.has(variableName)) {
-        throw new Error(
+        throw invalidInput(
           `HTTP mount path variable '${variableName}' ` +
             `(in path segment ${segmentIndex}) ` +
             `is not defined in the agent constructor.`,
@@ -247,7 +248,7 @@ function validateConstructorVarsAreSatisfied(
 
   for (const constructorVar of constructorVars) {
     if (!providedVars.has(constructorVar)) {
-      throw new Error(
+      throw invalidInput(
         `Agent constructor variable '${constructorVar}' ` +
           `is not provided by the HTTP mount path.`,
       );

@@ -14,6 +14,7 @@
 
 import { QueryVariable } from 'golem:agent/common@1.5.0';
 import { rejectEmptyString } from './validation';
+import { invalidInput } from '../agentError';
 
 // parseQuery is intended for HTTP endpoint definitions, not mounts
 export function parseQuery(query: string): QueryVariable[] {
@@ -23,15 +24,15 @@ export function parseQuery(query: string): QueryVariable[] {
     const [key, value] = pair.split('=');
 
     if (!key || !value) {
-      throw new Error(`Invalid query segment "${pair}"`);
+      throw invalidInput(`Invalid query segment "${pair}"`);
     }
 
     if (value !== value.trim()) {
-      throw new Error(`Whitespace is not allowed in query variables`);
+      throw invalidInput(`Whitespace is not allowed in query variables`);
     }
 
     if (!value.startsWith('{') || !value.endsWith('}')) {
-      throw new Error(`Query value for "${key}" must be a variable reference`);
+      throw invalidInput(`Query value for "${key}" must be a variable reference`);
     }
 
     const variableName = value.slice(1, -1);

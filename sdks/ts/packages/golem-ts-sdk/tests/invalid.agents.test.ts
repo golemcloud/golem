@@ -21,6 +21,17 @@ import { TypeScope } from '../src/internal/mapping/types/scope';
 import * as Either from '../src/newTypes/either';
 import { agent, AgentId, BaseAgent } from '../src';
 import { typeMapper } from '../src/internal/mapping/types/typeMapperImpl';
+import { isAgentError } from '../src/internal/agentError';
+
+async function expectAsyncAgentError(fn: () => Promise<unknown>, expectedMessage: string) {
+  try {
+    await fn();
+    expect.unreachable('Expected function to throw');
+  } catch (e) {
+    expect(isAgentError(e)).toBe(true);
+    expect((e as { val: string }).val).toContain(expectedMessage);
+  }
+}
 
 const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
 const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
@@ -235,49 +246,55 @@ test('Agent method with empty tuple return type is rejected', async () => {
 });
 
 test('Agent with with unsatisfied http mount is rejected', async () => {
-  await expect(async () => {
-    await import('./agentWithInvalidHttpMount1');
-  }).rejects.toThrowError(
+  await expectAsyncAgentError(
+    async () => {
+      await import('./agentWithInvalidHttpMount1');
+    },
     "Agent constructor variable 'bar' is not provided by the HTTP mount path.",
   );
 });
 
 test('Agent with with http mount variable bound to Principal is rejected', async () => {
-  await expect(async () => {
-    await import('./agentWithInvalidHttpMount2');
-  }).rejects.toThrowError(
+  await expectAsyncAgentError(
+    async () => {
+      await import('./agentWithInvalidHttpMount2');
+    },
     "HTTP mount path variable 'bar' cannot be used for constructor parameters of type 'Principal'",
   );
 });
 
 test('Agent with with http mount variable bound to UnstructuredBinary is rejected', async () => {
-  await expect(async () => {
-    await import('./agentWithInvalidHttpMount3');
-  }).rejects.toThrowError(
+  await expectAsyncAgentError(
+    async () => {
+      await import('./agentWithInvalidHttpMount3');
+    },
     "HTTP mount path variable 'bar' cannot be used for constructor parameters of type 'UnstructuredBinary'",
   );
 });
 
 test('Agent with with http mount variable with catch-all variable', async () => {
-  await expect(async () => {
-    await import('./agentWithInvalidHttpMount4');
-  }).rejects.toThrowError(
+  await expectAsyncAgentError(
+    async () => {
+      await import('./agentWithInvalidHttpMount4');
+    },
     "HTTP mount for agent 'AgentWithInvalidHttpMount4' cannot contain catch-all path variable 'filePath'",
   );
 });
 
 test('Agent with with http endpoint query variables referring to Principal is rejected', async () => {
-  await expect(async () => {
-    await import('./agentWithInvalidHttpEndpoint1');
-  }).rejects.toThrowError(
+  await expectAsyncAgentError(
+    async () => {
+      await import('./agentWithInvalidHttpEndpoint1');
+    },
     "HTTP endpoint query variable 'user' cannot be used for parameters of type 'Principal'",
   );
 });
 
 test('Agent with with http endpoint path variables referring to Principal is rejected', async () => {
-  await expect(async () => {
-    await import('./agentWithInvalidHttpEndpoint2');
-  }).rejects.toThrowError(
+  await expectAsyncAgentError(
+    async () => {
+      await import('./agentWithInvalidHttpEndpoint2');
+    },
     "HTTP endpoint path variable 'user' cannot be used for parameters of type 'Principal'",
   );
 });
