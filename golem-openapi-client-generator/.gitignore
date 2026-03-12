@@ -1,0 +1,13 @@
+../.DS_Store
+.DS_Store
+**/target/
+.bsp/
+.metals/
+.vscode/
+.idea/
+*.iml
+.vscode
+.metals
+metals.sbt
+dump.rdb
+*.swp
