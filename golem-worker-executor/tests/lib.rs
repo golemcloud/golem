@@ -32,6 +32,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod observability;
 pub mod rdbms;
+pub mod ignite_service;
 pub mod rdbms_service;
 pub mod revert;
 pub mod rpc;
@@ -57,6 +58,7 @@ tag_suite!(scalability, group2);
 tag_suite!(hot_update, group2);
 tag_suite!(rpc, group2);
 
+tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 
 #[derive(Debug)]

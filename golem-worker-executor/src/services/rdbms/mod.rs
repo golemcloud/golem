@@ -13,11 +13,13 @@
 // limitations under the License.
 
 pub(crate) mod metrics;
+pub mod ignite;
 pub mod mysql;
 pub mod postgres;
 pub(crate) mod sqlx_common;
 
 use crate::services::golem_config::RdbmsConfig;
+use crate::services::rdbms::ignite::IgniteType;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
@@ -169,12 +171,19 @@ pub trait Rdbms<T: RdbmsType>: Send + Sync {
 }
 
 pub trait RdbmsService: Send + Sync {
+    fn ignite(&self) -> Arc<dyn Rdbms<IgniteType>>;
     fn mysql(&self) -> Arc<dyn Rdbms<MysqlType>>;
     fn postgres(&self) -> Arc<dyn Rdbms<PostgresType>>;
 }
 
 pub trait RdbmsTypeService<T: RdbmsType> {
     fn rdbms_type_service(&self) -> Arc<dyn Rdbms<T>>;
+}
+
+impl RdbmsTypeService<IgniteType> for dyn RdbmsService {
+    fn rdbms_type_service(&self) -> Arc<dyn Rdbms<IgniteType>> {
+        self.ignite()
+    }
 }
 
 impl RdbmsTypeService<MysqlType> for dyn RdbmsService {
@@ -191,6 +200,7 @@ impl RdbmsTypeService<PostgresType> for dyn RdbmsService {
 
 #[derive(Clone)]
 pub struct RdbmsServiceDefault {
+    ignite: Arc<dyn Rdbms<IgniteType> + Send + Sync>,
     mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync>,
     postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync>,
 }
@@ -198,7 +208,8 @@ pub struct RdbmsServiceDefault {
 impl RdbmsServiceDefault {
     pub fn new(config: RdbmsConfig) -> Self {
         Self {
-            mysql: MysqlType::new_rdbms(config),
+            ignite: IgniteType::new_rdbms(config.clone()),
+            mysql: MysqlType::new_rdbms(config.clone()),
             postgres: PostgresType::new_rdbms(config),
         }
     }
@@ -211,6 +222,10 @@ impl Default for RdbmsServiceDefault {
 }
 
 impl RdbmsService for RdbmsServiceDefault {
+    fn ignite(&self) -> Arc<dyn Rdbms<IgniteType>> {
+        self.ignite.clone()
+    }
+
     fn mysql(&self) -> Arc<dyn Rdbms<MysqlType>> {
         self.mysql.clone()
     }
