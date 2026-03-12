@@ -41,6 +41,7 @@ use golem_common::model::{
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::component::Component;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -51,12 +52,32 @@ use tokio::time::Instant;
 use tracing::Instrument;
 use uuid::{uuid, Uuid};
 
+/// Per-plugin live state tracked by `ForwardingOplogState` for exactly-once delivery.
+/// Seeded from `AgentStatusRecord.oplog_processor_checkpoints` on construction,
+/// updated synchronously after each checkpoint write.
+#[derive(Clone, Debug)]
+struct LivePluginState {
+    target_agent_id: Option<AgentId>,
+    confirmed_up_to: OplogIndex,
+    sending_up_to: OplogIndex,
+    send_in_progress: bool,
+}
+
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
+    /// Resolves or creates a target plugin worker for the given plugin, returning its AgentId.
+    async fn resolve_target(
+        &self,
+        environment_id: EnvironmentId,
+        plugin: &InstalledPlugin,
+    ) -> Result<AgentId, WorkerExecutorError>;
+
+    /// Sends oplog entries to the specified target plugin worker.
     async fn send(
         &self,
         worker_metadata: AgentMetadata,
         plugin: &InstalledPlugin,
+        target_agent_id: &AgentId,
         initial_oplog_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError>;
@@ -200,10 +221,22 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ctx> {
+    async fn resolve_target(
+        &self,
+        environment_id: EnvironmentId,
+        plugin: &InstalledPlugin,
+    ) -> Result<AgentId, WorkerExecutorError> {
+        let running_plugin = self
+            .resolve_plugin_worker(environment_id, plugin)
+            .await?;
+        Ok(running_plugin.owned_agent_id.agent_id)
+    }
+
     async fn send(
         &self,
         worker_metadata: AgentMetadata,
         plugin: &InstalledPlugin,
+        target_agent_id: &AgentId,
         initial_oplog_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError> {
@@ -211,11 +244,14 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             .resolve_plugin_worker(worker_metadata.environment_id, plugin)
             .await?;
 
+        // Use the explicitly provided target_agent_id for invocation
+        let target_owned = OwnedAgentId::new(worker_metadata.environment_id, target_agent_id);
+
         let worker = self
             .worker_activator
             .get_or_create_running(
                 running_plugin.account_id,
-                &running_plugin.owned_agent_id,
+                &target_owned,
                 None,
                 None,
                 Vec::new(),
@@ -438,17 +474,20 @@ impl OplogConstructor for CreateOplogConstructor {
                 .await
         };
 
-        Arc::new(ForwardingOplog::new(
-            inner,
-            self.oplog_plugins,
-            self.components,
-            self.initial_worker_metadata,
-            self.last_known_status,
-            last_oplog_index,
-            close,
-            self.plugin_max_commit_count,
-            self.plugin_max_elapsed_time,
-        ))
+        Arc::new(
+            ForwardingOplog::new(
+                inner,
+                self.oplog_plugins,
+                self.components,
+                self.initial_worker_metadata,
+                self.last_known_status,
+                last_oplog_index,
+                close,
+                self.plugin_max_commit_count,
+                self.plugin_max_elapsed_time,
+            )
+            .await,
+        )
     }
 }
 
@@ -608,7 +647,7 @@ pub struct ForwardingOplog {
 }
 
 impl ForwardingOplog {
-    pub fn new(
+    pub async fn new(
         inner: Arc<dyn Oplog>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
@@ -619,15 +658,47 @@ impl ForwardingOplog {
         max_commit_count: usize,
         max_elapsed_time: Duration,
     ) -> Self {
+        // Seed per-plugin live state from the current status snapshot (not the
+        // potentially stale initial_worker_metadata.last_known_status)
+        let plugin_state = {
+            let seed_status = last_known_status.read().await;
+            let mut state = HashMap::new();
+            for (grant_id, cp) in &seed_status.oplog_processor_checkpoints {
+                state.insert(
+                    *grant_id,
+                    LivePluginState {
+                        target_agent_id: cp.target_agent_id.clone(),
+                        confirmed_up_to: cp.confirmed_up_to,
+                        sending_up_to: cp.sending_up_to,
+                        send_in_progress: false,
+                    },
+                );
+            }
+            // Also seed entries for active plugins that have no checkpoint yet (active from Create)
+            for grant_id in &seed_status.active_plugins {
+                state.entry(*grant_id).or_insert(LivePluginState {
+                    target_agent_id: None,
+                    confirmed_up_to: OplogIndex::NONE,
+                    sending_up_to: OplogIndex::NONE,
+                    send_in_progress: false,
+                });
+            }
+            state
+        };
+
         let state = Arc::new(Mutex::new(ForwardingOplogState {
             buffer: VecDeque::new(),
+            buffer_start_idx: last_oplog_idx.next(),
             commit_count: 0,
             last_send: Instant::now(),
             oplog_plugins,
             initial_worker_metadata,
             last_known_status,
             last_oplog_idx,
+            last_committed_idx: last_oplog_idx,
             components,
+            inner: inner.clone(),
+            plugin_state,
         }));
 
         let timer = tokio::spawn({
@@ -636,9 +707,7 @@ impl ForwardingOplog {
                 loop {
                     tokio::time::sleep(max_elapsed_time).await;
                     let mut state = state.lock().await;
-                    if !state.buffer.is_empty() && state.last_send.elapsed() > max_elapsed_time {
-                        state.send_buffer().await;
-                    }
+                    state.try_flush().await;
                 }
             }
             .in_current_span()
@@ -686,9 +755,15 @@ impl Oplog for ForwardingOplog {
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         let mut state = self.state.lock().await;
         let result = self.inner.commit(level).await;
+        // Update last_committed_idx from committed entries
+        if let Some(max_idx) = result.keys().max() {
+            if *max_idx > state.last_committed_idx {
+                state.last_committed_idx = *max_idx;
+            }
+        }
         state.commit_count += 1;
         if state.commit_count > self.max_commit_count {
-            state.send_buffer().await;
+            state.try_flush().await;
         }
         result
     }
@@ -740,90 +815,341 @@ impl Oplog for ForwardingOplog {
 
 struct ForwardingOplogState {
     buffer: VecDeque<OplogEntry>,
+    /// Oplog index corresponding to the first entry in `buffer`.
+    buffer_start_idx: OplogIndex,
     commit_count: usize,
     last_send: Instant,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     initial_worker_metadata: AgentMetadata,
     last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
     last_oplog_idx: OplogIndex,
+    last_committed_idx: OplogIndex,
     components: Arc<dyn ComponentService>,
+    inner: Arc<dyn Oplog>,
+    plugin_state: HashMap<EnvironmentPluginGrantId, LivePluginState>,
 }
 
 impl ForwardingOplogState {
-    pub async fn send_buffer(&mut self) {
-        let metadata = {
-            let status = self.last_known_status.read().await.clone();
-            AgentMetadata {
-                last_known_status: status,
-                ..self.initial_worker_metadata.clone()
-            }
-        };
+    /// Cursor-driven flush: for each plugin with unsent entries, send a batch.
+    /// Handles retries of in-flight batches, first-send target resolution,
+    /// pre-send and confirmation checkpoint writes.
+    ///
+    /// Entries are always read from the persisted oplog (canonical source) to avoid
+    /// buffer/index drift caused by checkpoint entries injected during flush.
+    pub async fn try_flush(&mut self) {
+        let status = self.last_known_status.read().await.clone();
+        let flush_set = self.reconcile_plugin_state(&status);
 
-        if !metadata.last_known_status.active_plugins.is_empty() {
-            let entries: Vec<_> = self.buffer.drain(..).collect();
-            let initial_oplog_index =
-                OplogIndex::from_u64(Into::<u64>::into(self.last_oplog_idx) - entries.len() as u64);
+        if flush_set.is_empty() {
+            self.finish_empty_flush();
+        } else if let Some((metadata, component_metadata)) =
+            self.prepare_flush_context(&status).await
+        {
+            let committed_tail = self.last_committed_idx;
 
-            if let Err(err) = self
-                .try_send_entries(metadata, initial_oplog_index, &entries)
-                .await
-            {
-                log::error!("Failed to send oplog entries: {err}");
-                // In case of an error we keep the unsent entries in the buffer.
-                // This does not guarantee that we don't double-send entries (in case the error happened
-                // only for one of the `send` calls, for example) - this is going to be handled
-                // better in future versions where the last known oplog index will be tracked for
-                // each active plugin.
-                self.buffer.extend(entries);
-            } else {
-                self.last_send = Instant::now();
-                self.commit_count = 0;
+            for grant_id in flush_set {
+                self.flush_one_plugin(grant_id, committed_tail, &metadata, &component_metadata)
+                    .await;
             }
-        } else {
-            // If there are no active plugins we just reset the state
-            self.last_send = Instant::now();
-            self.commit_count = 0;
+
+            self.prune_buffer();
+            self.finish_flush_cycle();
         }
     }
 
-    async fn try_send_entries(
-        &self,
-        metadata: AgentMetadata,
-        initial_oplog_index: OplogIndex,
-        entries: &[OplogEntry],
-    ) -> Result<(), WorkerExecutorError> {
-        if !metadata.last_known_status.active_plugins.is_empty() {
-            let component_metadata = self
-                .components
-                .get_metadata(
-                    metadata.owned_agent_id().component_id(),
-                    Some(metadata.last_known_status.component_revision),
-                )
-                .await?;
-
-            let plugins_to_send_to = component_metadata
-                .installed_plugins
-                .into_iter()
-                .filter(|p| {
-                    metadata
-                        .last_known_status
-                        .active_plugins
-                        .contains(&p.environment_plugin_grant_id)
-                });
-
-            for plugin in plugins_to_send_to {
-                self.oplog_plugins
-                    .send(
-                        metadata.clone(),
-                        &plugin,
-                        initial_oplog_index,
-                        entries.to_vec(),
-                    )
-                    .await?;
+    /// Sync plugin_state with the current status: add newly active plugins,
+    /// keep existing local state for already-tracked plugins, remove stale
+    /// entries that are neither active nor in-flight.
+    /// Returns the flush set (active ∪ in-flight plugin grant IDs).
+    fn reconcile_plugin_state(
+        &mut self,
+        status: &AgentStatusRecord,
+    ) -> Vec<EnvironmentPluginGrantId> {
+        for grant_id in &status.active_plugins {
+            if let Entry::Vacant(e) = self.plugin_state.entry(*grant_id) {
+                let live = if let Some(cp) = status.oplog_processor_checkpoints.get(grant_id) {
+                    LivePluginState {
+                        target_agent_id: cp.target_agent_id.clone(),
+                        confirmed_up_to: cp.confirmed_up_to,
+                        sending_up_to: cp.sending_up_to,
+                        send_in_progress: false,
+                    }
+                } else {
+                    LivePluginState {
+                        target_agent_id: None,
+                        confirmed_up_to: OplogIndex::NONE,
+                        sending_up_to: OplogIndex::NONE,
+                        send_in_progress: false,
+                    }
+                };
+                e.insert(live);
             }
         }
 
-        Ok(())
+        self.plugin_state.retain(|grant_id, state| {
+            status.active_plugins.contains(grant_id)
+                || state.sending_up_to > state.confirmed_up_to
+        });
+
+        self.plugin_state
+            .iter()
+            .filter(|(id, state)| {
+                status.active_plugins.contains(id)
+                    || state.sending_up_to > state.confirmed_up_to
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Build the AgentMetadata and fetch component metadata needed for the flush.
+    /// Returns `None` if component metadata cannot be retrieved.
+    async fn prepare_flush_context(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> Option<(AgentMetadata, Component)> {
+        let metadata = AgentMetadata {
+            last_known_status: status.clone(),
+            ..self.initial_worker_metadata.clone()
+        };
+
+        match self
+            .components
+            .get_metadata(
+                metadata.owned_agent_id().component_id(),
+                Some(status.component_revision),
+            )
+            .await
+        {
+            Ok(component_metadata) => Some((metadata, component_metadata)),
+            Err(err) => {
+                tracing::error!(
+                    "Failed to get component metadata for oplog processor flush: {err}"
+                );
+                None
+            }
+        }
+    }
+
+    /// Flush a single plugin: resolve target, read entries, write checkpoints, send.
+    async fn flush_one_plugin(
+        &mut self,
+        grant_id: EnvironmentPluginGrantId,
+        committed_tail: OplogIndex,
+        metadata: &AgentMetadata,
+        component_metadata: &Component,
+    ) {
+        let live = match self.plugin_state.get(&grant_id) {
+            Some(s) if !s.send_in_progress => s.clone(),
+            _ => return,
+        };
+
+        let plugin = match component_metadata
+            .installed_plugins
+            .iter()
+            .find(|p| p.environment_plugin_grant_id == grant_id)
+        {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        let batch = if live.sending_up_to > live.confirmed_up_to {
+            // RETRY: exact same range — never widen
+            Some((live.confirmed_up_to.next(), live.sending_up_to, true))
+        } else if live.confirmed_up_to < committed_tail {
+            // NEW BATCH: from confirmed+1 to committed tail
+            Some((live.confirmed_up_to.next(), committed_tail, false))
+        } else {
+            None
+        };
+
+        let (batch_start, batch_end, is_retry) = match batch {
+            Some(b) => b,
+            None => return,
+        };
+
+        let target_agent_id = if let Some(id) = &live.target_agent_id {
+            id.clone()
+        } else {
+            match self
+                .oplog_plugins
+                .resolve_target(metadata.environment_id, &plugin)
+                .await
+            {
+                Ok(id) => {
+                    self.write_checkpoint(
+                        grant_id,
+                        &id,
+                        live.confirmed_up_to,
+                        live.confirmed_up_to,
+                    )
+                    .await;
+                    if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                        s.target_agent_id = Some(id.clone());
+                    }
+                    id
+                }
+                Err(err) => {
+                    tracing::error!("Failed to resolve target for plugin {grant_id}: {err}");
+                    return;
+                }
+            }
+        };
+
+        if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+            s.send_in_progress = true;
+        }
+
+        let batch_count = (batch_end.as_u64() - batch_start.as_u64() + 1) as usize;
+        let entries = self.read_batch(batch_start, batch_count).await;
+
+        if entries.len() != batch_count {
+            tracing::error!(
+                "Expected {batch_count} entries for plugin {grant_id} [{batch_start}..{batch_end}], got {}",
+                entries.len()
+            );
+            if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                s.send_in_progress = false;
+            }
+            return;
+        }
+
+        // Filter out checkpoint entries — they are internal bookkeeping, not plugin payload
+        let payload: Vec<OplogEntry> = entries
+            .into_iter()
+            .filter(|e| !matches!(e, OplogEntry::OplogProcessorCheckpoint { .. }))
+            .collect();
+
+        // If the batch contained only checkpoint entries, confirm and move on
+        if payload.is_empty() {
+            if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                s.confirmed_up_to = batch_end;
+                s.sending_up_to = batch_end;
+                s.send_in_progress = false;
+            }
+            return;
+        }
+
+        if !is_retry {
+            self.write_checkpoint(grant_id, &target_agent_id, live.confirmed_up_to, batch_end)
+                .await;
+            if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                s.sending_up_to = batch_end;
+            }
+        }
+
+        match self
+            .oplog_plugins
+            .send(
+                metadata.clone(),
+                &plugin,
+                &target_agent_id,
+                batch_start,
+                payload,
+            )
+            .await
+        {
+            Ok(()) => {
+                self.write_checkpoint(grant_id, &target_agent_id, batch_end, batch_end)
+                    .await;
+                if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                    s.confirmed_up_to = batch_end;
+                    s.sending_up_to = batch_end;
+                    s.send_in_progress = false;
+                }
+            }
+            Err(err) => {
+                tracing::error!("Failed to send oplog entries to plugin {grant_id}: {err}");
+                if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                    s.send_in_progress = false;
+                }
+            }
+        }
+    }
+
+    /// Read `count` entries starting at `start` from the buffer if available,
+    /// otherwise fall back to the persisted oplog.
+    async fn read_batch(&self, start: OplogIndex, count: usize) -> Vec<OplogEntry> {
+        if count == 0 {
+            return Vec::new();
+        }
+
+        if !self.buffer.is_empty() && start >= self.buffer_start_idx {
+            let buffer_end_idx = self
+                .buffer_start_idx
+                .range_end(self.buffer.len() as u64);
+            let request_end_idx = start.range_end(count as u64);
+
+            if request_end_idx <= buffer_end_idx {
+                let offset = (start.as_u64() - self.buffer_start_idx.as_u64()) as usize;
+                return self.buffer.iter().skip(offset).take(count).cloned().collect();
+            }
+        }
+
+        self.inner
+            .read_many(start, count as u64)
+            .await
+            .into_values()
+            .collect()
+    }
+
+    /// Write an OplogProcessorCheckpoint entry, commit it, and update index tracking.
+    async fn write_checkpoint(
+        &mut self,
+        grant_id: EnvironmentPluginGrantId,
+        target_agent_id: &AgentId,
+        confirmed_up_to: OplogIndex,
+        sending_up_to: OplogIndex,
+    ) {
+        let checkpoint = OplogEntry::OplogProcessorCheckpoint {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+            target_agent_id: target_agent_id.clone(),
+            confirmed_up_to,
+            sending_up_to,
+        };
+        self.buffer.push_back(checkpoint.clone());
+        self.inner.add(checkpoint).await;
+        let committed = self.inner.commit(CommitLevel::Always).await;
+        self.last_oplog_idx = self.last_oplog_idx.next();
+        if let Some(max_idx) = committed.keys().max() {
+            if *max_idx > self.last_committed_idx {
+                self.last_committed_idx = *max_idx;
+            }
+        }
+    }
+
+    /// Prune buffer: drain entries that ALL active/in-flight plugins have confirmed past.
+    fn prune_buffer(&mut self) {
+        if self.plugin_state.is_empty() || self.buffer.is_empty() {
+            return;
+        }
+
+        let min_confirmed = self
+            .plugin_state
+            .values()
+            .map(|s| s.confirmed_up_to)
+            .min()
+            .unwrap_or(OplogIndex::NONE);
+
+        if min_confirmed >= self.buffer_start_idx {
+            let drain_up_to = min_confirmed.as_u64() - self.buffer_start_idx.as_u64() + 1;
+            let drain_count = (drain_up_to as usize).min(self.buffer.len());
+            self.buffer.drain(..drain_count);
+            self.buffer_start_idx =
+                OplogIndex::from_u64(self.buffer_start_idx.as_u64() + drain_count as u64);
+        }
+    }
+
+    fn finish_empty_flush(&mut self) {
+        self.buffer.clear();
+        self.buffer_start_idx = self.last_oplog_idx.next();
+        self.last_send = Instant::now();
+        self.commit_count = 0;
+    }
+
+    fn finish_flush_cycle(&mut self) {
+        self.last_send = Instant::now();
+        self.commit_count = 0;
     }
 }
 
@@ -988,10 +1314,22 @@ mod tests {
 
     #[async_trait]
     impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
+        async fn resolve_target(
+            &self,
+            _environment_id: EnvironmentId,
+            _plugin: &InstalledPlugin,
+        ) -> Result<AgentId, WorkerExecutorError> {
+            Ok(AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "mock-target".to_string(),
+            })
+        }
+
         async fn send(
             &self,
             _worker_metadata: AgentMetadata,
             _plugin: &InstalledPlugin,
+            _target_agent_id: &AgentId,
             initial_oplog_index: OplogIndex,
             entries: Vec<OplogEntry>,
         ) -> Result<(), WorkerExecutorError> {
@@ -1000,6 +1338,15 @@ mod tests {
                 entry_count: entries.len(),
             });
             Ok(())
+        }
+
+        async fn get_last_processed_index(
+            &self,
+            _environment_id: EnvironmentId,
+            _plugin: &InstalledPlugin,
+            _source_agent_id: AgentId,
+        ) -> Result<OplogIndex, WorkerExecutorError> {
+            Ok(OplogIndex::NONE)
         }
 
         async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
@@ -1222,32 +1569,45 @@ mod tests {
     // --------------------------------------------------------------------------
 
     #[test]
-    async fn empty_buffer_no_send() {
+    async fn no_committed_entries_no_send() {
         let grant_id = EnvironmentPluginGrantId::new();
         let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
         let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
         let components: Arc<dyn ComponentService> = Arc::new(
             FakeComponentService::with_one_oplog_processor_plugin(grant_id),
         );
+        let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
 
         let mut state = ForwardingOplogState {
             buffer: VecDeque::new(),
+            buffer_start_idx: OplogIndex::INITIAL,
             commit_count: 0,
             last_send: Instant::now(),
             oplog_plugins: recording_plugin.clone(),
             initial_worker_metadata: metadata,
             last_known_status: status_lock,
-            last_oplog_idx: OplogIndex::INITIAL,
+            last_oplog_idx: OplogIndex::NONE,
+            last_committed_idx: OplogIndex::NONE,
             components,
+            inner,
+            plugin_state: HashMap::from([(
+                grant_id,
+                LivePluginState {
+                    target_agent_id: None,
+                    confirmed_up_to: OplogIndex::NONE,
+                    sending_up_to: OplogIndex::NONE,
+                    send_in_progress: false,
+                },
+            )]),
         };
 
-        // Buffer is empty — send_buffer should be a no-op
-        state.send_buffer().await;
+        // No committed entries (last_committed_idx = NONE) — try_flush should be a no-op
+        state.try_flush().await;
 
         assert_eq!(
             recording_plugin.send_count().await,
             0,
-            "Empty buffer should not trigger any plugin sends"
+            "No committed entries should not trigger any plugin sends"
         );
     }
 
@@ -1260,22 +1620,27 @@ mod tests {
         let (metadata, status_lock) = test_worker_metadata(HashSet::new());
         let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
         let components: Arc<dyn ComponentService> = Arc::new(FakeComponentService::empty());
+        let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
 
         let mut state = ForwardingOplogState {
             buffer: VecDeque::from([OplogEntry::GrowMemory {
                 timestamp: Timestamp::now_utc(),
                 delta: 100,
             }]),
+            buffer_start_idx: OplogIndex::INITIAL,
             commit_count: 0,
             last_send: Instant::now(),
             oplog_plugins: recording_plugin.clone(),
             initial_worker_metadata: metadata,
             last_known_status: status_lock,
             last_oplog_idx: OplogIndex::from_u64(1),
+            last_committed_idx: OplogIndex::from_u64(1),
             components,
+            inner,
+            plugin_state: HashMap::new(),
         };
 
-        state.send_buffer().await;
+        state.try_flush().await;
 
         assert_eq!(
             recording_plugin.send_count().await,
@@ -1296,28 +1661,44 @@ mod tests {
         let components: Arc<dyn ComponentService> = Arc::new(
             FakeComponentService::with_one_oplog_processor_plugin(grant_id),
         );
+        let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+
+        // Pre-populate the inner oplog so read_many can return entries
+        let entry1 = OplogEntry::GrowMemory {
+            timestamp: Timestamp::now_utc(),
+            delta: 100,
+        };
+        let entry2 = OplogEntry::GrowMemory {
+            timestamp: Timestamp::now_utc(),
+            delta: 200,
+        };
+        inner.add(entry1.clone()).await;
+        inner.add(entry2.clone()).await;
 
         let mut state = ForwardingOplogState {
-            buffer: VecDeque::from([
-                OplogEntry::GrowMemory {
-                    timestamp: Timestamp::now_utc(),
-                    delta: 100,
-                },
-                OplogEntry::GrowMemory {
-                    timestamp: Timestamp::now_utc(),
-                    delta: 200,
-                },
-            ]),
+            buffer: VecDeque::from([entry1, entry2]),
+            buffer_start_idx: OplogIndex::INITIAL,
             commit_count: 0,
             last_send: Instant::now(),
             oplog_plugins: recording_plugin.clone(),
             initial_worker_metadata: metadata,
             last_known_status: status_lock,
             last_oplog_idx: OplogIndex::from_u64(2),
+            last_committed_idx: OplogIndex::from_u64(2),
             components,
+            inner,
+            plugin_state: HashMap::from([(
+                grant_id,
+                LivePluginState {
+                    target_agent_id: None,
+                    confirmed_up_to: OplogIndex::NONE,
+                    sending_up_to: OplogIndex::NONE,
+                    send_in_progress: false,
+                },
+            )]),
         };
 
-        state.send_buffer().await;
+        state.try_flush().await;
 
         let sends = recording_plugin.sends().await;
         assert_eq!(sends.len(), 1, "Should have sent exactly one batch");

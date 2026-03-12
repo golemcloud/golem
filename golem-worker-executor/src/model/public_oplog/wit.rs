@@ -775,7 +775,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 initial_active_plugins: params
                     .initial_active_plugins
                     .into_iter()
-                    .map(|v| golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(uuid::Uuid::from_u64_pair(v.high_bits, v.low_bits)))
+                    .map(|v| golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(uuid::Uuid::from_u64_pair(v.uuid.high_bits, v.uuid.low_bits)))
                     .collect(),
                 config_vars: params.config_vars.into_iter().collect(),
                 // FIXME: agent-config
@@ -907,7 +907,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 new_active_plugins: params
                     .new_active_plugins
                     .into_iter()
-                    .map(|v| golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(uuid::Uuid::from_u64_pair(v.high_bits, v.low_bits)))
+                    .map(|v| golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(uuid::Uuid::from_u64_pair(v.uuid.high_bits, v.uuid.low_bits)))
                     .collect(),
             }),
             oplog::OplogEntry::FailedUpdate(params) => Ok(Self::FailedUpdate {
@@ -950,13 +950,13 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::ActivatePlugin(params) => Ok(Self::ActivatePlugin {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 plugin_grant_id: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(
-                    uuid::Uuid::from_u64_pair(params.plugin_grant_id.high_bits, params.plugin_grant_id.low_bits),
+                    uuid::Uuid::from_u64_pair(params.plugin_grant_id.uuid.high_bits, params.plugin_grant_id.uuid.low_bits),
                 ),
             }),
             oplog::OplogEntry::DeactivatePlugin(params) => Ok(Self::DeactivatePlugin {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 plugin_grant_id: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(
-                    uuid::Uuid::from_u64_pair(params.plugin_grant_id.high_bits, params.plugin_grant_id.low_bits),
+                    uuid::Uuid::from_u64_pair(params.plugin_grant_id.uuid.high_bits, params.plugin_grant_id.uuid.low_bits),
                 ),
             }),
             oplog::OplogEntry::Revert(params) => Ok(Self::Revert {
@@ -1064,7 +1064,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 Ok(Self::OplogProcessorCheckpoint {
                     timestamp: timestamp_from_datetime(params.timestamp),
                     plugin_grant_id: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(
-                        uuid::Uuid::from_u64_pair(params.plugin_grant_id.high_bits, params.plugin_grant_id.low_bits),
+                        uuid::Uuid::from_u64_pair(params.plugin_grant_id.uuid.high_bits, params.plugin_grant_id.uuid.low_bits),
                     ),
                     target_agent_id: golem_common::model::AgentId::from(params.target_agent_id),
                     confirmed_up_to: golem_common::model::OplogIndex::from_u64(
