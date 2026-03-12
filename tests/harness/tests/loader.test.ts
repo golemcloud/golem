@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ScenarioLoader } from '../src/executor.js';
+import { ScenarioLoader, type ScenarioSpec } from '../src/executor.js';
 
 async function writeTempYaml(content: string): Promise<string> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'loader-test-'));
@@ -241,5 +241,161 @@ steps:
 `);
     const spec = await ScenarioLoader.load(filePath);
     assert.equal(spec.steps[0].delete_agent?.name, 'test-agent');
+  });
+
+  // #2911 Matrix tests
+
+  it('loads scenario with matrix', async () => {
+    const filePath = await writeTempYaml(`
+name: "matrix-test"
+matrix:
+  agents: ["claude-code", "gemini"]
+  languages: ["ts", "rust"]
+  os: ["linux", "darwin"]
+steps:
+  - prompt: "hello"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.deepEqual(spec.matrix?.agents, ['claude-code', 'gemini']);
+    assert.deepEqual(spec.matrix?.languages, ['ts', 'rust']);
+    assert.deepEqual(spec.matrix?.os, ['linux', 'darwin']);
+  });
+
+  it('loads scenario without matrix', async () => {
+    const filePath = await writeTempYaml(`
+name: "no-matrix"
+steps:
+  - prompt: "hello"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.equal(spec.matrix, undefined);
+  });
+
+  it('loads scenario with partial matrix', async () => {
+    const filePath = await writeTempYaml(`
+name: "partial-matrix"
+matrix:
+  agents: ["claude-code"]
+steps:
+  - prompt: "hello"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.deepEqual(spec.matrix?.agents, ['claude-code']);
+    assert.equal(spec.matrix?.languages, undefined);
+    assert.equal(spec.matrix?.os, undefined);
+  });
+
+  // #2911 matchesMatrix tests
+
+  it('matchesMatrix returns true when no matrix defined', () => {
+    const spec: ScenarioSpec = { name: 'test', steps: [{ prompt: 'hello' }] };
+    assert.equal(ScenarioLoader.matchesMatrix(spec, 'claude-code', 'ts'), true);
+  });
+
+  it('matchesMatrix returns true when agent and language match', () => {
+    const spec: ScenarioSpec = {
+      name: 'test',
+      matrix: { agents: ['claude-code', 'gemini'], languages: ['ts'] },
+      steps: [{ prompt: 'hello' }],
+    };
+    assert.equal(ScenarioLoader.matchesMatrix(spec, 'claude-code', 'ts'), true);
+  });
+
+  it('matchesMatrix returns false when agent does not match', () => {
+    const spec: ScenarioSpec = {
+      name: 'test',
+      matrix: { agents: ['gemini'] },
+      steps: [{ prompt: 'hello' }],
+    };
+    assert.equal(ScenarioLoader.matchesMatrix(spec, 'claude-code', 'ts'), false);
+  });
+
+  it('matchesMatrix returns false when language does not match', () => {
+    const spec: ScenarioSpec = {
+      name: 'test',
+      matrix: { languages: ['rust'] },
+      steps: [{ prompt: 'hello' }],
+    };
+    assert.equal(ScenarioLoader.matchesMatrix(spec, 'claude-code', 'ts'), false);
+  });
+
+  it('matchesMatrix checks OS against process.platform', () => {
+    const currentOs = process.platform;
+    const spec: ScenarioSpec = {
+      name: 'test',
+      matrix: { os: [currentOs] },
+      steps: [{ prompt: 'hello' }],
+    };
+    assert.equal(ScenarioLoader.matchesMatrix(spec, 'claude-code', 'ts'), true);
+
+    const specNoMatch: ScenarioSpec = {
+      name: 'test',
+      matrix: { os: ['nonexistent-os'] },
+      steps: [{ prompt: 'hello' }],
+    };
+    assert.equal(ScenarioLoader.matchesMatrix(specNoMatch, 'claude-code', 'ts'), false);
+  });
+
+  // #2916 Retry tests
+
+  it('loads step with retry', async () => {
+    const filePath = await writeTempYaml(`
+name: "retry-test"
+steps:
+  - id: "flaky-step"
+    prompt: "do something"
+    retry:
+      attempts: 3
+      delay: 5
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.equal(spec.steps[0].retry?.attempts, 3);
+    assert.equal(spec.steps[0].retry?.delay, 5);
+  });
+
+  it('loads step without retry', async () => {
+    const filePath = await writeTempYaml(`
+name: "no-retry"
+steps:
+  - prompt: "hello"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.equal(spec.steps[0].retry, undefined);
+  });
+
+  it('rejects retry with invalid attempts', async () => {
+    const filePath = await writeTempYaml(`
+name: "bad-retry"
+steps:
+  - prompt: "hello"
+    retry:
+      attempts: 0
+      delay: 1
+`);
+    await assert.rejects(
+      () => ScenarioLoader.load(filePath),
+      (err: Error) => {
+        assert.ok(err.message.includes('Invalid scenario file'));
+        return true;
+      }
+    );
+  });
+
+  it('rejects retry with negative delay', async () => {
+    const filePath = await writeTempYaml(`
+name: "bad-delay"
+steps:
+  - prompt: "hello"
+    retry:
+      attempts: 2
+      delay: -1
+`);
+    await assert.rejects(
+      () => ScenarioLoader.load(filePath),
+      (err: Error) => {
+        assert.ok(err.message.includes('Invalid scenario file'));
+        return true;
+      }
+    );
   });
 });
