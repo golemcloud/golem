@@ -414,6 +414,16 @@ pub mod directive {
             warn("bollard"),
         ]
     }
+
+    /// Directives for the OTLP layer: same as default_deps but also
+    /// enables trace-level for `otel::tracing` target so that spans
+    /// created by `tonic-tracing-opentelemetry` (which uses TRACE level)
+    /// are exported and can propagate trace context across services.
+    pub fn otlp_deps() -> Vec<Directive> {
+        let mut deps = default_deps();
+        deps.push("otel::tracing=trace".parse().unwrap());
+        deps
+    }
 }
 
 pub mod filter {
@@ -463,6 +473,12 @@ pub mod filter {
         pub fn default_info_env() -> Boxed {
             env_with_directives(directive::default::info(), directive::default_deps())
         }
+
+        /// Filter for the OTLP layer: debug level by default, with
+        /// `otel::tracing=trace` so context-propagation spans are exported.
+        pub fn default_otlp_env() -> Boxed {
+            env_with_directives(directive::default::debug(), directive::otlp_deps())
+        }
     }
 
     pub mod for_all_outputs {
@@ -471,7 +487,15 @@ pub mod filter {
         use crate::tracing::filter::{boxed, Boxed};
         use crate::tracing::Output;
 
-        pub const DEFAULT_ENV: fn(Output) -> Boxed = |_output| boxed::default_env();
+        /// For OTLP, uses a permissive debug-level filter with
+        /// `otel::tracing=trace` so that context-propagation spans created
+        /// by `tonic-tracing-opentelemetry` (at TRACE level) are always
+        /// exported. For other outputs falls back to the RUST_LOG-based
+        /// env filter.
+        pub const DEFAULT_ENV: fn(Output) -> Boxed = |output| match output {
+            Output::Otlp => boxed::default_otlp_env(),
+            _ => boxed::default_env(),
+        };
 
         pub fn debug_env_with_directives(directives: Vec<Directive>) -> impl Fn(Output) -> Boxed {
             move |_output| boxed::debug_env_with_directives(directives.clone())

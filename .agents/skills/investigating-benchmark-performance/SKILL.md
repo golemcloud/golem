@@ -11,7 +11,8 @@ Run Golem benchmarks with distributed tracing enabled and analyze the resulting 
 
 - Docker and Docker Compose installed
 - The monitoring stack defined in `integration-tests/monitoring/docker-compose.yml`
-- The benchmarks binary built: `cargo build -p integration-tests --bin benchmarks`
+- The Golem service binaries built with **release** profile: `cargo build --release -p golem-worker-executor ...` (see Step 1.5)
+- The benchmark runner binary built with **benchmarks** profile: `cargo build --profile benchmarks -p integration-tests --bin benchmarks` (see Step 1.5)
 
 ## Step 1: Start the Monitoring Stack
 
@@ -27,22 +28,62 @@ This starts:
 - **Prometheus** — on `localhost:9090`
 - **Grafana** — on `localhost:3000` (admin/admin)
 
+## Step 1.5: Build Binaries
+
+Two separate builds are required:
+
+### Service binaries (release profile)
+
+The benchmark runner in `spawned` mode starts Golem services as child processes. It expects pre-compiled **release** binaries at `target/release/`.
+
+```shell
+cargo build --release \
+  -p golem-component-compilation-service \
+  -p golem-worker-service \
+  -p golem-worker-executor \
+  -p golem-shard-manager \
+  -p golem-registry-service
+```
+
+**You must rebuild after every code change** — the benchmark runner uses whatever binaries are on disk. To rebuild only the crate you changed:
+
+```shell
+cargo build --release -p <crate-you-changed>
+```
+
+### Benchmark runner binary (benchmarks profile)
+
+The benchmark runner itself must be built with the `benchmarks` profile (defined in root `Cargo.toml`, inherits from `release` with `panic = "unwind"`):
+
+```shell
+cargo build --profile benchmarks -p integration-tests --bin benchmarks
+```
+
+This produces the binary at `target/benchmarks/benchmarks`.
+
 ## Step 2: Run Benchmarks with OTLP Tracing
 
 The benchmarks binary is at `integration-tests/src/benchmarks/all.rs` and is built as the `benchmarks` binary from the `integration-tests` crate. It has a built-in `--otlp` flag that configures all spawned Golem services to export traces.
 
 ### Running a single benchmark
 
+The CLI takes the benchmark name as a positional argument, followed by the `spawned` subcommand (which tells it to spawn services locally). The `--build-target` defaults to `target/release` which is the correct path for the service binaries.
+
+Run the benchmark using the benchmarks-profile binary:
+
 ```shell
-cargo run -p integration-tests --bin benchmarks -- \
+./target/benchmarks/benchmarks \
   --otlp \
   benchmark \
-  --name <benchmark-name> \
   --iterations <N> \
   --cluster-size <S> \
   --size <W> \
-  --length <L>
+  --length <L> \
+  <benchmark-name> \
+  spawned
 ```
+
+**Note:** `--size` and `--cluster-size` accept multiple values by repeating the flag (e.g., `--size 1 --size 10`), not comma-separated.
 
 ### Available benchmarks
 
@@ -61,14 +102,15 @@ cargo run -p integration-tests --bin benchmarks -- \
 ### Example: single benchmark with tracing
 
 ```shell
-cargo run -p integration-tests --bin benchmarks -- \
+./target/benchmarks/benchmarks \
   --otlp \
   benchmark \
-  --name latency-small \
   --iterations 1 \
   --cluster-size 1 \
   --size 100 \
-  --length 2
+  --length 2 \
+  latency-small \
+  spawned
 ```
 
 ### Running a benchmark suite
@@ -76,7 +118,7 @@ cargo run -p integration-tests --bin benchmarks -- \
 Benchmark suites are YAML files in `integration-tests/benchmark_suites/`. They define multiple benchmarks with their parameters.
 
 ```shell
-cargo run -p integration-tests --bin benchmarks -- \
+./target/benchmarks/benchmarks \
   --otlp \
   suite \
   --path integration-tests/benchmark_suites/quick-all.yaml
@@ -89,7 +131,7 @@ Available suites:
 Suite results can be saved to JSON:
 
 ```shell
-cargo run -p integration-tests --bin benchmarks -- \
+./target/benchmarks/benchmarks \
   --otlp \
   suite \
   --path integration-tests/benchmark_suites/quick-all.yaml \
@@ -251,7 +293,7 @@ print(f'Total: {len(data[\"data\"])}, After filtering noise: {len(clean)}')
 - **Trace context propagation**: gRPC calls between services propagate trace context via `traceparent` headers. If you see disconnected traces, verify the monitoring stack is running before starting the benchmark.
 - **Background loop noise**: Long-lived background tasks create traces spanning the entire benchmark duration. These are not performance issues but can obscure real benchmark traces.
 - **Fresh Jaeger**: Always restart Jaeger with `docker compose down && docker compose up -d` before a new investigation to avoid mixing traces from different runs.
-- **Build time**: Benchmarks require building the full integration-tests crate. Use `cargo build -p integration-tests --bin benchmarks` first if you want faster iteration.
+- **Build time**: Service binaries must be built with `--release`. The benchmark runner binary must be built with `--profile benchmarks`. After any code change, rebuild the affected service binary with `cargo build --release -p <crate>` before re-running the benchmark.
 
 ## Resetting Between Runs
 

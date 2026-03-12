@@ -221,8 +221,11 @@ impl BenchmarkTestDependencies {
                 .with_env_overrides()
                 .use_stderr()
                 .with_otlp(params.otlp, "localhost", 4318, "benchmarks"),
-            |_output| {
-                golem_common::tracing::filter::boxed::env_with_directives(
+            |output| match output {
+                golem_common::tracing::Output::Otlp => {
+                    golem_common::tracing::filter::boxed::default_otlp_env()
+                }
+                _ => golem_common::tracing::filter::boxed::env_with_directives(
                     params
                         .default_log_level()
                         .parse()
@@ -232,7 +235,7 @@ impl BenchmarkTestDependencies {
                         vec![warn("golem_client")],
                     ]
                     .concat(),
-                )
+                ),
             },
         );
     }
