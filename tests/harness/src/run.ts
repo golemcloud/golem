@@ -5,6 +5,7 @@ import { ScenarioLoader, ScenarioExecutor, type ScenarioRunResult } from './exec
 import { ClaudeAgentDriver } from './driver/claude.js';
 import { GeminiAgentDriver } from './driver/gemini.js';
 import { OpenCodeAgentDriver } from './driver/opencode.js';
+import { CodexAgentDriver } from './driver/codex.js';
 import { SkillWatcher } from './watcher.js';
 import chalk from 'chalk';
 
@@ -23,7 +24,7 @@ async function main() {
     options: {
       agent: { type: 'string' },
       language: { type: 'string' },
-      scenarios: { type: 'string' },
+      scenarios: { type: 'string', default: './scenarios' },
       output: { type: 'string', default: './results' },
       scenario: { type: 'string' },
       timeout: { type: 'string' },
@@ -34,7 +35,7 @@ async function main() {
 
   const { agent, language, scenarios, output, scenario: scenarioFilter, timeout, skills: skillsDirRel, help } = values;
 
-  if (help || !agent || !language || !scenarios) {
+  if (help || !agent || !language) {
     const usage = `
 golem-skill-harness — Skill testing harness for Golem coding agents
 
@@ -42,12 +43,12 @@ Usage:
   npx tsx src/run.ts --agent <name> --language <ts|rust> --scenarios <dir> [options]
 
 Required:
-  --agent <name>        Agent driver to use (claude-code, gemini, opencode)
+  --agent <name>        Agent driver to use (claude-code, gemini, opencode, codex)
   --language <lang>     Language for skill templates (ts, rust)
-  --scenarios <dir>     Path to scenario YAML files
 
 Options:
   --scenario <name>     Run only the named scenario
+  --scenarios <dir>     Path to scenario YAML files (default: ./scenarios)
   --output <dir>        Results output directory (default: ./results)
   --timeout <seconds>   Global timeout per scenario in seconds
   --skills <dir>        Path to skills directory (default: ../../skills)
@@ -81,6 +82,8 @@ Options:
     driver = new GeminiAgentDriver();
   } else if (agent === 'opencode') {
     driver = new OpenCodeAgentDriver();
+  } else if (agent === 'codex') {
+    driver = new CodexAgentDriver();
   } else {
     console.error(chalk.red(`Unsupported agent: ${agent}`));
     process.exit(1);
