@@ -86,10 +86,13 @@ pub trait OplogProcessorPlugin: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         plugin: &InstalledPlugin,
+        target_agent_id: &AgentId,
         source_agent_id: AgentId,
     ) -> Result<OplogIndex, WorkerExecutorError>;
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
+
+    async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError>;
 }
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
@@ -297,21 +300,31 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         &self,
         environment_id: EnvironmentId,
         plugin: &InstalledPlugin,
+        target_agent_id: &AgentId,
         source_agent_id: AgentId,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        let running_plugin = self
-            .resolve_plugin_worker(environment_id, plugin)
+        let plugin_component_id = plugin
+            .oplog_processor_component_id
+            .ok_or(anyhow!("missing oplog processor plugin component id"))?;
+        let plugin_component_revision =
+            plugin.oplog_processor_component_revision.ok_or(anyhow!(
+                "missing oplog processor plugin component revision"
+            ))?;
+        let plugin_component = self
+            .component_service
+            .get_metadata(plugin_component_id, Some(plugin_component_revision))
             .await?;
 
+        let target_owned = OwnedAgentId::new(environment_id, target_agent_id);
         let worker = self
             .worker_activator
             .get_or_create_running(
-                running_plugin.account_id,
-                &running_plugin.owned_agent_id,
+                plugin_component.account_id,
+                &target_owned,
                 None,
                 None,
                 Vec::new(),
-                Some(running_plugin.component_revision),
+                Some(plugin_component_revision),
                 None,
                 &InvocationContextStack::fresh(),
                 Principal::anonymous(),
@@ -333,6 +346,12 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 "Unexpected result from get-last-processed-index: {other:?}"
             ))),
         }
+    }
+
+    async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
+        let assignment = self.shard_service.current_assignment()?;
+        let shard_id = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
+        Ok(assignment.shard_ids.contains(&shard_id))
     }
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
@@ -707,6 +726,7 @@ impl ForwardingOplog {
                 loop {
                     tokio::time::sleep(max_elapsed_time).await;
                     let mut state = state.lock().await;
+                    state.try_locality_recovery().await;
                     state.try_flush().await;
                 }
             }
@@ -1148,6 +1168,164 @@ impl ForwardingOplogState {
         self.last_send = Instant::now();
         self.commit_count = 0;
     }
+
+    /// Periodic locality recovery: for each plugin whose target worker is on a
+    /// remote executor (after shard reassignment), check if the old target has
+    /// caught up and, if so, migrate to a new local plugin worker.
+    ///
+    /// This is an optimization — correctness is preserved regardless because
+    /// delivery always goes to the recorded `target_agent_id` with deterministic
+    /// idempotency keys.
+    async fn try_locality_recovery(&mut self) {
+        let status = self.last_known_status.read().await.clone();
+        // Ensure plugin_state is reconciled with current status
+        self.reconcile_plugin_state(&status);
+        let source_agent_id = self.initial_worker_metadata.agent_id.clone();
+        let environment_id = self.initial_worker_metadata.environment_id;
+
+        // Collect candidates: plugins with a target that might be non-local
+        let candidates: Vec<(EnvironmentPluginGrantId, AgentId)> = self
+            .plugin_state
+            .iter()
+            .filter(|(_, state)| {
+                state.target_agent_id.is_some()
+                    && !state.send_in_progress
+                    && state.sending_up_to <= state.confirmed_up_to
+            })
+            .map(|(grant_id, state)| (*grant_id, state.target_agent_id.clone().unwrap()))
+            .collect();
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        let component_metadata = match self.prepare_flush_context(&status).await {
+            Some((_, cm)) => cm,
+            None => return,
+        };
+
+        for (grant_id, old_target) in candidates {
+            // Check if the target is already local
+            match self.oplog_plugins.is_local(&old_target).await {
+                Ok(true) => continue,  // already local
+                Ok(false) => {}        // non-local, try recovery
+                Err(err) => {
+                    tracing::warn!(
+                        plugin = %grant_id,
+                        error = %err,
+                        "Locality recovery: failed to check locality"
+                    );
+                    continue;
+                }
+            }
+
+            let plugin = match component_metadata
+                .installed_plugins
+                .iter()
+                .find(|p| p.environment_plugin_grant_id == grant_id)
+            {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+
+            let confirmed = match self.plugin_state.get(&grant_id) {
+                Some(s) => s.confirmed_up_to,
+                None => continue,
+            };
+
+            // Query the old target for its last processed index
+            let last_processed = match self
+                .oplog_plugins
+                .get_last_processed_index(
+                    environment_id,
+                    &plugin,
+                    &old_target,
+                    source_agent_id.clone(),
+                )
+                .await
+            {
+                Ok(idx) => idx,
+                Err(err) => {
+                    tracing::warn!(
+                        plugin = %grant_id,
+                        old_target = %old_target,
+                        error = %err,
+                        "Locality recovery: failed to query old target"
+                    );
+                    continue;
+                }
+            };
+
+            if last_processed < confirmed {
+                tracing::debug!(
+                    plugin = %grant_id,
+                    last_processed = %last_processed,
+                    confirmed = %confirmed,
+                    "Locality recovery: old target has not caught up, skipping"
+                );
+                continue;
+            }
+
+            // Old target has caught up — migrate to a new local worker
+            let new_target = match self
+                .oplog_plugins
+                .resolve_target(environment_id, &plugin)
+                .await
+            {
+                Ok(t) => t,
+                Err(err) => {
+                    tracing::warn!(
+                        plugin = %grant_id,
+                        error = %err,
+                        "Locality recovery: failed to resolve new local target"
+                    );
+                    continue;
+                }
+            };
+
+            // Don't persist a no-op migration or migrate to another non-local target
+            if new_target == old_target {
+                tracing::debug!(
+                    plugin = %grant_id,
+                    target = %old_target,
+                    "Locality recovery: resolved target is unchanged, skipping"
+                );
+                continue;
+            }
+            match self.oplog_plugins.is_local(&new_target).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::debug!(
+                        plugin = %grant_id,
+                        new_target = %new_target,
+                        "Locality recovery: resolved target is still non-local, skipping"
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        plugin = %grant_id,
+                        new_target = %new_target,
+                        error = %err,
+                        "Locality recovery: failed to verify locality of new target"
+                    );
+                    continue;
+                }
+            }
+
+            self.write_checkpoint(grant_id, &new_target, confirmed, confirmed)
+                .await;
+            if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                s.target_agent_id = Some(new_target.clone());
+            }
+            tracing::info!(
+                plugin = %grant_id,
+                old_target = %old_target,
+                new_target = %new_target,
+                "Locality recovery: migrated plugin to new local target"
+            );
+        }
+    }
 }
 
 const OPLOG_PROC_NS: Uuid = uuid!("A7E3F1B2-8C4D-5E6F-9A0B-1C2D3E4F5A6B");
@@ -1341,9 +1519,14 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
             _plugin: &InstalledPlugin,
+            _target_agent_id: &AgentId,
             _source_agent_id: AgentId,
         ) -> Result<OplogIndex, WorkerExecutorError> {
             Ok(OplogIndex::NONE)
+        }
+
+        async fn is_local(&self, _agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
+            Ok(true)
         }
 
         async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
