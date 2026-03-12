@@ -375,6 +375,46 @@ export class LanguageService {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  getAgentTypeGetSignature(agentTypeName: string): string | undefined {
+    if (!isValidIdentifier(agentTypeName)) return;
+
+    const sourceText = this.snippetImports + `const __agentType = ${agentTypeName};\n` + 'void __agentType;\n';
+    const sourceFile = this.project.createSourceFile('__client_info__.ts', sourceText, {
+      overwrite: true,
+    });
+
+    const agentTypeDecl = sourceFile.getVariableDeclaration('__agentType');
+    if (!agentTypeDecl) return;
+
+    const checker = this.project.getTypeChecker();
+    const getSymbol = agentTypeDecl.getType().getProperty('get');
+    if (!getSymbol) return;
+
+    const getType = checker.getTypeOfSymbolAtLocation(getSymbol, agentTypeDecl);
+    const signature = getType.getCallSignatures()[0];
+    if (!signature) return;
+
+    const parameters = signature
+      .getParameters()
+      .map((paramSymbol) => {
+        const decl = paramSymbol.getDeclarations()[0];
+        const paramName = paramSymbol.getName();
+        const paramType = checker.getTypeOfSymbolAtLocation(paramSymbol, decl ?? agentTypeDecl);
+        let typeText = checker.getTypeText(paramType, decl ?? agentTypeDecl);
+        typeText = typeText.replace(/import\([^)]*\)\./g, '');
+
+        const parameterDecl =
+          decl && tsm.Node.isParameterDeclaration(decl) ? decl : undefined;
+        const prefix = parameterDecl?.isRestParameter() ? '...' : '';
+        const optional = parameterDecl?.isOptional() ? '?' : '';
+
+        return `${prefix}${paramName}${optional}: ${formatTypeText(typeText)}`;
+      })
+      .join(', ');
+
+    return `${agentTypeName}.get(${parameters})`;
+  }
+
   private getSnippetPlaceholderCompletions(
     snippet: tsm.SourceFile,
     pos: number,

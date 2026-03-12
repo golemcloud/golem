@@ -26,7 +26,6 @@ use golem_common::model::component::{ComponentName, InitialComponentFile};
 
 use crate::agent_id_display::render_type_for_language;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::trim_date::TrimDateTime;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -172,15 +171,6 @@ pub struct ComponentDeployProperties {
     pub plugins: Vec<crate::model::app::PluginInstallation>,
     pub env: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
-}
-
-impl TrimDateTime for ComponentView {
-    fn trim_date_time_ms(self) -> Self {
-        Self {
-            created_at: self.created_at.trim_date_time_ms(),
-            ..self
-        }
-    }
 }
 
 pub fn show_exported_agents(

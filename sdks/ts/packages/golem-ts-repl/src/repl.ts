@@ -323,15 +323,16 @@ export class Repl {
     const languageService = this.getLanguageService();
     const lines: string[] = [];
     lines.push('');
-    lines.push(pc.bold('Available agents client types:'));
+    lines.push(pc.bold('Available agent client types:'));
 
     for (const agentTypeName of agentNames) {
       const methods = languageService.getClientMethodSignatures(agentTypeName);
+      const getSignature = languageService.getAgentTypeGetSignature(agentTypeName);
       if (!methods?.length) {
         lines.push('');
         continue;
       }
-      lines.push(`  ${pc.bold(agentTypeName)}`);
+      lines.push(`  ${pc.bold(getSignature ?? agentTypeName)}`);
       for (const method of methods) {
         lines.push(`    ${pc.green(method.name)}: ${method.signature}`);
       }

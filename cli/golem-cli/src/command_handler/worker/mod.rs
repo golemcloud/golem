@@ -49,8 +49,8 @@ use colored::Colorize;
 use crate::agent_id_display::SourceLanguage;
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
 use crate::model::worker::{
-    AgentUpdateMode, RawAgentId, WorkerMetadata, WorkerMetadataView, WorkerNameMatch,
-    WorkersMetadataResponseView,
+    AgentUpdateMode, RawAgentId, AgentMetadata, AgentMetadataView, AgentNameMatch,
+    AgentsMetadataResponseView,
 };
 use golem_client::api::{AgentClient, ComponentClient, EnvironmentClient, WorkerClient};
 use golem_client::model::ScanCursor;
@@ -396,7 +396,7 @@ impl WorkerCommandHandler {
         };
 
         // Update agent_name with normalized agent id
-        let agent_name_match = WorkerNameMatch {
+        let agent_name_match = AgentNameMatch {
             agent_name: agent_id.to_string().into(),
             ..agent_name_match
         };
@@ -905,7 +905,7 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
-        let mut view = WorkersMetadataResponseView::default();
+        let mut view = AgentsMetadataResponseView::default();
 
         for component in &components {
             let (workers, scan_cursor) = self
@@ -919,7 +919,7 @@ impl WorkerCommandHandler {
                 )
                 .await?;
 
-            view.workers.extend(workers.into_iter().map(|w| {
+            view.agents.extend(workers.into_iter().map(|w| {
                 let raw_agent_name = w.agent_id.agent_id.clone();
                 let source_language = ParsedAgentId::parse_agent_type_name(&raw_agent_name)
                     .ok()
@@ -933,7 +933,7 @@ impl WorkerCommandHandler {
                     })
                     .unwrap_or_default();
 
-                let mut view = WorkerMetadataView::from(w);
+                let mut view = AgentMetadataView::from(w);
 
                 if source_language.is_known() {
                     if let Ok(parsed) = ParsedAgentId::parse(&raw_agent_name, &component.metadata) {
@@ -1079,7 +1079,7 @@ impl WorkerCommandHandler {
                 .await
                 .map_service_error()?;
 
-            WorkerMetadata::from(agent_name_match.component_name, result)
+            AgentMetadata::from(agent_name_match.component_name, result)
         };
 
         self.ctx
@@ -1293,7 +1293,7 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         component_name: &ComponentName,
         agent_name: &RawAgentId,
-    ) -> anyhow::Result<WorkerMetadata> {
+    ) -> anyhow::Result<AgentMetadata> {
         let clients = self.ctx.golem_clients().await?;
 
         let result = clients
@@ -1302,7 +1302,7 @@ impl WorkerCommandHandler {
             .await
             .map_service_error()?;
 
-        Ok(WorkerMetadata::from(component_name.clone(), result))
+        Ok(AgentMetadata::from(component_name.clone(), result))
     }
 
     async fn delete(&self, component_id: Uuid, agent_name: &str) -> anyhow::Result<()> {
@@ -1637,7 +1637,7 @@ impl WorkerCommandHandler {
     async fn redeploy_worker(
         &self,
         component_name: &ComponentName,
-        worker_metadata: WorkerMetadata,
+        worker_metadata: AgentMetadata,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Redeploying",
@@ -1674,7 +1674,7 @@ impl WorkerCommandHandler {
     pub async fn delete_worker(
         &self,
         component_name: &ComponentName,
-        worker_metadata: &WorkerMetadata,
+        worker_metadata: &AgentMetadata,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Deleting",
@@ -1701,9 +1701,9 @@ impl WorkerCommandHandler {
         start_scan_cursor: Option<&ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
-    ) -> anyhow::Result<(Vec<WorkerMetadata>, Option<ScanCursor>)> {
+    ) -> anyhow::Result<(Vec<AgentMetadata>, Option<ScanCursor>)> {
         let clients = self.ctx.golem_clients().await?;
-        let mut workers = Vec::<WorkerMetadata>::new();
+        let mut workers = Vec::<AgentMetadata>::new();
         let mut final_result_cursor = Option::<ScanCursor>::None;
 
         let start_scan_cursor = start_scan_cursor.map(scan_cursor_to_string);
@@ -1726,7 +1726,7 @@ impl WorkerCommandHandler {
                     results
                         .workers
                         .into_iter()
-                        .map(|meta| WorkerMetadata::from(component_name.clone(), meta)),
+                        .map(|meta| AgentMetadata::from(component_name.clone(), meta)),
                 );
 
                 results.cursor
@@ -1752,7 +1752,7 @@ impl WorkerCommandHandler {
 
     async fn component_by_agent_name_match(
         &self,
-        agent_name_match: &WorkerNameMatch,
+        agent_name_match: &AgentNameMatch,
     ) -> anyhow::Result<(ComponentDto, RawAgentId)> {
         let component = self
             .ctx
@@ -1901,7 +1901,7 @@ impl WorkerCommandHandler {
     pub async fn match_agent_name(
         &self,
         agent_name: RawAgentId,
-    ) -> anyhow::Result<WorkerNameMatch> {
+    ) -> anyhow::Result<AgentNameMatch> {
         let segments = split_agent_name(&agent_name.0);
         match segments.len() {
             // <WORKER>
@@ -1944,7 +1944,7 @@ impl WorkerCommandHandler {
                             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
                             .await?;
 
-                        Ok(WorkerNameMatch {
+                        Ok(AgentNameMatch {
                             environment,
                             component_name_match_kind: ComponentNameMatchKind::AppCurrentDir,
                             component_name: ComponentName::try_from(
@@ -2087,7 +2087,7 @@ impl WorkerCommandHandler {
                         match fuzzy_search.find(&component_name.0) {
                             Ok(match_) => {
                                 log_fuzzy_match(&match_);
-                                Ok(WorkerNameMatch {
+                                Ok(AgentNameMatch {
                                     environment,
                                     component_name_match_kind: ComponentNameMatchKind::App,
                                     component_name: ComponentName(match_.option),
@@ -2122,7 +2122,7 @@ impl WorkerCommandHandler {
                                 }
                                 Error::NotFound { .. } => {
                                     // Assuming non-app component
-                                    Ok(WorkerNameMatch {
+                                    Ok(AgentNameMatch {
                                         environment,
                                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                                         component_name,
@@ -2133,7 +2133,7 @@ impl WorkerCommandHandler {
                             },
                         }
                     }
-                    _ => Ok(WorkerNameMatch {
+                    _ => Ok(AgentNameMatch {
                         environment,
                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                         component_name,
