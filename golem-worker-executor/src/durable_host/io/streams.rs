@@ -17,17 +17,23 @@ use wasmtime_wasi::StreamError;
 
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
+use crate::durable_host::{
+    Durability, DurabilityHost, DurableWorkerCtx, HttpOutputStreamState, HttpRequestCloseOwner,
+};
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     HttpTypesIncomingBodyStreamBlockingRead, HttpTypesIncomingBodyStreamBlockingSkip,
     HttpTypesIncomingBodyStreamRead, HttpTypesIncomingBodyStreamSkip,
+    HttpTypesOutgoingBodyStreamBlockingFlush, HttpTypesOutgoingBodyStreamBlockingSplice,
+    HttpTypesOutgoingBodyStreamCheckWrite, HttpTypesOutgoingBodyStreamFlush,
+    HttpTypesOutgoingBodyStreamSplice, HttpTypesOutgoingBodyStreamWrite,
+    HttpTypesOutgoingBodyStreamWriteZeroes,
 };
 use golem_common::model::oplog::types::SerializableStreamError;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestHttpRequest, HostResponseStreamChunk, HostResponseStreamSkip,
-    OplogIndex,
+    DurableFunctionType, HostRequestHttpRequest, HostResponseStreamCheckWrite,
+    HostResponseStreamChunk, HostResponseStreamSkip, HostResponseStreamWriteResult, OplogIndex,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime_wasi::p2::bindings::io::streams::{
@@ -227,9 +233,38 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
-    fn check_write(&mut self, self_: Resource<OutputStream>) -> Result<u64, StreamError> {
-        self.observe_function_call("io::streams::output_stream", "check_write");
-        HostOutputStream::check_write(self.table(), self_)
+    async fn check_write(&mut self, self_: Resource<OutputStream>) -> Result<u64, StreamError> {
+        let rep = self_.rep();
+        if is_outgoing_http_body_stream(self, rep) {
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamCheckWrite>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let result = HostOutputStream::check_write(self.table(), self_).await;
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamCheckWrite {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                durability.replay(self).await
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map_err(StreamError::from)
+        } else {
+            self.observe_function_call("io::streams::output_stream", "check_write");
+            HostOutputStream::check_write(self.table(), self_).await
+        }
     }
 
     async fn write(
@@ -237,23 +272,52 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
-        self.observe_function_call("io::streams::output_stream", "write");
+        let rep = self_.rep();
 
-        let output = self.table().get(&self_)?;
-        let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
-            Some(InternalWorkerEvent::stdout(contents.clone()))
-        } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
-            Some(InternalWorkerEvent::stderr(contents.clone()))
-        } else {
-            None
-        };
+        if is_outgoing_http_body_stream(self, rep) {
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamWrite>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
 
-        if let Some(event) = event {
-            self.emit_log_event(event).await;
-            Ok::<(), StreamError>(())
+            let result = if durability.is_live() {
+                let result = HostOutputStream::write(self.table(), self_, contents).await;
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamWriteResult {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                durability.replay(self).await
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map_err(StreamError::from)
         } else {
-            // Non-stdout writes are non-persistent and always executed
-            HostOutputStream::write(self.table(), self_, contents).await
+            self.observe_function_call("io::streams::output_stream", "write");
+
+            let output = self.table().get(&self_)?;
+            let event = if output.as_any().downcast_ref::<ManagedStdOut>().is_some() {
+                Some(InternalWorkerEvent::stdout(contents.clone()))
+            } else if output.as_any().downcast_ref::<ManagedStdErr>().is_some() {
+                Some(InternalWorkerEvent::stderr(contents.clone()))
+            } else {
+                None
+            };
+
+            if let Some(event) = event {
+                self.emit_log_event(event).await;
+                Ok::<(), StreamError>(())
+            } else {
+                HostOutputStream::write(self.table(), self_, contents).await
+            }
         }
     }
 
@@ -262,6 +326,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
+        // This is already composed from write + blocking_flush, both of which
+        // are individually made durable, so no additional oplog entry needed.
         let self2 = Resource::new_borrow(self_.rep());
         self.write(self_, contents).await?;
         self.blocking_flush(self2).await?;
@@ -269,13 +335,71 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     }
 
     async fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
-        self.observe_function_call("io::streams::output_stream", "flush");
-        HostOutputStream::flush(self.table(), self_).await
+        let rep = self_.rep();
+        if is_outgoing_http_body_stream(self, rep) {
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamFlush>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let result = HostOutputStream::flush(self.table(), self_).await;
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamWriteResult {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                durability.replay(self).await
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map_err(StreamError::from)
+        } else {
+            self.observe_function_call("io::streams::output_stream", "flush");
+            HostOutputStream::flush(self.table(), self_).await
+        }
     }
 
     async fn blocking_flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
-        self.observe_function_call("io::streams::output_stream", "blocking_flush");
-        HostOutputStream::blocking_flush(self.table(), self_).await
+        let rep = self_.rep();
+        if is_outgoing_http_body_stream(self, rep) {
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamBlockingFlush>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let result = HostOutputStream::blocking_flush(self.table(), self_).await;
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamWriteResult {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                durability.replay(self).await
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map_err(StreamError::from)
+        } else {
+            self.observe_function_call("io::streams::output_stream", "blocking_flush");
+            HostOutputStream::blocking_flush(self.table(), self_).await
+        }
     }
 
     fn subscribe(&mut self, self_: Resource<OutputStream>) -> wasmtime::Result<Resource<Pollable>> {
@@ -288,8 +412,37 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         len: u64,
     ) -> Result<(), StreamError> {
-        self.observe_function_call("io::streams::output_stream", "write_zeroeas");
-        HostOutputStream::write_zeroes(self.table(), self_, len).await
+        let rep = self_.rep();
+        if is_outgoing_http_body_stream(self, rep) {
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamWriteZeroes>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let result = HostOutputStream::write_zeroes(self.table(), self_, len).await;
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamWriteResult {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                durability.replay(self).await
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map_err(StreamError::from)
+        } else {
+            self.observe_function_call("io::streams::output_stream", "write_zeroes");
+            HostOutputStream::write_zeroes(self.table(), self_, len).await
+        }
     }
 
     async fn blocking_write_zeroes_and_flush(
@@ -310,8 +463,37 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         src: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
-        self.observe_function_call("io::streams::output_stream", "splice");
-        HostOutputStream::splice(self.table(), self_, src, len).await
+        let rep = self_.rep();
+        if is_outgoing_http_body_stream(self, rep) {
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamSplice>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let result = HostOutputStream::splice(self.table(), self_, src, len).await;
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamSkip {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                durability.replay(self).await
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map_err(StreamError::from)
+        } else {
+            self.observe_function_call("io::streams::output_stream", "splice");
+            HostOutputStream::splice(self.table(), self_, src, len).await
+        }
     }
 
     async fn blocking_splice(
@@ -320,12 +502,47 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         src: Resource<InputStream>,
         len: u64,
     ) -> Result<u64, StreamError> {
-        self.observe_function_call("io::streams::output_stream", "blocking_splice");
-        HostOutputStream::blocking_splice(self.table(), self_, src, len).await
+        let rep = self_.rep();
+        if is_outgoing_http_body_stream(self, rep) {
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamBlockingSplice>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let result = HostOutputStream::blocking_splice(self.table(), self_, src, len).await;
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamSkip {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                durability.replay(self).await
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map_err(StreamError::from)
+        } else {
+            self.observe_function_call("io::streams::output_stream", "blocking_splice");
+            HostOutputStream::blocking_splice(self.table(), self_, src, len).await
+        }
     }
 
     async fn drop(&mut self, rep: Resource<OutputStream>) -> wasmtime::Result<()> {
+        let handle = rep.rep();
         self.observe_function_call("io::streams::output_stream", "drop");
+        if let Some(request_handle) = self.state.find_request_handle_by_output_stream(handle) {
+            if let Some(state) = self.state.open_http_requests.get_mut(&request_handle) {
+                state.output_stream_rep = None;
+            }
+        }
         HostOutputStream::drop(self.table(), rep).await
     }
 }
@@ -337,6 +554,37 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> wasmtime::Result<wasmtime_wasi::p2::bindings::io::streams::StreamError> {
         Host::convert_stream_error(self.table(), err)
     }
+}
+
+fn is_outgoing_http_body_stream<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+) -> bool {
+    ctx.state
+        .find_request_handle_by_output_stream(stream_rep)
+        .is_some()
+}
+
+fn get_http_output_stream_state<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+) -> Result<HttpOutputStreamState, StreamError> {
+    ctx.state
+        .find_request_handle_by_output_stream(stream_rep)
+        .and_then(|handle| {
+            ctx.state
+                .open_http_requests
+                .get(&handle)
+                .map(|state| HttpOutputStreamState {
+                    begin_index: state.begin_index,
+                    request: state.request.clone(),
+                })
+        })
+        .ok_or_else(|| {
+            StreamError::Trap(wasmtime::Error::msg(
+                "No matching HTTP output stream state for resource handle",
+            ))
+        })
 }
 
 fn is_incoming_http_body_stream<Ctx: WorkerCtx>(
