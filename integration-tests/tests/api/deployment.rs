@@ -18,8 +18,11 @@ use golem_client::api::{
 };
 use golem_client::model::DeploymentCreation;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent_secret::AgentSecretCreation;
 use golem_common::model::component::{ComponentName, ComponentUpdate};
-use golem_common::model::deployment::{DeploymentRollback, DeploymentVersion};
+use golem_common::model::deployment::{
+    DeploymentAgentSecretDefault, DeploymentRollback, DeploymentVersion,
+};
 use golem_common::model::diff::Hash;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
@@ -28,7 +31,9 @@ use golem_common::model::http_api_deployment::{
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use pretty_assertions::{assert_eq, assert_ne};
+use golem_wasm::analysis::analysed_type;
+use pretty_assertions::{assert_eq, assert_matches, assert_ne};
+use serde_json::json;
 use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 
@@ -55,6 +60,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 current_revision: None,
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: Vec::new(),
             },
         )
         .await?;
@@ -107,16 +113,17 @@ async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
                     current_revision: None,
                     expected_deployment_hash: Hash::empty(),
                     version: DeploymentVersion("0.0.1".to_string()),
+                    agent_secret_defaults: Vec::new(),
                 },
             )
             .await;
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceDeployEnvironmentError::Error409(_)
             ))
-        ));
+        );
     }
 
     Ok(())
@@ -146,6 +153,7 @@ async fn get_component_version_from_previous_deployment(
                 current_revision: None,
                 expected_deployment_hash: plan_1.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: Vec::new(),
             },
         )
         .await?;
@@ -180,6 +188,7 @@ async fn get_component_version_from_previous_deployment(
                 current_revision: Some(deployment_1.current_revision),
                 expected_deployment_hash: plan_2.deployment_hash,
                 version: DeploymentVersion("0.0.2".to_string()),
+                agent_secret_defaults: Vec::new(),
             },
         )
         .await?;
@@ -273,6 +282,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
                 current_revision: None,
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: Vec::new(),
             },
         )
         .await?;
@@ -327,12 +337,12 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
             )
             .await;
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(golem_client::Error::Item(
                 RegistryServiceRollbackEnvironmentError::Error409(_)
             ))
-        ));
+        );
     }
 
     {
@@ -437,6 +447,275 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
             .await?;
         assert_eq!(deployments.values, vec![deployment_2.clone().into()])
     }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_creates_missing_secret_from_default(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .store()
+        .await?;
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+
+    let secret_path = vec!["secret".into()];
+
+    client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: None,
+                expected_deployment_hash: plan.deployment_hash,
+                version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: vec![DeploymentAgentSecretDefault {
+                    path: secret_path.clone(),
+                    secret_value: json!(false),
+                }],
+            },
+        )
+        .await?;
+
+    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+
+    assert_eq!(secrets.values.len(), 2);
+    let secret = secrets
+        .values
+        .iter()
+        .find(|sec| sec.path == secret_path)
+        .unwrap();
+
+    assert_eq!(secret.path, secret_path);
+    assert_eq!(secret.secret_type, analysed_type::bool());
+    assert_eq!(secret.secret_value, Some(json!(false)));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_ignores_default_if_secret_already_exists(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let secret_path = vec!["secret".into()];
+
+    client
+        .create_agent_secret(
+            &env.id.0,
+            &AgentSecretCreation {
+                path: secret_path.clone(),
+                secret_type: analysed_type::bool(),
+                secret_value: Some(json!(true)),
+            },
+        )
+        .await?;
+
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .store()
+        .await?;
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+
+    client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: None,
+                expected_deployment_hash: plan.deployment_hash,
+                version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: vec![DeploymentAgentSecretDefault {
+                    path: secret_path.clone(),
+                    secret_value: json!(false),
+                }],
+            },
+        )
+        .await?;
+
+    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+
+    assert_eq!(secrets.values.len(), 2);
+    let secret = secrets
+        .values
+        .iter()
+        .find(|sec| sec.path == secret_path)
+        .unwrap();
+
+    assert_eq!(secret.path, secret_path);
+    assert_eq!(secret.secret_type, analysed_type::bool());
+
+    // Existing value must be preserved
+    assert_eq!(secret.secret_value, Some(json!(true)));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_uses_default_if_secret_already_exists_with_no_value(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let secret_path = vec!["secret".into()];
+
+    client
+        .create_agent_secret(
+            &env.id.0,
+            &AgentSecretCreation {
+                path: secret_path.clone(),
+                secret_type: analysed_type::bool(),
+                secret_value: None,
+            },
+        )
+        .await?;
+
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .store()
+        .await?;
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+
+    client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: None,
+                expected_deployment_hash: plan.deployment_hash,
+                version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: vec![DeploymentAgentSecretDefault {
+                    path: secret_path.clone(),
+                    secret_value: json!(false),
+                }],
+            },
+        )
+        .await?;
+
+    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+
+    assert_eq!(secrets.values.len(), 2);
+    let secret = secrets
+        .values
+        .iter()
+        .find(|sec| sec.path == secret_path)
+        .unwrap();
+
+    assert_eq!(secret.path, secret_path);
+    assert_eq!(secret.secret_type, analysed_type::bool());
+
+    assert_eq!(secret.secret_value, Some(json!(false)));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_fails_if_existing_secret_type_mismatches_default(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let secret_path = vec!["secret".into()];
+
+    client
+        .create_agent_secret(
+            &env.id.0,
+            &AgentSecretCreation {
+                path: secret_path.clone(),
+                secret_type: analysed_type::str(),
+                secret_value: Some(json!("abc")),
+            },
+        )
+        .await?;
+
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .store()
+        .await?;
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+
+    let result = client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: None,
+                expected_deployment_hash: plan.deployment_hash,
+                version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: vec![DeploymentAgentSecretDefault {
+                    path: secret_path.clone(),
+                    secret_value: json!(false),
+                }],
+            },
+        )
+        .await;
+
+    assert_matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceDeployEnvironmentError::Error400(_)
+        ))
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deploy_fails_if_secret_default_mismatches_component(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let secret_path = vec!["secret".into()];
+
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .store()
+        .await?;
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+
+    let result = client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: None,
+                expected_deployment_hash: plan.deployment_hash,
+                version: DeploymentVersion("0.0.1".to_string()),
+                agent_secret_defaults: vec![DeploymentAgentSecretDefault {
+                    path: secret_path.clone(),
+                    secret_value: json!("foo"),
+                }],
+            },
+        )
+        .await;
+
+    assert_matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceDeployEnvironmentError::Error400(_)
+        ))
+    );
 
     Ok(())
 }
