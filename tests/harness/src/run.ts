@@ -27,14 +27,38 @@ async function main() {
       output: { type: 'string', default: './results' },
       scenario: { type: 'string' },
       timeout: { type: 'string' },
-      skills: { type: 'string', default: '../../skills' }
+      skills: { type: 'string', default: '../../skills' },
+      help: { type: 'boolean', short: 'h', default: false }
     }
   });
 
-  const { agent, language, scenarios, output, scenario: scenarioFilter, timeout, skills: skillsDirRel } = values;
+  const { agent, language, scenarios, output, scenario: scenarioFilter, timeout, skills: skillsDirRel, help } = values;
 
-  if (!agent || !language || !scenarios) {
-    console.error(chalk.red('Usage: run.ts --agent <name> --language <ts|rust> --scenarios <dir> [--scenario <name>] [--skills <dir>]'));
+  if (help || !agent || !language || !scenarios) {
+    const usage = `
+golem-skill-harness — Skill testing harness for Golem coding agents
+
+Usage:
+  npx tsx src/run.ts --agent <name> --language <ts|rust> --scenarios <dir> [options]
+
+Required:
+  --agent <name>        Agent driver to use (claude-code, gemini, opencode)
+  --language <lang>     Language for skill templates (ts, rust)
+  --scenarios <dir>     Path to scenario YAML files
+
+Options:
+  --scenario <name>     Run only the named scenario
+  --output <dir>        Results output directory (default: ./results)
+  --timeout <seconds>   Global timeout per scenario in seconds
+  --skills <dir>        Path to skills directory (default: ../../skills)
+  -h, --help            Show this help message
+`.trim();
+
+    if (help) {
+      console.log(usage);
+      process.exit(0);
+    }
+    console.error(chalk.red(usage));
     process.exit(1);
   }
 
