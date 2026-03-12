@@ -235,7 +235,13 @@ impl PluginRegistrationService {
             .oplog_processor()
             .ok()
             .flatten()
-            .is_some();
+            .is_some()
+            && component
+                .metadata
+                .oplog_processor_get_last_processed_index()
+                .ok()
+                .flatten()
+                .is_some();
 
         if !implements_oplog_processor_interface {
             return Err(PluginRegistrationError::OplogProcessorComponentDoesNotExist);

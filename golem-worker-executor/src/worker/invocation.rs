@@ -703,6 +703,26 @@ pub fn lower_invocation(
                 ],
             })
         }
+        AgentInvocation::GetLastProcessedIndex {
+            source_agent_id, ..
+        } => {
+            let get_last_processed_index = component_metadata
+                .oplog_processor_get_last_processed_index()
+                .map_err(WorkerExecutorError::runtime)?
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(
+                        "oplog-processor get-last-processed-index function not found in component"
+                            .to_string(),
+                    )
+                })?;
+
+            Ok(LoweredInvocation {
+                kind,
+                wit_fqfn: get_last_processed_index.name.to_string(),
+                display_name: "get-last-processed-index".to_string(),
+                params: vec![source_agent_id.into_value()],
+            })
+        }
     }
 }
 
@@ -816,6 +836,25 @@ fn wrap_output_as_agent_result(
                 result: AgentInvocationResult::ProcessOplogEntries { error },
             })
         }
+        AgentInvocationKind::GetLastProcessedIndex => match output {
+            Some(value) => {
+                let last_processed_index: OplogIndex =
+                    FromValue::from_value(value).map_err(|e| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed to decode result from get-last-processed-index function: {e}"
+                        ))
+                    })?;
+                Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result: AgentInvocationResult::GetLastProcessedIndex {
+                        last_processed_index,
+                    },
+                })
+            }
+            None => Err(WorkerExecutorError::runtime(
+                "Unexpected empty result from get-last-processed-index function",
+            )),
+        },
     }
 }
 

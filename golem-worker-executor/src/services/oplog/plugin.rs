@@ -36,8 +36,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    ScanCursor, ShardId,
+    AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
+    IdempotencyKey, OwnedAgentId, ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -60,6 +60,13 @@ pub trait OplogProcessorPlugin: Send + Sync {
         initial_oplog_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError>;
+
+    async fn get_last_processed_index(
+        &self,
+        environment_id: EnvironmentId,
+        plugin: &InstalledPlugin,
+        source_agent_id: AgentId,
+    ) -> Result<OplogIndex, WorkerExecutorError>;
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
 }
@@ -248,6 +255,48 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             .await?;
 
         Ok(())
+    }
+
+    async fn get_last_processed_index(
+        &self,
+        environment_id: EnvironmentId,
+        plugin: &InstalledPlugin,
+        source_agent_id: AgentId,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        let running_plugin = self
+            .resolve_plugin_worker(environment_id, plugin)
+            .await?;
+
+        let worker = self
+            .worker_activator
+            .get_or_create_running(
+                running_plugin.account_id,
+                &running_plugin.owned_agent_id,
+                None,
+                None,
+                Vec::new(),
+                Some(running_plugin.component_revision),
+                None,
+                &InvocationContextStack::fresh(),
+                Principal::anonymous(),
+            )
+            .await?;
+
+        let output = worker
+            .invoke_and_await(AgentInvocation::GetLastProcessedIndex {
+                idempotency_key: IdempotencyKey::fresh(),
+                source_agent_id,
+            })
+            .await?;
+
+        match output.result {
+            AgentInvocationResult::GetLastProcessedIndex {
+                last_processed_index,
+            } => Ok(last_processed_index),
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Unexpected result from get-last-processed-index: {other:?}"
+            ))),
+        }
     }
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {

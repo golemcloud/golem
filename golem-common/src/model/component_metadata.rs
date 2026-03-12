@@ -120,6 +120,15 @@ impl ComponentMetadata {
         self.cache.lock().unwrap().oplog_processor(&self.data)
     }
 
+    pub fn oplog_processor_get_last_processed_index(
+        &self,
+    ) -> Result<Option<InvokableFunction>, String> {
+        self.cache
+            .lock()
+            .unwrap()
+            .oplog_processor_get_last_processed_index(&self.data)
+    }
+
     pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
         self.cache.lock().unwrap().find_function(&self.data, name)
     }
@@ -296,6 +305,22 @@ impl ComponentMetadataInnerData {
         ))
     }
 
+    pub fn oplog_processor_get_last_processed_index(
+        &self,
+    ) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "api".to_string(),
+                interface: "oplog-processor".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "get-last-processed-index".to_string(),
+            },
+        ))
+    }
+
     pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
         let parsed = ParsedFunctionName::parse(name)?;
         self.find_parsed_function(&parsed)
@@ -399,6 +424,7 @@ pub(crate) struct ComponentMetadataInnerCache {
     agent_initialize: Option<Result<Option<InvokableFunction>, String>>,
     agent_invoke: Option<Result<Option<InvokableFunction>, String>>,
     oplog_processor: Option<Result<Option<InvokableFunction>, String>>,
+    oplog_processor_get_last_processed_index: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
     agent_types_by_type_name: HashMap<AgentTypeName, Option<AgentType>>,
@@ -466,6 +492,19 @@ impl ComponentMetadataInnerCache {
         } else {
             let result = data.oplog_processor();
             self.oplog_processor = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn oplog_processor_get_last_processed_index(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = &self.oplog_processor_get_last_processed_index {
+            cached.clone()
+        } else {
+            let result = data.oplog_processor_get_last_processed_index();
+            self.oplog_processor_get_last_processed_index = Some(result.clone());
             result
         }
     }

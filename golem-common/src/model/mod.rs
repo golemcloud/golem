@@ -767,6 +767,7 @@ pub enum AgentInvocationKind {
     LoadSnapshot,
     SaveSnapshot,
     ProcessOplogEntries,
+    GetLastProcessedIndex,
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -804,6 +805,10 @@ pub enum AgentInvocation {
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
     },
+    GetLastProcessedIndex {
+        idempotency_key: IdempotencyKey,
+        source_agent_id: AgentId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -832,6 +837,9 @@ pub enum AgentInvocationPayload {
         first_entry_index: OplogIndex,
         entries: Vec<crate::model::oplog::OplogEntry>,
     },
+    GetLastProcessedIndex {
+        source_agent_id: AgentId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -843,6 +851,7 @@ pub enum AgentInvocationResult {
     LoadSnapshot { error: Option<String> },
     SaveSnapshot { snapshot: RawSnapshotData },
     ProcessOplogEntries { error: Option<String> },
+    GetLastProcessedIndex { last_processed_index: OplogIndex },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -951,6 +960,10 @@ impl AgentInvocationResult {
                 AgentInvocationResult::ProcessOplogEntries { error: a },
                 AgentInvocationResult::ProcessOplogEntries { error: b },
             ) => a == b,
+            (
+                AgentInvocationResult::GetLastProcessedIndex { last_processed_index: a },
+                AgentInvocationResult::GetLastProcessedIndex { last_processed_index: b },
+            ) => a == b,
             _ => false,
         }
     }
@@ -1004,6 +1017,12 @@ impl AgentInvocation {
                 first_entry_index,
                 entries,
             },
+            AgentInvocationPayload::GetLastProcessedIndex { source_agent_id } => {
+                Self::GetLastProcessedIndex {
+                    idempotency_key,
+                    source_agent_id,
+                }
+            }
         }
     }
 
@@ -1076,6 +1095,14 @@ impl AgentInvocation {
                 },
                 InvocationContextStack::fresh(),
             ),
+            Self::GetLastProcessedIndex {
+                idempotency_key,
+                source_agent_id,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::GetLastProcessedIndex { source_agent_id },
+                InvocationContextStack::fresh(),
+            ),
         }
     }
 
@@ -1100,6 +1127,9 @@ impl AgentInvocation {
                 idempotency_key, ..
             } => Some(idempotency_key),
             Self::ProcessOplogEntries {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            Self::GetLastProcessedIndex {
                 idempotency_key, ..
             } => Some(idempotency_key),
             Self::SaveSnapshot { idempotency_key } => Some(idempotency_key),
@@ -1130,6 +1160,7 @@ impl AgentInvocation {
             Self::LoadSnapshot { .. } => AgentInvocationKind::LoadSnapshot,
             Self::SaveSnapshot { .. } => AgentInvocationKind::SaveSnapshot,
             Self::ProcessOplogEntries { .. } => AgentInvocationKind::ProcessOplogEntries,
+            Self::GetLastProcessedIndex { .. } => AgentInvocationKind::GetLastProcessedIndex,
         }
     }
 
@@ -1141,6 +1172,7 @@ impl AgentInvocation {
             Self::LoadSnapshot { .. } => "load-snapshot".to_string(),
             Self::SaveSnapshot { .. } => "save-snapshot".to_string(),
             Self::ProcessOplogEntries { .. } => "process-oplog-entries".to_string(),
+            Self::GetLastProcessedIndex { .. } => "get-last-processed-index".to_string(),
         }
     }
 }

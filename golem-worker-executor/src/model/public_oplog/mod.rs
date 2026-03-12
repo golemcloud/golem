@@ -941,6 +941,11 @@ async fn agent_invocation_to_public(
         } => Ok(PublicAgentInvocation::ProcessOplogEntries(
             ProcessOplogEntriesParameters { idempotency_key },
         )),
+        AgentInvocation::GetLastProcessedIndex {
+            idempotency_key, ..
+        } => Ok(PublicAgentInvocation::ProcessOplogEntries(
+            ProcessOplogEntriesParameters { idempotency_key },
+        )),
     }
 }
 
@@ -988,6 +993,11 @@ async fn agent_invocation_result_to_public(
         AgentInvocationResult::ProcessOplogEntries { error } => Ok(
             PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters { error }),
         ),
+        AgentInvocationResult::GetLastProcessedIndex { .. } => {
+            Ok(PublicAgentInvocationResult::ProcessOplogEntries(
+                FallibleResultParameters { error: None },
+            ))
+        }
     }
 }
 
