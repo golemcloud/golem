@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::schema::mcp_schema::McpSchema;
+use crate::mcp::schema::mcp_schema::McpInputSchema;
 use crate::mcp::schema::mcp_schema_mapping::get_mcp_schema;
 use golem_common::base_model::agent::AgentMethod;
 
 pub struct McpToolSchema {
-    pub input_schema: McpSchema,
-    pub output_schema: Option<McpSchema>,
+    pub input_schema: McpInputSchema,
+    pub output_schema: Option<McpInputSchema>,
 }
 
 pub fn get_mcp_tool_schema(method: &AgentMethod) -> McpToolSchema {
