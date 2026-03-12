@@ -8,6 +8,10 @@ interface oplog {
     use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
     use context.{attribute, attribute-value, span-id, trace-id};
 
+    record environment-plugin-grant-id {
+        uuid: uuid,
+    }
+
     variant wrapped-function-type {
         /// The side-effect reads from the agent's local state (for example local file system,
         /// random generator, etc.)
@@ -369,7 +373,7 @@ interface oplog {
         parent: option<agent-id>,
         component-size: u64,
         initial-total-linear-memory-size: u64,
-        initial-active-plugins: list<s32>,
+        initial-active-plugins: list<environment-plugin-grant-id>,
         config-vars: list<tuple<string, string>>,
         local-agent-config: list<raw-local-agent-config-entry>,
         original-phantom-id: option<uuid>
@@ -437,7 +441,7 @@ interface oplog {
         timestamp: datetime,
         target-revision: component-revision,
         new-component-size: u64,
-        new-active-plugins: list<s32>
+        new-active-plugins: list<environment-plugin-grant-id>
     }
 
     record resource-type-id {
@@ -459,12 +463,12 @@ interface oplog {
 
     record raw-activate-plugin-parameters {
         timestamp: datetime,
-        plugin-priority: s32
+        plugin-grant-id: environment-plugin-grant-id
     }
 
     record raw-deactivate-plugin-parameters {
         timestamp: datetime,
-        plugin-priority: s32
+        plugin-grant-id: environment-plugin-grant-id
     }
 
     record raw-begin-remote-transaction-parameters {
@@ -481,7 +485,7 @@ interface oplog {
 
     record raw-oplog-processor-checkpoint-parameters {
         timestamp: datetime,
-        plugin-priority: s32,
+        plugin-grant-id: environment-plugin-grant-id,
         target-agent-id: agent-id,
         confirmed-up-to: oplog-index,
         sending-up-to: oplog-index,

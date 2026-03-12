@@ -1,7 +1,8 @@
 use crate::services::{HasConfig, HasOplogService};
 use async_recursion::async_recursion;
 use golem_common::base_model::OplogIndex;
-use golem_common::model::component::{ComponentRevision, PluginPriority};
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, OplogEntry, OplogPayload, TimestampedUpdateDescription,
@@ -11,7 +12,8 @@ use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogR
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::{
     AgentInvocation, AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
-    IdempotencyKey, OwnedAgentId, RetryConfig, SuccessfulUpdateRecord, TimestampedAgentInvocation,
+    IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, RetryConfig,
+    SuccessfulUpdateRecord, TimestampedAgentInvocation,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -186,6 +188,13 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 
     let active_plugins = calculate_active_plugins(active_plugins, &deleted_regions, &new_entries);
 
+    let oplog_processor_checkpoints = calculate_oplog_processor_checkpoints(
+        last_known.oplog_processor_checkpoints,
+        &active_plugins,
+        &deleted_regions,
+        &new_entries,
+    );
+
     let result = AgentStatusRecord {
         oplog_idx: new_entries
             .keys()
@@ -206,6 +215,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         owned_resources,
         total_linear_memory_size,
         active_plugins,
+        oplog_processor_checkpoints,
         deleted_regions,
         component_revision_for_replay,
         current_retry_count,
@@ -820,10 +830,10 @@ fn collect_resources(
 }
 
 fn calculate_active_plugins(
-    initial: HashSet<PluginPriority>,
+    initial: HashSet<EnvironmentPluginGrantId>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashSet<PluginPriority> {
+) -> HashSet<EnvironmentPluginGrantId> {
     let mut result = initial;
     for (idx, entry) in entries {
         // Skipping entries in deleted regions as they are not applied during replay
@@ -832,15 +842,21 @@ fn calculate_active_plugins(
         }
 
         match entry {
-            OplogEntry::ActivatePlugin {
-                plugin_priority, ..
+            OplogEntry::Create {
+                initial_active_plugins,
+                ..
             } => {
-                result.insert(*plugin_priority);
+                result = initial_active_plugins.clone();
+            }
+            OplogEntry::ActivatePlugin {
+                plugin_grant_id, ..
+            } => {
+                result.insert(*plugin_grant_id);
             }
             OplogEntry::DeactivatePlugin {
-                plugin_priority, ..
+                plugin_grant_id, ..
             } => {
-                result.remove(plugin_priority);
+                result.remove(plugin_grant_id);
             }
             OplogEntry::SuccessfulUpdate {
                 new_active_plugins, ..
@@ -850,6 +866,77 @@ fn calculate_active_plugins(
             _ => {}
         }
     }
+    result
+}
+
+fn calculate_oplog_processor_checkpoints(
+    mut result: HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
+    active_plugins: &HashSet<EnvironmentPluginGrantId>,
+    deleted_regions: &DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState> {
+    for (idx, entry) in entries {
+        if deleted_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        match entry {
+            OplogEntry::OplogProcessorCheckpoint {
+                plugin_grant_id,
+                target_agent_id,
+                confirmed_up_to,
+                sending_up_to,
+                ..
+            } => {
+                result.insert(
+                    *plugin_grant_id,
+                    OplogProcessorCheckpointState {
+                        target_agent_id: Some(target_agent_id.clone()),
+                        confirmed_up_to: *confirmed_up_to,
+                        sending_up_to: *sending_up_to,
+                    },
+                );
+            }
+            OplogEntry::ActivatePlugin {
+                plugin_grant_id, ..
+            } => {
+                result.entry(*plugin_grant_id).or_insert(
+                    OplogProcessorCheckpointState {
+                        target_agent_id: None,
+                        confirmed_up_to: *idx,
+                        sending_up_to: *idx,
+                    },
+                );
+            }
+            OplogEntry::DeactivatePlugin {
+                plugin_grant_id, ..
+            } => {
+                // Remove non-in-flight checkpoint so a later same-fold ActivatePlugin
+                // can seed a fresh checkpoint at the new activation index
+                let keep_in_flight = result
+                    .get(plugin_grant_id)
+                    .is_some_and(|state| state.sending_up_to > state.confirmed_up_to);
+                if !keep_in_flight {
+                    result.remove(plugin_grant_id);
+                }
+            }
+            OplogEntry::SuccessfulUpdate {
+                new_active_plugins, ..
+            } => {
+                result.retain(|grant_id, state| {
+                    new_active_plugins.contains(grant_id)
+                        || state.sending_up_to > state.confirmed_up_to
+                });
+            }
+            _ => {}
+        }
+    }
+
+    result.retain(|grant_id, state| {
+        active_plugins.contains(grant_id)
+            || state.sending_up_to > state.confirmed_up_to
+    });
+
     result
 }
 
@@ -881,6 +968,7 @@ mod test {
     use golem_common::base_model::OplogIndex;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{Principal, UntypedDataValue, UntypedElementValue};
+    use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -1755,7 +1843,7 @@ mod test {
             self,
             update_description: UpdateDescription,
             new_component_size: u64,
-            new_active_plugins: &HashSet<PluginPriority>,
+            new_active_plugins: &HashSet<EnvironmentPluginGrantId>,
         ) -> Self {
             let old_status = self.entries.first().unwrap().expected_status.clone();
             let entry = OplogEntry::successful_update(

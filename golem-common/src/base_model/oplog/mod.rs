@@ -34,7 +34,7 @@ use uuid::Uuid;
 /// Imports only used by the raw oplog entries - not generated unless the 'full' feature is enabled.
 #[cfg(feature = "full")]
 mod raw_imports {
-    pub use crate::base_model::component::PluginPriority;
+    pub use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     pub use crate::model::invocation_context::AttributeValue;
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::AttributeMap;
@@ -77,7 +77,7 @@ oplog_entry! {
             parent: Option<AgentId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
-            initial_active_plugins: HashSet<PluginPriority>,
+            initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
             config_vars: BTreeMap<String, String>,
             local_agent_config: Vec<UntypedParsedWorkerCreationLocalAgentConfigEntry>,
             original_phantom_id: Option<Uuid>
@@ -294,7 +294,7 @@ oplog_entry! {
         raw {
             target_revision: ComponentRevision,
             new_component_size: u64,
-            new_active_plugins: HashSet<PluginPriority>,
+            new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         }
         public {
             target_revision: ComponentRevision,
@@ -381,7 +381,7 @@ oplog_entry! {
         hint: true
         wit_raw_type: "raw-activate-plugin-parameters"
         raw {
-            plugin_priority: PluginPriority,
+            plugin_grant_id: EnvironmentPluginGrantId,
         }
         public {
             plugin: PluginInstallationDescription
@@ -392,7 +392,7 @@ oplog_entry! {
         hint: true
         wit_raw_type: "raw-deactivate-plugin-parameters"
         raw {
-            plugin_priority: PluginPriority,
+            plugin_grant_id: EnvironmentPluginGrantId,
         }
         public {
             plugin: PluginInstallationDescription
@@ -550,7 +550,7 @@ oplog_entry! {
         hint: true
         wit_raw_type: "raw-oplog-processor-checkpoint-parameters"
         raw {
-            plugin_priority: PluginPriority,
+            plugin_grant_id: EnvironmentPluginGrantId,
             target_agent_id: AgentId,
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,

@@ -1522,48 +1522,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match metadata {
             Some(metadata) => {
-                // Worker exists
-                if metadata
-                    .last_known_status
-                    .active_plugins
-                    .contains(&plugin_priority)
-                {
-                    warn!("Plugin is already activated");
-                    Ok(())
-                } else {
-                    let component_metadata = self
-                        .component_service()
-                        .get_metadata(
-                            owned_agent_id.agent_id.component_id,
-                            Some(metadata.last_known_status.component_revision),
-                        )
-                        .await?;
+                let component_metadata = self
+                    .component_service()
+                    .get_metadata(
+                        owned_agent_id.agent_id.component_id,
+                        Some(metadata.last_known_status.component_revision),
+                    )
+                    .await?;
 
-                    if component_metadata
-                        .installed_plugins
-                        .iter()
-                        .any(|installation| installation.priority == plugin_priority)
-                    {
-                        let worker = Worker::get_or_create_suspended(
-                            self,
-                            auth_ctx.account_id(),
-                            &owned_agent_id,
-                            None,
-                            None,
-                            Vec::new(),
-                            None,
-                            None,
-                            &InvocationContextStack::fresh(),
-                            principal,
-                        )
-                        .await?;
-                        worker.activate_plugin(plugin_priority).await?;
-                        Ok(())
-                    } else {
-                        Err(WorkerExecutorError::invalid_request(
-                            "Plugin installation does not belong to this worker's component",
-                        ))
+                let installation = component_metadata
+                    .installed_plugins
+                    .iter()
+                    .find(|installation| installation.priority == plugin_priority);
+
+                match installation {
+                    Some(installation) => {
+                        let grant_id = installation.environment_plugin_grant_id;
+                        if metadata.last_known_status.active_plugins.contains(&grant_id) {
+                            warn!("Plugin is already activated");
+                            Ok(())
+                        } else {
+                            let worker = Worker::get_or_create_suspended(
+                                self,
+                                auth_ctx.account_id(),
+                                &owned_agent_id,
+                                None,
+                                None,
+                                Vec::new(),
+                                None,
+                                None,
+                                &InvocationContextStack::fresh(),
+                                principal,
+                            )
+                            .await?;
+                            worker.activate_plugin(grant_id).await?;
+                            Ok(())
+                        }
                     }
+                    None => Err(WorkerExecutorError::invalid_request(
+                        "Plugin installation does not belong to this worker's component",
+                    )),
                 }
             }
             None => Err(WorkerExecutorError::worker_not_found(
@@ -1598,48 +1596,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        // Worker exists
-        if !metadata
-            .last_known_status
-            .active_plugins
-            .contains(&plugin_priority)
-        {
-            warn!("Plugin is already deactivated");
-            Ok(())
-        } else {
-            let component_metadata = self
-                .component_service()
-                .get_metadata(
-                    owned_agent_id.agent_id.component_id,
-                    Some(metadata.last_known_status.component_revision),
-                )
-                .await?;
+        let component_metadata = self
+            .component_service()
+            .get_metadata(
+                owned_agent_id.agent_id.component_id,
+                Some(metadata.last_known_status.component_revision),
+            )
+            .await?;
 
-            if component_metadata
-                .installed_plugins
-                .iter()
-                .any(|installation| installation.priority == plugin_priority)
-            {
-                let worker = Worker::get_or_create_suspended(
-                    self,
-                    auth_ctx.account_id(),
-                    &owned_agent_id,
-                    None,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal,
-                )
-                .await?;
-                worker.deactivate_plugin(plugin_priority).await?;
-                Ok(())
-            } else {
-                Err(WorkerExecutorError::invalid_request(
-                    "Plugin installation does not belong to this worker's component",
-                ))
+        let installation = component_metadata
+            .installed_plugins
+            .iter()
+            .find(|installation| installation.priority == plugin_priority);
+
+        match installation {
+            Some(installation) => {
+                let grant_id = installation.environment_plugin_grant_id;
+                if !metadata.last_known_status.active_plugins.contains(&grant_id) {
+                    warn!("Plugin is already deactivated");
+                    Ok(())
+                } else {
+                    let worker = Worker::get_or_create_suspended(
+                        self,
+                        auth_ctx.account_id(),
+                        &owned_agent_id,
+                        None,
+                        None,
+                        Vec::new(),
+                        None,
+                        None,
+                        &InvocationContextStack::fresh(),
+                        principal,
+                    )
+                    .await?;
+                    worker.deactivate_plugin(grant_id).await?;
+                    Ok(())
+                }
             }
+            None => Err(WorkerExecutorError::invalid_request(
+                "Plugin installation does not belong to this worker's component",
+            )),
         }
     }
 
@@ -1822,7 +1818,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             component_size: latest_status.component_size,
             total_linear_memory_size: latest_status.total_linear_memory_size,
             owned_resources,
-            active_plugins: active_plugins.into_iter().map(|id| id.0).collect(),
+            active_plugins: active_plugins.into_iter().map(|id| id.0.to_string()).collect(),
             skipped_regions: latest_status
                 .skipped_regions
                 .into_regions()

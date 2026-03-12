@@ -759,7 +759,7 @@ impl ForwardingOplogState {
                     metadata
                         .last_known_status
                         .active_plugins
-                        .contains(&p.priority)
+                        .contains(&p.environment_plugin_grant_id)
                 });
 
             for plugin in plugins_to_send_to {
@@ -804,7 +804,7 @@ mod tests {
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{
-        ComponentId, ComponentName, ComponentRevision, InstalledPlugin, PluginPriority,
+        ComponentId, ComponentName, ComponentRevision, InstalledPlugin,
     };
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::diff;
@@ -964,11 +964,11 @@ mod tests {
     }
 
     impl FakeComponentService {
-        fn with_one_oplog_processor_plugin(priority: PluginPriority) -> Self {
+        fn with_one_oplog_processor_plugin(grant_id: EnvironmentPluginGrantId) -> Self {
             Self {
                 installed_plugins: vec![InstalledPlugin {
-                    environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
-                    priority,
+                    environment_plugin_grant_id: grant_id,
+                    priority: golem_common::model::component::PluginPriority(0),
                     parameters: BTreeMap::new(),
                     plugin_registration_id: PluginRegistrationId::new(),
                     plugin_name: "test-oplog-plugin".to_string(),
@@ -1133,7 +1133,7 @@ mod tests {
     }
 
     fn test_worker_metadata(
-        active_plugins: HashSet<PluginPriority>,
+        active_plugins: HashSet<EnvironmentPluginGrantId>,
     ) -> (
         AgentMetadata,
         read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -1174,11 +1174,11 @@ mod tests {
 
     #[test]
     async fn empty_buffer_no_send() {
-        let plugin_priority = PluginPriority(0);
-        let (metadata, status_lock) = test_worker_metadata(HashSet::from([plugin_priority]));
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
         let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
         let components: Arc<dyn ComponentService> = Arc::new(
-            FakeComponentService::with_one_oplog_processor_plugin(plugin_priority),
+            FakeComponentService::with_one_oplog_processor_plugin(grant_id),
         );
 
         let mut state = ForwardingOplogState {
@@ -1241,11 +1241,11 @@ mod tests {
 
     #[test]
     async fn active_plugin_receives_buffered_entries() {
-        let plugin_priority = PluginPriority(0);
-        let (metadata, status_lock) = test_worker_metadata(HashSet::from([plugin_priority]));
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
         let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
         let components: Arc<dyn ComponentService> = Arc::new(
-            FakeComponentService::with_one_oplog_processor_plugin(plugin_priority),
+            FakeComponentService::with_one_oplog_processor_plugin(grant_id),
         );
 
         let mut state = ForwardingOplogState {

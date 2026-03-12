@@ -7,6 +7,7 @@ import "golem/common/empty.proto";
 import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
+import "golem/component/plugin.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
@@ -77,6 +78,7 @@ message PluginInstallationDescription {
   string plugin_version = 3;
   map<string, string> parameters = 4;
   bool registered = 5;
+  golem.component.EnvironmentPluginGrantId environment_plugin_grant_id = 6;
 }
 
 message CreateParameters {

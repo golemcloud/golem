@@ -46,7 +46,8 @@ use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::component::{ComponentFilePath, PluginPriority};
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::component::ComponentFilePath;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
@@ -1040,7 +1041,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn activate_plugin(
         &self,
-        plugin_priority: PluginPriority,
+        plugin_grant_id: EnvironmentPluginGrantId,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1052,7 +1053,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.add_and_commit_oplog_internal(
             &instance_guard,
-            OplogEntry::activate_plugin(plugin_priority),
+            OplogEntry::activate_plugin(plugin_grant_id),
         )
         .await;
 
@@ -1062,7 +1063,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn deactivate_plugin(
         &self,
-        plugin_priority: PluginPriority,
+        plugin_grant_id: EnvironmentPluginGrantId,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1074,7 +1075,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.add_and_commit_oplog_internal(
             &instance_guard,
-            OplogEntry::deactivate_plugin(plugin_priority),
+            OplogEntry::deactivate_plugin(plugin_grant_id),
         )
         .await;
 
@@ -1637,7 +1638,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     active_plugins: component
                         .installed_plugins
                         .iter()
-                        .map(|i| i.priority)
+                        .map(|i| i.environment_plugin_grant_id)
                         .collect(),
                     ..Default::default()
                 };

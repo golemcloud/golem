@@ -15,7 +15,7 @@
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use golem_common::model::agent::UntypedDataValue;
-use golem_common::model::component::PluginPriority;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::host_functions::{
     host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName,
 };
@@ -260,7 +260,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             initial_total_linear_memory_size,
             initial_active_plugins: initial_active_plugins
                 .into_iter()
-                .map(|x| x.plugin_priority)
+                .map(|x| x.environment_plugin_grant_id)
                 .collect(),
             original_phantom_id,
         }),
@@ -373,10 +373,10 @@ fn get_oplog_entry_from_public_oplog_entry(
             Err("Cannot override an oplog with a rolled back remote transaction".to_string())?
         }
         PublicOplogEntry::SuccessfulUpdate(successful_update_params) => {
-            let new_active_plugins: HashSet<PluginPriority> = successful_update_params
+            let new_active_plugins: HashSet<EnvironmentPluginGrantId> = successful_update_params
                 .new_active_plugins
                 .iter()
-                .map(|plugin| plugin.plugin_priority)
+                .map(|plugin| plugin.environment_plugin_grant_id)
                 .collect();
 
             Ok(OplogEntry::SuccessfulUpdate {
@@ -435,13 +435,13 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::ActivatePlugin(activate_plugin_params) => {
             Ok(OplogEntry::ActivatePlugin {
                 timestamp: activate_plugin_params.timestamp,
-                plugin_priority: activate_plugin_params.plugin.plugin_priority,
+                plugin_grant_id: activate_plugin_params.plugin.environment_plugin_grant_id,
             })
         }
         PublicOplogEntry::DeactivatePlugin(deactivate_plugin_params) => {
             Ok(OplogEntry::DeactivatePlugin {
                 timestamp: deactivate_plugin_params.timestamp,
-                plugin_priority: deactivate_plugin_params.plugin.plugin_priority,
+                plugin_grant_id: deactivate_plugin_params.plugin.environment_plugin_grant_id,
             })
         }
         PublicOplogEntry::Revert(revert_params) => Ok(OplogEntry::Revert {
@@ -501,7 +501,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::OplogProcessorCheckpoint(params) => {
             Ok(OplogEntry::OplogProcessorCheckpoint {
                 timestamp: params.timestamp,
-                plugin_priority: params.plugin.plugin_priority,
+                plugin_grant_id: params.plugin.environment_plugin_grant_id,
                 target_agent_id: params.target_agent_id,
                 confirmed_up_to: params.confirmed_up_to,
                 sending_up_to: params.sending_up_to,

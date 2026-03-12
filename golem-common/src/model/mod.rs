@@ -50,7 +50,8 @@ pub mod worker;
 pub use crate::base_model::*;
 
 use self::component::ComponentId;
-use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
+use self::component::{ComponentFilePermissions, ComponentRevision};
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use self::environment::EnvironmentId;
 use self::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::base_model::agent::ParsedAgentId;
@@ -689,7 +690,8 @@ pub struct AgentStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
-    pub active_plugins: HashSet<PluginPriority>,
+    pub active_plugins: HashSet<EnvironmentPluginGrantId>,
+    pub oplog_processor_checkpoints: HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
@@ -724,6 +726,7 @@ impl Default for AgentStatusRecord {
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
+            oplog_processor_checkpoints: HashMap::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_count: HashMap::new(),
@@ -746,6 +749,14 @@ pub struct FailedUpdateRecord {
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct OplogProcessorCheckpointState {
+    pub target_agent_id: Option<AgentId>,
+    pub confirmed_up_to: OplogIndex,
+    pub sending_up_to: OplogIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

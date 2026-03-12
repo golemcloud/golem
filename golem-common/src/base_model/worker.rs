@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
+use crate::base_model::component::{ComponentFilePermissions, ComponentRevision};
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::oplog::AgentResourceId;
 use crate::base_model::regions::OplogRegion;
@@ -130,7 +131,7 @@ declare_structs! {
         pub component_size: u64,
         pub total_linear_memory_size: u64,
         pub exported_resource_instances: Vec<ExportedResourceMetadata>,
-        pub active_plugins: HashSet<PluginPriority>,
+        pub active_plugins: HashSet<EnvironmentPluginGrantId>,
         /// Oplog regions that are skipped during the worker's state recovery, but describe
         /// the history of the worker. For example if an atomic region gets restarted, its partially
         /// recorded oplog entries will be skipped on retry.

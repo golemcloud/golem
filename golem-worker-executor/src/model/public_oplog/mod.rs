@@ -253,7 +253,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let initial_plugins = metadata
                     .installed_plugins
                     .into_iter()
-                    .filter(|p| initial_active_plugins.contains(&p.priority))
+                    .filter(|p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
                     .map(make_plugin_installation_description)
                     .collect();
 
@@ -510,7 +510,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let new_plugins = metadata
                     .installed_plugins
                     .into_iter()
-                    .filter(|p| new_active_plugins.contains(&p.priority))
+                    .filter(|p| new_active_plugins.contains(&p.environment_plugin_grant_id))
                     .map(make_plugin_installation_description)
                     .collect();
 
@@ -573,7 +573,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::ActivatePlugin {
                 timestamp,
-                plugin_priority,
+                plugin_grant_id,
             } => {
                 let metadata = components
                     .get_metadata(
@@ -586,7 +586,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let plugin_installation = metadata
                     .installed_plugins
                     .into_iter()
-                    .find(|p| p.priority == plugin_priority)
+                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
                     .ok_or("plugin not found in metadata".to_string())?;
 
                 let desc = make_plugin_installation_description(plugin_installation);
@@ -597,7 +597,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::DeactivatePlugin {
                 timestamp,
-                plugin_priority,
+                plugin_grant_id,
             } => {
                 let metadata = components
                     .get_metadata(
@@ -610,7 +610,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let plugin_installation = metadata
                     .installed_plugins
                     .into_iter()
-                    .find(|p| p.priority == plugin_priority)
+                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
                     .ok_or("plugin not found in metadata".to_string())?;
 
                 let desc = make_plugin_installation_description(plugin_installation);
@@ -746,7 +746,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp,
-                plugin_priority,
+                plugin_grant_id,
                 target_agent_id,
                 confirmed_up_to,
                 sending_up_to,
@@ -762,7 +762,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let plugin_installation = metadata
                     .installed_plugins
                     .into_iter()
-                    .find(|p| p.priority == plugin_priority)
+                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
                     .ok_or("plugin not found in metadata".to_string())?;
 
                 let desc = make_plugin_installation_description(plugin_installation);
@@ -995,6 +995,7 @@ fn make_plugin_installation_description(
     installation: InstalledPlugin,
 ) -> PluginInstallationDescription {
     PluginInstallationDescription {
+        environment_plugin_grant_id: installation.environment_plugin_grant_id,
         plugin_priority: installation.priority,
         plugin_name: installation.plugin_name,
         plugin_version: installation.plugin_version,

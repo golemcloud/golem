@@ -148,6 +148,7 @@ impl From<PluginInstallationDescription>
 {
     fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
         golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
+            environment_plugin_grant_id: Some(plugin_installation_description.environment_plugin_grant_id.into()),
             plugin_priority: plugin_installation_description.plugin_priority.0,
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
@@ -166,6 +167,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription
         value: golem_api_grpc::proto::golem::worker::PluginInstallationDescription,
     ) -> Result<Self, Self::Error> {
         Ok(PluginInstallationDescription {
+            environment_plugin_grant_id: value
+                .environment_plugin_grant_id
+                .ok_or("Missing environment_plugin_grant_id field")?
+                .try_into()?,
             plugin_priority: PluginPriority(value.plugin_priority),
             plugin_name: value.plugin_name,
             plugin_version: value.plugin_version,
