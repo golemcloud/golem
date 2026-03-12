@@ -1013,17 +1013,14 @@ impl ForwardingOplogState {
             return;
         }
 
-        // Filter out checkpoint entries — they are internal bookkeeping, not plugin payload
-        let payload: Vec<OplogEntry> = entries
-            .into_iter()
-            .filter(|e| !matches!(e, OplogEntry::OplogProcessorCheckpoint { .. }))
-            .collect();
-
-        // If the batch contained only checkpoint entries, confirm and move on
-        if payload.is_empty() {
+        // If ALL entries are checkpoint entries, skip — nothing meaningful to deliver.
+        // Don't advance cursors: when a real entry arrives later, it will be included
+        // in the batch alongside these checkpoints and sent together.
+        if entries
+            .iter()
+            .all(|e| matches!(e, OplogEntry::OplogProcessorCheckpoint { .. }))
+        {
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                s.confirmed_up_to = batch_end;
-                s.sending_up_to = batch_end;
                 s.send_in_progress = false;
             }
             return;
@@ -1044,7 +1041,7 @@ impl ForwardingOplogState {
                 &plugin,
                 &target_agent_id,
                 batch_start,
-                payload,
+                entries,
             )
             .await
         {
