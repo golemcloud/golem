@@ -12565,6 +12565,9 @@ components:
       type: object
       properties:
         path:
+          title: |-
+            Agent secret path in any casing. All agent secret paths
+            are converted to the same casing internally to allow easier cross-language use.
           type: array
           items:
             type: string
@@ -12585,6 +12588,7 @@ components:
           type: string
           format: uuid
         path:
+          title: Canonical representation of an agent secret path (segments are each camelCase)
           type: array
           items:
             type: string
@@ -13152,6 +13156,9 @@ components:
       type: object
       properties:
         path:
+          title: |-
+            Agent secret path in any casing. All agent secret paths
+            are converted to the same casing internally to allow easier cross-language use.
           type: array
           items:
             type: string

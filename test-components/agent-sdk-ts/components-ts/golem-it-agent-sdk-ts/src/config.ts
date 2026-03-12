@@ -89,3 +89,21 @@ export class SharedConfigAgent extends BaseAgent {
     })
   }
 }
+
+type LocalCasingSharedConfigAgentConfig = {
+  secretPath: Secret<string>,
+};
+
+@agent()
+export class LocalCasingSharedConfigAgent extends BaseAgent {
+  constructor(_name: string, readonly config: Config<LocalCasingSharedConfigAgentConfig>) {
+    super();
+  }
+
+  echoLocalConfig(): string {
+    const config = this.config.value;
+    return JSON.stringify({
+      secretPath: config.secretPath.get(),
+    })
+  }
+}

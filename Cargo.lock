@@ -1990,6 +1990,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "affbf0190ed2caf063e3def54ff444b449371d55c58e513a95ab98eca50adb49"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4203,7 +4212,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c785e553a020bed4efa518268635b34f8f75e7fe5905195e931e628164135e7e"
 dependencies = [
  "clap",
- "convert_case",
+ "convert_case 0.6.0",
  "fmt",
  "indexmap 2.12.0",
  "indoc",
@@ -5318,7 +5327,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea561fea97e1734bd1572acfc8e5baf19ca3d3934e7de2932fc7a1c4e3b909f6"
 dependencies = [
- "convert_case",
+ "convert_case 0.6.0",
  "proc-macro2",
  "quote",
  "syn 2.0.110",
@@ -5496,6 +5505,7 @@ dependencies = [
  "blake3",
  "bytes 1.11.0",
  "clap",
+ "convert_case 0.11.0",
  "futures-concurrency",
  "goldenfile",
  "golem-api-grpc",

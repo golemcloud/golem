@@ -1533,6 +1533,7 @@ mod app_builder {
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
+    use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::deployment::DeploymentAgentSecretDefault;
@@ -1878,7 +1879,7 @@ mod app_builder {
                             entry.push(
                                 WithSource::new(
                                     app.source.to_path_buf(),
-                                    DeploymentAgentSecretDefault { path: environment_agent_secret.path, secret_value: environment_agent_secret.value }
+                                    DeploymentAgentSecretDefault { path: AgentSecretPath(environment_agent_secret.path), secret_value: environment_agent_secret.value }
                                 )
                             )
                         }

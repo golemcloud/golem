@@ -17,13 +17,15 @@ use golem_client::api::{
     RegistryServiceDeleteAgentSecretError, RegistryServiceUpdateAgentSecretError,
 };
 use golem_common::model::agent_secret::{
-    AgentSecretCreation, AgentSecretRevision, AgentSecretUpdate,
+    AgentSecretCreation, AgentSecretPath, AgentSecretRevision, AgentSecretUpdate,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use golem_wasm::analysis::analysed_type;
 use pretty_assertions::assert_eq;
+use pretty_assertions::assert_matches;
 use serde_json::json;
 use test_r::{inherit_test_dep, test};
 
@@ -38,14 +40,64 @@ async fn create_agent_secret_with_value(deps: &EnvBasedTestDependencies) -> anyh
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["foo".to_string(), "bar".to_string()],
+        path: AgentSecretPath(vec!["foo".to_string(), "bar".to_string()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!(true)),
     };
 
     let result = client.create_agent_secret(&env.id.0, &creation).await?;
 
-    assert_eq!(result.path, creation.path);
+    assert_eq!(
+        result.path,
+        CanonicalAgentSecretPath(vec!["foo".to_string(), "bar".to_string()])
+    );
+    assert_eq!(result.secret_type, creation.secret_type);
+    assert_eq!(result.secret_value, creation.secret_value);
+    assert_eq!(result.revision, AgentSecretRevision::INITIAL);
+
+    {
+        let fetched_secret = client.get_agent_secret(&result.id.0).await?;
+        assert_eq!(fetched_secret, result);
+    }
+
+    {
+        let all_environment_secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+        assert!(all_environment_secrets.values.contains(&result));
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn secret_path_is_canonicalized_when_reading(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let creation = AgentSecretCreation {
+        path: AgentSecretPath(vec![
+            "firstPathSegment".to_string(),
+            "SecondPathSegment".to_string(),
+            "third_path_segment".to_string(),
+        ]),
+        secret_type: analysed_type::bool(),
+        secret_value: Some(json!(true)),
+    };
+
+    let result = client.create_agent_secret(&env.id.0, &creation).await?;
+
+    assert_eq!(
+        result.path,
+        CanonicalAgentSecretPath(vec![
+            "firstPathSegment".to_string(),
+            "secondPathSegment".to_string(),
+            "thirdPathSegment".to_string()
+        ])
+    );
     assert_eq!(result.secret_type, creation.secret_type);
     assert_eq!(result.secret_value, creation.secret_value);
     assert_eq!(result.revision, AgentSecretRevision::INITIAL);
@@ -70,7 +122,7 @@ async fn create_agent_secret_without_value(deps: &EnvBasedTestDependencies) -> a
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["no".into(), "value".into()],
+        path: AgentSecretPath(vec!["no".into(), "value".into()]),
         secret_type: analysed_type::str(),
         secret_value: None,
     };
@@ -92,7 +144,7 @@ async fn creating_same_path_twice_should_fail(
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["dup".into()],
+        path: AgentSecretPath(vec!["dup".into()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!(true)),
     };
@@ -101,12 +153,52 @@ async fn creating_same_path_twice_should_fail(
 
     let result = client.create_agent_secret(&env.id.0, &creation).await;
 
-    assert!(matches!(
+    assert_matches!(
         result,
         Err(golem_client::Error::Item(
             RegistryServiceCreateAgentSecretError::Error409(_)
         ))
-    ));
+    );
+
+    Ok(())
+}
+
+#[test]
+async fn creating_same_path_in_different_casing_should_fail(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    client
+        .create_agent_secret(
+            &env.id.0,
+            &AgentSecretCreation {
+                path: AgentSecretPath(vec!["secret_path".into()]),
+                secret_type: analysed_type::bool(),
+                secret_value: Some(json!(true)),
+            },
+        )
+        .await?;
+
+    let result = client
+        .create_agent_secret(
+            &env.id.0,
+            &AgentSecretCreation {
+                path: AgentSecretPath(vec!["secretPath".into()]),
+                secret_type: analysed_type::bool(),
+                secret_value: Some(json!(true)),
+            },
+        )
+        .await;
+
+    assert_matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceCreateAgentSecretError::Error409(_)
+        ))
+    );
 
     Ok(())
 }
@@ -118,7 +210,7 @@ async fn update_secret_increments_revision(deps: &EnvBasedTestDependencies) -> a
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["rev".into()],
+        path: AgentSecretPath(vec!["rev".into()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!(true)),
     };
@@ -150,7 +242,7 @@ async fn update_with_stale_revision_should_fail(
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["stale".into()],
+        path: AgentSecretPath(vec!["stale".into()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!(true)),
     };
@@ -177,12 +269,12 @@ async fn update_with_stale_revision_should_fail(
         )
         .await;
 
-    assert!(matches!(
+    assert_matches!(
         stale_update,
         Err(golem_client::Error::Item(
             RegistryServiceUpdateAgentSecretError::Error409(_)
         ))
-    ));
+    );
 
     Ok(())
 }
@@ -194,7 +286,7 @@ async fn unset_secret_value(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["unset".into()],
+        path: AgentSecretPath(vec!["unset".into()]),
         secret_type: analysed_type::str(),
         secret_value: Some(json!("hello")),
     };
@@ -224,7 +316,7 @@ async fn delete_secret(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["delete".into()],
+        path: AgentSecretPath(vec!["delete".into()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!(true)),
     };
@@ -247,7 +339,7 @@ async fn delete_with_stale_revision_should_fail(
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["delete-stale".into()],
+        path: AgentSecretPath(vec!["delete-stale".into()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!(true)),
     };
@@ -268,12 +360,12 @@ async fn delete_with_stale_revision_should_fail(
         .delete_agent_secret(&created.id.0, created.revision.into())
         .await;
 
-    assert!(matches!(
+    assert_matches!(
         stale_delete,
         Err(golem_client::Error::Item(
             RegistryServiceDeleteAgentSecretError::Error409(_)
         ))
-    ));
+    );
 
     Ok(())
 }
@@ -285,7 +377,7 @@ async fn delete_and_recreate_same_path(deps: &EnvBasedTestDependencies) -> anyho
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["recreate".into()],
+        path: AgentSecretPath(vec!["recreate".into()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!(true)),
     };
@@ -297,7 +389,7 @@ async fn delete_and_recreate_same_path(deps: &EnvBasedTestDependencies) -> anyho
 
     let recreated = client.create_agent_secret(&env.id.0, &creation).await?;
 
-    assert_eq!(recreated.path, creation.path);
+    assert_eq!(recreated.path, creation.path.into());
     assert_ne!(recreated.id, created.id);
 
     Ok(())
@@ -314,19 +406,19 @@ async fn create_agent_secret_with_value_type_mismatch_should_fail(
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["type".into(), "creation-mismatch".into()],
+        path: AgentSecretPath(vec!["type".into(), "creation-mismatch".into()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!("not-a-bool")),
     };
 
     let result = client.create_agent_secret(&env.id.0, &creation).await;
 
-    assert!(matches!(
+    assert_matches!(
         result,
         Err(golem_client::Error::Item(
             RegistryServiceCreateAgentSecretError::Error409(_)
         ))
-    ));
+    );
 
     let all = client.get_environment_agent_secrets(&env.id.0).await?;
 
@@ -346,7 +438,7 @@ async fn update_agent_secret_with_wrong_type_should_fail(
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = AgentSecretCreation {
-        path: vec!["update".into(), "type-mismatch".into()],
+        path: AgentSecretPath(vec!["update".into(), "type-mismatch".into()]),
         secret_type: analysed_type::bool(),
         secret_value: Some(json!(true)),
     };

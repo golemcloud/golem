@@ -18,7 +18,7 @@ use golem_client::api::{
 };
 use golem_client::model::DeploymentCreation;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent_secret::AgentSecretCreation;
+use golem_common::model::agent_secret::{AgentSecretCreation, AgentSecretPath};
 use golem_common::model::component::{ComponentName, ComponentUpdate};
 use golem_common::model::deployment::{
     DeploymentAgentSecretDefault, DeploymentRollback, DeploymentVersion,
@@ -477,7 +477,7 @@ async fn deploy_creates_missing_secret_from_default(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
-                    path: secret_path.clone(),
+                    path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!("foo"),
                 }],
             },
@@ -486,14 +486,14 @@ async fn deploy_creates_missing_secret_from_default(
 
     let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 2);
+    assert_eq!(secrets.values.len(), 3);
     let secret = secrets
         .values
         .iter()
-        .find(|sec| sec.path == secret_path)
+        .find(|sec| sec.path.0 == secret_path)
         .unwrap();
 
-    assert_eq!(secret.path, secret_path);
+    assert_eq!(secret.path.0, secret_path);
     assert_eq!(secret.secret_type, analysed_type::str());
     assert_eq!(secret.secret_value, Some(json!("foo")));
 
@@ -515,7 +515,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
-                path: secret_path.clone(),
+                path: AgentSecretPath(secret_path.clone()),
                 secret_type: analysed_type::str(),
                 secret_value: Some(json!("bar")),
             },
@@ -537,7 +537,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
-                    path: secret_path.clone(),
+                    path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!("foo"),
                 }],
             },
@@ -546,14 +546,14 @@ async fn deploy_ignores_default_if_secret_already_exists(
 
     let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 2);
+    assert_eq!(secrets.values.len(), 3);
     let secret = secrets
         .values
         .iter()
-        .find(|sec| sec.path == secret_path)
+        .find(|sec| sec.path.0 == secret_path)
         .unwrap();
 
-    assert_eq!(secret.path, secret_path);
+    assert_eq!(secret.path.0, secret_path);
     assert_eq!(secret.secret_type, analysed_type::str());
 
     // Existing value must be preserved
@@ -577,7 +577,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
-                path: secret_path.clone(),
+                path: AgentSecretPath(secret_path.clone()),
                 secret_type: analysed_type::str(),
                 secret_value: None,
             },
@@ -599,7 +599,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
-                    path: secret_path.clone(),
+                    path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!("foo"),
                 }],
             },
@@ -608,14 +608,14 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
 
     let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
 
-    assert_eq!(secrets.values.len(), 2);
+    assert_eq!(secrets.values.len(), 3);
     let secret = secrets
         .values
         .iter()
-        .find(|sec| sec.path == secret_path)
+        .find(|sec| sec.path.0 == secret_path)
         .unwrap();
 
-    assert_eq!(secret.path, secret_path);
+    assert_eq!(secret.path.0, secret_path);
     assert_eq!(secret.secret_type, analysed_type::str());
 
     assert_eq!(secret.secret_value, Some(json!("foo")));
@@ -638,7 +638,7 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
         .create_agent_secret(
             &env.id.0,
             &AgentSecretCreation {
-                path: secret_path.clone(),
+                path: AgentSecretPath(secret_path.clone()),
                 secret_type: analysed_type::bool(),
                 secret_value: Some(json!(false)),
             },
@@ -660,7 +660,7 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
-                    path: secret_path.clone(),
+                    path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!("abc"),
                 }],
             },
@@ -703,7 +703,7 @@ async fn deploy_fails_if_secret_default_mismatches_component(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
-                    path: secret_path.clone(),
+                    path: AgentSecretPath(secret_path.clone()),
                     secret_value: json!(false),
                 }],
             },

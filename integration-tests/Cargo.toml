@@ -47,6 +47,7 @@ goldenfile = { workspace = true }
 test-r = { workspace = true }
 wac-graph = { workspace = true }
 assert2 = { workspace = true }
+convert_case = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 backtrace-on-stack-overflow = { workspace = true }
