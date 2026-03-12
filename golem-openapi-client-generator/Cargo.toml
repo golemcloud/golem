@@ -1,0 +1,23 @@
+[package]
+name = "golem-openapi-client-generator"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://www.golem.cloud/"
+authors = ["Simon Popugaev <simon.popugaev@ziverge.com>"]
+readme = "README.md"
+description = "OpenAPI glient generator for golem"
+repository = "https://github.com/golemcloud/golem-openapi-client-generator"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+fmt = "0.1.0"
+serde = { version = "1.0.189", features = ["derive"] }
+serde_yaml = "0.9.29"
+indoc = "2.0.4"
+itertools = "0.12.0"
+openapiv3 = "=2.0.0"
+convert_case = "0.6.0"
+indexmap = "2.1.0"
+clap = { version = "4.4.12", features = ["derive"] }
