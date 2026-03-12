@@ -5,7 +5,10 @@ description: "Creating a new Golem application project. Use when scaffolding a n
 
 # Creating a New Golem Project
 
-Use the `golem new` CLI command to scaffold a new Golem application with the desired language template.
+**Important: Do not try to build golem from scratch or install it manually.**
+
+Assume the `golem` or `golem-cli` binary exists and is added to PATH.
+Try `golem --version` to check if it exists. If not, try `golem-cli --version`. Every command below works for `golem` and `golem-cli`
 
 ## Step 1: Run `golem new`
 
@@ -39,6 +42,7 @@ After running `golem new`, verify the following:
 ## Step 3: Build the Project
 
 ```shell
+cd <APPLICATION_NAME>
 golem build
 ```
 ## Checklist
