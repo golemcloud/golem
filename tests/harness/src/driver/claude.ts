@@ -1,37 +1,8 @@
 import { BaseAgentDriver, AgentResult } from './base.js';
-import * as path from 'node:path';
-import * as fs from 'node:fs/promises';
 
 export class ClaudeAgentDriver extends BaseAgentDriver {
+  protected readonly skillDirs = ['.claude/skills'];
   private sessionId: string | null = null;
-
-  async setup(workspace: string, skillsDir: string): Promise<void> {
-    await super.setup(workspace, skillsDir);
-    // Link skills to .claude/skills in the workspace
-    const claudeSkillsDir = path.join(workspace, '.claude', 'skills');
-    await fs.mkdir(claudeSkillsDir, { recursive: true });
-
-    const skills = await fs.readdir(skillsDir, { withFileTypes: true });
-    for (const dirent of skills) {
-      if (dirent.isDirectory()) {
-        const skillName = dirent.name;
-        const sourceDir = path.resolve(skillsDir, skillName);
-        const destDir = path.join(claudeSkillsDir, skillName);
-        
-        await fs.mkdir(destDir, { recursive: true });
-        
-        const sourceFile = path.join(sourceDir, 'SKILL.md');
-        const destFile = path.join(destDir, 'SKILL.md');
-        
-        try {
-          await fs.access(sourceFile);
-          await fs.symlink(sourceFile, destFile).catch(() => {});
-        } catch {
-          // Ignore if SKILL.md doesn't exist
-        }
-      }
-    }
-  }
 
   async sendPrompt(prompt: string, timeout: number): Promise<AgentResult> {
     const result = await this.runCommand(
