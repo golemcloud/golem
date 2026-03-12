@@ -32,6 +32,7 @@ use std::sync::Arc;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
 
+pub mod ignite;
 pub mod mysql;
 pub mod postgres;
 pub mod serialized;
