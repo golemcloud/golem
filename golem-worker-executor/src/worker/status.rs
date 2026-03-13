@@ -927,6 +927,15 @@ fn calculate_oplog_processor_checkpoints(
                     new_active_plugins.contains(grant_id)
                         || state.sending_up_to > state.confirmed_up_to
                 });
+                for grant_id in new_active_plugins {
+                    result.entry(*grant_id).or_insert(
+                        OplogProcessorCheckpointState {
+                            target_agent_id: None,
+                            confirmed_up_to: *idx,
+                            sending_up_to: *idx,
+                        },
+                    );
+                }
             }
             _ => {}
         }

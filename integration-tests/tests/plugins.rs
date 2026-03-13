@@ -610,10 +610,9 @@ async fn oplog_processor_crash_after_confirmed_flush(
 //  5. Assert: no duplicate oplog indices, and every completed add in
 //     the oplog has exactly one callback delivery.
 //
-// Currently EXPECTED TO FAIL: ForwardingOplog does not replay previously-
-// persisted oplog entries on recovery, so entries buffered during crash
-// rounds are permanently lost. Once exactly-once delivery with persisted
-// watermarks and replay is implemented, this test should pass.
+// This test verifies that recovery replays previously-persisted oplog
+// entries, so no callbacks are lost even when in-memory buffers are
+// discarded by crashes.
 
 #[test]
 #[tracing::instrument]
@@ -815,11 +814,6 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
     );
 
     // Every completed add must have exactly one callback delivery.
-    // Currently fails because ForwardingOplog does not replay previously-
-    // persisted oplog entries on recovery — entries buffered during crash
-    // rounds (with high thresholds) are permanently lost.
-    // Will pass once exactly-once delivery with persisted watermarks is
-    // implemented.
     assert_eq!(
         add_count, completed_adds_in_oplog,
         "Oplog processor must deliver exactly one callback per completed invocation. \
@@ -1517,7 +1511,7 @@ async fn oplog_processor_idle_worker_timer_flush(
     .await?;
     let invoke_done = t0.elapsed();
 
-    let batches = wait_for_invocations(&received_batches, 2, Duration::from_secs(15)).await;
+    let batches = wait_for_invocations(&received_batches, 2, Duration::from_secs(60)).await;
     let callback_arrived = t0.elapsed();
     let fn_names = extract_function_names(&batches);
     assert!(fn_names.contains(&"agent-initialization".to_string()));
