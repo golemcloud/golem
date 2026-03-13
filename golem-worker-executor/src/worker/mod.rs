@@ -825,58 +825,62 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        let instance_guard = self.lock_non_stopping_worker().await;
+        async {
+            let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() {
-            return Err(WorkerExecutorError::invalid_request(
-                "Cannot enqueue invocation to a deleting worker",
-            ));
-        };
+            if instance_guard.is_deleting() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "Cannot enqueue invocation to a deleting worker",
+                ));
+            };
 
-        if let Some(err) = instance_guard.startup_failure() {
-            return Err(err.clone());
-        }
+            if let Some(err) = instance_guard.startup_failure() {
+                return Err(err.clone());
+            }
 
-        let (idempotency_key, invocation_payload, invocation_context) =
-            invocation.clone().into_parts();
-        let payload = self
-            .oplog
-            .upload_payload(&invocation_payload)
-            .await
-            .map_err(|e| {
-                WorkerExecutorError::invalid_request(format!(
-                    "Failed to upload invocation payload: {e}"
-                ))
-            })?;
-        let invocation_context_spans = invocation_context.to_oplog_data();
-        let entry = OplogEntry::pending_agent_invocation(
-            idempotency_key,
-            payload,
-            invocation_context.trace_id,
-            invocation_context.trace_states,
-            invocation_context_spans,
-        );
-        let timestamped_invocation = TimestampedAgentInvocation {
-            timestamp: entry.timestamp(),
-            invocation,
-        };
-        self.add_and_commit_oplog_internal(&instance_guard, entry)
-            .await;
-
-        if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
-            self.external_invocation_spans
-                .write()
+            let (idempotency_key, invocation_payload, invocation_context) =
+                invocation.clone().into_parts();
+            let payload = self
+                .oplog
+                .upload_payload(&invocation_payload)
                 .await
-                .insert(idempotency_key.clone(), Span::current());
+                .map_err(|e| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "Failed to upload invocation payload: {e}"
+                    ))
+                })?;
+            let invocation_context_spans = invocation_context.to_oplog_data();
+            let entry = OplogEntry::pending_agent_invocation(
+                idempotency_key,
+                payload,
+                invocation_context.trace_id,
+                invocation_context.trace_states,
+                invocation_context_spans,
+            );
+            let timestamped_invocation = TimestampedAgentInvocation {
+                timestamp: entry.timestamp(),
+                invocation,
+            };
+            self.add_and_commit_oplog_internal(&instance_guard, entry)
+                .await;
+
+            if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
+                self.external_invocation_spans
+                    .write()
+                    .await
+                    .insert(idempotency_key.clone(), Span::current());
+            }
+
+            if let WorkerInstance::Running(running) = &*instance_guard {
+                running.sender.send(WorkerCommand::Unblock).unwrap();
+            };
+
+            drop(instance_guard);
+
+            Ok(())
         }
-
-        if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Unblock).unwrap();
-        };
-
-        drop(instance_guard);
-
-        Ok(())
+        .instrument(span!(Level::INFO, "enqueue_invocation"))
+        .await
     }
 
     pub async fn get_file_system_node(
