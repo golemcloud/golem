@@ -14,6 +14,7 @@
 
 use crate::error::ShardManagerError;
 use crate::model::{RoutingTable, ShardManagerState};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::config::DbPostgresConfig;
@@ -153,7 +154,7 @@ impl RoutingTablePersistence for RoutingTablePostgresPersistence {
         if let Some(row) = row {
             let bytes: Vec<u8> = row
                 .try_get("state")
-                .map_err(|err| RepoError::InternalError(anyhow::Error::msg(err)))?;
+                .map_err(|err| RepoError::InternalError(anyhow!(err)))?;
             let shard_manager_state: ShardManagerState =
                 deserialize(&bytes).map_err(ShardManagerError::SerializationError)?;
             Ok(shard_manager_state.get_routing_table())
