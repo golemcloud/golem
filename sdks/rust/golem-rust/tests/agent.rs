@@ -18,13 +18,13 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 #[test_r::sequential]
 mod tests {
-    use golem_rust::agentic::{create_webhook, Principal, Secret};
+    use golem_rust::agentic::{create_webhook, Principal};
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, AgentType, ConfigKeyValueType, ConfigValueType, ElementValue, Snapshotting,
+        AgentMode, AgentType, AgentConfigDeclaration, AgentConfigSource, ElementValue, Snapshotting,
         SnapshottingConfig,
     };
     use golem_rust::value_and_type::IntoValue;
@@ -572,33 +572,36 @@ mod tests {
         }
     }
 
-    #[derive(ConfigSchema)]
     #[allow(unused)]
+    #[derive(ConfigSchema)]
     struct ConfigAgentConfigNested {
         foo: String,
         bar: i32,
-        nested_secret: Secret<bool>,
+        #[config_schema(secret)]
+        nested_secret: golem_rust::agentic::Secret<bool>,
     }
 
-    #[derive(ConfigSchema)]
     #[allow(unused)]
+    #[derive(ConfigSchema)]
     struct ConfigAgentConfig {
         url: String,
         port: u32,
+        #[config_schema(nested)]
         nested: ConfigAgentConfigNested,
-        api_key: Secret<String>,
+        #[config_schema(secret)]
+        api_key: golem_rust::agentic::Secret<String>,
     }
 
     #[agent_definition]
     trait ConfigAgent: BaseAgent {
-        fn new(#[autoinject] config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self;
+        fn new(#[agent_config] config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self;
     }
 
     struct ConfigAgentImpl;
 
     #[agent_implementation]
     impl ConfigAgent for ConfigAgentImpl {
-        fn new(#[autoinject] _config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self {
+        fn new(#[agent_config] _config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self {
             Self
         }
     }
@@ -1299,19 +1302,14 @@ mod tests {
         let agent =
             golem_rust::agentic::get_agent_type_by_name(&agent_name).expect("Agent type not found");
 
-        fn project_for_comparsion(value: ConfigKeyValueType) -> (Vec<String>, bool, String) {
-            match value.value {
-                ConfigValueType::Local(mut inner) => (
-                    value.key,
-                    false,
-                    format!("{:?}", inner.nodes.swap_remove(0).type_),
-                ),
-                ConfigValueType::Shared(mut inner) => (
-                    value.key,
-                    true,
-                    format!("{:?}", inner.nodes.swap_remove(0).type_),
-                ),
-            }
+        fn project_for_comparsion(
+            mut value: AgentConfigDeclaration,
+        ) -> (AgentConfigSource, Vec<String>, String) {
+            (
+                value.source,
+                value.path,
+                format!("{:?}", value.value_type.nodes.swap_remove(0).type_),
+            )
         }
 
         assert_eq!(
@@ -1322,33 +1320,33 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (
+                    AgentConfigSource::Local,
                     vec!["url".to_string()],
-                    false,
                     "WitTypeNode::PrimStringType".to_string()
                 ),
                 (
+                    AgentConfigSource::Local,
                     vec!["port".to_string()],
-                    false,
                     "WitTypeNode::PrimU32Type".to_string()
                 ),
                 (
+                    AgentConfigSource::Local,
                     vec!["nested".to_string(), "foo".to_string(),],
-                    false,
                     "WitTypeNode::PrimStringType".to_string()
                 ),
                 (
+                    AgentConfigSource::Local,
                     vec!["nested".to_string(), "bar".to_string(),],
-                    false,
                     "WitTypeNode::PrimS32Type".to_string()
                 ),
                 (
+                    AgentConfigSource::Secret,
                     vec!["nested".to_string(), "nested_secret".to_string(),],
-                    true,
                     "WitTypeNode::PrimBoolType".to_string()
                 ),
                 (
+                    AgentConfigSource::Secret,
                     vec!["api_key".to_string()],
-                    true,
                     "WitTypeNode::PrimStringType".to_string()
                 )
             ]

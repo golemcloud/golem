@@ -1,19 +1,18 @@
 use super::{
-    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentInvocationMode, AgentMethod,
-    AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
-    BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
-    ComponentModelElementValue, ConfigKeyValueType, ConfigValueType, CorsOptions, CustomHttpMethod,
-    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, GolemUserPrincipal,
-    HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal,
-    PathSegment, PathVariable, Principal, QueryVariable, RegisteredAgentType,
+    AgentConfigDeclaration, AgentConfigSource, AgentConstructor, AgentDependency,
+    AgentHttpAuthDetails, AgentInvocationMode, AgentMethod, AgentMode, AgentPrincipal, AgentType,
+    AgentTypeName, BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource,
+    BinaryType, ComponentModelElementSchema, ComponentModelElementValue, CorsOptions,
+    CustomHttpMethod, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
+    LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+    OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable, RegisteredAgentType,
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment, TextDescriptor, TextReference,
     TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
     UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
     Url,
 };
-use crate::model::agent::{ConfigValueTypeLocal, ConfigValueTypeShared};
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
@@ -106,7 +105,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
             config: proto
                 .config
                 .into_iter()
-                .map(ConfigKeyValueType::try_from)
+                .map(AgentConfigDeclaration::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
@@ -135,7 +134,7 @@ impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
             config: value
                 .config
                 .into_iter()
-                .map(golem_api_grpc::proto::golem::component::ConfigKeyValueType::from)
+                .map(golem_api_grpc::proto::golem::component::AgentConfigDeclaration::from)
                 .collect(),
         }
     }
@@ -1495,76 +1494,57 @@ impl From<SnapshottingConfig> for golem_api_grpc::proto::golem::component::Snaps
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::ConfigKeyValueType> for ConfigKeyValueType {
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentConfigSource> for AgentConfigSource {
+    type Error = String;
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::AgentConfigSource,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::AgentConfigSource as GrpcAgentConfigSource;
+        match value {
+            GrpcAgentConfigSource::Local => Ok(Self::Local),
+            GrpcAgentConfigSource::Secret => Ok(Self::Secret),
+            GrpcAgentConfigSource::Unspecified => Err("unknown agent config source".to_string()),
+        }
+    }
+}
+
+impl From<AgentConfigSource> for golem_api_grpc::proto::golem::component::AgentConfigSource {
+    fn from(value: AgentConfigSource) -> Self {
+        match value {
+            AgentConfigSource::Local => Self::Local,
+            AgentConfigSource::Secret => Self::Secret,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentConfigDeclaration>
+    for AgentConfigDeclaration
+{
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::component::ConfigKeyValueType,
+        value: golem_api_grpc::proto::golem::component::AgentConfigDeclaration,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
-            key: value.key,
-            value: value
-                .value
-                .ok_or_else(|| "Missing field: value".to_string())?
+            source: value.source().try_into()?,
+            path: value.path,
+            value_type: (&value
+                .value_type
+                .ok_or_else(|| "Missing field: value_type".to_string())?)
                 .try_into()?,
         })
     }
 }
 
-impl From<ConfigKeyValueType> for golem_api_grpc::proto::golem::component::ConfigKeyValueType {
-    fn from(value: ConfigKeyValueType) -> Self {
+impl From<AgentConfigDeclaration>
+    for golem_api_grpc::proto::golem::component::AgentConfigDeclaration
+{
+    fn from(value: AgentConfigDeclaration) -> Self {
         Self {
-            key: value.key,
-            value: Some(value.value.into()),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::ConfigValueType> for ConfigValueType {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::ConfigValueType,
-    ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::config_value_type::Kind;
-
-        match value
-            .kind
-            .ok_or_else(|| "Missing field: kind".to_string())?
-        {
-            Kind::Local(inner) => Ok(Self::Local(ConfigValueTypeLocal {
-                value: (&inner
-                    .value
-                    .ok_or_else(|| "Missing field: value".to_string())?)
-                    .try_into()?,
-            })),
-            Kind::Shared(inner) => Ok(Self::Shared(ConfigValueTypeShared {
-                value: (&inner
-                    .value
-                    .ok_or_else(|| "Missing field: value".to_string())?)
-                    .try_into()?,
-            })),
-        }
-    }
-}
-
-impl From<ConfigValueType> for golem_api_grpc::proto::golem::component::ConfigValueType {
-    fn from(value: ConfigValueType) -> Self {
-        use golem_api_grpc::proto::golem::component::config_value_type::Kind;
-
-        Self {
-            kind: Some(match value {
-                ConfigValueType::Local(inner) => Kind::Local(
-                    golem_api_grpc::proto::golem::component::config_value_type::Local {
-                        value: Some((&inner.value).into()),
-                    },
-                ),
-                ConfigValueType::Shared(inner) => Kind::Shared(
-                    golem_api_grpc::proto::golem::component::config_value_type::Shared {
-                        value: Some((&inner.value).into()),
-                    },
-                ),
-            }),
+            source: golem_api_grpc::proto::golem::component::AgentConfigSource::from(value.source)
+                .into(),
+            path: value.path,
+            value_type: Some((&value.value_type).into()),
         }
     }
 }

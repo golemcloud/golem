@@ -22,7 +22,7 @@ describe('agent config handling', () => {
     const configAgent = TypeMetadata.get('ConfigAgent')!;
     const constructorArgs = configAgent.constructorArgs;
 
-    const arg = constructorArgs[0];
+    const arg = constructorArgs[1];
     expect(arg.name).toBe('config');
     expect(arg.type.optional).toBe(false);
     expect(arg.type.kind).toBe('config');
@@ -55,130 +55,116 @@ describe('agent config handling', () => {
     expect(configAgent.config).toEqual(
       expect.arrayContaining([
         {
-          key: ['foo'],
-          value: {
-            tag: 'local',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-f64-type',
-                  },
+          source: 'local',
+          path: ['foo'],
+          valueType: {
+            nodes: [
+              {
+                name: undefined,
+                owner: undefined,
+                type: {
+                  tag: 'prim-f64-type',
                 },
-              ],
-            },
+              },
+            ],
           },
         },
         {
-          key: ['bar'],
-          value: {
-            tag: 'local',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-string-type',
-                  },
+          source: 'local',
+          path: ['bar'],
+          valueType: {
+            nodes: [
+              {
+                name: undefined,
+                owner: undefined,
+                type: {
+                  tag: 'prim-string-type',
                 },
-              ],
-            },
+              },
+            ],
           },
         },
         {
-          key: ['secret'],
-          value: {
-            tag: 'shared',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-bool-type',
-                  },
+          source: 'secret',
+          path: ['secret'],
+          valueType: {
+            nodes: [
+              {
+                name: undefined,
+                owner: undefined,
+                type: {
+                  tag: 'prim-bool-type',
                 },
-              ],
-            },
+              },
+            ],
           },
         },
         {
-          key: ['nested', 'nestedSecret'],
-          value: {
-            tag: 'shared',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-f64-type',
-                  },
+          source: 'secret',
+          path: ['nested', 'nestedSecret'],
+          valueType: {
+            nodes: [
+              {
+                name: undefined,
+                owner: undefined,
+                type: {
+                  tag: 'prim-f64-type',
                 },
-              ],
-            },
+              },
+            ],
           },
         },
         {
-          key: ['nested', 'a'],
-          value: {
-            tag: 'local',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-bool-type',
-                  },
+          source: 'local',
+          path: ['nested', 'a'],
+          valueType: {
+            nodes: [
+              {
+                name: undefined,
+                owner: undefined,
+                type: {
+                  tag: 'prim-bool-type',
                 },
-              ],
-            },
+              },
+            ],
           },
         },
         {
-          key: ['nested', 'b'],
-          value: {
-            tag: 'local',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'list-type',
-                    val: 1,
-                  },
+          source: 'local',
+          path: ['nested', 'b'],
+          valueType: {
+            nodes: [
+              {
+                name: undefined,
+                owner: undefined,
+                type: {
+                  tag: 'list-type',
+                  val: 1,
                 },
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-f64-type',
-                  },
+              },
+              {
+                name: undefined,
+                owner: undefined,
+                type: {
+                  tag: 'prim-f64-type',
                 },
-              ],
-            },
+              },
+            ],
           },
         },
         {
-          key: ['aliasedNested', 'c'],
-          value: {
-            tag: 'local',
-            val: {
-              nodes: [
-                {
-                  name: undefined,
-                  owner: undefined,
-                  type: {
-                    tag: 'prim-f64-type',
-                  },
+          source: 'local',
+          path: ['aliasedNested', 'c'],
+          valueType: {
+            nodes: [
+              {
+                name: undefined,
+                owner: undefined,
+                type: {
+                  tag: 'prim-f64-type',
                 },
-              ],
-            },
+              },
+            ],
           },
         },
       ]),
@@ -187,6 +173,45 @@ describe('agent config handling', () => {
 
   it('config parameters should not show up in declared constructor', () => {
     const configAgent = AgentTypeRegistry.get(new AgentClassName('ConfigAgent'))!;
-    expect(configAgent.constructor.inputSchema).toEqual({ tag: 'tuple', val: [] });
+    const expectedSchema = {
+      tag: 'tuple',
+      val: [
+        [
+          'before',
+          {
+            tag: 'component-model',
+            val: {
+              nodes: [
+                {
+                  name: undefined,
+                  owner: undefined,
+                  type: {
+                    tag: 'prim-f64-type',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        [
+          'after',
+          {
+            tag: 'component-model',
+            val: {
+              nodes: [
+                {
+                  name: undefined,
+                  owner: undefined,
+                  type: {
+                    tag: 'prim-bool-type',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      ],
+    };
+    expect(configAgent.constructor.inputSchema).toEqual(expectedSchema);
   });
 });

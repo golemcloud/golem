@@ -19,6 +19,7 @@ import { AgentClassName } from './agentClassName';
 import { Datetime } from 'wasi:clocks/wall-clock@0.2.3';
 import { Uuid } from 'golem:agent/host@1.5.0';
 import { getAgentId } from './internal/registry/agentId';
+import { Config, Secret } from './agentConfig';
 
 /**
  * BaseAgent is the foundational class for defining agent implementations.
@@ -57,7 +58,7 @@ export class BaseAgent {
     if (!agentId) {
       throw new Error(
         `AgentId is not available for \`${this.constructor.name}\`. ` +
-          `Ensure the class is decorated with @agent()`,
+        `Ensure the class is decorated with @agent()`,
       );
     }
 
@@ -87,7 +88,7 @@ export class BaseAgent {
       if (!agentType) {
         throw new Error(
           `Agent type metadata is not available for \`${this.constructor.name}\`. ` +
-            `Ensure the class is decorated with @agent()`,
+          `Ensure the class is decorated with @agent()`,
         );
       }
 
@@ -176,17 +177,17 @@ export class BaseAgent {
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    ..._args: GetArgs<ConstructorParameters<T>>
+    ..._args: TransformGetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
     );
   }
 
-  static getPhantom<T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent>(
+  static getPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    ..._args: ConstructorParameters<T>
+    ..._args: TransformGetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
@@ -196,7 +197,7 @@ export class BaseAgent {
   static newPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    ..._args: ConstructorParameters<T>
+    ..._args: TransformGetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
@@ -236,7 +237,7 @@ type MethodKeys<T> = {
 
 export type Client<T> = {
   [K in MethodKeys<T>]: T[K] extends (...args: infer A) => infer R
-    ? RemoteMethod<GetArgs<A>, Awaited<R>>
+    ? RemoteMethod<TransformMethodArgs<A>, Awaited<R>>
     : never;
 };
 
@@ -246,40 +247,36 @@ export type RemoteMethod<Args extends unknown[], R> = {
   schedule: (ts: Datetime, ...args: Args) => void;
 };
 
-// GetArgs extracts the argument types for the remote agent's get method
-// by removing the Principal parameter
-type GetArgs<T extends readonly unknown[]> =
-  SplitOnPrincipal<T> extends {
-    found: infer F extends boolean;
-    before: infer B extends unknown[];
-    after: infer A extends unknown[];
-  }
-    ? F extends true
-      ? AllOptional<A> extends true
-        ? B | [...B, ...A]
-        : [...B, ...A]
-      : T
-    : never;
+type TransformMethodArg<T> = T extends Principal ? never : T;
 
-// Handles any trailing parameters (optional) after `Principal`
-// See `tests/agentWithPrincipalAutoInjection.ts` for usage example
-type IsOptional<T extends readonly unknown[], K extends keyof T> =
-  {} extends Pick<T, K> ? true : false;
-
-type AllOptional<T extends readonly unknown[], I extends unknown[] = []> = T extends readonly [
-  unknown,
-  ...infer R,
+type TransformMethodArgs<T extends readonly unknown[]> = T extends readonly [
+  infer Head,
+  ...infer Tail,
 ]
-  ? IsOptional<T, I['length']> extends true
-    ? AllOptional<R, [...I, 0]>
-    : false
-  : true;
+  ? TransformMethodArg<Head> extends never
+  ? TransformMethodArgs<Tail>
+  : [TransformMethodArg<Head>, ...TransformMethodArgs<Tail>]
+  : T;
 
-type SplitOnPrincipal<
-  T extends readonly unknown[],
-  Before extends unknown[] = [],
-> = T extends readonly [infer H, ...infer R]
-  ? [H] extends [Principal]
-    ? { found: true; before: Before; after: R }
-    : SplitOnPrincipal<R, [...Before, H]>
-  : { found: false; before: Before; after: [] };
+type TransformGetArg<T> = T extends Principal
+  ? never
+  : T extends Config<infer C>
+  ? RpcConfigInput<C>
+  : T;
+
+export type TransformGetArgs<T extends readonly unknown[]> = T extends readonly [
+  infer Head,
+  ...infer Tail,
+]
+  ? TransformGetArg<Head> extends never
+  ? TransformGetArgs<Tail>
+  : [TransformGetArg<Head>, ...TransformGetArgs<Tail>]
+  : T;
+
+type RemoveSecretFields<T> = {
+  [K in keyof T as T[K] extends Secret<any> ? never : K]: T[K];
+};
+
+type RpcConfigInput<T> = T extends object
+  ? { [K in keyof RemoveSecretFields<T>]?: RpcConfigInput<RemoveSecretFields<T>[K]> }
+  : T;

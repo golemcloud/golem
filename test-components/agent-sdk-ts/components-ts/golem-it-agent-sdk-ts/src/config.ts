@@ -107,3 +107,29 @@ export class LocalCasingSharedConfigAgent extends BaseAgent {
     })
   }
 }
+
+type RpcLocalConfigAgentConfig = {
+  foo: number;
+  nested_a?: boolean,
+};
+
+@agent()
+export class RpcLocalConfigAgent extends BaseAgent {
+  constructor(readonly name: string, readonly config: Config<RpcLocalConfigAgentConfig>) {
+    super();
+  }
+
+  async echoLocalConfig(): Promise<string> {
+    const config = this.config.value;
+    let client = LocalConfigAgent.get(
+      this.name,
+      {
+        foo: config.foo,
+        nested: {
+          a: config.nested_a
+        }
+      }
+    )
+    return await client.echoLocalConfig()
+  }
+}
