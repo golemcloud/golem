@@ -363,6 +363,7 @@ declare module 'golem:api/oplog@1.5.0' {
     targetAgentId: AgentId;
     confirmedUpTo: OplogIndex;
     sendingUpTo: OplogIndex;
+    lastBatchStart: OplogIndex;
   };
   export type Timestamp = {
     timestamp: Datetime;
@@ -524,6 +525,7 @@ declare module 'golem:api/oplog@1.5.0' {
     targetAgentId: AgentId;
     confirmedUpTo: OplogIndex;
     sendingUpTo: OplogIndex;
+    lastBatchStart: OplogIndex;
   };
   export type OplogEntry = 
   /** The initial agent oplog entry */
