@@ -130,8 +130,8 @@ impl RoutingTablePersistence for RoutingTablePostgresPersistence {
         self.pool
             .with_rw(PERSISTENCE_SVC, "write")
             .execute(sqlx::query(
-            "INSERT INTO shard_manager_state (id, state) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state",
-        )
+                "INSERT INTO shard_manager_state (id, state) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state",
+            )
             .bind(encoded))
             .await
             .map_err(|err| ShardManagerError::PostgresError(sqlx::Error::Protocol(err.to_string())))?;
