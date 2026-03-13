@@ -24,8 +24,8 @@ use crate::services::{
     active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
     rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
-    HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasLeakSentinel,
-    HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasRdbmsService,
+    HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
+    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasRdbmsService,
     HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
     HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
     HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
@@ -49,6 +49,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tracing::debug;
+use wasmtime_wasi_http::HttpConnectionPool;
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
@@ -393,6 +394,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     shutdown_token: tokio_util::sync::CancellationToken,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
+    http_connection_pool: Option<HttpConnectionPool>,
     extra_deps: Ctx::ExtraDeps,
     leak_sentinel: Arc<()>,
 }
@@ -427,6 +429,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             shutdown_token: self.shutdown_token.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
+            http_connection_pool: self.http_connection_pool.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -611,6 +614,12 @@ impl<Ctx: WorkerCtx> HasShutdownToken for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasHttpConnectionPool for DirectWorkerInvocationRpc<Ctx> {
+    fn http_connection_pool(&self) -> Option<HttpConnectionPool> {
+        self.http_connection_pool.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -644,6 +653,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         shutdown_token: tokio_util::sync::CancellationToken,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
+        http_connection_pool: Option<HttpConnectionPool>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -675,6 +685,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             shutdown_token,
             agent_types_service,
             agent_webhooks_service,
+            http_connection_pool,
             extra_deps,
             leak_sentinel,
         }

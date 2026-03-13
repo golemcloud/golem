@@ -136,7 +136,7 @@ pub fn map_agent_response_to_tool_result(
 
                 let element = elements.into_iter().next().unwrap();
                 let too_result = convert_elem_value_to_mcp_tool_response(&element)?;
-                
+
                 match too_result {
                     ToolResult::Default(value) => {
                         let json_value = value;
@@ -146,7 +146,7 @@ pub fn map_agent_response_to_tool_result(
                             Some(name) => json!({ name: json_value }),
                             None => json_value,
                         };
-                        
+
                         Ok(CallToolResult::structured(structured))
                     }
                     ToolResult::Content(content) => {
@@ -166,27 +166,27 @@ pub fn map_agent_response_to_tool_result(
                 None,
             )),
         },
-        
-        // multimodal 
+
+        // multimodal
         DataValue::Multimodal(NamedElementValues { elements }) => {
             let mut contents: Vec<Content> = vec![];
 
             for named in elements {
-                let tool_result = 
+                let tool_result =
                     convert_elem_value_to_mcp_tool_response(&named.value)?;
-                
+
                 match tool_result {
                     ToolResult::Default(json_value) => {
                         contents.push(Content::text(json_value.to_string()));
                     }
-                    
+
                     // Mostly multimodal is a collection of binary or unstructured text data
                     ToolResult::Content(content) => {
                         contents.push(content);
                     }
                 }
             }
-            
+
             Ok(CallToolResult {
                 content: contents,
                 structured_content: None,
@@ -223,7 +223,7 @@ fn convert_elem_value_to_mcp_tool_response(
                 )
             }).map(ToolResult::Default)
         }
-        
+
         ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
             TextReference::Inline(TextSource { data, .. }) => {
                 Ok(ToolResult::Content(RawContent::text(data.clone()).no_annotation()))
@@ -233,7 +233,7 @@ fn convert_elem_value_to_mcp_tool_response(
                 None,
             )),
         },
-        
+
         ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
             match value {
                 BinaryReference::Inline(BinarySource { data, binary_type }) => {

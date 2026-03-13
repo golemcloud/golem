@@ -178,7 +178,15 @@ impl<Ctx: WorkerCtx> HostOutgoingRequest for DurableWorkerCtx<Ctx> {
         self_: Resource<OutgoingRequest>,
     ) -> wasmtime::Result<Result<Resource<OutgoingBody>, ()>> {
         self.observe_function_call("http::types::outgoing_request", "body");
-        HostOutgoingRequest::body(&mut self.as_wasi_http_view(), self_)
+        let request_rep = self_.rep();
+        let result = HostOutgoingRequest::body(&mut self.as_wasi_http_view(), self_);
+        if let Ok(Ok(ref body)) = result {
+            let body_rep = body.rep();
+            self.state
+                .pending_http_outgoing_request_body
+                .insert(request_rep, body_rep);
+        }
+        result
     }
 
     fn method(&mut self, self_: Resource<OutgoingRequest>) -> wasmtime::Result<Method> {
@@ -495,11 +503,13 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                 let (to_serialize, for_retry) = match &result {
                     Ok(Some(Ok(Ok(None)))) => (Ok(Some(Ok(Ok(None)))), Ok(())),
                     Ok(Some(Ok(Ok(Some(trailers))))) => {
-                        let mut serialized_trailers = HashMap::new();
+                        let mut serialized_trailers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
 
                         for (key, value) in get_fields(self.table(), trailers)?.as_ref().iter() {
                             serialized_trailers
-                                .insert(key.as_str().to_string(), value.as_bytes().to_vec());
+                                .entry(key.as_str().to_string())
+                                .or_default()
+                                .push(value.as_bytes().to_vec());
                         }
                         (Ok(Some(Ok(Ok(Some(serialized_trailers))))), Ok(()))
                     }
@@ -543,9 +553,11 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
                     Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
                         let mut header_map = http::HeaderMap::new();
-                        for (key, value) in serialized_trailers {
-                            header_map
-                                .insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
+                        for (key, values) in serialized_trailers {
+                            let name = HeaderName::from_str(&key)?;
+                            for value in values {
+                                header_map.append(name.clone(), HeaderValue::try_from(value)?);
+                            }
                         }
                         let field_size_limit = {
                             let mut view = self.as_wasi_http_view();
@@ -581,12 +593,8 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<FutureTrailers>) -> wasmtime::Result<()> {
         self.observe_function_call("http::types::future_trailers", "drop");
 
-        // Remove tracking if still present (guest dropped without calling get()).
-        // Note: we cannot call end_http_request here because drop is sync,
-        // but this is safe — the durable function region was already opened by
-        // begin_function and the oplog entries are still valid. The request state
-        // cleanup is sufficient.
         let handle = rep.rep();
+        // Remove tracking if still present (guest dropped without calling get()).
         self.state.open_http_requests.remove(&handle);
 
         HostFutureTrailers::drop(&mut self.as_wasi_http_view(), rep)
@@ -641,7 +649,19 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         self_: Resource<OutgoingBody>,
     ) -> wasmtime::Result<Result<Resource<OutputStream>, ()>> {
         self.observe_function_call("http::types::outgoing_body", "write");
-        HostOutgoingBody::write(&mut self.as_wasi_http_view(), self_)
+        let body_rep = self_.rep();
+        let result = HostOutgoingBody::write(&mut self.as_wasi_http_view(), self_);
+        if let Ok(Ok(ref stream)) = result {
+            // Associate the output stream with the HttpRequestState that owns this body
+            if let Some(request_handle) = self.state.find_request_handle_by_outgoing_body(body_rep)
+            {
+                let stream_rep = stream.rep();
+                if let Some(state) = self.state.open_http_requests.get_mut(&request_handle) {
+                    state.output_stream_rep = Some(stream_rep);
+                }
+            }
+        }
+        result
     }
 
     fn finish(
@@ -650,11 +670,23 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         trailers: Option<Resource<Trailers>>,
     ) -> HttpResult<()> {
         self.observe_function_call("http::types::outgoing_body", "finish");
+        let body_rep = this.rep();
+        if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep) {
+            if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
+                state.outgoing_body_rep = None;
+            }
+        }
         HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers)
     }
 
     fn drop(&mut self, rep: Resource<OutgoingBody>) -> wasmtime::Result<()> {
         self.observe_function_call("http::types::outgoing_body", "drop");
+        let body_rep = rep.rep();
+        if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep) {
+            if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
+                state.outgoing_body_rep = None;
+            }
+        }
         HostOutgoingBody::drop(&mut self.as_wasi_http_view(), rep)
     }
 }
@@ -676,6 +708,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         self_: Resource<FutureIncomingResponse>,
     ) -> wasmtime::Result<Option<Result<Result<Resource<IncomingResponse>, ErrorCode>, ()>>> {
         self.observe_function_call("http::types::future_incoming_response", "get");
+
         // Each get call is stored in the oplog. If the result was Error or None (future is pending), we just
         // continue the replay. If the result was Ok, we return register the stored response to the table as a new
         // HostIncomingResponse and return its reference.
@@ -685,6 +718,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         // Note that the response body is streaming, so at this point we don't have it in memory. Each chunk read from
         // the body is stored in the oplog, so we can replay it later. In replay mode we initialize the body with a
         // fake stream which can only be read in the oplog, and fails if we try to read it in live mode.
+
         let handle = self_.rep();
         let durable_execution_state = self.durable_execution_state();
         if durable_execution_state.is_live || self.state.snapshotting_mode.is_some() {

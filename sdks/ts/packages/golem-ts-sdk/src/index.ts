@@ -23,6 +23,7 @@ import { AgentInitiator } from './internal/agentInitiator';
 import { TypeInfoInternal } from './internal/typeInfoInternal';
 import { loadConfigKey } from './internal/mapping/values/dataValue';
 import { Type } from '@golemcloud/golem-ts-types-core';
+import { setAgentId } from './internal/registry/agentId';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -70,6 +71,8 @@ async function initialize(
       `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`,
     );
   }
+
+  setAgentId(getRawSelfAgentId());
 
   const initiateResult = initiator.initiate(input, principal);
 

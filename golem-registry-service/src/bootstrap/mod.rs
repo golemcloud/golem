@@ -280,23 +280,24 @@ impl Services {
             domain_registration_service.clone(),
         ));
 
+        let agent_secret_service = Arc::new(AgentSecretService::new(
+            repos.agent_secret_repo.clone(),
+            environment_service.clone(),
+        ));
+
         let deployment_write_service = Arc::new(DeploymentWriteService::new(
             environment_service.clone(),
             repos.deployment_repo.clone(),
             component_service.clone(),
             http_api_deployment_service.clone(),
             mcp_deployment_service.clone(),
+            agent_secret_service.clone(),
         ));
 
         let deployed_routes_service =
             Arc::new(DeployedRoutesService::new(repos.deployment_repo.clone()));
 
         let deployed_mcp_service = Arc::new(DeployedMcpService::new(repos.deployment_repo.clone()));
-
-        let agent_secret_service = Arc::new(AgentSecretService::new(
-            repos.agent_secret_repo.clone(),
-            environment_service.clone(),
-        ));
 
         Ok(Self {
             account_service,
