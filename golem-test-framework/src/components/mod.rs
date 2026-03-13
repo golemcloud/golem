@@ -457,6 +457,12 @@ impl EnvVarBuilder {
                 "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
                 service_name.to_string(),
             );
+            // Increase the BatchSpanProcessor queue size from the default (2048)
+            // to avoid dropping spans under high throughput (e.g. benchmarks).
+            self.env_vars.insert(
+                "OTEL_BSP_MAX_QUEUE_SIZE".to_string(),
+                "65536".to_string(),
+            );
         }
         self
     }
