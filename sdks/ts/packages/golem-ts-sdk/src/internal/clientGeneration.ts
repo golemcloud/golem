@@ -14,14 +14,7 @@
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as WitValue from './mapping/values/WitValue';
-import {
-  getAgentType,
-  makeAgentId,
-  RegisteredAgentType,
-  Uuid,
-  WasmRpc,
-  Datetime,
-} from 'golem:agent/host@1.5.0';
+import { makeAgentId, Uuid, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
 import { AgentClassName } from '../agentClassName';
 import {
   AgentType,
@@ -39,11 +32,7 @@ import {
   serializeTsValueToTextReference,
 } from './mapping/values/serializer';
 import { TypeInfoInternal } from './typeInfoInternal';
-import {
-  deserializeDataValue,
-  ParameterDetail,
-  serializeToDataValue,
-} from './mapping/values/dataValue';
+import { deserializeDataValue, serializeToDataValue } from './mapping/values/dataValue';
 import { randomUuid } from '../host/hostapi';
 import { AgentId } from '../agentId';
 
@@ -285,7 +274,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
   private readonly getIdMethod: () => AgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
-    const [_typeName, _params, phantomId] = this.agentId.parsed();
+    const [, , phantomId] = this.agentId.parsed();
     return phantomId;
   };
   private readonly getAgentTypeMethod: () => AgentType = () => this.shared.agentType;

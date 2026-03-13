@@ -63,7 +63,7 @@ export class ResolvedAgent {
   }
 
   phantomId(): Uuid | undefined {
-    const [_typeName, _params, phantomId] = this.uniqueAgentId.parsed();
+    const [, , phantomId] = this.uniqueAgentId.parsed();
     return phantomId;
   }
 

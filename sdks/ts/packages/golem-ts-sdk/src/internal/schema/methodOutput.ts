@@ -128,7 +128,7 @@ function tryResultWithVoid(
 
   const analysedErrEither = errEmpty
     ? Either.right<AnalysedType | undefined, string>(undefined)
-    : Either.flatMap(WitType.fromTsType(errType, undefined), ([_, analysedErr]) =>
+    : Either.flatMap(WitType.fromTsType(errType, undefined), ([, analysedErr]) =>
         Either.right<AnalysedType | undefined, string>(analysedErr),
       );
 

@@ -239,7 +239,7 @@ export function agent(options?: AgentDecoratorOptions) {
 
     if (!classMetadata) {
       const availableAgents = Array.from(TypeMetadata.getAll().entries())
-        .map(([key, _]) => key)
+        .map(([key]) => key)
         .join(', ');
 
       throw new Error(

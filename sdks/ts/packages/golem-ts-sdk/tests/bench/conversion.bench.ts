@@ -529,7 +529,9 @@ const resultErrWit = serialize(resultErrVal, resultType);
 
 const mapInnerType: AnalysedType = tuple('MapEntry', undefined, [str(), u32()]);
 const mapType: AnalysedType = list('StringToU32Map', undefined, undefined, mapInnerType);
-const smallMap = new Map(Array.from({ length: 100 }, (_, i) => [`key-${i}`, i] as [string, number]));
+const smallMap = new Map(
+  Array.from({ length: 100 }, (_, i) => [`key-${i}`, i] as [string, number]),
+);
 const smallMapWit = serialize(smallMap, mapType);
 
 describe('Map (100 string→u32 entries)', () => {

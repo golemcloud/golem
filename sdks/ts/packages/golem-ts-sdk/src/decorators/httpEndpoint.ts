@@ -129,7 +129,8 @@ export type EndpointDecoratorOptions = {
  * - See `EndpointDecoratorOptions` for all available configuration options.
  */
 export function endpoint(opts: EndpointDecoratorOptions) {
-  return function (target: Object, propertyKey: string | symbol, descriptor: PropertyDescriptor) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  return function (target: Object, propertyKey: string | symbol, _descriptor: PropertyDescriptor) {
     const className = target.constructor.name;
     const methodName = String(propertyKey);
 

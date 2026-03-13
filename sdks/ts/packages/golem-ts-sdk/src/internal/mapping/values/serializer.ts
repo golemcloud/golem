@@ -237,7 +237,7 @@ export function matchesType(value: any, type: AnalysedType): boolean {
 
     // A variant can be tagged union or simple union
     case 'variant': {
-      if (value == null) return false;
+      if (value === null || value === undefined) return false;
 
       const nameAndOptions = type.value.cases;
 
