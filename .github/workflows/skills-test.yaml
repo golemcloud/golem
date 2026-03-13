@@ -107,7 +107,11 @@ jobs:
 
       - name: Install Codex CLI
         if: matrix.agent == 'codex'
-        run: npm install -g @openai/codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          npm install -g @openai/codex
+          printenv OPENAI_API_KEY | codex login --with-api-key
 
       - name: Install Harness Dependencies
         run: |
