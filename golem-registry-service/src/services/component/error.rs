@@ -95,8 +95,8 @@ pub enum ComponentError {
         key: Vec<String>,
         errors: Vec<String>,
     },
-    #[error("Config for agent {agent} at key {rendered_key} is shared and cannot be provided here", rendered_key = key.join("."))]
-    AgentConfigProvidedSharedWhereOnlyLocalAllowed {
+    #[error("Config for agent {agent} at key {rendered_key} is secret and cannot be provided here", rendered_key = key.join("."))]
+    AgentConfigProvidedSecretWhereOnlyLocalAllowed {
         agent: AgentTypeName,
         key: Vec<String>,
     },
@@ -143,7 +143,7 @@ impl SafeDisplay for ComponentError {
             Self::AgentTypeForNameNotFound(_) => self.to_string(),
             Self::AgentConfigNotDeclared { .. } => self.to_string(),
             Self::AgentConfigTypeMismatch { .. } => self.to_string(),
-            Self::AgentConfigProvidedSharedWhereOnlyLocalAllowed { .. } => self.to_string(),
+            Self::AgentConfigProvidedSecretWhereOnlyLocalAllowed { .. } => self.to_string(),
             Self::AgentConfigDuplicateValue { .. } => self.to_string(),
             Self::AgentConfigOldConfigNotValid { .. } => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),

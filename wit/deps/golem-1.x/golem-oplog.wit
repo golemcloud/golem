@@ -36,12 +36,12 @@ interface oplog {
     }
 
     record raw-local-agent-config-entry {
-        key: list<string>,
+        path: list<string>,
         value: wit-value
     }
 
     record local-agent-config-entry {
-        key: list<string>,
+        path: list<string>,
         value: value-and-type
     }
 

@@ -15,7 +15,7 @@
 use super::agent::AgentTypeName;
 use super::component_metadata::ComponentMetadata;
 pub use crate::base_model::worker::*;
-use crate::model::agent::{ConfigKeyValueType, ConfigValueType};
+use crate::model::agent::AgentConfigSource;
 use golem_wasm::ValueAndType;
 
 impl UntypedWorkerAgentConfigEntry {
@@ -33,23 +33,18 @@ impl UntypedWorkerAgentConfigEntry {
             .ok_or("did not find expected agent type in the metadata")?
             .config
             .into_iter()
-            .find_map(|c| match c {
-                ConfigKeyValueType {
-                    key,
-                    value: ConfigValueType::Local(inner),
-                } if key == self.key => Some(inner),
-                _ => None,
-            })
+            .find(|c| c.source == AgentConfigSource::Local && c.path == self.path)
             .ok_or_else(|| {
                 format!(
                     "did not find config key {} in the metadata",
-                    self.key.join(".")
+                    self.path.join(".")
                 )
-            })?;
+            })?
+            .value_type;
 
         Ok(ParsedWorkerAgentConfigEntry {
-            key: self.key,
-            value: ValueAndType::new(self.value, value_type.value),
+            path: self.path,
+            value: ValueAndType::new(self.value, value_type),
         })
     }
 }
@@ -369,7 +364,7 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::worker::ParsedAgentConfigEntry,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
-                key: value.path,
+                path: value.path,
                 value: value
                     .value
                     .ok_or_else(|| "Missing field: value".to_string())?
@@ -383,7 +378,7 @@ mod protobuf {
     {
         fn from(value: ParsedWorkerAgentConfigEntry) -> Self {
             Self {
-                path: value.key,
+                path: value.path,
                 value: Some(value.value.into()),
             }
         }

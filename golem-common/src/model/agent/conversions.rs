@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    AgentHttpAuthDetails, AgentPrincipal, ConfigKeyValueType, ConfigValueType, CorsOptions,
+    AgentConfigDeclaration, AgentConfigSource, AgentHttpAuthDetails, AgentPrincipal, CorsOptions,
     CustomHttpMethod, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
     LiteralSegment, PathSegment, PathVariable, QueryVariable, SystemVariable,
     SystemVariableSegment,
@@ -22,13 +22,13 @@ use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
     AgentTypeName, BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource,
-    BinaryType, ComponentModelElementSchema, ComponentModelElementValue, ConfigValueTypeLocal,
-    ConfigValueTypeShared, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    RegisteredAgentType, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
-    SnapshottingPeriodic, TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue, UntypedDataValue,
-    UntypedElementValue, UntypedNamedElementValue, Url,
+    BinaryType, ComponentModelElementSchema, ComponentModelElementValue, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
+    NamedElementValue, NamedElementValues, RegisteredAgentType, Snapshotting, SnapshottingConfig,
+    SnapshottingEveryNInvocation, SnapshottingPeriodic, TextDescriptor, TextReference,
+    TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
+    UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
+    Url,
 };
 use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
@@ -184,7 +184,7 @@ impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
             config: value
                 .config
                 .into_iter()
-                .map(ConfigKeyValueType::from)
+                .map(AgentConfigDeclaration::from)
                 .collect(),
         }
     }
@@ -208,7 +208,7 @@ impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
             config: value
                 .config
                 .into_iter()
-                .map(ConfigKeyValueType::into)
+                .map(AgentConfigDeclaration::into)
                 .collect(),
         }
     }
@@ -1139,44 +1139,48 @@ impl From<SnapshottingConfig> for super::bindings::golem::agent::common::Snapsho
     }
 }
 
-impl From<ConfigKeyValueType> for super::bindings::golem::agent::common::ConfigKeyValueType {
-    fn from(value: ConfigKeyValueType) -> Self {
-        Self {
-            key: value.key,
-            value: value.value.into(),
-        }
-    }
-}
-
-impl From<super::bindings::golem::agent::common::ConfigKeyValueType> for ConfigKeyValueType {
-    fn from(value: super::bindings::golem::agent::common::ConfigKeyValueType) -> Self {
-        Self {
-            key: value.key,
-            value: value.value.into(),
-        }
-    }
-}
-
-impl From<ConfigValueType> for super::bindings::golem::agent::common::ConfigValueType {
-    fn from(value: ConfigValueType) -> Self {
+impl From<super::bindings::golem::agent::common::AgentConfigSource> for AgentConfigSource {
+    fn from(value: super::bindings::golem::agent::common::AgentConfigSource) -> Self {
         match value {
-            ConfigValueType::Local(inner) => Self::Local(inner.value.into()),
-            ConfigValueType::Shared(inner) => Self::Shared(inner.value.into()),
+            super::bindings::golem::agent::common::AgentConfigSource::Local => Self::Local,
+            super::bindings::golem::agent::common::AgentConfigSource::Secret => Self::Secret,
         }
     }
 }
 
-impl From<super::bindings::golem::agent::common::ConfigValueType> for ConfigValueType {
-    fn from(value: super::bindings::golem::agent::common::ConfigValueType) -> Self {
-        use super::bindings::golem::agent::common::ConfigValueType as Value;
-
+impl From<AgentConfigSource> for super::bindings::golem::agent::common::AgentConfigSource {
+    fn from(value: AgentConfigSource) -> Self {
         match value {
-            Value::Local(wit_type) => Self::Local(ConfigValueTypeLocal {
-                value: wit_type.into(),
-            }),
-            Value::Shared(wit_type) => Self::Shared(ConfigValueTypeShared {
-                value: wit_type.into(),
-            }),
+            AgentConfigSource::Local => {
+                super::bindings::golem::agent::common::AgentConfigSource::Local
+            }
+            AgentConfigSource::Secret => {
+                super::bindings::golem::agent::common::AgentConfigSource::Secret
+            }
+        }
+    }
+}
+
+impl From<AgentConfigDeclaration>
+    for super::bindings::golem::agent::common::AgentConfigDeclaration
+{
+    fn from(value: AgentConfigDeclaration) -> Self {
+        Self {
+            source: value.source.into(),
+            path: value.path,
+            value_type: value.value_type.into(),
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::AgentConfigDeclaration>
+    for AgentConfigDeclaration
+{
+    fn from(value: super::bindings::golem::agent::common::AgentConfigDeclaration) -> Self {
+        Self {
+            source: value.source.into(),
+            path: value.path,
+            value_type: value.value_type.into(),
         }
     }
 }

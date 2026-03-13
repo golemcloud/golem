@@ -337,9 +337,12 @@ impl HostWasmRpc for DebugContext {
         agent_type_name: String,
         constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
+        agent_config: Vec<
+            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id)
+            .new(agent_type_name, constructor, phantom_id, agent_config)
             .await
     }
 

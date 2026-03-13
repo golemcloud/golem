@@ -113,7 +113,7 @@ oplog_payload! {
             mode: UpdateMode
         },
         GolemAgentGetConfigValue {
-            key: Vec<String>,
+            path: Vec<String>,
             expected_type: AnalysedType
         },
         GolemAgentGetAgentType {

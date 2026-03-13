@@ -17,8 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_asyncness, has_async_trait_attribute, has_autoinject_attribute, is_constructor_method,
-    is_static_method, trim_type_parameter, Asyncness, AutoInjectAttrRemover, FunctionOutputInfo,
+    get_asyncness, has_agent_config_attr, has_async_trait_attr, is_constructor_method,
+    is_static_method, trim_type_parameter, AgentConfigAttrRemover, Asyncness, FunctionOutputInfo,
 };
 use syn::visit_mut::VisitMut;
 
@@ -28,7 +28,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         Err(e) => return e.to_compile_error().into(),
     };
 
-    let has_async_trait_attribute = has_async_trait_attribute(&impl_block);
+    let has_async_trait_attribute = has_async_trait_attr(&impl_block);
 
     if has_async_trait_attribute {
         return syn::Error::new_spanned(
@@ -145,7 +145,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let register_initiator_fn =
         generate_register_initiator_fn(&impl_block.self_ty, &trait_name_ident, &initiator_ident);
 
-    AutoInjectAttrRemover.visit_item_impl_mut(&mut impl_block);
+    AgentConfigAttrRemover.visit_item_impl_mut(&mut impl_block);
 
     quote! {
         #impl_block
@@ -467,11 +467,10 @@ fn generate_constructor_extraction(
     };
 
     let extraction: Vec<proc_macro2::TokenStream> = ctor_params.iter().enumerate().map(|(constructor_param_index, (ident, pat_type))| {
-        if has_autoinject_attribute(pat_type) {
+        if has_agent_config_attr(pat_type) {
             let ty = &pat_type.ty;
             quote! {
-                let #ident: #ty = <#ty as ::golem_rust::agentic::AutoInjectable>::autoinject()
-                .map_err(|err| golem_rust::agentic::internal_error(format!("Failed loading config of type {}: {}",  err, stringify!(#ty))))?;
+                let #ident: #ty = ::golem_rust::agentic::Config::new();
             }
         } else {
             let ident_result = format_ident!("{}_result", ident);

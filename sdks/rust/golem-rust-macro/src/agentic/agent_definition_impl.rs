@@ -19,8 +19,8 @@ use crate::agentic::agent_definition_http_endpoint::{
     extract_http_endpoints, ParsedHttpEndpointDetails,
 };
 use crate::agentic::helpers::{
-    has_autoinject_attribute, is_async_trait_attr, is_constructor_method, is_static_method,
-    AutoInjectAttrRemover,
+    has_agent_config_attr, is_async_trait_attr, is_constructor_method, is_static_method,
+    AgentConfigAttrRemover,
 };
 use crate::agentic::{
     async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
@@ -108,7 +108,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             agent_definition_trait.items.push(save_snapshot_item);
             agent_definition_trait.items.push(registration_function);
 
-            AutoInjectAttrRemover.visit_item_trait_mut(&mut agent_definition_trait);
+            AgentConfigAttrRemover.visit_item_trait_mut(&mut agent_definition_trait);
 
             let result = quote! {
                 #[allow(async_fn_in_trait)]
@@ -284,7 +284,7 @@ fn get_agent_type_with_remote_client(
                         return generic_type_in_agent_method_error(pat_type.pat.span(), &type_name).into();
                     }
 
-                    if !has_autoinject_attribute(pat_type) {
+                    if !has_agent_config_attr(pat_type) {
                         let ty = &pat_type.ty;
                         input_schema_logic.push(quote! {
                             let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
@@ -392,10 +392,6 @@ fn get_agent_type_with_remote_client(
 
     let mut constructor_parameters_with_schema: Vec<proc_macro2::TokenStream> = vec![];
 
-    let mut constructor_param_defs = vec![];
-
-    let mut constructor_param_names = vec![];
-
     if constructor_methods.is_empty() {
         return Err(no_constructor_method_error(agent_definition_trait).into());
     }
@@ -408,10 +404,13 @@ fn get_agent_type_with_remote_client(
     let mut constructor_prompt = String::new();
     let mut constructor_name = String::new();
 
+    let mut agent_config_types = Vec::new();
+    let mut client_constructor_param_defs = vec![];
+    let mut client_agent_config_param_idents = Vec::new();
+    let mut client_data_value_param_idents = Vec::new();
+
     let high_level_description =
         extract_description(&agent_definition_trait.attrs).unwrap_or_default();
-
-    let mut autoinjected_types = Vec::new();
 
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
         constructor_description = extract_description(&ctor_fn.attrs).unwrap_or_default();
@@ -441,16 +440,18 @@ fn get_agent_type_with_remote_client(
                             .into());
                         }
 
-                        if has_autoinject_attribute(pat_type) {
-                            autoinjected_types.push(pat_type.ty.clone());
+                        if has_agent_config_attr(pat_type) {
+                            agent_config_types.push(pat_type.ty.clone());
+
+                            client_constructor_param_defs.push(quote! {
+                                #param_ident: <<#ty as ::golem_rust::agentic::InnerTypeHelper>::Type as ::golem_rust::agentic::ConfigSchema>::RpcType
+                            });
+                            client_agent_config_param_idents.push(param_ident.clone());
                         } else if type_name != "Principal" {
-                            constructor_param_defs.push(quote! {
+                            client_constructor_param_defs.push(quote! {
                                 #param_ident: #ty
                             });
-
-                            constructor_param_names.push(quote! {
-                                #param_ident
-                            });
+                            client_data_value_param_idents.push(param_ident.clone());
                         }
 
                         pat_ident.ident.to_string()
@@ -458,7 +459,7 @@ fn get_agent_type_with_remote_client(
                     _ => "_".to_string(),
                 };
 
-                if !has_autoinject_attribute(pat_type) {
+                if !has_agent_config_attr(pat_type) {
                     let ty = &pat_type.ty;
                     constructor_parameters_with_schema.push(quote! {
                         let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
@@ -499,8 +500,9 @@ fn get_agent_type_with_remote_client(
 
     let remote_client = get_remote_client(
         agent_definition_trait,
-        constructor_param_defs,
-        constructor_param_names,
+        client_constructor_param_defs,
+        &client_data_value_param_idents,
+        &client_agent_config_param_idents,
         type_parameters,
     );
 
@@ -536,20 +538,15 @@ fn get_agent_type_with_remote_client(
     };
 
     let config_impl = {
-        let add_described_config_entries = autoinjected_types.iter().map(|ct|
-            quote! {
-                {
-                    let mut config = <#ct as ::golem_rust::agentic::AutoInjectable>::config_entries();
-                    all_configs.append(&mut config);
-                }
-            }
-        );
+        let add_type_config_entries = agent_config_types
+            .iter()
+            .map(|ct| quote! { result.append(&mut <#ct>::config_entries()); });
 
         quote! {
             {
-                let mut all_configs = Vec::new();
-                #(#add_described_config_entries)*
-                all_configs
+                let mut result = Vec::new();
+                #(#add_type_config_entries)*
+                result
             }
         }
     };
