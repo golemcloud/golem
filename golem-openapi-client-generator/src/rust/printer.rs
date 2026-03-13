@@ -161,6 +161,8 @@ impl<T: Printer<RustContext> + 'static> IntoRustTree for T {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use indoc::indoc;
 
     use crate::printer::indented;

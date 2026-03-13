@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
+test_r::enable!();
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
