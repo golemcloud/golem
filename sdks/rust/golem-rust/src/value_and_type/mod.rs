@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -701,8 +701,8 @@ impl IntoValue for Uuid {
     }
     fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
         let builder = builder.record(Some("Uuid".to_string()), None);
-        let builder = u64::add_to_type_builder(builder.field("high-bits"));
-        let builder = u64::add_to_type_builder(builder.field("low-bits"));
+        let builder = u64::add_to_type_builder(builder.field("high_bits"));
+        let builder = u64::add_to_type_builder(builder.field("low_bits"));
         builder.finish()
     }
 }
@@ -881,30 +881,29 @@ impl IntoValue for WitNode {
     }
     fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
         let builder = builder.variant(Some("WitNode".to_string()), None);
-        let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("record-value"));
-        let builder =
-            <(u32, Option<NodeIndex>)>::add_to_type_builder(builder.case("variant-value"));
-        let builder = <u32>::add_to_type_builder(builder.case("enum-value"));
-        let builder = <Vec<bool>>::add_to_type_builder(builder.case("flags-value"));
-        let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("tuple-value"));
-        let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("list-value"));
-        let builder = <Option<NodeIndex>>::add_to_type_builder(builder.case("option-value"));
+        let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("RecordValue"));
+        let builder = <(u32, Option<NodeIndex>)>::add_to_type_builder(builder.case("VariantValue"));
+        let builder = <u32>::add_to_type_builder(builder.case("EnumValue"));
+        let builder = <Vec<bool>>::add_to_type_builder(builder.case("FlagsValue"));
+        let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("TupleValue"));
+        let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("ListValue"));
+        let builder = <Option<NodeIndex>>::add_to_type_builder(builder.case("OptionValue"));
         let builder = <Result<Option<NodeIndex>, Option<NodeIndex>>>::add_to_type_builder(
-            builder.case("result-value"),
+            builder.case("ResultValue"),
         );
-        let builder = u8::add_to_type_builder(builder.case("prim-u8"));
-        let builder = u16::add_to_type_builder(builder.case("prim-u16"));
-        let builder = u32::add_to_type_builder(builder.case("prim-u32"));
-        let builder = u64::add_to_type_builder(builder.case("prim-u64"));
-        let builder = i8::add_to_type_builder(builder.case("prim-s8"));
-        let builder = i16::add_to_type_builder(builder.case("prim-s16"));
-        let builder = i32::add_to_type_builder(builder.case("prim-s32"));
-        let builder = i64::add_to_type_builder(builder.case("prim-s64"));
-        let builder = f32::add_to_type_builder(builder.case("prim-float32"));
-        let builder = f64::add_to_type_builder(builder.case("prim-float64"));
-        let builder = char::add_to_type_builder(builder.case("prim-char"));
-        let builder = bool::add_to_type_builder(builder.case("prim-bool"));
-        let builder = String::add_to_type_builder(builder.case("prim-string"));
+        let builder = u8::add_to_type_builder(builder.case("PrimU8"));
+        let builder = u16::add_to_type_builder(builder.case("PrimU16"));
+        let builder = u32::add_to_type_builder(builder.case("PrimU32"));
+        let builder = u64::add_to_type_builder(builder.case("PrimU64"));
+        let builder = i8::add_to_type_builder(builder.case("PrimS8"));
+        let builder = i16::add_to_type_builder(builder.case("PrimS16"));
+        let builder = i32::add_to_type_builder(builder.case("PrimS32"));
+        let builder = i64::add_to_type_builder(builder.case("PrimS64"));
+        let builder = f32::add_to_type_builder(builder.case("PrimFloat32"));
+        let builder = f64::add_to_type_builder(builder.case("PrimFloat64"));
+        let builder = char::add_to_type_builder(builder.case("PrimChar"));
+        let builder = bool::add_to_type_builder(builder.case("PrimBool"));
+        let builder = String::add_to_type_builder(builder.case("PrimString"));
         let builder = <(Uri, u64)>::add_to_type_builder(builder.case("handle"));
         builder.finish()
     }
@@ -1144,32 +1143,31 @@ impl IntoValue for WitTypeNode {
     }
     fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
         let builder = builder.variant(Some("WitTypeNode".to_string()), None);
-        let builder = <Vec<(String, NodeIndex)>>::add_to_type_builder(builder.case("record-type"));
+        let builder = <Vec<(String, NodeIndex)>>::add_to_type_builder(builder.case("RecordType"));
         let builder =
-            <Vec<(String, Option<NodeIndex>)>>::add_to_type_builder(builder.case("variant-type"));
-        let builder = <Vec<String>>::add_to_type_builder(builder.case("enum-type"));
-        let builder = <Vec<String>>::add_to_type_builder(builder.case("flags-type"));
-        let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("tuple-type"));
-        let builder = <NodeIndex>::add_to_type_builder(builder.case("list-type"));
-        let builder = <NodeIndex>::add_to_type_builder(builder.case("option-type"));
+            <Vec<(String, Option<NodeIndex>)>>::add_to_type_builder(builder.case("VariantType"));
+        let builder = <Vec<String>>::add_to_type_builder(builder.case("EnumType"));
+        let builder = <Vec<String>>::add_to_type_builder(builder.case("FlagsType"));
+        let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("TupleType"));
+        let builder = <NodeIndex>::add_to_type_builder(builder.case("ListType"));
+        let builder = <NodeIndex>::add_to_type_builder(builder.case("OptionType"));
         let builder = <(Option<NodeIndex>, Option<NodeIndex>)>::add_to_type_builder(
-            builder.case("result-type"),
+            builder.case("ResultType"),
         );
-        let builder = builder.unit_case("prim-u8-type");
-        let builder = builder.unit_case("prim-u16-type");
-        let builder = builder.unit_case("prim-u32-type");
-        let builder = builder.unit_case("prim-u64-type");
-        let builder = builder.unit_case("prim-s8-type");
-        let builder = builder.unit_case("prim-s16-type");
-        let builder = builder.unit_case("prim-s32-type");
-        let builder = builder.unit_case("prim-s64-type");
-        let builder = builder.unit_case("prim-f32-type");
-        let builder = builder.unit_case("prim-f64-type");
-        let builder = builder.unit_case("prim-char-type");
-        let builder = builder.unit_case("prim-bool-type");
-        let builder = builder.unit_case("prim-string-type");
-        let builder =
-            <(ResourceId, ResourceMode)>::add_to_type_builder(builder.case("handle-type"));
+        let builder = builder.unit_case("PrimU8Type");
+        let builder = builder.unit_case("PrimU16Type");
+        let builder = builder.unit_case("PrimU32Type");
+        let builder = builder.unit_case("PrimU64Type");
+        let builder = builder.unit_case("PrimS8Type");
+        let builder = builder.unit_case("PrimS16Type");
+        let builder = builder.unit_case("PrimS32Type");
+        let builder = builder.unit_case("PrimS64Type");
+        let builder = builder.unit_case("PrimF32Type");
+        let builder = builder.unit_case("PrimF64Type");
+        let builder = builder.unit_case("PrimCharType");
+        let builder = builder.unit_case("PrimBoolType");
+        let builder = builder.unit_case("PrimStringType");
+        let builder = <(ResourceId, ResourceMode)>::add_to_type_builder(builder.case("HandleType"));
         builder.finish()
     }
 }
@@ -1777,9 +1775,9 @@ impl IntoValue for AgentId {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let builder = builder.record(Some("agent-id".to_string()), Some("golem".to_string()));
-        let builder = ComponentId::add_to_type_builder(builder.field("component-id"));
-        let builder = String::add_to_type_builder(builder.field("agent-id"));
+        let builder = builder.record(Some("AgentId".to_string()), Some("golem".to_string()));
+        let builder = ComponentId::add_to_type_builder(builder.field("component_id"));
+        let builder = String::add_to_type_builder(builder.field("agent_id"));
         builder.finish()
     }
 }
@@ -1814,9 +1812,9 @@ impl IntoValue for PromiseId {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let builder = builder.record(Some("promise-id".to_string()), Some("golem".to_string()));
-        let builder = AgentId::add_to_type_builder(builder.field("agent-id"));
-        let builder = u64::add_to_type_builder(builder.field("oplog-idx"));
+        let builder = builder.record(Some("PromiseId".to_string()), Some("golem".to_string()));
+        let builder = AgentId::add_to_type_builder(builder.field("agent_id"));
+        let builder = u64::add_to_type_builder(builder.field("oplog_idx"));
         builder.finish()
     }
 }

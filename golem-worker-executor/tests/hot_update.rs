@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,12 +18,12 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::WorkerStatus;
+use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{update_counts, TestDsl};
 
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use http::StatusCode;
 use log::info;
@@ -38,6 +38,14 @@ use tracing::{debug, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("agent_update_v1")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_update_v2")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 pub struct F1Blocker {
@@ -145,6 +153,7 @@ impl TestHttpServer {
 async fn auto_update_on_running(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -155,17 +164,19 @@ async fn auto_update_on_running(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -229,21 +240,18 @@ async fn auto_update_on_running(
 async fn auto_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -283,6 +291,7 @@ async fn auto_update_on_idle(
 async fn failing_auto_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -294,17 +303,19 @@ async fn failing_auto_update_on_idle(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -351,21 +362,18 @@ async fn failing_auto_update_on_idle(
 async fn auto_update_on_idle_with_non_diverging_history(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -416,6 +424,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
 async fn failing_auto_update_on_running(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -426,17 +435,19 @@ async fn failing_auto_update_on_running(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -506,6 +517,7 @@ async fn failing_auto_update_on_running(
 async fn manual_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -516,17 +528,19 @@ async fn manual_update_on_idle(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v2_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v2)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -577,6 +591,7 @@ async fn manual_update_on_idle(
 async fn manual_update_on_idle_without_save_snapshot(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -587,17 +602,19 @@ async fn manual_update_on_idle_without_save_snapshot(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -644,6 +661,7 @@ async fn manual_update_on_idle_without_save_snapshot(
 async fn auto_update_on_running_followed_by_manual(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -654,17 +672,19 @@ async fn auto_update_on_running_followed_by_manual(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -745,6 +765,7 @@ async fn auto_update_on_running_followed_by_manual(
 async fn manual_update_on_idle_with_failing_load(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -755,17 +776,19 @@ async fn manual_update_on_idle_with_failing_load(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v2_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v2)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -811,6 +834,7 @@ async fn manual_update_on_idle_with_failing_load(
 async fn manual_update_on_idle_using_v11(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -821,17 +845,19 @@ async fn manual_update_on_idle_using_v11(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v2_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v2)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -882,6 +908,7 @@ async fn manual_update_on_idle_using_v11(
 async fn manual_update_on_idle_using_golem_rust_sdk(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -892,17 +919,19 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v2_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v2)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -953,21 +982,18 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
 async fn auto_update_on_idle_to_non_existing(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1020,21 +1046,18 @@ async fn auto_update_on_idle_to_non_existing(
 async fn update_component_revision_environment_variable(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("revision-env-agent");
+    let agent_id = agent_id!("RevisionEnvAgent");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1078,7 +1101,7 @@ async fn update_component_revision_environment_variable(
 
     // agent created on the new version sees correct component version
     {
-        let agent_id_2 = phantom_agent_id!("revision-env-agent", uuid::Uuid::new_v4());
+        let agent_id_2 = phantom_agent_id!("RevisionEnvAgent", uuid::Uuid::new_v4());
         let _worker2 = executor
             .start_agent(&component.id, agent_id_2.clone())
             .await?;
@@ -1125,6 +1148,7 @@ async fn update_component_revision_environment_variable(
 async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -1135,17 +1159,19 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -1181,7 +1207,7 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
     executor
         .wait_for_status(
             &worker_id,
-            WorkerStatus::Interrupted,
+            AgentStatus::Interrupted,
             Duration::from_secs(10),
         )
         .await?;
@@ -1212,9 +1238,68 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
     http_server.abort();
 
     // The worker should still be interrupted since disable_wakeup was true
-    assert_eq!(metadata.status, WorkerStatus::Interrupted);
+    assert_eq!(metadata.status, AgentStatus::Interrupted);
     // The update should be pending, not yet applied
     assert_eq!(update_counts(&metadata), (1, 0, 0));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v2)
+        .unique()
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("UpdateTest");
+
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor.log_output(&worker_id).await?;
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+
+    executor
+        .manual_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    // restart and force the agent to reload the last snapshot
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    assert_eq!(result, data_value!(0u64));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
 
     Ok(())
 }

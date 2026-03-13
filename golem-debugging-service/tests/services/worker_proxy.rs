@@ -13,7 +13,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::AgentInvocationOutput;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
+use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
@@ -22,6 +22,7 @@ use golem_worker_executor_test_utils::TestContext;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 // Worker Proxy will be internally used by fork functionality,
 // Fork will be resuming the worker (the target) in the real executor by
@@ -30,14 +31,14 @@ use tonic::transport::Channel;
 // Here the proxy implementation bypasses the worker service
 // however place it in the real executor
 pub struct TestWorkerProxy {
-    client: WorkerExecutorClient<Channel>,
+    client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     component_service: Arc<FileSystemComponentWriter>,
     test_ctx: TestContext,
 }
 
 impl TestWorkerProxy {
     pub fn new(
-        client: WorkerExecutorClient<Channel>,
+        client: WorkerExecutorClient<OtelGrpcService<Channel>>,
         component_service: Arc<FileSystemComponentWriter>,
         test_ctx: TestContext,
     ) -> Self {
@@ -65,8 +66,8 @@ impl TestWorkerProxy {
 impl WorkerProxy for TestWorkerProxy {
     async fn start(
         &self,
-        _owned_worker_id: &OwnedWorkerId,
-        _caller_worker_id: &WorkerId,
+        _owned_agent_id: &OwnedAgentId,
+        _caller_agent_id: &AgentId,
         _caller_env: HashMap<String, String>,
         _caller_config_vars: BTreeMap<String, String>,
         _caller_stack: InvocationContextStack,
@@ -82,13 +83,13 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn invoke_agent(
         &self,
-        _worker_id: &WorkerId,
+        _agent_id: &AgentId,
         _method_name: String,
         _method_parameters: UntypedDataValue,
         _mode: AgentInvocationMode,
         _schedule_at: Option<DateTime<Utc>>,
         _idempotency_key: Option<IdempotencyKey>,
-        _caller_worker_id: WorkerId,
+        _caller_agent_id: AgentId,
         _caller_env: HashMap<String, String>,
         _caller_config_vars: BTreeMap<String, String>,
         _caller_stack: InvocationContextStack,
@@ -104,7 +105,7 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn update(
         &self,
-        _owned_worker_id: &OwnedWorkerId,
+        _owned_agent_id: &OwnedAgentId,
         _target_revision: ComponentRevision,
         _mode: UpdateMode,
         _disable_wakeup: bool,
@@ -119,7 +120,7 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn resume(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         force: bool,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
@@ -127,7 +128,7 @@ impl WorkerProxy for TestWorkerProxy {
 
         let component = self
             .component_service
-            .get_latest_component_metadata(&worker_id.component_id)
+            .get_latest_component_metadata(&agent_id.component_id)
             .await
             .unwrap();
 
@@ -144,7 +145,7 @@ impl WorkerProxy for TestWorkerProxy {
                 .client
                 .clone()
                 .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
+                    agent_id: Some(agent_id.clone().into()),
                     environment_id: Some(component.environment_id.into()),
                     force: Some(force),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -175,14 +176,14 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &AgentId,
+        target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
-            .get_latest_component_metadata(&source_worker_id.component_id)
+            .get_latest_component_metadata(&source_agent_id.component_id)
             .await
             .unwrap();
 
@@ -200,8 +201,8 @@ impl WorkerProxy for TestWorkerProxy {
             .fork_worker(ForkWorkerRequest {
                 component_owner_account_id: Some(component.account_id.into()),
                 environment_id: Some(component.environment_id.into()),
-                source_worker_id: Some(source_worker_id.clone().into()),
-                target_worker_id: Some(target_worker_id.clone().into()),
+                source_agent_id: Some(source_agent_id.clone().into()),
+                target_agent_id: Some(target_agent_id.clone().into()),
                 oplog_index_cutoff: (*oplog_index_cutoff).into(),
                 auth_ctx: Some(auth_ctx.into()),
                 principal: None,
@@ -223,13 +224,13 @@ impl WorkerProxy for TestWorkerProxy {
 
     async fn revert(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target: RevertWorkerTarget,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         let component = self
             .component_service
-            .get_latest_component_metadata(&worker_id.component_id)
+            .get_latest_component_metadata(&agent_id.component_id)
             .await
             .unwrap();
 
@@ -245,7 +246,7 @@ impl WorkerProxy for TestWorkerProxy {
             .client
             .clone()
             .revert_worker(RevertWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(component.environment_id.into()),
                 target: Some(target.into()),
                 auth_ctx: Some(auth_ctx.into()),

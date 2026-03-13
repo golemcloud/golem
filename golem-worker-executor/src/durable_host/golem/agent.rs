@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -19,8 +19,8 @@ use anyhow::anyhow;
 use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
-use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, AgentTypeName};
+use golem_common::model::agent::ConfigValueType;
+use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
 };
@@ -30,7 +30,8 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::model::PromiseId;
-use golem_wasm::WitValue;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{NodeBuilder, WitType, WitValue, WitValueBuilderExtensions};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -41,8 +42,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .agent_types_service()
                 .get_all(
-                    self.owned_worker_id.environment_id,
-                    self.owned_worker_id.worker_id.component_id,
+                    self.owned_agent_id.environment_id,
+                    self.owned_agent_id.agent_id.component_id,
                     self.state.component_metadata.revision,
                 )
                 .await
@@ -78,8 +79,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .agent_types_service()
                 .get(
-                    self.owned_worker_id.environment_id,
-                    self.owned_worker_id.worker_id.component_id,
+                    self.owned_agent_id.environment_id,
+                    self.owned_agent_id.agent_id.component_id,
                     component_revision,
                     &agent_type_name,
                 )
@@ -117,11 +118,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 agent_type.agent_type.constructor.input_schema,
             ) {
                 Ok(input) => {
-                    let agent_id = AgentId::new(
-                        AgentTypeName(agent_type_name).to_wit_naming(),
+                    let agent_id = ParsedAgentId::new(
+                        AgentTypeName(agent_type_name),
                         input,
                         phantom_id.map(|id| id.into()),
-                    );
+                    )
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
                     Ok(Ok(agent_id.to_string()))
                 }
                 Err(err) => Ok(Err(AgentError::InvalidInput(err))),
@@ -138,7 +140,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
-        match AgentId::parse(agent_id, component_metadata) {
+        match ParsedAgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => Ok(Ok((
                 agent_id.agent_type.to_string(),
                 agent_id.parameters.into(),
@@ -158,7 +160,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             let promise_id: PromiseId = promise_id.clone().into();
-            if promise_id.worker_id.component_id != self.state.component_metadata.id {
+            if promise_id.agent_id.component_id != self.state.component_metadata.id {
                 let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
                 let persisted = durability
                     .persist(
@@ -219,7 +221,67 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn get_config_value(&mut self, _key: Vec<String>) -> anyhow::Result<WitValue> {
-        unimplemented!()
+    async fn get_config_value(
+        &mut self,
+        key: Vec<String>,
+        expected_type: WitType,
+    ) -> anyhow::Result<WitValue> {
+        let key_str = key.join(".");
+        tracing::debug!("Agent getting config value for key {}", key_str);
+
+        let agent_id = self
+            .parsed_agent_id()
+            .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
+
+        let expected_type = AnalysedType::from(expected_type);
+
+        let declaration = self
+            .component_metadata()
+            .metadata
+            .find_agent_type_by_name(&agent_id.agent_type)
+            .expect("Active agent type of agent was not declared in component metadata")
+            .config
+            .iter()
+            .find_map(|c| (c.key == key).then(|| c.value.clone()));
+
+        let declaration = match declaration {
+            None if matches!(expected_type, AnalysedType::Option(_)) => {
+                // Allow optional undeclared config for schema evolution
+                return Ok(WitValue::builder().option_none());
+            }
+            None => {
+                return Err(anyhow!("No config declared for key {}", key_str));
+            }
+            Some(d) => d,
+        };
+
+        match declaration {
+            ConfigValueType::Local(local_decl) => {
+                let config_value = self.state.local_agent_config.get(&key);
+
+                match (&local_decl.value, &expected_type, config_value) {
+                    // Declared optional, expected optional, value missing
+                    (AnalysedType::Option(declared), AnalysedType::Option(expected), None)
+                        if declared == expected =>
+                    {
+                        Ok(WitValue::builder().option_none())
+                    }
+
+                    // Types match and value exists
+                    (declared, expected, Some(value)) if declared == expected => {
+                        Ok(value.value.clone().into())
+                    }
+
+                    _ => Err(anyhow!(
+                        "declared and expected type for config key {} are not compatible",
+                        key_str
+                    )),
+                }
+            }
+
+            ConfigValueType::Shared(_) => {
+                unimplemented!()
+            }
+        }
     }
 }

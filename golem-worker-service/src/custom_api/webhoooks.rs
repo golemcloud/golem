@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -86,7 +86,7 @@ impl WebhookCallbackHandler {
         tracing::debug!("Completing promise due to webhook_callback: {promise_id}");
         self.worker_service
             .complete_promise(
-                &promise_id.worker_id,
+                &promise_id.agent_id,
                 promise_id.oplog_idx.as_u64(),
                 body_binary,
                 auth_ctx,

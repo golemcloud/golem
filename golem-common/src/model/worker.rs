@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,32 +12,75 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent::AgentTypeName;
+use super::component_metadata::ComponentMetadata;
 pub use crate::base_model::worker::*;
+use crate::model::agent::{ConfigKeyValueType, ConfigValueType};
+use golem_wasm::ValueAndType;
+
+impl UntypedParsedWorkerCreationLocalAgentConfigEntry {
+    pub fn enrich_with_type(
+        self,
+        component_metadata: &ComponentMetadata,
+        agent_type_name: Option<&AgentTypeName>,
+    ) -> Result<ParsedWorkerCreationLocalAgentConfigEntry, String> {
+        let agent_type_name = agent_type_name.ok_or_else(|| {
+            "cannot enrich local agent config for non-agentic workers".to_string()
+        })?;
+
+        let value_type = component_metadata
+            .find_agent_type_by_name(agent_type_name)
+            .ok_or_else(|| {
+                format!("did not find expected agent type {agent_type_name} in the metadata")
+            })?
+            .config
+            .into_iter()
+            .find_map(|c| match c {
+                ConfigKeyValueType {
+                    key,
+                    value: ConfigValueType::Local(inner),
+                } if key == self.key => Some(inner),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "did not find config key {} in the metadata",
+                    self.key.join(".")
+                )
+            })?;
+
+        Ok(ParsedWorkerCreationLocalAgentConfigEntry {
+            key: self.key,
+            value: ValueAndType::new(self.value, value_type.value),
+        })
+    }
+}
 
 mod protobuf {
-    use super::WorkerMetadataDto;
+    use super::AgentMetadataDto;
+    use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
     use super::{
-        ExportedResourceMetadata, FailedUpdate, PendingUpdate, SuccessfulUpdate, UpdateRecord,
+        ExportedResourceMetadata, FailedUpdate, ParsedWorkerCreationLocalAgentConfigEntry,
+        PendingUpdate, SuccessfulUpdate, UpdateRecord, WorkerCreationLocalAgentConfigEntry,
     };
-    use super::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget, WorkerUpdateMode};
     use crate::model::component::PluginPriority;
-    use crate::model::oplog::WorkerResourceId;
+    use crate::model::oplog::AgentResourceId;
     use crate::model::regions::OplogRegion;
-    use crate::model::{OplogIndex, WorkerResourceDescription};
+    use crate::model::{AgentResourceDescription, OplogIndex};
     use std::collections::HashSet;
 
-    impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadataDto {
+    impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetadataDto {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
+            value: golem_api_grpc::proto::golem::worker::AgentMetadata,
         ) -> Result<Self, Self::Error> {
             let mut exported_resource_instances = Vec::new();
 
             for desc in value.owned_resources {
                 exported_resource_instances.push(ExportedResourceMetadata {
-                    key: WorkerResourceId(desc.resource_id),
-                    description: WorkerResourceDescription {
+                    key: AgentResourceId(desc.resource_id),
+                    description: AgentResourceDescription {
                         created_at: desc.created_at.ok_or("Missing created_at")?.into(),
                         resource_owner: desc.resource_owner,
                         resource_name: desc.resource_name,
@@ -45,7 +88,7 @@ mod protobuf {
                 });
             }
             Ok(Self {
-                worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
+                agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
                 environment_id: value
                     .environment_id
                     .ok_or("Missing environment_id")?
@@ -86,8 +129,8 @@ mod protobuf {
         }
     }
 
-    impl From<WorkerMetadataDto> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
-        fn from(value: WorkerMetadataDto) -> Self {
+    impl From<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMetadata {
+        fn from(value: AgentMetadataDto) -> Self {
             let mut owned_resources = Vec::new();
             for instance in value.exported_resource_instances {
                 owned_resources.push(golem_api_grpc::proto::golem::worker::ResourceDescription {
@@ -99,7 +142,7 @@ mod protobuf {
             }
 
             Self {
-                worker_id: Some(value.worker_id.into()),
+                agent_id: Some(value.agent_id.into()),
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
@@ -266,28 +309,79 @@ mod protobuf {
         }
     }
 
-    impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode {
+    impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for AgentUpdateMode {
         fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
             match value {
                 golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => {
-                    WorkerUpdateMode::Automatic
+                    AgentUpdateMode::Automatic
                 }
-                golem_api_grpc::proto::golem::worker::UpdateMode::Manual => {
-                    WorkerUpdateMode::Manual
-                }
+                golem_api_grpc::proto::golem::worker::UpdateMode::Manual => AgentUpdateMode::Manual,
             }
         }
     }
 
-    impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
-        fn from(value: WorkerUpdateMode) -> Self {
+    impl From<AgentUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
+        fn from(value: AgentUpdateMode) -> Self {
             match value {
-                WorkerUpdateMode::Automatic => {
+                AgentUpdateMode::Automatic => {
                     golem_api_grpc::proto::golem::worker::UpdateMode::Automatic
                 }
-                WorkerUpdateMode::Manual => {
-                    golem_api_grpc::proto::golem::worker::UpdateMode::Manual
-                }
+                AgentUpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry>
+        for WorkerCreationLocalAgentConfigEntry
+    {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                key: value.key,
+                value: serde_json::from_str::<serde_json::Value>(&value.value)
+                    .map_err(|e| e.to_string())?,
+            })
+        }
+    }
+
+    impl From<WorkerCreationLocalAgentConfigEntry>
+        for golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry
+    {
+        fn from(value: WorkerCreationLocalAgentConfigEntry) -> Self {
+            Self {
+                key: value.key,
+                value: serde_json::to_string(&value.value)
+                    .expect("json value should be encodable to string"),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::ParsedLocalAgentConfigEntry>
+        for ParsedWorkerCreationLocalAgentConfigEntry
+    {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::ParsedLocalAgentConfigEntry,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                key: value.key,
+                value: value
+                    .value
+                    .ok_or_else(|| "Missing field: value".to_string())?
+                    .try_into()?,
+            })
+        }
+    }
+
+    impl From<ParsedWorkerCreationLocalAgentConfigEntry>
+        for golem_api_grpc::proto::golem::worker::ParsedLocalAgentConfigEntry
+    {
+        fn from(value: ParsedWorkerCreationLocalAgentConfigEntry) -> Self {
+            Self {
+                key: value.key,
+                value: Some(value.value.into()),
             }
         }
     }

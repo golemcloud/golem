@@ -1,7 +1,7 @@
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::{oplog, IdempotencyKey, LogLevel, Timestamp, WorkerEvent};
+use golem_common::model::{oplog, AgentEvent, IdempotencyKey, LogLevel, Timestamp};
 
-// Internal version of WorkerEvent, without any operational details.
+// Internal version of AgentEvent, without any operational details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InternalWorkerEvent {
     StdOut {
@@ -108,7 +108,7 @@ impl InternalWorkerEvent {
     }
 }
 
-impl From<InternalWorkerEvent> for WorkerEvent {
+impl From<InternalWorkerEvent> for AgentEvent {
     fn from(event: InternalWorkerEvent) -> Self {
         match event {
             InternalWorkerEvent::StdOut { timestamp, bytes } => Self::StdOut { timestamp, bytes },

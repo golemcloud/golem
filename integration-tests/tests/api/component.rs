@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -528,6 +528,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let agent_type = AgentType {
         type_name: golem_common::model::agent::AgentTypeName("CounterAgent".to_string()),
         description: "".to_string(),
+        source_language: String::new(),
         constructor: AgentConstructor {
             name: None,
             description: "".to_string(),

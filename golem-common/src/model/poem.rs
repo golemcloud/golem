@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -181,15 +181,15 @@ mod tests {
     use crate::model::component::{
         ComponentFileContentHash, ComponentFilePath, InitialComponentFile,
     };
-    use crate::model::{ComponentFilePermissions, Empty, IdempotencyKey, WorkerStatus};
+    use crate::model::{AgentStatus, ComponentFilePermissions, Empty, IdempotencyKey};
     use poem_openapi::types::ToJSON;
     use test_r::test;
 
     #[test]
     fn worker_status_serialization_poem_serde_equivalence() {
-        let status = WorkerStatus::Retrying;
+        let status = AgentStatus::Retrying;
         let serialized = status.to_json_string();
-        let deserialized: WorkerStatus = serde_json::from_str(&serialized).unwrap();
+        let deserialized: AgentStatus = serde_json::from_str(&serialized).unwrap();
         assert_eq!(status, deserialized);
     }
 

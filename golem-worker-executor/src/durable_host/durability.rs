@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -192,7 +192,7 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
             "subscribe",
         );
 
-        dynamic_subscribe(self.table(), self_, None)
+        Ok(dynamic_subscribe(self.table(), self_, None)?)
     }
 
     async fn drop(&mut self, rep: Resource<LazyInitializedPollableEntry>) -> anyhow::Result<()> {

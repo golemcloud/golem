@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,28 +20,30 @@ use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::{AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use tracing::{error, warn};
 
 /// Service for activating workers in the background
 #[async_trait]
 pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
     /// Makes sure an already existing worker is active in a background task. Returns immediately
-    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId);
+    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId);
 
     /// Gets or creates a worker in suspended state
     async fn get_or_create_suspended(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
@@ -50,18 +52,19 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
     async fn get_or_create_running(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
 }
 
 pub struct LazyWorkerActivator<Ctx: WorkerCtx> {
-    worker_activator: Arc<Mutex<Option<Arc<dyn WorkerActivator<Ctx> + 'static>>>>,
+    worker_activator: Arc<Mutex<Option<Weak<dyn WorkerActivator<Ctx> + 'static>>>>,
 }
 
 impl<Ctx: WorkerCtx> LazyWorkerActivator<Ctx> {
@@ -71,8 +74,8 @@ impl<Ctx: WorkerCtx> LazyWorkerActivator<Ctx> {
         }
     }
 
-    pub fn set(&self, worker_activator: Arc<impl WorkerActivator<Ctx> + 'static>) {
-        *self.worker_activator.lock().unwrap() = Some(worker_activator);
+    pub fn set(&self, worker_activator: Arc<dyn WorkerActivator<Ctx> + 'static>) {
+        *self.worker_activator.lock().unwrap() = Some(Arc::downgrade(&worker_activator));
     }
 }
 
@@ -84,12 +87,17 @@ impl<Ctx: WorkerCtx> Default for LazyWorkerActivator<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
-    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId) {
-        let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
+    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId) {
+        let maybe_worker_activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade());
         match maybe_worker_activator {
             Some(worker_activator) => {
                 worker_activator
-                    .activate_worker(created_by, owned_worker_id)
+                    .activate_worker(created_by, owned_agent_id)
                     .await
             }
             None => warn!("WorkerActivator is disabled, not activating instance"),
@@ -99,23 +107,30 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
     async fn get_or_create_suspended(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
+        let maybe_worker_activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade());
         match maybe_worker_activator {
             Some(worker_activator) => {
                 worker_activator
                     .get_or_create_suspended(
                         created_by,
-                        owned_worker_id,
+                        owned_agent_id,
                         worker_env,
                         worker_config,
+                        worker_local_agent_config,
                         component_revision,
                         parent,
                         invocation_context,
@@ -132,23 +147,30 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
     async fn get_or_create_running(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
+        let maybe_worker_activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade());
         match maybe_worker_activator {
             Some(worker_activator) => {
                 worker_activator
                     .get_or_create_running(
                         created_by,
-                        owned_worker_id,
+                        owned_agent_id,
                         worker_env,
                         worker_config,
+                        worker_local_agent_config,
                         component_revision,
                         parent,
                         invocation_context,
@@ -182,16 +204,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx>> DefaultWorkerActivator<Ctx, Svcs> {
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<Ctx>
     for DefaultWorkerActivator<Ctx, Svcs>
 {
-    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId) {
-        let metadata = self.all.worker_service().get(owned_worker_id).await;
+    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId) {
+        let metadata = self.all.worker_service().get(owned_agent_id).await;
         match metadata {
             Some(_) => {
                 if let Err(err) = Worker::get_or_create_running(
                     &self.all,
                     created_by,
-                    owned_worker_id,
+                    owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -211,20 +234,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
     async fn get_or_create_suspended(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         Worker::get_or_create_suspended(
             &self.all,
             created_by,
-            owned_worker_id,
+            owned_agent_id,
             worker_env,
             worker_config,
+            worker_local_agent_config,
             component_revision,
             parent,
             invocation_context,
@@ -236,20 +261,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
     async fn get_or_create_running(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
-        parent: Option<WorkerId>,
+        parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
         principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         Worker::get_or_create_running(
             &self.all,
             created_by,
-            owned_worker_id,
+            owned_agent_id,
             worker_env,
             worker_config,
+            worker_local_agent_config,
             component_revision,
             parent,
             invocation_context,

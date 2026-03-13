@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{HasConfigVars, LogEventEmitBehaviour};
+use super::LogEventEmitBehaviour;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
+use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, Host as AgentHost, HostCancellationToken,
     HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
@@ -45,34 +45,35 @@ use crate::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
     InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
-use anyhow::{anyhow, Error};
+use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationOutput, IdempotencyKey, OwnedWorkerId, WorkerId,
-    WorkerStatusRecord,
+    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
+    OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::Uri;
-use std::collections::{BTreeMap, HashSet};
+use golem_wasm::{Uri, WitType};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Weak};
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 pub struct Context {
@@ -233,7 +234,7 @@ impl ResourceLimiterAsync for Context {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         let limit = self.get_max_memory();
         debug!(
             "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
@@ -241,7 +242,7 @@ impl ResourceLimiterAsync for Context {
         );
 
         if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
-            Err(anyhow!(GolemSpecificWasmTrap::WorkerExceededMemoryLimit))?;
+            Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)?;
         };
 
         let current_known = self.durable_ctx.total_linear_memory_size();
@@ -249,7 +250,10 @@ impl ResourceLimiterAsync for Context {
 
         if delta > 0 {
             // Get more permits from the host. If this is not allowed the worker will fail immediately and will retry with more permits.
-            self.durable_ctx.increase_memory(delta).await?;
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
             record_allocated_memory(desired);
         }
 
@@ -261,7 +265,7 @@ impl ResourceLimiterAsync for Context {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         debug!(
             "table_growing: current={}, desired={}, maximum={:?}",
             current, desired, maximum
@@ -276,12 +280,12 @@ impl ExternalOperations<Context> for Context {
 
     async fn get_last_error_and_retry_count<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        worker_id: &OwnedWorkerId,
-        worker_status_record: &WorkerStatusRecord,
+        agent_id: &OwnedAgentId,
+        worker_status_record: &AgentStatusRecord,
     ) -> Option<LastError> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(
             this,
-            worker_id,
+            agent_id,
             worker_status_record,
         )
         .await
@@ -296,11 +300,11 @@ impl ExternalOperations<Context> for Context {
     }
 
     async fn prepare_instance(
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Self> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
+        DurableWorkerCtx::<Context>::prepare_instance(agent_id, instance, store).await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
@@ -538,23 +542,27 @@ impl AgentHost for Context {
         AgentHost::create_webhook(&mut self.durable_ctx, promise_id).await
     }
 
-    async fn get_config_value(&mut self, key: Vec<String>) -> anyhow::Result<golem_wasm::WitValue> {
-        AgentHost::get_config_value(&mut self.durable_ctx, key).await
+    async fn get_config_value(
+        &mut self,
+        key: Vec<String>,
+        expected_type: WitType,
+    ) -> anyhow::Result<golem_wasm::WitValue> {
+        AgentHost::get_config_value(&mut self.durable_ctx, key, expected_type).await
     }
 }
 
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
     fn get_environment(
         &mut self,
-    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
     }
 
-    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
     }
 
-    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
     }
 }
@@ -611,12 +619,6 @@ impl InvocationContextManagement for Context {
     }
 }
 
-impl HasConfigVars for Context {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.config_vars()
-    }
-}
-
 #[async_trait]
 impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
@@ -625,8 +627,8 @@ impl WorkerCtx for Context {
 
     async fn create(
         account_id: AccountId,
-        owned_worker_id: OwnedWorkerId,
-        agent_id: Option<AgentId>,
+        owned_agent_id: OwnedAgentId,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -644,7 +646,7 @@ impl WorkerCtx for Context {
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
-        worker_config: WorkerConfig,
+        worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -652,11 +654,12 @@ impl WorkerCtx for Context {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
-            owned_worker_id.clone(),
+            owned_agent_id.clone(),
             agent_id,
             promise_service,
             worker_service,
@@ -680,6 +683,7 @@ impl WorkerCtx for Context {
             agent_types_service,
             agent_webhooks_service,
             shard_service,
+            http_connection_pool,
             pending_update,
             original_phantom_id,
         )
@@ -704,16 +708,16 @@ impl WorkerCtx for Context {
         self
     }
 
-    fn worker_id(&self) -> &WorkerId {
-        self.durable_ctx.worker_id()
-    }
-
-    fn owned_worker_id(&self) -> &OwnedWorkerId {
-        self.durable_ctx.owned_worker_id()
-    }
-
-    fn agent_id(&self) -> Option<AgentId> {
+    fn agent_id(&self) -> &AgentId {
         self.durable_ctx.agent_id()
+    }
+
+    fn owned_agent_id(&self) -> &OwnedAgentId {
+        self.durable_ctx.owned_agent_id()
+    }
+
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
+        self.durable_ctx.parsed_agent_id()
     }
 
     fn agent_mode(&self) -> AgentMode {

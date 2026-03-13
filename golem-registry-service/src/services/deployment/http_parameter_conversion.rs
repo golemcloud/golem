@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     ComponentModelElementSchema, DataSchema, ElementSchema, HeaderVariable, HttpEndpointDetails,
     HttpMountDetails, NamedElementSchema, NamedElementSchemas, PathSegment, QueryVariable,
@@ -182,7 +181,7 @@ fn handle_body_parameters<E>(
 
             let field_index = body_fields.len();
             body_fields.push(NameTypePair {
-                name: named_schema.name.to_wit_naming(),
+                name: named_schema.name.clone(),
                 typ: element_type.clone(),
             });
 
@@ -348,10 +347,11 @@ fn validate_path_segment_type<E>(
 mod test {
     use golem_common::model::agent::{
         BinaryDescriptor, BinaryType, ComponentModelElementSchema, CorsOptions, DataSchema,
-        ElementSchema, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
-        NamedElementSchema, NamedElementSchemas, PathSegment, PathVariable,
+        ElementSchema, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
+        LiteralSegment, NamedElementSchema, NamedElementSchemas, PathSegment, PathVariable,
+        QueryVariable,
     };
-    use golem_wasm::analysis::analysed_type;
+    use golem_wasm::analysis::{AnalysedType, analysed_type};
     use test_r::test;
 
     use crate::services::deployment::http_parameter_conversion::{
@@ -688,5 +688,325 @@ mod test {
             build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap_err();
 
         assert!(err.contains("Invalid body parameters"));
+    }
+
+    #[test]
+    fn constructor_binds_snake_case_parameter_from_path() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![
+                PathSegment::Literal(LiteralSegment {
+                    value: "agents".into(),
+                }),
+                PathSegment::PathVariable(PathVariable {
+                    variable_name: "user_name".into(),
+                }),
+            ],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "user_name".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::str(),
+                }),
+            }],
+        });
+
+        let params = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
+
+        assert_eq!(params.len(), 1);
+        assert!(matches!(
+            params[0],
+            ConstructorParameter::Path {
+                path_segment_index,
+                parameter_type: PathSegmentType::Str
+            } if path_segment_index == SafeIndex::from(0)
+        ));
+    }
+
+    #[test]
+    fn constructor_binds_camel_case_parameter_from_path() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![
+                PathSegment::Literal(LiteralSegment {
+                    value: "agents".into(),
+                }),
+                PathSegment::PathVariable(PathVariable {
+                    variable_name: "userName".into(),
+                }),
+            ],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "userName".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::str(),
+                }),
+            }],
+        });
+
+        let params = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
+
+        assert_eq!(params.len(), 1);
+        assert!(matches!(
+            params[0],
+            ConstructorParameter::Path {
+                path_segment_index,
+                parameter_type: PathSegmentType::Str
+            } if path_segment_index == SafeIndex::from(0)
+        ));
+    }
+
+    #[test]
+    fn method_binds_snake_case_query_variable() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![QueryVariable {
+                query_param_name: "page_size".into(),
+                variable_name: "page_size".into(),
+            }],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "page_size".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::str(),
+                }),
+            }],
+        });
+
+        let (_body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert_eq!(params.len(), 1);
+        assert!(matches!(params[0], MethodParameter::Query { .. }));
+    }
+
+    #[test]
+    fn method_binds_camel_case_query_variable() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![QueryVariable {
+                query_param_name: "pageSize".into(),
+                variable_name: "pageSize".into(),
+            }],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "pageSize".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::str(),
+                }),
+            }],
+        });
+
+        let (_body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert_eq!(params.len(), 1);
+        assert!(matches!(params[0], MethodParameter::Query { .. }));
+    }
+
+    #[test]
+    fn method_binds_snake_case_header_variable() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![],
+            header_vars: vec![HeaderVariable {
+                header_name: "x-api-key".into(),
+                variable_name: "x_api_key".into(),
+            }],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "x_api_key".into(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: analysed_type::str(),
+                }),
+            }],
+        });
+
+        let (_body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        assert_eq!(params.len(), 1);
+        assert!(matches!(params[0], MethodParameter::Header { .. }));
+    }
+
+    #[test]
+    fn method_json_body_preserves_snake_case_field_names() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "first_name".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: analysed_type::str(),
+                    }),
+                },
+                NamedElementSchema {
+                    name: "last_name".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: analysed_type::str(),
+                    }),
+                },
+            ],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        if let RequestBodySchema::JsonBody { expected_type, .. } = body {
+            if let AnalysedType::Record(record) = expected_type {
+                assert_eq!(record.fields[0].name, "first_name");
+                assert_eq!(record.fields[1].name, "last_name");
+            } else {
+                panic!("Expected Record body type");
+            }
+        } else {
+            panic!("Expected JsonBody");
+        }
+
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn method_json_body_preserves_camel_case_field_names() {
+        let mount = HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            webhook_suffix: vec![],
+        };
+
+        let endpoint = HttpEndpointDetails {
+            http_method: HttpMethod::Get(Empty {}),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            path_suffix: vec![],
+            query_vars: vec![],
+            header_vars: vec![],
+        };
+
+        let schema = DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![
+                NamedElementSchema {
+                    name: "firstName".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: analysed_type::str(),
+                    }),
+                },
+                NamedElementSchema {
+                    name: "lastName".into(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: analysed_type::str(),
+                    }),
+                },
+            ],
+        });
+
+        let (body, params) =
+            build_http_agent_method_parameters(&mount, &endpoint, &schema, &|msg| msg).unwrap();
+
+        if let RequestBodySchema::JsonBody { expected_type, .. } = body {
+            if let AnalysedType::Record(record) = expected_type {
+                assert_eq!(record.fields[0].name, "firstName");
+                assert_eq!(record.fields[1].name, "lastName");
+            } else {
+                panic!("Expected Record body type");
+            }
+        } else {
+            panic!("Expected JsonBody");
+        }
+
+        assert_eq!(params.len(), 2);
     }
 }

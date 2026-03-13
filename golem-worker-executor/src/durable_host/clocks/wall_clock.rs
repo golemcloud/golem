@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,16 +18,20 @@ use golem_common::model::oplog::types::SerializableDateTime;
 use golem_common::model::oplog::{
     host_functions, DurableFunctionType, HostRequestNoInput, HostResponseWallClock,
 };
+use wasmtime_wasi::clocks::WasiClocksView as _;
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn now(&mut self) -> anyhow::Result<Datetime> {
+    async fn now(&mut self) -> wasmtime::Result<Datetime> {
         let durability =
             Durability::<host_functions::WallClockNow>::new(self, DurableFunctionType::ReadLocal)
                 .await?;
 
         let result = if durability.is_live() {
-            let result = Host::now(&mut self.as_wasi_view()).await?;
+            let result = {
+                let mut view = self.as_wasi_view();
+                Host::now(&mut view.clocks()).await?
+            };
 
             durability
                 .persist(
@@ -48,7 +52,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(result.time.into())
     }
 
-    async fn resolution(&mut self) -> anyhow::Result<Datetime> {
+    async fn resolution(&mut self) -> wasmtime::Result<Datetime> {
         let durability = Durability::<host_functions::WallClockResolution>::new(
             self,
             DurableFunctionType::ReadLocal,
@@ -56,7 +60,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let result = Host::resolution(&mut self.as_wasi_view()).await?;
+            let result = {
+                let mut view = self.as_wasi_view();
+                Host::resolution(&mut view.clocks()).await?
+            };
             durability
                 .persist(
                     self,

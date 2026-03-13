@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::{render_type_for_language, SourceLanguage};
 use crate::log::{logln, LogColorize};
-use crate::model::component::render_type;
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
     TextView,
@@ -21,8 +21,7 @@ use crate::model::text::fmt::{
 use cli_table::Table;
 use colored::Colorize;
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, AgentType};
+use golem_common::model::agent::{AgentType, ParsedAgentId};
 use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
@@ -211,15 +210,15 @@ pub struct AvailableFunctionNamesHelp {
 }
 
 impl AvailableFunctionNamesHelp {
-    pub fn new_agent(component: &ComponentDto, agent_id: &AgentId, agent_type: &AgentType) -> Self {
+    pub fn new_agent(
+        component: &ComponentDto,
+        agent_id: &ParsedAgentId,
+        agent_type: &AgentType,
+    ) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
-            agent_name: Some(agent_id.wrapper_agent_type().to_string()),
-            function_names: agent_type
-                .methods
-                .iter()
-                .map(|m| m.name.to_wit_naming())
-                .collect(),
+            agent_name: Some(agent_id.agent_type.0.clone()),
+            function_names: agent_type.methods.iter().map(|m| m.name.clone()).collect(),
         }
     }
 }
@@ -319,6 +318,7 @@ pub struct ArgumentError {
     pub type_: Option<AnalysedType>,
     pub value: Option<String>,
     pub error: Option<String>,
+    pub source_language: SourceLanguage,
 }
 
 // TODO: limit long values
@@ -336,7 +336,11 @@ impl From<&ArgumentError> for ParameterErrorTable {
     fn from(value: &ArgumentError) -> Self {
         Self {
             parameter_type_: textwrap::wrap(
-                &value.type_.as_ref().map(render_type).unwrap_or_default(),
+                &value
+                    .type_
+                    .as_ref()
+                    .map(|t| render_type_for_language(&value.source_language, t, true))
+                    .unwrap_or_default(),
                 textwrap::Options::new(30).word_splitter(WordSplitter::NoHyphenation),
             )
             .join("\n"),

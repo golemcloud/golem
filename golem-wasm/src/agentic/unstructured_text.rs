@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
     /// use golem_rust::AllowedLanguages;
     ///
     /// let text: UnstructuredText<MyLanguage> =
-    ///    UnstructuredText::from_inline("foo".to_string(), MyLanguage::English);
+    ///    UnstructuredText::from_inline("foo", MyLanguage::English);
     ///
     ///
     /// #[derive(AllowedLanguages)]
@@ -50,11 +50,11 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
     ///
     /// // Create an UnstructuredText instance with no specific language code
     /// let any_text: UnstructuredText =
-    ///    UnstructuredText::from_inline_any("bar".to_string());
+    ///    UnstructuredText::from_inline_any("bar");
     /// ```
-    pub fn from_inline(text: String, language_code: T) -> UnstructuredText<T> {
+    pub fn from_inline(text: impl Into<String>, language_code: T) -> UnstructuredText<T> {
         UnstructuredText::Text {
-            text,
+            text: text.into(),
             language_code: Some(language_code),
         }
     }
@@ -141,11 +141,11 @@ impl UnstructuredText<AnyLanguage> {
     /// # Example
     /// ```
     /// use golem_rust::agentic::UnstructuredText;
-    /// let url_text = UnstructuredText::from_url_any("http://example.com".to_string());
+    /// let url_text = UnstructuredText::from_url_any("http://example.com");
     ///
     /// ```
-    pub fn from_url_any(url: String) -> UnstructuredText<AnyLanguage> {
-        UnstructuredText::Url(url)
+    pub fn from_url_any(url: impl Into<String>) -> UnstructuredText<AnyLanguage> {
+        UnstructuredText::Url(url.into())
     }
 
     /// Create an `UnstructuredText` instance from inline text without specifying a language code.
@@ -154,12 +154,12 @@ impl UnstructuredText<AnyLanguage> {
     ///
     /// ```
     /// use golem_rust::agentic::UnstructuredText;
-    /// let text = UnstructuredText::from_inline_any("Hello, world!".to_string());
+    /// let text = UnstructuredText::from_inline_any("Hello, world!");
     /// ```
     ///
-    pub fn from_inline_any(text: String) -> UnstructuredText<AnyLanguage> {
+    pub fn from_inline_any(text: impl Into<String>) -> UnstructuredText<AnyLanguage> {
         UnstructuredText::Text {
-            text,
+            text: text.into(),
             language_code: None,
         }
     }

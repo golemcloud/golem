@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,7 +14,7 @@
 
 pub mod default;
 
-use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
+use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -38,25 +38,26 @@ use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationOutput, IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId,
-    WorkerStatusRecord,
+    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
+    OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::ResourceStore;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
@@ -73,7 +74,6 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + InvocationContextManagement
-    + HasConfigVars
     + Send
     + Sync
     + Sized
@@ -90,7 +90,7 @@ pub trait WorkerCtx:
     /// Creates a new worker context
     ///
     /// Arguments:
-    /// - `owned_worker_id`: The worker ID (consists of the component id and worker name as well as the worker's owner account)
+    /// - `owned_agent_id`: The worker ID (consists of the component id and worker name as well as the worker's owner account)
     /// - `component_metadata`: Metadata associated with the worker's component
     /// - `initial_component_metadata`: Metadata associated with the worker's component at the start of replay. Might be same or earlier than component_metadata
     /// - `promise_service`: The service for managing promises
@@ -112,8 +112,8 @@ pub trait WorkerCtx:
     #[allow(clippy::too_many_arguments)]
     async fn create(
         account_id: AccountId,
-        owned_worker_id: OwnedWorkerId,
-        agent_id: Option<AgentId>,
+        owned_agent_id: OwnedAgentId,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -131,7 +131,7 @@ pub trait WorkerCtx:
         component_service: Arc<dyn ComponentService>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
-        worker_config: WorkerConfig,
+        worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -139,6 +139,7 @@ pub trait WorkerCtx:
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError>;
@@ -156,13 +157,13 @@ pub trait WorkerCtx:
     fn resource_limiter(&mut self) -> &mut dyn ResourceLimiterAsync;
 
     /// Get the worker ID associated with this worker context
-    fn worker_id(&self) -> &WorkerId;
+    fn agent_id(&self) -> &AgentId;
 
     /// Get the owned worker ID associated with this worker context
-    fn owned_worker_id(&self) -> &OwnedWorkerId;
+    fn owned_agent_id(&self) -> &OwnedAgentId;
 
     /// Get the agent-id resolved from the worker name
-    fn agent_id(&self) -> Option<AgentId>;
+    fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
 
     fn agent_mode(&self) -> AgentMode;
 
@@ -244,7 +245,7 @@ pub trait InvocationManagement {
 /// The status management interface of a worker context is responsible for querying and storing
 /// the worker's status.
 ///
-/// See `WorkerStatus` for the possible states of a worker.
+/// See `AgentStatus` for the possible states of a worker.
 #[async_trait]
 pub trait StatusManagement {
     /// Checks if the worker is being interrupted, or has been interrupted. If not, the result
@@ -325,8 +326,8 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// error was stored in the last entry.
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        latest_worker_status: &WorkerStatusRecord,
+        owned_agent_id: &OwnedAgentId,
+        latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError>;
 
     /// Resume the replay of a worker instance. Note that if the previous replay
@@ -349,7 +350,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// - Ok(Some(RetryDecision::ReacquirePermits)) - the preparation has been interrupted by an error, but should be retried immediately after dropping and reacquiring te permits
     /// - Ok(Some(RetryDecision::None)) - the preparation has been interrupted and should not be retried, but it is not an error (example: suspend after resuming a previously interrupted invocation)
     async fn prepare_instance(
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
@@ -415,10 +416,6 @@ pub trait InvocationContextManagement {
     /// Clones every element of the stack belonging to the given current span id, and sets
     /// the inherited flag to true on them, without changing the spans in this invocation context.
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack;
-}
-
-pub trait HasConfigVars {
-    fn config_vars(&self) -> BTreeMap<String, String>;
 }
 
 pub enum LogEventEmitBehaviour {

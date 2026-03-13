@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,7 +16,7 @@ use crate::storage::indexed::{
     IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
 };
 use async_trait::async_trait;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
@@ -43,20 +43,20 @@ impl InMemoryIndexedStorage {
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
-                worker_id:
-                    WorkerId {
+                agent_id:
+                    AgentId {
                         component_id,
-                        worker_name,
+                        agent_id: agent_name,
                     },
-            } => format!("oplog/{component_id}/{worker_name}/{key}"),
+            } => format!("oplog/{component_id}/{agent_name}/{key}"),
             IndexedStorageNamespace::CompressedOpLog {
-                worker_id:
-                    WorkerId {
+                agent_id:
+                    AgentId {
                         component_id,
-                        worker_name,
+                        agent_id: agent_name,
                     },
                 level,
-            } => format!("compressed-oplog/{level}/{component_id}/{worker_name}/{key}"),
+            } => format!("compressed-oplog/{level}/{component_id}/{agent_name}/{key}"),
         }
     }
 
@@ -334,16 +334,16 @@ mod tests {
     use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
     use assert2::check;
     use golem_common::model::component::ComponentId;
-    use golem_common::model::WorkerId;
+    use golem_common::model::AgentId;
 
-    fn test_worker_id() -> WorkerId {
+    fn test_agent_id() -> AgentId {
         use std::sync::OnceLock;
-        static WORKER_ID: OnceLock<WorkerId> = OnceLock::new();
+        static WORKER_ID: OnceLock<AgentId> = OnceLock::new();
 
         WORKER_ID
-            .get_or_init(|| WorkerId {
+            .get_or_init(|| AgentId {
                 component_id: ComponentId::new(),
-                worker_name: "worker".to_string(),
+                agent_id: "worker".to_string(),
             })
             .clone()
     }
@@ -356,7 +356,7 @@ mod tests {
 
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             1,
@@ -366,7 +366,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             2,
@@ -376,7 +376,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             3,
@@ -386,7 +386,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             4,
@@ -398,7 +398,7 @@ mod tests {
         let result = api
             .closest(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
                 3,
@@ -417,7 +417,7 @@ mod tests {
 
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             1,
@@ -427,7 +427,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             2,
@@ -437,7 +437,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             3,
@@ -447,7 +447,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             4,
@@ -459,7 +459,7 @@ mod tests {
         let result: Option<(u64, i32)> = api
             .closest(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
                 5,
@@ -478,7 +478,7 @@ mod tests {
 
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             10,
@@ -488,7 +488,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             20,
@@ -498,7 +498,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             30,
@@ -508,7 +508,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             40,
@@ -520,7 +520,7 @@ mod tests {
         let result = api
             .closest(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
                 33,
@@ -539,7 +539,7 @@ mod tests {
 
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             10,
@@ -549,7 +549,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             20,
@@ -559,7 +559,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             30,
@@ -569,7 +569,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             40,
@@ -581,7 +581,7 @@ mod tests {
         let result = api
             .read(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
                 20,
@@ -601,7 +601,7 @@ mod tests {
 
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             10,
@@ -611,7 +611,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             20,
@@ -621,7 +621,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             30,
@@ -631,7 +631,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             40,
@@ -643,7 +643,7 @@ mod tests {
         let result = api
             .read(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
                 1,
@@ -663,7 +663,7 @@ mod tests {
 
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             10,
@@ -673,7 +673,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             20,
@@ -685,7 +685,7 @@ mod tests {
         let result = api
             .first(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
             )
@@ -703,7 +703,7 @@ mod tests {
 
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             10,
@@ -713,7 +713,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             20,
@@ -725,7 +725,7 @@ mod tests {
         let result = api
             .last(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
             )
@@ -743,7 +743,7 @@ mod tests {
 
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             1,
@@ -753,7 +753,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             2,
@@ -763,7 +763,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             3,
@@ -773,7 +773,7 @@ mod tests {
         .unwrap();
         api.append(
             IndexedStorageNamespace::OpLog {
-                worker_id: test_worker_id(),
+                agent_id: test_agent_id(),
             },
             key,
             4,
@@ -786,7 +786,7 @@ mod tests {
             .with("test", "test")
             .drop_prefix(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
                 2,
@@ -797,7 +797,7 @@ mod tests {
         let result = api
             .read(
                 IndexedStorageNamespace::OpLog {
-                    worker_id: test_worker_id(),
+                    agent_id: test_agent_id(),
                 },
                 key,
                 1,

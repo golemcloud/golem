@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -384,17 +384,17 @@ pub enum PublicUpdateDescription {
     derive(desert_rust::BinaryCodec, poem_openapi::NewType)
 )]
 #[cfg_attr(feature = "full", desert(transparent))]
-pub struct WorkerResourceId(pub u64);
+pub struct AgentResourceId(pub u64);
 
-impl WorkerResourceId {
-    pub const INITIAL: WorkerResourceId = WorkerResourceId(0);
+impl AgentResourceId {
+    pub const INITIAL: AgentResourceId = AgentResourceId(0);
 
-    pub fn next(&self) -> WorkerResourceId {
-        WorkerResourceId(self.0 + 1)
+    pub fn next(&self) -> AgentResourceId {
+        AgentResourceId(self.0 + 1)
     }
 }
 
-impl Display for WorkerResourceId {
+impl Display for AgentResourceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }

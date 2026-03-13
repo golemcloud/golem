@@ -4,15 +4,14 @@ use golem_common::base_model::OplogIndex;
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    OplogEntry, OplogPayload, TimestampedUpdateDescription, UpdateDescription, WorkerError,
-    WorkerResourceId,
+    AgentError, AgentResourceId, OplogEntry, OplogPayload, TimestampedUpdateDescription,
+    UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::AgentInvocationPayload;
 use golem_common::model::{
-    AgentInvocation, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig,
-    SuccessfulUpdateRecord, TimestampedAgentInvocation, WorkerResourceDescription, WorkerStatus,
-    WorkerStatusRecord,
+    AgentInvocation, AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
+    IdempotencyKey, OwnedAgentId, RetryConfig, SuccessfulUpdateRecord, TimestampedAgentInvocation,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -20,13 +19,13 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 /// Like calculate_last_known_status, but assumes that the oplog exists and has at least a Create entry in it.
 pub async fn calculate_last_known_status_for_existing_worker<T>(
     this: &T,
-    owned_worker_id: &OwnedWorkerId,
-    last_known: Option<WorkerStatusRecord>,
-) -> WorkerStatusRecord
+    owned_agent_id: &OwnedAgentId,
+    last_known: Option<AgentStatusRecord>,
+) -> AgentStatusRecord
 where
     T: HasOplogService + HasConfig + Sync,
 {
-    calculate_last_known_status(this, owned_worker_id, last_known)
+    calculate_last_known_status(this, owned_agent_id, last_known)
         .await
         .expect("Failed to calculate oplog index for existing worker")
 }
@@ -35,15 +34,15 @@ where
 #[async_recursion]
 pub async fn calculate_last_known_status<T>(
     this: &T,
-    owned_worker_id: &OwnedWorkerId,
-    last_known: Option<WorkerStatusRecord>,
-) -> Option<WorkerStatusRecord>
+    owned_agent_id: &OwnedAgentId,
+    last_known: Option<AgentStatusRecord>,
+) -> Option<AgentStatusRecord>
 where
     T: HasOplogService + HasConfig + Sync,
 {
     let last_known = last_known.unwrap_or_default();
 
-    let last_oplog_index = this.oplog_service().get_last_index(owned_worker_id).await;
+    let last_oplog_index = this.oplog_service().get_last_index(owned_agent_id).await;
     assert!(last_oplog_index >= last_known.oplog_idx);
 
     if last_oplog_index == OplogIndex::NONE {
@@ -55,7 +54,7 @@ where
         let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
             .oplog_service()
             .read_range(
-                owned_worker_id,
+                owned_agent_id,
                 last_known.oplog_idx.next(),
                 last_oplog_index,
             )
@@ -63,7 +62,7 @@ where
 
         let final_status = update_status_with_new_entries(
             this,
-            owned_worker_id,
+            owned_agent_id,
             last_known,
             new_entries,
             &this.config().retry,
@@ -73,7 +72,7 @@ where
         if let Some(final_status) = final_status {
             Some(final_status)
         } else {
-            calculate_last_known_status(this, owned_worker_id, None).await
+            calculate_last_known_status(this, owned_agent_id, None).await
         }
     }
 }
@@ -81,12 +80,12 @@ where
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
 pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
     this: &T,
-    owned_worker_id: &OwnedWorkerId,
-    last_known: WorkerStatusRecord,
+    owned_agent_id: &OwnedAgentId,
+    last_known: AgentStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
     default_retry_policy: &RetryConfig,
-) -> Option<WorkerStatusRecord> {
+) -> Option<AgentStatusRecord> {
     let deleted_regions =
         calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
 
@@ -142,7 +141,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 
     let pending_invocations = calculate_pending_invocations(
         this,
-        owned_worker_id,
+        owned_agent_id,
         last_known.pending_invocations,
         &new_entries,
     )
@@ -154,6 +153,8 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         component_revision,
         component_size,
         component_revision_for_replay,
+        last_manual_update_snapshot_index,
+        last_automatic_snapshot_index,
     ) = calculate_update_fields(
         last_known.pending_updates,
         last_known.failed_updates,
@@ -161,6 +162,8 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         last_known.component_revision,
         last_known.component_size,
         last_known.component_revision_for_replay,
+        last_known.last_manual_update_snapshot_index,
+        last_known.last_automatic_snapshot_index,
         &deleted_regions,
         &new_entries,
     );
@@ -183,13 +186,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 
     let active_plugins = calculate_active_plugins(active_plugins, &deleted_regions, &new_entries);
 
-    let last_snapshot_index = calculate_last_snapshot_index(
-        last_known.last_snapshot_index,
-        &deleted_regions,
-        &new_entries,
-    );
-
-    let result = WorkerStatusRecord {
+    let result = AgentStatusRecord {
         oplog_idx: new_entries
             .keys()
             .max()
@@ -212,104 +209,116 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         deleted_regions,
         component_revision_for_replay,
         current_retry_count,
-        last_snapshot_index,
+        last_manual_update_snapshot_index,
+        last_automatic_snapshot_index,
     };
 
     Some(result)
 }
 
 fn calculate_latest_worker_status(
-    mut current_status: WorkerStatus,
+    mut current_status: AgentStatus,
     mut current_retry_count: HashMap<OplogIndex, u32>,
     mut current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (WorkerStatus, HashMap<OplogIndex, u32>, Option<RetryConfig>) {
+) -> (AgentStatus, HashMap<OplogIndex, u32>, Option<RetryConfig>) {
     for (idx, entry) in entries {
-        // Skipping entries in skipped regions, as they are skipped during replay too
-        if skipped_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
         // Errors are counted in skipped regions too (but not in deleted ones),
-        // otherwise we would not be able to know how many times we retried failures in atomic regions
+        // otherwise we would not be able to know how many times we retried failures in atomic regions.
+        // This must happen before the skipped-region continue below.
         if !deleted_regions.is_in_deleted_region(*idx) {
-            if let OplogEntry::Error {
-                error, retry_from, ..
-            } = entry
-            {
+            if let OplogEntry::Error { retry_from, .. } = entry {
                 let new_count = current_retry_count
                     .get(retry_from)
                     .copied()
                     .unwrap_or_default()
                     + 1;
                 current_retry_count.insert(*retry_from, new_count);
+            }
+        }
+
+        // Skipping entries in skipped regions, as they are skipped during replay too
+        if skipped_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        // For non-skipped errors, update the worker status based on the accumulated retry count
+        if !deleted_regions.is_in_deleted_region(*idx) {
+            if let OplogEntry::Error {
+                error, retry_from, ..
+            } = entry
+            {
+                let count = current_retry_count
+                    .get(retry_from)
+                    .copied()
+                    .unwrap_or_default();
                 if is_worker_error_retriable(
                     current_retry_policy
                         .as_ref()
                         .unwrap_or(default_retry_policy),
                     error,
-                    new_count,
+                    count,
                 ) {
-                    current_status = WorkerStatus::Retrying;
+                    current_status = AgentStatus::Retrying;
                 } else {
-                    current_status = WorkerStatus::Failed;
+                    current_status = AgentStatus::Failed;
                 }
             }
         }
 
         match entry {
             OplogEntry::Create { .. } => {
-                current_status = WorkerStatus::Idle;
+                current_status = AgentStatus::Idle;
             }
             OplogEntry::HostCall { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::AgentInvocationStarted { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
                 current_retry_count.clear();
             }
             OplogEntry::AgentInvocationFinished { .. } => {
-                current_status = WorkerStatus::Idle;
+                current_status = AgentStatus::Idle;
                 current_retry_count.clear();
             }
             OplogEntry::Suspend { .. } => {
-                current_status = WorkerStatus::Suspended;
+                current_status = AgentStatus::Suspended;
             }
             OplogEntry::NoOp { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::Jump { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::Interrupted { .. } => {
-                current_status = WorkerStatus::Interrupted;
+                current_status = AgentStatus::Interrupted;
             }
             OplogEntry::Exited { .. } => {
-                current_status = WorkerStatus::Exited;
+                current_status = AgentStatus::Exited;
             }
             OplogEntry::ChangeRetryPolicy { new_policy, .. } => {
                 current_retry_policy = Some(new_policy.clone());
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::BeginAtomicRegion { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::EndAtomicRegion { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::BeginRemoteWrite { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::EndRemoteWrite { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::PendingAgentInvocation { .. } => {}
             OplogEntry::PendingUpdate { .. } => {
-                if current_status == WorkerStatus::Failed {
-                    current_status = WorkerStatus::Retrying;
+                if current_status == AgentStatus::Failed {
+                    current_status = AgentStatus::Retrying;
                 }
             }
             OplogEntry::FailedUpdate { .. } => {}
@@ -318,41 +327,41 @@ fn calculate_latest_worker_status(
             OplogEntry::CreateResource { .. } => {}
             OplogEntry::DropResource { .. } => {}
             OplogEntry::Log { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::Restart { .. } => {
-                current_status = WorkerStatus::Idle;
+                current_status = AgentStatus::Idle;
             }
             OplogEntry::ActivatePlugin { .. } => {}
             OplogEntry::DeactivatePlugin { .. } => {}
             OplogEntry::Revert { .. } => {}
             OplogEntry::CancelPendingInvocation { .. } => {}
             OplogEntry::StartSpan { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::FinishSpan { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::SetSpanAttribute { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::ChangePersistenceLevel { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::BeginRemoteTransaction { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::PreCommitRemoteTransaction { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::PreRollbackRemoteTransaction { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::CommittedRemoteTransaction { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::RolledBackRemoteTransaction { .. } => {
-                current_status = WorkerStatus::Running;
+                current_status = AgentStatus::Running;
             }
             OplogEntry::Snapshot { .. } => {}
             OplogEntry::Error { .. } => {
@@ -443,7 +452,7 @@ fn calculate_skipped_regions(
 
 async fn calculate_pending_invocations<T: HasOplogService + Sync>(
     this: &T,
-    owned_worker_id: &OwnedWorkerId,
+    owned_agent_id: &OwnedAgentId,
     initial: Vec<TimestampedAgentInvocation>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<TimestampedAgentInvocation> {
@@ -498,7 +507,7 @@ async fn calculate_pending_invocations<T: HasOplogService + Sync>(
                         match this
                             .oplog_service()
                             .download_raw_payload(
-                                owned_worker_id,
+                                owned_agent_id,
                                 payload_id.clone(),
                                 md5_hash.clone(),
                             )
@@ -588,6 +597,7 @@ async fn calculate_pending_invocations<T: HasOplogService + Sync>(
     result
 }
 
+#[allow(clippy::type_complexity)]
 fn calculate_update_fields(
     initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
     initial_failed_updates: Vec<FailedUpdateRecord>,
@@ -595,6 +605,8 @@ fn calculate_update_fields(
     initial_revision: ComponentRevision,
     initial_component_size: u64,
     initial_component_revision_for_replay: ComponentRevision,
+    initial_last_manual_update_snapshot_index: Option<OplogIndex>,
+    initial_last_automatic_snapshot_index: Option<OplogIndex>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -604,6 +616,8 @@ fn calculate_update_fields(
     ComponentRevision,
     u64,
     ComponentRevision,
+    Option<OplogIndex>,
+    Option<OplogIndex>,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
@@ -611,6 +625,8 @@ fn calculate_update_fields(
     let mut revision = initial_revision;
     let mut size = initial_component_size;
     let mut component_revision_for_replay = initial_component_revision_for_replay;
+    let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
+    let mut last_automatic_snapshot_index = initial_last_automatic_snapshot_index;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
@@ -664,16 +680,19 @@ fn calculate_update_fields(
                 revision = *target_revision;
                 size = *new_component_size;
 
-                let applied_update = pending_updates.pop_front();
-                if matches!(
-                    applied_update,
-                    Some(TimestampedUpdateDescription {
-                        description: UpdateDescription::SnapshotBased { .. },
-                        ..
-                    })
-                ) {
-                    component_revision_for_replay = *target_revision
+                if let Some(TimestampedUpdateDescription {
+                    description: UpdateDescription::SnapshotBased { .. },
+                    oplog_index: applied_update_oplog_index,
+                    ..
+                }) = pending_updates.pop_front()
+                {
+                    component_revision_for_replay = *target_revision;
+                    last_manual_update_snapshot_index = Some(applied_update_oplog_index);
+                    last_automatic_snapshot_index = None;
                 }
+            }
+            OplogEntry::Snapshot { .. } => {
+                last_automatic_snapshot_index = Some(*oplog_idx);
             }
             _ => {}
         }
@@ -685,6 +704,8 @@ fn calculate_update_fields(
         revision,
         size,
         component_revision_for_replay,
+        last_manual_update_snapshot_index,
+        last_automatic_snapshot_index,
     )
 }
 
@@ -761,10 +782,10 @@ fn calculate_total_linear_memory_size(
 }
 
 fn collect_resources(
-    initial: HashMap<WorkerResourceId, WorkerResourceDescription>,
+    initial: HashMap<AgentResourceId, AgentResourceDescription>,
     skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashMap<WorkerResourceId, WorkerResourceDescription> {
+) -> HashMap<AgentResourceId, AgentResourceDescription> {
     let mut result = initial;
     for (idx, entry) in entries {
         // Skipping entries in deleted regions as they are not applied during replay
@@ -780,7 +801,7 @@ fn collect_resources(
             } => {
                 result.insert(
                     *id,
-                    WorkerResourceDescription {
+                    AgentResourceDescription {
                         created_at: *timestamp,
                         resource_owner: resource_type_id.owner.clone(),
                         resource_name: resource_type_id.name.clone(),
@@ -831,43 +852,18 @@ fn calculate_active_plugins(
     result
 }
 
-fn calculate_last_snapshot_index(
-    initial: Option<OplogIndex>,
-    deleted_regions: &DeletedRegions,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Option<OplogIndex> {
-    let mut result = initial;
-
-    if let Some(idx) = result {
-        if deleted_regions.is_in_deleted_region(idx) {
-            result = None;
-        }
-    }
-
-    for (idx, entry) in entries {
-        if deleted_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
-        if matches!(entry, OplogEntry::Snapshot { .. }) {
-            result = Some(*idx);
-        }
-    }
-    result
-}
-
 fn is_worker_error_retriable(
     retry_config: &RetryConfig,
-    error: &WorkerError,
+    error: &AgentError,
     retry_count: u32,
 ) -> bool {
     match error {
-        WorkerError::Unknown(_) => retry_count < retry_config.max_attempts,
-        WorkerError::InvalidRequest(_) => false,
-        WorkerError::StackOverflow => false,
-        WorkerError::OutOfMemory => true,
-        WorkerError::ExceededMemoryLimit => false,
-        WorkerError::AgentError(_) => false,
+        AgentError::Unknown(_) => retry_count < retry_config.max_attempts,
+        AgentError::InvalidRequest(_) => false,
+        AgentError::StackOverflow => false,
+        AgentError::OutOfMemory => true,
+        AgentError::ExceededMemoryLimit => false,
+        AgentError::InternalError(_) => false,
     }
 }
 
@@ -894,9 +890,9 @@ mod test {
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
-        AgentInvocation, AgentInvocationPayload, AgentInvocationResult, FailedUpdateRecord,
-        IdempotencyKey, OwnedWorkerId, RetryConfig, ScanCursor, SuccessfulUpdateRecord, Timestamp,
-        TimestampedAgentInvocation, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
+        AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey, OwnedAgentId,
+        RetryConfig, ScanCursor, SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -1454,35 +1450,35 @@ mod test {
     #[test]
     async fn non_existing_oplog() {
         let environment_id = EnvironmentId::new();
-        let owned_worker_id = OwnedWorkerId::new(
+        let owned_agent_id = OwnedAgentId::new(
             environment_id,
-            &WorkerId {
+            &AgentId {
                 component_id: ComponentId::new(),
-                worker_name: "test-worker".to_string(),
+                agent_id: "test-worker".to_string(),
             },
         );
         let test_case = TestCase {
-            owned_worker_id: owned_worker_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             entries: vec![],
         };
 
-        let result = calculate_last_known_status(&test_case, &owned_worker_id, None).await;
+        let result = calculate_last_known_status(&test_case, &owned_agent_id, None).await;
         assert2::assert!(let None = result);
     }
 
     struct TestCaseBuilder {
         entries: Vec<TestEntry>,
-        previous_status_record: WorkerStatusRecord,
-        owned_worker_id: OwnedWorkerId,
+        previous_status_record: AgentStatusRecord,
+        owned_agent_id: OwnedAgentId,
     }
 
     impl TestCaseBuilder {
         pub fn new(
             account_id: AccountId,
-            owned_worker_id: OwnedWorkerId,
+            owned_agent_id: OwnedAgentId,
             component_revision: ComponentRevision,
         ) -> Self {
-            let status = WorkerStatusRecord {
+            let status = AgentStatusRecord {
                 component_revision,
                 component_revision_for_replay: component_revision,
                 component_size: 100,
@@ -1493,29 +1489,30 @@ mod test {
             TestCaseBuilder {
                 entries: vec![TestEntry {
                     oplog_entry: OplogEntry::create(
-                        owned_worker_id.worker_id(),
+                        owned_agent_id.agent_id(),
                         component_revision,
                         vec![],
-                        owned_worker_id.environment_id(),
+                        owned_agent_id.environment_id(),
                         account_id,
                         None,
                         100,
                         200,
                         HashSet::new(),
                         BTreeMap::new(),
+                        Vec::new(),
                         None,
                     ),
                     expected_status: status.clone(),
                 }],
                 previous_status_record: status,
-                owned_worker_id,
+                owned_agent_id,
             }
         }
 
         pub fn add(
             mut self,
             entry: OplogEntry,
-            update: impl FnOnce(WorkerStatusRecord) -> WorkerStatusRecord,
+            update: impl FnOnce(AgentStatusRecord) -> AgentStatusRecord,
         ) -> Self {
             self.previous_status_record.oplog_idx = self.previous_status_record.oplog_idx.next();
             self.previous_status_record = update(self.previous_status_record);
@@ -1553,7 +1550,7 @@ mod test {
                 },
                 move |mut status| {
                     status.current_idempotency_key = Some(idempotency_key);
-                    status.status = WorkerStatus::Running;
+                    status.status = AgentStatus::Running;
                     if !status.pending_invocations.is_empty() {
                         status.pending_invocations.pop();
                     }
@@ -1580,7 +1577,7 @@ mod test {
                         .invocation_results
                         .insert(idempotency_key, status.oplog_idx);
                     status.current_idempotency_key = None;
-                    status.status = WorkerStatus::Idle;
+                    status.status = AgentStatus::Idle;
                     status
                 },
             )
@@ -1627,7 +1624,7 @@ mod test {
                     mime_type: "application/octet-stream".to_string(),
                 },
                 move |mut status| {
-                    status.last_snapshot_index = Some(oplog_idx);
+                    status.last_automatic_snapshot_index = Some(oplog_idx);
                     status
                 },
             )
@@ -1681,7 +1678,9 @@ mod test {
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
                 status.component_revision_for_replay = old_status.component_revision_for_replay;
-                status.last_snapshot_index = old_status.last_snapshot_index;
+                status.last_manual_update_snapshot_index =
+                    old_status.last_manual_update_snapshot_index;
+                status.last_automatic_snapshot_index = old_status.last_automatic_snapshot_index;
 
                 status
             })
@@ -1720,7 +1719,7 @@ mod test {
         pub fn pending_update(
             self,
             update_description: &UpdateDescription,
-            extra_status_updates: impl Fn(&mut WorkerStatusRecord),
+            extra_status_updates: impl Fn(&mut AgentStatusRecord),
         ) -> Self {
             let entry = OplogEntry::pending_update(update_description.clone()).rounded();
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
@@ -1765,7 +1764,7 @@ mod test {
             )
             .rounded();
             self.add(entry.clone(), move |mut status| {
-                let _ = status.pending_updates.pop_front();
+                let applied_update = status.pending_updates.pop_front();
                 status.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: entry.timestamp(),
                     target_revision: *update_description.target_revision(),
@@ -1785,6 +1784,9 @@ mod test {
                 } = update_description
                 {
                     status.component_revision_for_replay = target_revision;
+                    status.last_manual_update_snapshot_index =
+                        applied_update.map(|au| au.oplog_index);
+                    status.last_automatic_snapshot_index = None;
                 };
 
                 status
@@ -1834,7 +1836,7 @@ mod test {
 
         pub fn build(self) -> TestCase {
             TestCase {
-                owned_worker_id: self.owned_worker_id,
+                owned_agent_id: self.owned_agent_id,
                 entries: self
                     .entries
                     .into_iter()
@@ -1847,7 +1849,7 @@ mod test {
     #[derive(Debug, Clone)]
     struct TestEntry {
         oplog_entry: OplogEntry,
-        expected_status: WorkerStatusRecord,
+        expected_status: AgentStatusRecord,
     }
 
     impl TestEntry {
@@ -1861,7 +1863,7 @@ mod test {
 
     #[derive(Debug, Clone)]
     struct TestCase {
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         entries: Vec<TestEntry>,
     }
 
@@ -1869,16 +1871,16 @@ mod test {
         pub fn builder(initial_component_version: u64) -> TestCaseBuilder {
             let environment_id = EnvironmentId::new();
             let account_id = AccountId::new();
-            let owned_worker_id = OwnedWorkerId::new(
+            let owned_agent_id = OwnedAgentId::new(
                 environment_id,
-                &WorkerId {
+                &AgentId {
                     component_id: ComponentId::new(),
-                    worker_name: "test-worker".to_string(),
+                    agent_id: "test-worker".to_string(),
                 },
             );
             TestCaseBuilder::new(
                 account_id,
-                owned_worker_id,
+                owned_agent_id,
                 initial_component_version.try_into().unwrap(),
             )
         }
@@ -1894,10 +1896,10 @@ mod test {
     impl OplogService for TestCase {
         async fn create(
             &self,
-            _owned_worker_id: &OwnedWorkerId,
+            _owned_agent_id: &OwnedAgentId,
             _initial_entry: OplogEntry,
-            _initial_worker_metadata: WorkerMetadata,
-            _last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
@@ -1905,26 +1907,26 @@ mod test {
 
         async fn open(
             &self,
-            _owned_worker_id: &OwnedWorkerId,
+            _owned_agent_id: &OwnedAgentId,
             _last_oplog_index: Option<OplogIndex>,
-            _initial_worker_metadata: WorkerMetadata,
-            _last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
 
-        async fn get_last_index(&self, _owned_worker_id: &OwnedWorkerId) -> OplogIndex {
+        async fn get_last_index(&self, _owned_agent_id: &OwnedAgentId) -> OplogIndex {
             OplogIndex::from_u64(self.entries.len() as u64)
         }
 
-        async fn delete(&self, _owned_worker_id: &OwnedWorkerId) {
+        async fn delete(&self, _owned_agent_id: &OwnedAgentId) {
             unreachable!()
         }
 
         async fn read(
             &self,
-            _owned_worker_id: &OwnedWorkerId,
+            _owned_agent_id: &OwnedAgentId,
             idx: OplogIndex,
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -1938,7 +1940,7 @@ mod test {
             result
         }
 
-        async fn exists(&self, _owned_worker_id: &OwnedWorkerId) -> bool {
+        async fn exists(&self, _owned_agent_id: &OwnedAgentId) -> bool {
             unreachable!()
         }
 
@@ -1948,13 +1950,13 @@ mod test {
             _component_id: &ComponentId,
             _cursor: ScanCursor,
             _count: u64,
-        ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
+        ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
             unreachable!()
         }
 
         async fn upload_raw_payload(
             &self,
-            _owned_worker_id: &OwnedWorkerId,
+            _owned_agent_id: &OwnedAgentId,
             _data: Vec<u8>,
         ) -> Result<RawOplogPayload, String> {
             unreachable!()
@@ -1962,7 +1964,7 @@ mod test {
 
         async fn download_raw_payload(
             &self,
-            _owned_worker_id: &OwnedWorkerId,
+            _owned_agent_id: &OwnedAgentId,
             _payload_id: PayloadId,
             _md5_hash: Vec<u8>,
         ) -> Result<Vec<u8>, String> {
@@ -1990,7 +1992,7 @@ mod test {
             };
             let final_status = calculate_last_known_status_for_existing_worker(
                 &test_case,
-                &test_case.owned_worker_id,
+                &test_case.owned_agent_id,
                 last_known_status,
             )
             .await;

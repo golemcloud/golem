@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -275,7 +275,7 @@ export function agent(options?: AgentDecoratorOptions) {
       AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ?? defaultPromptHint;
 
     const constructor: AgentConstructor = {
-      name: agentClassName.value,
+      name: undefined,
       description: agentTypeDescription,
       promptHint: agentTypePromptHint,
       inputSchema: constructorDataSchema,
@@ -293,6 +293,7 @@ export function agent(options?: AgentDecoratorOptions) {
     const agentType: AgentType = {
       typeName: agentTypeName.value,
       description: agentTypeDescription,
+      sourceLanguage: 'typescript',
       constructor,
       methods,
       dependencies: [],
@@ -351,9 +352,9 @@ export function agent(options?: AgentDecoratorOptions) {
         const instance = new ctor(...deserializedConstructorArgs.val);
 
         const agentId = getRawSelfAgentId();
-        if (!agentId.value.startsWith(agentTypeName.asWit)) {
+        if (!agentId.value.startsWith(agentTypeName.value)) {
           const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", got "${agentId.value}"`,
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.value}", got "${agentId.value}"`,
           );
 
           return {

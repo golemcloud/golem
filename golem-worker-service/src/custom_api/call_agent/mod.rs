@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -27,10 +27,10 @@ use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::agent::{
-    AgentId, BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue,
-    ElementValue, ElementValues, OidcPrincipal, Principal, UntypedDataValue, UntypedElementValue,
+    BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue, ElementValue,
+    ElementValues, OidcPrincipal, ParsedAgentId, Principal, UntypedDataValue, UntypedElementValue,
 };
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::ValueAndType;
@@ -53,7 +53,7 @@ impl CallAgentHandler {
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let worker_id = self.build_worker_id(resolved_route, behaviour)?;
+        let agent_id = self.build_agent_id(resolved_route, behaviour)?;
 
         let parsed_body = request
             .parse_request_body(&resolved_route.route.body)
@@ -62,7 +62,7 @@ impl CallAgentHandler {
         let method_params =
             self.resolve_method_arguments(resolved_route, request, behaviour, parsed_body)?;
 
-        debug!("Invoking agent {worker_id}");
+        debug!("Invoking agent {agent_id}");
 
         let method_params_data_value = UntypedDataValue::Tuple(method_params);
 
@@ -83,7 +83,7 @@ impl CallAgentHandler {
         let agent_response = self
             .worker_service
             .invoke_agent(
-                &worker_id,
+                &agent_id,
                 behaviour.method_name.clone(),
                 proto_method_parameters,
                 golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32,
@@ -110,11 +110,11 @@ impl CallAgentHandler {
         Ok(route_result)
     }
 
-    fn build_worker_id(
+    fn build_agent_id(
         &self,
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
-    ) -> Result<WorkerId, RequestHandlerError> {
+    ) -> Result<AgentId, RequestHandlerError> {
         let CallAgentBehaviour {
             component_id,
             agent_type,
@@ -148,11 +148,12 @@ impl CallAgentHandler {
 
         let phantom_id = phantom.then(Uuid::new_v4);
 
-        let agent_id = AgentId::new(agent_type.clone(), data_value, phantom_id);
+        let agent_id = ParsedAgentId::new(agent_type.clone(), data_value, phantom_id)
+            .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
-        Ok(WorkerId {
+        Ok(AgentId {
             component_id: *component_id,
-            worker_name: agent_id.to_string(),
+            agent_id: agent_id.to_string(),
         })
     }
 

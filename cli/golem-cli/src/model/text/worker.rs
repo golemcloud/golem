@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::SourceLanguage;
 use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkersMetadataResponseView,
+    RawAgentId, WorkerMetadata, WorkerMetadataView, WorkerNameMatch, WorkersMetadataResponseView,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -45,15 +46,15 @@ use std::fmt::Write;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerCreateView {
     pub component_name: ComponentName,
-    pub worker_name: Option<WorkerName>,
+    pub agent_name: Option<RawAgentId>,
 }
 
 impl MessageWithFields for WorkerCreateView {
     fn message(&self) -> String {
-        if let Some(worker_name) = &self.worker_name {
+        if let Some(agent_name) = &self.agent_name {
             format!(
                 "Created new agent {}",
-                format_message_highlight(&worker_name)
+                format_message_highlight(&agent_name)
             )
         } else {
             // TODO: review: do we really want to hide the worker name? it is provided now
@@ -70,7 +71,7 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field_option("Agent name", &self.worker_name, format_worker_name);
+            .fmt_field_option("Agent name", &self.agent_name, format_agent_name);
 
         fields.build()
     }
@@ -102,7 +103,7 @@ impl MessageWithFields for WorkerGetView {
     fn message(&self) -> String {
         format!(
             "Got metadata for agent {}",
-            format_message_highlight(&self.metadata.worker_name)
+            format_message_highlight(&self.metadata.agent_name)
         )
     }
 
@@ -162,7 +163,7 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_revision,
                 format_id,
             )
-            .fmt_field("Agent name", &self.metadata.worker_name, format_worker_name)
+            .fmt_field("Agent name", &self.metadata.agent_name, format_agent_name)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
                 "Component size",
@@ -219,7 +220,7 @@ struct WorkerMetadataTableView {
     #[table(title = "Component name")]
     pub component_name: ComponentName,
     #[table(title = "Agent name")]
-    pub worker_name: String,
+    pub agent_name: String,
     #[table(title = "Component\nrevision", justify = "Justify::Right")]
     pub component_revision: ComponentRevision,
     #[table(title = "Status", justify = "Justify::Right")]
@@ -235,7 +236,7 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
         Self {
             component_name: value.component_name.clone(),
             // TODO: pretty print, once we have "metadata-less" agent-type parsing
-            worker_name: textwrap::wrap(&value.worker_name.0, 30).join("\n"),
+            agent_name: textwrap::wrap(&value.agent_name.0, 30).join("\n"),
             status: format_status(&value.status),
             component_revision: value.component_revision,
             created_at: value.created_at,
@@ -271,7 +272,7 @@ impl TextView for InvokeResultView {
     fn log(&self) {
         fn log_results_format(format: &str) {
             logln(format!(
-                "Invocation results in {} format:",
+                "Invocation results in {}:",
                 format_message_highlight(format),
             ))
         }
@@ -284,7 +285,7 @@ impl TextView for InvokeResultView {
             if wave_values.is_empty() {
                 logln("Empty result.")
             } else {
-                log_results_format("WAVE");
+                log_results_format(&self.result_format);
                 for wave in wave_values {
                     logln(format!("  - {wave}"));
                 }
@@ -292,8 +293,8 @@ impl TextView for InvokeResultView {
         } else if let Some(json) = &self.result_json {
             logln(format_warn(indoc!(
                 "
-                Failed to convert invocation result to WAVE format.
-                At the moment WAVE does not support Handle (aka Resource) data type.
+                Failed to convert invocation result to the requested format.
+                At the moment it does not support Handle (aka Resource) data type.
                 "
             )));
             log_results_format("JSON");
@@ -377,7 +378,7 @@ impl TextView for PublicOplogEntry {
                         format_id(&inner.idempotency_key),
                     ));
                     logln(format!("{pad}input:"));
-                    log_data_value(pad, &inner.function_input);
+                    log_data_value(pad, &inner.function_input, &SourceLanguage::default());
                 }
                 other => {
                     logln(format!(
@@ -416,6 +417,7 @@ impl TextView for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
+                logln(format!("{pad}retry from:        {}", params.retry_from));
                 logln(format!(
                     "{pad}error:             {}",
                     format_error(&params.error)
@@ -921,22 +923,27 @@ fn value_to_string(value: &ValueAndType) -> String {
 }
 
 // TODO: pretty print
-fn format_worker_name(worker_name: &WorkerName) -> String {
-    textwrap::wrap(&worker_name.to_string(), 80).join("\n")
+fn format_agent_name(agent_name: &RawAgentId) -> String {
+    textwrap::wrap(&agent_name.to_string(), 80).join("\n")
 }
 
-fn log_data_value(pad: &str, value: &DataValue) {
-    match value {
-        DataValue::Tuple(values) => {
-            logln(format!("{pad}  tuple:"));
-            for value in &values.elements {
-                log_element_value(&format!("{pad}    "), value);
+fn log_data_value(pad: &str, value: &DataValue, source_language: &SourceLanguage) {
+    if source_language.is_known() {
+        let rendered = crate::agent_id_display::render_data_value(value, source_language);
+        logln(format!("{pad}  {rendered}"));
+    } else {
+        match value {
+            DataValue::Tuple(values) => {
+                logln(format!("{pad}  tuple:"));
+                for value in &values.elements {
+                    log_element_value(&format!("{pad}    "), value);
+                }
             }
-        }
-        DataValue::Multimodal(values) => {
-            logln(format!("{pad}  multi-modal:"));
-            for value in &values.elements {
-                log_element_value(&format!("{pad}    "), &value.value);
+            DataValue::Multimodal(values) => {
+                logln(format!("{pad}  multi-modal:"));
+                for value in &values.elements {
+                    log_element_value(&format!("{pad}    "), &value.value);
+                }
             }
         }
     }
@@ -1041,10 +1048,10 @@ pub fn format_timestamp(timestamp: u64) -> String {
     }
 }
 
-pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
+pub fn format_agent_name_match(agent_name_match: &WorkerNameMatch) -> String {
     format!(
         "{}{}/{}",
-        match &worker_name_match.environment_reference() {
+        match &agent_name_match.environment_reference() {
             Some(environment_reference) => {
                 match environment_reference {
                     EnvironmentReference::Environment { environment_name } => {
@@ -1076,7 +1083,7 @@ pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
             }
             None => "".to_string(),
         },
-        worker_name_match.component_name.0.blue().bold(),
-        worker_name_match.worker_name.0.green().bold(),
+        agent_name_match.component_name.0.blue().bold(),
+        agent_name_match.agent_name.0.green().bold(),
     )
 }

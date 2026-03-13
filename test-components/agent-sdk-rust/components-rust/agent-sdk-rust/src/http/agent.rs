@@ -3,8 +3,7 @@ use golem_rust::{agent_definition, agent_implementation, endpoint, AllowedMimeTy
 use golem_rust::agentic::{create_webhook, UnstructuredBinary};
 use serde::Deserialize;
 use serde::Serialize;
-use wstd::http::{Body, Client, HeaderValue, IntoBody, Request};
-use wstd::http::request::JsonRequest;
+use wstd::http::{Body, Client, HeaderValue, Request};
 
 #[agent_definition(mount = "/http-agents/{agent_name}")]
 pub trait HttpAgent {
@@ -333,13 +332,14 @@ impl WebhookAgent for WebhookAgentImpl {
             webhook_url: webhook.url().to_string(),
         };
 
+        let body = Body::from_json(&url).map_err(|err| err.to_string()).unwrap();
         let request = Request::post(self.test_server_url.clone().unwrap())
             .header("Accept", HeaderValue::from_str("application/json").unwrap())
             .header("Content-Type", "application/json")
-            .json(&url).map_err(|err| err.to_string()).unwrap();
+            .body(body).map_err(|err| err.to_string()).unwrap();
 
         let _ =
-            Client::new().send(request).await.map_err(|err| err.to_string()).unwrap().into_body();
+            Client::new().send(request).await.map_err(|err| err.to_string()).unwrap();
 
         let request = webhook.await;
 

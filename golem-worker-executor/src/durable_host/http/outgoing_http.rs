@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,7 +16,6 @@ use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
-use anyhow::anyhow;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
@@ -26,8 +25,8 @@ use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 use wasmtime::component::Resource;
+use wasmtime_wasi_http::bindings::http::outgoing_handler::Host;
 use wasmtime_wasi_http::bindings::http::types;
-use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::Host;
 use wasmtime_wasi_http::types::{HostFutureIncomingResponse, HostOutgoingRequest};
 use wasmtime_wasi_http::{HttpError, HttpResult};
 
@@ -43,7 +42,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let begin_index = self
             .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
             .await
-            .map_err(|err| HttpError::trap(anyhow!(err)))?;
+            .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
 
         let host_request = self.table().get(&request)?;
         let uri = format!(
@@ -58,6 +57,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let mut headers: HashMap<String, String> = host_request
             .headers
+            .as_ref()
             .iter()
             .map(|(k, v)| {
                 (
@@ -70,7 +70,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let span = self
             .start_span(&outgoing_http_request_span_attributes(&uri, &method), false)
             .await
-            .map_err(|err| HttpError::trap(anyhow!(err)))?;
+            .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
 
         if self.state.forward_trace_context_headers {
             let invocation_context = self
@@ -83,10 +83,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let trace_context_headers =
                 TraceContextHeaders::from_invocation_context(invocation_context);
             for (key, value) in trace_context_headers.to_raw_headers_map() {
-                host_request.headers.insert(
-                    HeaderName::from_str(&key).unwrap(),
-                    HeaderValue::from_str(&value).unwrap(),
-                );
+                let header_name = HeaderName::from_str(&key).unwrap();
+                host_request.headers.remove_all(&header_name);
+                host_request
+                    .headers
+                    .append(&header_name, HeaderValue::from_str(&value).unwrap())
+                    .map_err(HttpError::trap)?;
                 headers.insert(key, value);
             }
         }
@@ -101,13 +103,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let header_name = HeaderName::from_static("idempotency-key");
 
             let host_request = self.table().get_mut(&request)?;
-            if !host_request.headers.contains_key(&header_name) {
-                host_request.headers.insert(
-                    header_name,
-                    HeaderValue::from_str(&idempotency_key.to_string()).unwrap(),
-                );
+            if !host_request.headers.as_ref().contains_key(&header_name) {
+                host_request
+                    .headers
+                    .append(
+                        &header_name,
+                        HeaderValue::from_str(&idempotency_key.to_string()).unwrap(),
+                    )
+                    .map_err(HttpError::trap)?;
             }
         }
+
+        let request_rep = request.rep();
 
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
 
@@ -123,6 +130,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 };
 
                 let handle = future_incoming_response.rep();
+                // Resolve any pending outgoing body mapping from outgoing_request::body()
+                let outgoing_body_rep = self
+                    .state
+                    .pending_http_outgoing_request_body
+                    .remove(&request_rep);
+
                 self.state.open_http_requests.insert(
                     handle,
                     HttpRequestState {
@@ -131,6 +144,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         request,
                         span_id: span.span_id().clone(),
                         body_handle: None,
+                        outgoing_body_rep,
+                        output_stream_rep: None,
                     },
                 );
             }
@@ -142,7 +157,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     false,
                 )
                 .await
-                .map_err(|err| HttpError::trap(anyhow!(err)))?;
+                .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
             }
         }
 

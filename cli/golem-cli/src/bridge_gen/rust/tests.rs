@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -98,6 +98,7 @@ fn rust_counter_agent() -> GeneratedPackage {
     let agent_type = AgentType {
         type_name: AgentTypeName("CounterAgent".to_string()),
         description: "Constructs the agent CounterAgent".to_string(),
+        source_language: "rust".to_string(),
         constructor: AgentConstructor {
             name: Some("CounterAgent".to_string()),
             description: "Constructs the agent CounterAgent".to_string(),
@@ -118,7 +119,7 @@ fn rust_counter_agent() -> GeneratedPackage {
             input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
             output_schema: DataSchema::Tuple(NamedElementSchemas {
                 elements: vec![NamedElementSchema {
-                    name: "return-value".to_string(),
+                    name: "return_value".to_string(),
                     schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                         element_type: f64(),
                     }),

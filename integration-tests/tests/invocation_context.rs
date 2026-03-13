@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -89,7 +89,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
-            AgentTypeName("invocation-context-agent".to_string()),
+            AgentTypeName("InvocationContextAgent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),

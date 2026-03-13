@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -72,44 +72,49 @@ impl ComponentCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: ComponentSubcommand) -> anyhow::Result<()> {
-        match subcommand {
-            ComponentSubcommand::New {
-                component_template,
-                component_name,
-            } => self.cmd_new(component_template, component_name).await,
-            ComponentSubcommand::Templates { filter } => self.cmd_templates(filter),
-            ComponentSubcommand::List => self.cmd_list().await,
-            ComponentSubcommand::Get {
-                component_name,
-                revision,
-            } => self.cmd_get(component_name.component_name, revision).await,
+    pub fn handle_command(
+        &self,
+        subcommand: ComponentSubcommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
+        Box::pin(async move {
+            match subcommand {
+                ComponentSubcommand::New {
+                    component_template,
+                    component_name,
+                } => self.cmd_new(component_template, component_name).await,
+                ComponentSubcommand::Templates { filter } => self.cmd_templates(filter),
+                ComponentSubcommand::List => self.cmd_list().await,
+                ComponentSubcommand::Get {
+                    component_name,
+                    revision,
+                } => self.cmd_get(component_name.component_name, revision).await,
 
-            ComponentSubcommand::UpdateAgents {
-                component_name,
-                update_mode,
-                r#await,
-                disable_wakeup,
-            } => {
-                self.cmd_update_workers(
-                    component_name.component_name,
+                ComponentSubcommand::UpdateAgents {
+                    component_name,
                     update_mode,
                     r#await,
                     disable_wakeup,
-                )
-                .await
-            }
-            ComponentSubcommand::RedeployAgents { component_name } => {
-                self.cmd_redeploy_workers(component_name.component_name)
+                } => {
+                    self.cmd_update_workers(
+                        component_name.component_name,
+                        update_mode,
+                        r#await,
+                        disable_wakeup,
+                    )
                     .await
+                }
+                ComponentSubcommand::RedeployAgents { component_name } => {
+                    self.cmd_redeploy_workers(component_name.component_name)
+                        .await
+                }
+                ComponentSubcommand::Diagnose { component_name } => {
+                    self.cmd_diagnose(component_name).await
+                }
+                ComponentSubcommand::ManifestTrace { component_name } => {
+                    self.cmd_manifest_trace(component_name).await
+                }
             }
-            ComponentSubcommand::Diagnose { component_name } => {
-                self.cmd_diagnose(component_name).await
-            }
-            ComponentSubcommand::ManifestTrace { component_name } => {
-                self.cmd_manifest_trace(component_name).await
-            }
-        }
+        })
     }
 
     async fn cmd_new(
@@ -809,10 +814,10 @@ impl ComponentCommandHandler {
         match (component, component_revision_selection) {
             (Some(component), Some(component_revision_selection)) => {
                 let revision = match component_revision_selection {
-                    ComponentRevisionSelection::ByWorkerName(worker_name) => self
+                    ComponentRevisionSelection::ByAgentName(agent_name) => self
                         .ctx
                         .worker_handler()
-                        .worker_metadata(component.id.0, &component.component_name, worker_name)
+                        .worker_metadata(component.id.0, &component.component_name, agent_name)
                         .await
                         .ok()
                         .map(|worker_metadata| worker_metadata.component_revision),
@@ -1136,7 +1141,7 @@ impl ComponentCommandHandler {
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
                     config_vars: component_stager.config_vars_if_changed(),
-                    // FIXME: local-agent-config
+                    // FIXME: agent-config
                     local_agent_config: None,
                     env: component_stager.env_if_changed(),
                     agent_types,

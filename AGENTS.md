@@ -64,6 +64,7 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `sdk-development` | Working on the Rust or TypeScript SDKs in `sdks/` |
+| `investigating-executor-performance` | Investigating worker-executor performance with OTLP tracing and Jaeger |
 | `pre-pr-checklist` | Final checks before submitting a pull request |
 
 ## Before Submitting a PR

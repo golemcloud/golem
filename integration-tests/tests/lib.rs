@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,14 +17,22 @@ mod custom_api;
 mod fork;
 mod plugins;
 mod worker;
+mod worker_local_agent_config;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
-use test_r::test_dep;
+use test_r::{tag_suite, test_dep};
 
 test_r::enable!();
+
+tag_suite!(worker, group1);
+tag_suite!(fork, group1);
+
+tag_suite!(worker_local_agent_config, group2);
+tag_suite!(api, group2);
+tag_suite!(custom_api, group2);
 
 #[derive(Debug)]
 pub struct Tracing;

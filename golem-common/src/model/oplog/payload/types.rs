@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,10 +21,9 @@ use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
 use crate::model::{
-    AccountId, AgentInvocation, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId,
-    ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, AgentId, AgentInvocation, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId,
+    RdbmsPoolKey, ScheduleId, ScheduledAction,
 };
-use anyhow::anyhow;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -60,6 +59,9 @@ use wasmtime_wasi_http::bindings::http::types::{
 };
 use wasmtime_wasi_http::body::HostIncomingBody;
 use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
+
+/// Must match `DEFAULT_FIELD_SIZE_LIMIT` in wasmtime-wasi-http's `WasiHttpCtx`
+const DEFAULT_FIELD_SIZE_LIMIT: usize = 128 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
@@ -138,7 +140,7 @@ impl From<FileSystemError> for FsError {
     fn from(value: FileSystemError) -> Self {
         match value {
             FileSystemError::ErrorCode(SerializableFsErrorCode(error_code)) => error_code.into(),
-            FileSystemError::Generic(error) => FsError::trap(anyhow!(error)),
+            FileSystemError::Generic(error) => FsError::trap(wasmtime::Error::msg(error)),
         }
     }
 }
@@ -467,7 +469,9 @@ impl From<SerializableSocketError> for SocketError {
             SerializableSocketError::ErrorCode(SerializableSocketErrorCode(error_code)) => {
                 error_code.into()
             }
-            SerializableSocketError::Generic(error) => SocketError::trap(anyhow!(error)),
+            SerializableSocketError::Generic(error) => {
+                SocketError::trap(wasmtime::Error::msg(error))
+            }
         }
     }
 }
@@ -708,16 +712,19 @@ pub enum SerializableHttpResponse {
 #[desert(evolution())]
 pub struct SerializableResponseHeaders {
     pub status: u16,
-    pub headers: HashMap<String, Vec<u8>>,
+    pub headers: HashMap<String, Vec<Vec<u8>>>,
 }
 
 impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
     type Error = anyhow::Error;
 
     fn try_from(response: &HostIncomingResponse) -> Result<Self, Self::Error> {
-        let mut headers = HashMap::new();
-        for (key, value) in response.headers.iter() {
-            headers.insert(key.as_str().to_string(), value.as_bytes().to_vec());
+        let mut headers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
+        for (key, value) in response.headers.as_ref().iter() {
+            headers
+                .entry(key.as_str().to_string())
+                .or_default()
+                .push(value.as_bytes().to_vec());
         }
 
         Ok(Self {
@@ -731,10 +738,14 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
     type Error = anyhow::Error;
 
     fn try_from(value: SerializableResponseHeaders) -> Result<Self, Self::Error> {
-        let mut headers = FieldMap::new();
-        for (key, value) in value.headers {
-            headers.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
+        let mut header_map = http::HeaderMap::new();
+        for (key, values) in value.headers {
+            let name = HeaderName::from_str(&key)?;
+            for value in values {
+                header_map.append(name.clone(), HeaderValue::try_from(value)?);
+            }
         }
+        let headers = FieldMap::new(header_map, DEFAULT_FIELD_SIZE_LIMIT);
 
         Ok(Self {
             status: value.status,
@@ -1086,23 +1097,23 @@ impl Display for SerializableHttpMethod {
     }
 }
 
-/// A subset of WorkerMetadata visible for guests (and serializable to oplog)
+/// A subset of AgentMetadata visible for guests (and serializable to oplog)
 #[derive(Debug, Clone, PartialEq, IntoValue, FromValue, BinaryCodec)]
 pub struct AgentMetadataForGuests {
-    pub agent_id: WorkerId,
+    pub agent_id: AgentId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config_vars: BTreeMap<String, String>,
-    pub status: WorkerStatus,
+    pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u64,
     pub environment_id: EnvironmentId,
 }
 
-impl From<WorkerMetadata> for AgentMetadataForGuests {
-    fn from(value: WorkerMetadata) -> Self {
+impl From<AgentMetadata> for AgentMetadataForGuests {
+    fn from(value: AgentMetadata) -> Self {
         Self {
-            agent_id: value.worker_id,
+            agent_id: value.agent_id,
             args: vec![],
             env: value.env,
             config_vars: value.config_vars,
@@ -1143,9 +1154,9 @@ impl From<SerializableStreamError> for StreamError {
         match value {
             SerializableStreamError::Closed => Self::Closed,
             SerializableStreamError::LastOperationFailed(e) => {
-                Self::LastOperationFailed(anyhow!(e))
+                Self::LastOperationFailed(wasmtime::Error::msg(e))
             }
-            SerializableStreamError::Trap(e) => Self::Trap(anyhow!(e)),
+            SerializableStreamError::Trap(e) => Self::Trap(wasmtime::Error::msg(e)),
         }
     }
 }
@@ -1278,7 +1289,7 @@ pub struct SerializableScheduledInvocation {
     pub timestamp: i64,
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub idempotency_key: IdempotencyKey,
     pub method_name: String,
     pub input: UntypedDataValue,
@@ -1293,7 +1304,7 @@ impl SerializableScheduledInvocation {
         match schedule_id.action {
             ScheduledAction::Invoke {
                 account_id,
-                owned_worker_id,
+                owned_agent_id,
                 invocation,
             } => match *invocation {
                 AgentInvocation::AgentMethod {
@@ -1305,8 +1316,8 @@ impl SerializableScheduledInvocation {
                 } => Ok(Self {
                     timestamp: schedule_id.timestamp,
                     account_id,
-                    environment_id: owned_worker_id.environment_id,
-                    worker_id: owned_worker_id.worker_id,
+                    environment_id: owned_agent_id.environment_id,
+                    agent_id: owned_agent_id.agent_id,
                     idempotency_key,
                     method_name,
                     input,
@@ -1334,9 +1345,9 @@ impl SerializableScheduledInvocation {
             timestamp: self.timestamp,
             action: ScheduledAction::Invoke {
                 account_id: self.account_id,
-                owned_worker_id: OwnedWorkerId {
+                owned_agent_id: OwnedAgentId {
                     environment_id: self.environment_id,
-                    worker_id: self.worker_id,
+                    agent_id: self.agent_id,
                 },
                 invocation: Box::new(AgentInvocation::AgentMethod {
                     idempotency_key: self.idempotency_key,

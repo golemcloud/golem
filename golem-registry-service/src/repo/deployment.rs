@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent_secret::DbAgentSecretRepo;
 use super::model::BindFields;
+use super::model::agent_secrets::AgentSecretRepoError;
 use super::model::deployment::{
     CurrentDeploymentExtRevisionRecord, DeploymentCompiledMcpRecord,
     DeploymentCompiledRouteWithSecuritySchemeRecord, DeploymentRevisionCreationRecord,
@@ -88,7 +90,6 @@ pub trait DeploymentRepo: Send + Sync {
 
     async fn deploy(
         &self,
-        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
@@ -294,13 +295,15 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn deploy(
         &self,
-        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
-        let span = Self::span_user_and_env(user_account_id, deployment_creation.environment_id);
+        let span = Self::span_user_and_env(
+            deployment_creation.user_account_id,
+            deployment_creation.environment_id,
+        );
         self.repo
-            .deploy(user_account_id, deployment_creation, version_check)
+            .deploy(deployment_creation, version_check)
             .instrument(span)
             .await
     }
@@ -690,7 +693,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn deploy(
         &self,
-        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
@@ -714,7 +716,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                 let deployment_revision = Self::create_deployment_revision(
                     tx,
-                    user_account_id,
+                    deployment_creation.user_account_id,
                     environment_id,
                     deployment_creation.deployment_revision_id,
                     deployment_creation.version,
@@ -753,9 +755,37 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     Self::create_deployment_mcp(tx, compiled_mcp).await?;
                 }
 
+                for agent_secret in deployment_creation.created_agent_secrets {
+                    let agent_secret_path = agent_secret.path.0.clone();
+                    DbAgentSecretRepo::<PostgresPool>::create_within_transaction(tx, agent_secret)
+                        .await
+                        .map_err(|err| match err {
+                            AgentSecretRepoError::SecretViolatesUniqueness => {
+                                DeployRepoError::AgentSecretConflict {
+                                    path: agent_secret_path,
+                                }
+                            }
+                            AgentSecretRepoError::ConcurrentModification => {
+                                DeployRepoError::ConcurrentModification
+                            }
+                            other => other.into(),
+                        })?;
+                }
+
+                for agent_secret in deployment_creation.updated_agent_secrets {
+                    DbAgentSecretRepo::<PostgresPool>::update_within_transaction(tx, agent_secret)
+                        .await
+                        .map_err(|err| match err {
+                            AgentSecretRepoError::ConcurrentModification => {
+                                DeployRepoError::ConcurrentModification
+                            }
+                            other => other.into(),
+                        })?;
+                }
+
                 let revision = Self::set_current_deployment_internal(
                     tx,
-                    user_account_id,
+                    deployment_creation.user_account_id,
                     deployment_revision.environment_id,
                     deployment_revision.revision_id,
                 )
@@ -959,14 +989,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
-                        AND (r.agent_type_name = $3 OR r.agent_wrapper_type_name = $3)
+                        AND r.agent_type_name = $3
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id)
@@ -987,7 +1017,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -1014,7 +1044,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -1024,7 +1054,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_registered_agent_types r
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
-                    WHERE cd.environment_id = $1 AND (r.agent_type_name = $2 OR r.agent_wrapper_type_name = $2)
+                    WHERE cd.environment_id = $1 AND r.agent_type_name = $2
                 "#})
                 .bind(environment_id)
                 .bind(agent_type_name)
@@ -1043,7 +1073,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -1129,7 +1159,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             )
             SELECT
               r.environment_id, r.deployment_revision_id,
-              r.agent_type_name, r.agent_wrapper_type_name,
+              r.agent_type_name, r.canonical_agent_type_name,
               r.component_id, r.component_revision_id,
               r.webhook_prefix_authority_and_path, r.agent_type,
               target.owner_account_id,
@@ -1138,8 +1168,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             JOIN deployment_registered_agent_types r
               ON r.environment_id = target.environment_id
              AND r.deployment_revision_id = target.deployment_revision_id
-            WHERE (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
-            ORDER BY (r.agent_wrapper_type_name = $4) DESC
+            WHERE r.agent_type_name = $4
             LIMIT 1
         "#};
 
@@ -1192,7 +1221,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -1205,7 +1234,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             ORDER BY deployment_revision_id DESC
                             LIMIT 1
                         )
-                        AND (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
+                        AND r.agent_type_name = $4
                     ORDER BY r.agent_type_name
                 "#})
                 .bind(environment_id)
@@ -1229,7 +1258,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.agent_type_name,
-                        r.agent_wrapper_type_name,
+                        r.canonical_agent_type_name,
                         r.component_id,
                         r.component_revision_id,
                         r.webhook_prefix_authority_and_path,
@@ -1562,7 +1591,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             sqlx::query(indoc! { r#"
                 INSERT INTO deployment_registered_agent_types
                     (environment_id, deployment_revision_id,
-                     agent_type_name, agent_wrapper_type_name,
+                     agent_type_name, canonical_agent_type_name,
                      component_id, component_revision_id,
                      webhook_prefix_authority_and_path, agent_type)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -1570,7 +1599,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind(registered_agent_type.environment_id)
             .bind(registered_agent_type.deployment_revision_id)
             .bind(&registered_agent_type.agent_type_name)
-            .bind(&registered_agent_type.agent_wrapper_type_name)
+            .bind(&registered_agent_type.canonical_agent_type_name)
             .bind(registered_agent_type.component_id)
             .bind(registered_agent_type.component_revision_id)
             .bind(&registered_agent_type.webhook_prefix_authority_and_path)

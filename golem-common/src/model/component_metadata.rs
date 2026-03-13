@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
 use crate::SafeDisplay;
@@ -38,7 +37,6 @@ pub use crate::base_model::component_metadata::*;
 pub struct InvokableFunction {
     pub name: ParsedFunctionName,
     pub analysed_export: AnalysedFunction,
-    pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
 }
 
 impl ComponentMetadata {
@@ -136,34 +134,11 @@ impl ComponentMetadata {
             .find_parsed_function(&self.data, parsed)
     }
 
-    pub fn find_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
         self.cache
             .lock()
             .unwrap()
             .find_agent_type_by_name(&self.data, agent_type)
-    }
-
-    pub fn find_agent_type_by_wrapper_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
-        self.cache
-            .lock()
-            .unwrap()
-            .find_agent_type_by_wrapper_name(&self.data, agent_type)
-    }
-
-    pub fn find_wrapper_function_by_agent_constructor(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<InvokableFunction>, String> {
-        self.cache
-            .lock()
-            .unwrap()
-            .find_wrapper_function_by_agent_constructor(&self.data, agent_type)
     }
 }
 
@@ -332,79 +307,17 @@ impl ComponentMetadataInnerData {
     ) -> Result<Option<InvokableFunction>, String> {
         Ok(self
             .find_analysed_function(parsed)
-            .map(|analysed_export| {
-                self.find_agent_method_or_constructor(parsed)
-                    .map(|agent_method_or_constructor| {
-                        (analysed_export, agent_method_or_constructor)
-                    })
-            })
-            .transpose()?
-            .map(
-                |(analysed_export, agent_method_or_constructor)| InvokableFunction {
-                    name: parsed.clone(),
-                    analysed_export,
-                    agent_method_or_constructor,
-                },
-            ))
+            .map(|analysed_export| InvokableFunction {
+                name: parsed.clone(),
+                analysed_export,
+            }))
     }
 
-    pub fn find_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
-        Ok(self
-            .agent_types
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
+        self.agent_types
             .iter()
             .find(|t| &t.type_name == agent_type)
-            .cloned())
-    }
-
-    pub fn find_agent_type_by_wrapper_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
-        Ok(self
-            .agent_types
-            .iter()
-            .find(|t| &t.type_name.to_wit_naming() == agent_type)
-            .cloned())
-    }
-
-    pub fn find_wrapper_function_by_agent_constructor(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<InvokableFunction>, String> {
-        let agent_type = self
-            .find_agent_type_by_name(agent_type)?
-            .ok_or_else(|| format!("Agent type {} not found", agent_type))?;
-
-        let root_package_name = self
-            .root_package_name
-            .as_ref()
-            .ok_or("Agents must have a root package name")?;
-        let (namespace, package) = root_package_name
-            .split_once(':')
-            .ok_or("Root package name must be in the form namespace:package")?;
-        let version = self
-            .root_package_version
-            .as_ref()
-            .map(|v| SemVer::parse(v))
-            .transpose()?;
-
-        let interface = agent_type.wrapper_type_name();
-        let function = ParsedFunctionName::new(
-            ParsedFunctionSite::PackagedInterface {
-                namespace: namespace.to_string(),
-                package: package.to_string(),
-                interface,
-                version,
-            },
-            ParsedFunctionReference::Function {
-                function: "initialize".to_string(),
-            },
-        );
-
-        self.find_parsed_function(&function)
+            .cloned()
     }
 
     /// Finds a function ignoring the function site's version. Returns None if it was not found.
@@ -431,20 +344,10 @@ impl ComponentMetadataInnerData {
                     None
                 }
             })
-            .map(|(analysed_export, name)| {
-                self.find_agent_method_or_constructor(&name)
-                    .map(|agent_method_or_constructor| {
-                        (analysed_export, name, agent_method_or_constructor)
-                    })
-            })
-            .transpose()?
-            .map(
-                |(analysed_export, name, agent_method_or_constructor)| InvokableFunction {
-                    name,
-                    analysed_export,
-                    agent_method_or_constructor,
-                },
-            ))
+            .map(|(analysed_export, name)| InvokableFunction {
+                name,
+                analysed_export,
+            }))
     }
 
     fn find_analysed_function(&self, parsed: &ParsedFunctionName) -> Option<AnalysedFunction> {
@@ -487,69 +390,6 @@ impl ComponentMetadataInnerData {
             },
         }
     }
-
-    fn find_agent_method_or_constructor(
-        &self,
-        parsed: &ParsedFunctionName,
-    ) -> Result<Option<AgentMethodOrConstructor>, String> {
-        if let Some(root_package_name) = &self.root_package_name {
-            if let Some((root_namespace, root_package)) = root_package_name.split_once(':') {
-                let static_agent_interface = ParsedFunctionSite::PackagedInterface {
-                    namespace: root_namespace.to_string(),
-                    package: root_package.to_string(),
-                    interface: "agent".to_string(),
-                    version: self
-                        .root_package_version
-                        .as_ref()
-                        .map(|v| SemVer::parse(v))
-                        .transpose()?,
-                };
-
-                if parsed.site() == &static_agent_interface {
-                    if let Some(resource_name) = parsed.is_method() {
-                        let agent = self
-                            .agent_types
-                            .iter()
-                            .find(|agent| agent.wrapper_type_name() == resource_name);
-
-                        let method = agent.and_then(|agent| {
-                            agent
-                                .methods
-                                .iter()
-                                .find(|method| {
-                                    method.name.to_wit_naming() == parsed.function().function_name()
-                                })
-                                .cloned()
-                        });
-
-                        Ok(method.map(AgentMethodOrConstructor::Method))
-                    } else if let Some(resource_name) = parsed.is_static_method() {
-                        if parsed.function().function_name() == "create" {
-                            // this can be an agent constructor
-                            let agent = self
-                                .agent_types
-                                .iter()
-                                .find(|agent| agent.wrapper_type_name() == resource_name);
-
-                            Ok(agent.map(|agent| {
-                                AgentMethodOrConstructor::Constructor(agent.constructor.clone())
-                            }))
-                        } else {
-                            Ok(None) // Not the agent constructor
-                        }
-                    } else {
-                        Ok(None) // Not a method or static method
-                    }
-                } else {
-                    Ok(None) // Not belonging to the static agent wrapper interface
-                }
-            } else {
-                Ok(None) // Not a valid root package name
-            }
-        } else {
-            Ok(None) // No root package name
-        }
-    }
 }
 
 #[derive(Default)]
@@ -561,10 +401,7 @@ pub(crate) struct ComponentMetadataInnerCache {
     oplog_processor: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    agent_types_by_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
-    agent_types_by_wrapper_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
-    functions_by_agent_constructor:
-        HashMap<AgentTypeName, Result<Option<InvokableFunction>, String>>,
+    agent_types_by_type_name: HashMap<AgentTypeName, Option<AgentType>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -667,42 +504,12 @@ impl ComponentMetadataInnerCache {
         &mut self,
         data: &ComponentMetadataInnerData,
         agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
+    ) -> Option<AgentType> {
         if let Some(cached) = self.agent_types_by_type_name.get(agent_type) {
             cached.clone()
         } else {
             let result = data.find_agent_type_by_name(agent_type);
             self.agent_types_by_type_name
-                .insert(agent_type.clone(), result.clone());
-            result
-        }
-    }
-
-    pub fn find_agent_type_by_wrapper_name(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
-        if let Some(cached) = self.agent_types_by_wrapper_type_name.get(agent_type) {
-            cached.clone()
-        } else {
-            let result = data.find_agent_type_by_wrapper_name(agent_type);
-            self.agent_types_by_wrapper_type_name
-                .insert(agent_type.clone(), result.clone());
-            result
-        }
-    }
-
-    pub fn find_wrapper_function_by_agent_constructor(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<InvokableFunction>, String> {
-        if let Some(cached) = self.functions_by_agent_constructor.get(agent_type) {
-            cached.clone()
-        } else {
-            let result = data.find_wrapper_function_by_agent_constructor(agent_type);
-            self.functions_by_agent_constructor
                 .insert(agent_type.clone(), result.clone());
             result
         }

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 
@@ -626,10 +626,10 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 pub enum KeyValueStorageNamespace {
     RunningWorkers,
     Worker {
-        worker_id: WorkerId,
+        agent_id: AgentId,
     },
     Promise {
-        worker_id: WorkerId,
+        agent_id: AgentId,
     },
     Schedule,
     UserDefined {

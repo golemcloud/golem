@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -38,7 +38,7 @@ use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType, WorkerConfig,
+    AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -60,14 +60,15 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::HasOplogService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::wasi_host;
+use crate::worker::agent_config::{effective_local_agent_config, validate_local_agent_config};
 use crate::worker::invocation::{
     invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, HasConfigVars, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
+    ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
+    InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
@@ -79,7 +80,7 @@ use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
@@ -89,22 +90,23 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry, OplogIndex,
-    PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
-    WorkerError, WorkerResourceId,
+    AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
+    OplogIndex, PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
-    ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
+    AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor,
+    ScheduledAction, Timestamp,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::component::Component;
 use golem_service_base::model::{
-    Component, ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::Uri;
@@ -125,13 +127,17 @@ use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
-use wasmtime_wasi::p2::{FsResult, Stderr, Stdout, WasiCtx, WasiImpl, WasiView};
-use wasmtime_wasi::{I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError};
+use wasmtime_wasi::p2::FsResult;
+use wasmtime_wasi::{
+    I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
+    WasiView,
+};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
-    default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
+    default_send_request_with_pool, BodyCompletionReceiver, HostFutureIncomingResponse,
+    OutgoingRequestConfig,
 };
-use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
+use wasmtime_wasi_http::{HttpConnectionPool, HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -139,7 +145,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     wasi: Arc<Mutex<WasiCtx>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
     io_ctx: Arc<Mutex<IoCtx>>,
     wasi_http: WasiHttpCtx,
-    pub owned_worker_id: OwnedWorkerId,
+    pub owned_agent_id: OwnedAgentId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     temp_dir: Arc<TempDir>,
@@ -149,8 +155,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
-        owned_worker_id: OwnedWorkerId,
-        agent_id: Option<AgentId>,
+        owned_agent_id: OwnedAgentId,
+        agent_id: Option<ParsedAgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -166,13 +172,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
-        worker_config: WorkerConfig,
+        worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -186,24 +193,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         debug!(
             "Worker {} initialized with deleted regions {}",
-            owned_worker_id.worker_id, worker_config.deleted_regions
+            owned_agent_id.agent_id, worker_config.deleted_regions
         );
 
         debug!(
             "Worker {} starting replay from component revision {}",
-            owned_worker_id.worker_id, worker_config.component_revision_for_replay
+            owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
 
         let component_metadata = component_service
             .get_metadata(
-                owned_worker_id.component_id(),
+                owned_agent_id.component_id(),
                 Some(worker_config.component_revision_for_replay),
             )
             .await?;
 
         let files = prepare_filesystem(
             &file_loader,
-            owned_worker_id.environment_id,
+            owned_agent_id.environment_id,
             temp_dir.path(),
             &component_metadata.files,
         )
@@ -214,9 +221,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             component_metadata.config_vars.clone(),
         );
 
+        let local_agent_config = if let Some(agent_id) = &agent_id {
+            effective_local_agent_config(
+                worker_config.initial_local_agent_config.clone(),
+                component_metadata.local_agent_config.clone(),
+                &agent_id.agent_type,
+            )
+        } else {
+            HashMap::new()
+        };
+
         let stdin = ManagedStdIn::disabled();
-        let stdout = ManagedStdOut::from_stdout(Stdout);
-        let stderr = ManagedStdErr::from_stderr(Stderr);
+        let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
+        let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
 
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
@@ -224,17 +241,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stdin,
             stdout,
             stderr,
-            |duration| anyhow!(SuspendForSleep(duration)),
+            |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             config.suspend.suspend_after,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
-        let wasi_http = WasiHttpCtx::new();
+        let mut wasi_http = WasiHttpCtx::new();
+        wasi_http.connection_pool = http_connection_pool;
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
             io_ctx: Arc::new(Mutex::new(io_ctx)),
             wasi_http,
-            owned_worker_id: owned_worker_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
                 event_service,
@@ -256,7 +274,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 agent_types_service,
                 agent_webhooks_service,
                 config.clone(),
-                owned_worker_id.clone(),
+                owned_agent_id.clone(),
                 rpc,
                 worker_proxy,
                 worker_config.deleted_regions.clone(),
@@ -269,6 +287,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.created_by,
                 worker_config.initial_config_vars,
                 config_vars,
+                worker_config.initial_local_agent_config,
+                local_agent_config,
                 shard_service,
                 pending_update,
                 original_phantom_id,
@@ -314,13 +334,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn ctx(&mut self) -> &mut WasiCtx {
-        Arc::get_mut(&mut self.wasi)
-            .expect("WasiCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("WasiCtx mutex must never fail")
-    }
-
     fn io_ctx(&mut self) -> &mut IoCtx {
         Arc::get_mut(&mut self.io_ctx)
             .expect("WasiCtx is shared and cannot be borrowed mutably")
@@ -328,19 +341,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("WasiCtx mutex must never fail")
     }
 
-    pub fn worker_id(&self) -> &WorkerId {
-        &self.owned_worker_id.worker_id
+    pub fn agent_id(&self) -> &AgentId {
+        &self.owned_agent_id.agent_id
     }
 
-    pub fn owned_worker_id(&self) -> &OwnedWorkerId {
-        &self.owned_worker_id
+    pub fn owned_agent_id(&self) -> &OwnedAgentId {
+        &self.owned_agent_id
     }
 
     pub fn created_by(&self) -> AccountId {
         self.state.created_by
     }
 
-    pub fn agent_id(&self) -> Option<AgentId> {
+    pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.state.agent_id.clone()
     }
 
@@ -359,12 +372,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|exit| exit.0)
     }
 
-    pub fn as_wasi_view(&mut self) -> WasiImpl<DurableWorkerCtxWasiView<'_, Ctx>> {
-        WasiImpl(IoImpl(DurableWorkerCtxWasiView(self)))
+    pub fn as_wasi_view(&mut self) -> DurableWorkerCtxWasiView<'_, Ctx> {
+        DurableWorkerCtxWasiView(self)
     }
 
     pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'_, Ctx>> {
-        WasiHttpImpl(IoImpl(DurableWorkerCtxWasiHttpView(self)))
+        WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
     }
 
     pub fn rpc(&self) -> Arc<dyn Rpc> {
@@ -427,27 +440,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Jump) => RetryDecision::Immediate,
             TrapType::Exit => RetryDecision::None,
             TrapType::Error {
-                error: WorkerError::OutOfMemory,
+                error: AgentError::OutOfMemory,
                 ..
             } => RetryDecision::ReacquirePermits,
             TrapType::Error {
-                error: WorkerError::InvalidRequest(_),
+                error: AgentError::InvalidRequest(_),
                 ..
             } => RetryDecision::None,
             TrapType::Error {
-                error: WorkerError::StackOverflow,
+                error: AgentError::StackOverflow,
                 ..
             } => RetryDecision::None,
             TrapType::Error {
-                error: WorkerError::ExceededMemoryLimit,
+                error: AgentError::ExceededMemoryLimit,
                 ..
             } => RetryDecision::None,
             TrapType::Error {
-                error: WorkerError::AgentError(_),
+                error: AgentError::InternalError(_),
                 ..
             } => RetryDecision::None,
             TrapType::Error {
-                error: WorkerError::Unknown(_),
+                error: AgentError::Unknown(_),
                 retry_from,
             } => {
                 let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
@@ -957,12 +970,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasConfigVars for DurableWorkerCtx<Ctx> {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.state.config_vars.read().unwrap().clone()
-    }
-}
-
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
     pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
@@ -1014,7 +1021,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             idempotency_key,
                             snapshot: RawSnapshotData { data, mime_type },
                         };
-                        let agent_id = store.as_context().data().agent_id();
+                        let agent_id = store.as_context().data().parsed_agent_id();
                         let lowered = match lower_invocation(
                             load_snapshot_invocation,
                             &component_metadata,
@@ -1169,6 +1176,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             OplogEntry::Snapshot {
                 data, mime_type, ..
             } => (data, mime_type),
+            OplogEntry::PendingUpdate {
+                description:
+                    UpdateDescription::SnapshotBased {
+                        payload, mime_type, ..
+                    },
+                ..
+            } => (payload, mime_type),
             _ => {
                 warn!(
                     "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
@@ -1227,7 +1241,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
         };
-        let agent_id = store.as_context().data().agent_id();
+        let agent_id = store.as_context().data().parsed_agent_id();
         let lowered = match lower_invocation(
             load_snapshot_invocation,
             &component_metadata,
@@ -1397,14 +1411,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let new_metadata = self
             .component_service()
-            .get_metadata(self.owned_worker_id.component_id(), Some(new_revision))
+            .get_metadata(self.owned_agent_id.component_id(), Some(new_revision))
             .await?;
 
         let mut current_files = self.state.files.write().await;
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
-            self.owned_worker_id.environment_id,
+            self.owned_agent_id.environment_id,
             self.temp_dir.path(),
             &new_metadata.files,
         )
@@ -1413,11 +1427,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        let mut config_vars = self.state.config_vars.write().unwrap();
-        *config_vars = effective_config_vars(
+        self.state.config_vars = effective_config_vars(
             self.state.initial_config_vars.clone(),
             new_metadata.config_vars.clone(),
         );
+
+        if let Some(agent_id) = self.parsed_agent_id() {
+            let agent_type = new_metadata
+                .metadata
+                .find_agent_type_by_name(&agent_id.agent_type)
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "Agent type {} not found in updated agent metadata",
+                        agent_id.agent_type
+                    ))
+                })?;
+
+            let updated_local_agent_config = effective_local_agent_config(
+                self.state.initial_local_agent_config.clone(),
+                new_metadata.local_agent_config.clone(),
+                &agent_id.agent_type,
+            );
+
+            validate_local_agent_config(&updated_local_agent_config, &agent_type)?;
+
+            self.state.local_agent_config = updated_local_agent_config;
+        };
 
         self.state.component_metadata = new_metadata;
 
@@ -1565,7 +1600,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .unwrap_or_else(|err| {
                     panic!(
                         "could not encode agent invocation on {}: {err}",
-                        self.worker_id()
+                        self.agent_id()
                     )
                 });
 
@@ -1591,7 +1626,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Restart) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
             TrapType::Error {
-                error: WorkerError::InvalidRequest(_),
+                error: AgentError::InvalidRequest(_),
                 ..
             } => current_idempotency_key.map(OplogEntry::cancel_pending_invocation),
             TrapType::Error { error, retry_from } => {
@@ -1617,12 +1652,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let giving_up = matches!(
             trap_type,
             TrapType::Error {
-                error: WorkerError::InvalidRequest(_),
+                error: AgentError::InvalidRequest(_),
                 ..
             }
         ) || matches!(
             latest_status.status,
-            WorkerStatus::Failed | WorkerStatus::Interrupted | WorkerStatus::Exited
+            AgentStatus::Failed | AgentStatus::Interrupted | AgentStatus::Exited
         );
 
         if giving_up {
@@ -1744,7 +1779,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
 
     async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
         let id = self.state.add(resource, name.clone()).await;
-        let resource_id = WorkerResourceId(id);
+        let resource_id = AgentResourceId(id);
         if self.state.is_live() {
             let entry = OplogEntry::create_resource(resource_id, name.clone());
             self.public_state.worker().add_to_oplog(entry).await;
@@ -1755,7 +1790,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
     async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         let result = self.state.borrow(resource_id).await;
         if let Some((resource_type_id, _)) = &result {
-            let id = WorkerResourceId(resource_id);
+            let id = AgentResourceId(resource_id);
             if self.state.is_live() {
                 let entry = OplogEntry::drop_resource(id, resource_type_id.clone());
                 self.public_state.worker().add_to_oplog(entry).await;
@@ -1996,10 +2031,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        latest_worker_status: &WorkerStatusRecord,
+        owned_agent_id: &OwnedAgentId,
+        latest_worker_status: &AgentStatusRecord,
     ) -> Option<LastError> {
-        last_error(this, owned_worker_id, latest_worker_status).await
+        last_error(this, owned_agent_id, latest_worker_status).await
     }
 
     async fn resume_replay(
@@ -2081,7 +2116,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .metadata
                             .clone();
 
-                        let agent_id = store.as_context().data().agent_id();
+                        let agent_id = store.as_context().data().parsed_agent_id();
                         let lowered = lower_invocation(
                             agent_invocation,
                             &component_metadata,
@@ -2238,7 +2273,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 
     async fn prepare_instance(
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
@@ -2300,11 +2335,25 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         UpdateDescription::Automatic {
                             target_revision, ..
                         } => {
-                            // snapshot update will be succeeded as part of the replay.
-                            let result = Self::resume_replay(store, instance, false).await;
-                            record_resume_worker(start.elapsed());
+                            let replay_result = async {
+                                if let SnapshotRecoveryResult::Failed =
+                                    Self::try_load_snapshot(store, instance).await
+                                {
+                                    return Err(WorkerExecutorError::failed_to_resume_worker(
+                                        agent_id.clone(),
+                                        WorkerExecutorError::runtime("loading snapshot failed"),
+                                    ));
+                                };
+                                // automatic update will be succeeded as part of the replay.
+                                let result = Self::resume_replay(store, instance, false).await?;
 
-                            match result {
+                                record_resume_worker(start.elapsed());
+
+                                Ok(result)
+                            }
+                            .await;
+
+                            match replay_result {
                                 Err(error) => {
                                     // replay failed. There are two cases here:
                                     // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
@@ -2342,18 +2391,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         _ => Err(error),
                                     }
                                 }
-                                _ => result,
+                                _ => replay_result,
                             }
                         }
                     }
                 }
                 None => match Self::try_load_snapshot(store, instance).await {
-                    SnapshotRecoveryResult::Success => {
-                        let result = Self::resume_replay(store, instance, false).await;
-                        record_resume_worker(start.elapsed());
-                        result
-                    }
-                    SnapshotRecoveryResult::NotAttempted => {
+                    SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                         let result = Self::resume_replay(store, instance, false).await;
                         record_resume_worker(start.elapsed());
                         result
@@ -2378,7 +2422,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             }
             Ok(other) => Ok(other),
             Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-                worker_id.clone(),
+                agent_id.clone(),
                 error,
             )),
         }
@@ -2398,27 +2442,28 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         debug!("Recovering running workers: {:?}", workers);
 
         for worker in workers {
-            let owned_worker_id = worker.initial_worker_metadata.owned_worker_id();
+            let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
             let created_by = worker.initial_worker_metadata.created_by;
             let latest_worker_status = calculate_last_known_status_for_existing_worker(
                 this,
-                &owned_worker_id,
+                &owned_agent_id,
                 worker.last_known_status,
             )
             .await;
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
             match latest_worker_status.status {
-                WorkerStatus::Running
-                | WorkerStatus::Idle
-                | WorkerStatus::Retrying
-                | WorkerStatus::Interrupted => {
+                AgentStatus::Running
+                | AgentStatus::Idle
+                | AgentStatus::Retrying
+                | AgentStatus::Interrupted => {
                     let _ = Worker::get_or_create_running(
                         this,
                         created_by,
-                        &owned_worker_id,
+                        &owned_agent_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
@@ -2593,13 +2638,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
     }
 }
 
-// TODO: optimize this and keep the relevant indices for recovering logs in the WorkerStatusRecord
+// TODO: optimize this and keep the relevant indices for recovering logs in the AgentStatusRecord
 async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
-    owned_worker_id: &OwnedWorkerId,
-    latest_worker_status: &WorkerStatusRecord,
+    owned_agent_id: &OwnedAgentId,
+    latest_worker_status: &AgentStatusRecord,
 ) -> Option<LastError> {
-    let mut idx = this.oplog_service().get_last_index(owned_worker_id).await;
+    let mut idx = this.oplog_service().get_last_index(owned_agent_id).await;
     if idx == OplogIndex::NONE {
         None
     } else {
@@ -2618,7 +2663,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
                     break;
                 }
             } else {
-                let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+                let oplog_entry = this.oplog_service().read(owned_agent_id, idx, 1).await;
                 match oplog_entry.first_key_value() {
                     Some((
                         _,
@@ -2680,7 +2725,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
         match first_error {
             Some(error) => Some(LastError {
                 error,
-                stderr: recover_stderr_logs(this, owned_worker_id, last_error_index).await,
+                stderr: recover_stderr_logs(this, owned_agent_id, last_error_index).await,
                 retry_from: first_retry_from,
             }),
             None => None,
@@ -2692,7 +2737,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
 /// number of entries, and at most until the beginning of the last invocation.
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     this: &T,
-    owned_worker_id: &OwnedWorkerId,
+    owned_agent_id: &OwnedAgentId,
     last_oplog_idx: OplogIndex,
 ) -> String {
     let max_count = this.config().limits.event_history_size;
@@ -2707,7 +2752,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
 
     loop {
         // TODO: this could be read in batches to speed up the process
-        let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+        let oplog_entry = this.oplog_service().read(owned_agent_id, idx, 1).await;
 
         // Because of retries we might have multiple invocation start entries.
         // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
@@ -2799,6 +2844,20 @@ struct HttpRequestState {
     /// this records the IncomingBody handle so that on stream close we can transfer
     /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
     pub body_handle: Option<u32>,
+    /// The outgoing body resource handle associated with this request, set when
+    /// outgoing_handler::handle() resolves the pending body mapping.
+    pub outgoing_body_rep: Option<u32>,
+    /// The outgoing body output stream resource handle, set when outgoing_body::write()
+    /// creates the stream from the outgoing body.
+    pub output_stream_rep: Option<u32>,
+}
+
+/// Extracted view of the begin_index and request from an HttpRequestState,
+/// used when processing outgoing body output stream operations.
+#[derive(Debug, Clone)]
+pub(crate) struct HttpOutputStreamState {
+    pub begin_index: OplogIndex,
+    pub request: HostRequestHttpRequest,
 }
 
 struct PrivateDurableWorkerState {
@@ -2816,14 +2875,14 @@ struct PrivateDurableWorkerState {
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
     config: Arc<GolemConfig>,
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<AgentId>,
+    agent_id: Option<ParsedAgentId>,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
-    resources: HashMap<WorkerResourceId, (ResourceTypeId, ResourceAny)>,
-    last_resource_id: WorkerResourceId,
+    resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
+    last_resource_id: AgentResourceId,
     replay_state: ReplayState,
     overridden_retry_policy: Option<RetryConfig>,
     persistence_level: PersistenceLevel,
@@ -2831,6 +2890,10 @@ struct PrivateDurableWorkerState {
 
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
+
+    /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
+    /// before outgoing_handler::handle() is called and the HttpRequestState is created.
+    pending_http_outgoing_request_body: HashMap<u32, u32>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -2854,7 +2917,12 @@ struct PrivateDurableWorkerState {
     /// The initial config vars that the worker was configured with
     initial_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
-    config_vars: RwLock<BTreeMap<String, String>>,
+    config_vars: BTreeMap<String, String>,
+
+    // The initial local agent config that the worker was configured with
+    initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+    /// The current local agent config of the worker, taking the component revision into account
+    local_agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
 
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
     promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
@@ -2885,7 +2953,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<AgentId>,
+        agent_id: Option<ParsedAgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -2899,7 +2967,7 @@ impl PrivateDurableWorkerState {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         config: Arc<GolemConfig>,
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
@@ -2912,6 +2980,8 @@ impl PrivateDurableWorkerState {
         created_by: AccountId,
         initial_config_vars: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+        local_agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -2931,7 +3001,7 @@ impl PrivateDurableWorkerState {
         };
 
         let replay_state =
-            ReplayState::new(owned_worker_id.clone(), oplog.clone(), deleted_regions).await;
+            ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         Self {
@@ -2949,16 +3019,17 @@ impl PrivateDurableWorkerState {
             agent_types_service,
             agent_webhooks_service,
             config,
-            owned_worker_id,
+            owned_agent_id,
             current_idempotency_key: None,
             rpc,
             worker_proxy,
             resources: HashMap::new(),
-            last_resource_id: WorkerResourceId::INITIAL,
+            last_resource_id: AgentResourceId::INITIAL,
             overridden_retry_policy: None,
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
+            pending_http_outgoing_request_body: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,
             total_linear_memory_size,
@@ -2973,7 +3044,9 @@ impl PrivateDurableWorkerState {
             file_loader,
             created_by,
             initial_config_vars,
-            config_vars: RwLock::new(config_vars),
+            config_vars,
+            initial_local_agent_config,
+            local_agent_config,
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
@@ -2983,6 +3056,22 @@ impl PrivateDurableWorkerState {
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
         }
+    }
+
+    /// Find the open_http_requests entry key for a given outgoing body rep.
+    fn find_request_handle_by_outgoing_body(&self, body_rep: u32) -> Option<u32> {
+        self.open_http_requests
+            .iter()
+            .find(|(_, state)| state.outgoing_body_rep == Some(body_rep))
+            .map(|(&handle, _)| handle)
+    }
+
+    /// Find the open_http_requests entry key for a given output stream rep.
+    fn find_request_handle_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
+        self.open_http_requests
+            .iter()
+            .find(|(_, state)| state.output_stream_rep == Some(stream_rep))
+            .map(|(&handle, _)| handle)
     }
 
     /// In live mode it returns the last oplog index (index of the entry last added).
@@ -3009,7 +3098,7 @@ impl PrivateDurableWorkerState {
         let promise_id = self
             .promise_service
             .create(
-                &self.owned_worker_id.worker_id,
+                &self.owned_agent_id.agent_id,
                 self.current_oplog_index().await,
             )
             .await;
@@ -3020,7 +3109,7 @@ impl PrivateDurableWorkerState {
                 when,
                 ScheduledAction::CompletePromise {
                     account_id: self.created_by,
-                    environment_id: self.owned_worker_id.environment_id(),
+                    environment_id: self.owned_agent_id.environment_id(),
                     promise_id,
                 },
             )
@@ -3045,14 +3134,14 @@ impl PrivateDurableWorkerState {
     pub async fn get_workers(
         &self,
         component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
+    ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
         self.worker_enumeration_service
             .get(
-                &self.owned_worker_id.environment_id,
+                &self.owned_agent_id.environment_id,
                 component_id,
                 filter,
                 cursor,
@@ -3067,7 +3156,7 @@ impl PrivateDurableWorkerState {
 impl ResourceStore for PrivateDurableWorkerState {
     fn self_uri(&self) -> Uri {
         Uri {
-            value: self.owned_worker_id.worker_id.to_worker_urn(),
+            value: self.owned_agent_id.agent_id.to_agent_urn(),
         }
     }
 
@@ -3079,12 +3168,12 @@ impl ResourceStore for PrivateDurableWorkerState {
     }
 
     async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
-        let resource_id = WorkerResourceId(resource_id);
+        let resource_id = AgentResourceId(resource_id);
         self.resources.remove(&resource_id)
     }
 
     async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
-        self.resources.get(&WorkerResourceId(resource_id)).cloned()
+        self.resources.get(&AgentResourceId(resource_id)).cloned()
     }
 }
 
@@ -3172,12 +3261,38 @@ impl<Ctx: WorkerCtx> IoView for DurableWorkerCtxWasiView<'_, Ctx> {
     fn io_ctx(&mut self) -> &mut IoCtx {
         self.0.io_ctx()
     }
+
+    fn io_data(&mut self) -> IoData<'_> {
+        let inner = &mut *self.0;
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        IoData { table, io_ctx }
+    }
 }
 
 // This wrapper forces the compiler to choose the wasmtime_wasi implementations for T: WasiView
 impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
-    fn ctx(&mut self) -> &mut WasiCtx {
-        self.0.ctx()
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        let inner = &mut *self.0;
+        let ctx = Arc::get_mut(&mut inner.wasi)
+            .expect("WasiCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("WasiCtx mutex must never fail");
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        WasiCtxView { ctx, table, io_ctx }
     }
 }
 
@@ -3195,6 +3310,19 @@ impl<Ctx: WorkerCtx> IoView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
             .get_mut()
             .expect("IoCtx mutex must never fail")
     }
+
+    fn io_data(&mut self) -> IoData<'_> {
+        let inner = &mut *self.0;
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        IoData { table, io_ctx }
+    }
 }
 
 impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
@@ -3202,10 +3330,22 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
         &mut self.0.wasi_http
     }
 
+    fn table(&mut self) -> &mut ResourceTable {
+        Arc::get_mut(&mut self.0.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail")
+    }
+
+    fn connection_pool(&self) -> Option<&HttpConnectionPool> {
+        self.0.wasi_http.connection_pool.as_ref()
+    }
+
     fn send_request(
         &mut self,
         request: hyper::Request<HyperOutgoingBody>,
         config: OutgoingRequestConfig,
+        body_completion: Option<BodyCompletionReceiver>,
     ) -> HttpResult<HostFutureIncomingResponse>
     where
         Self: Sized,
@@ -3215,9 +3355,22 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
             // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
             // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
             // or poll the response future.
-            Ok(HostFutureIncomingResponse::deferred(request, config))
+            let connection_pool = self.0.wasi_http.connection_pool.clone();
+            Ok(HostFutureIncomingResponse::deferred(Box::new(move || {
+                Ok(default_send_request_with_pool(
+                    request,
+                    config,
+                    body_completion,
+                    connection_pool,
+                ))
+            })))
         } else {
-            Ok(default_send_request(request, config))
+            Ok(default_send_request_with_pool(
+                request,
+                config,
+                body_completion,
+                self.0.wasi_http.connection_pool.clone(),
+            ))
         }
     }
 }
@@ -3476,6 +3629,7 @@ macro_rules! get_oplog_entry {
                     break Ok((oplog_index, oplog_entry));
                 })+
                 _ => {
+                    tracing::error!("Unexpected oplog entry - expected {}, got {:?}", stringify!($($cases |)+), oplog_entry);
                     break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
                         stringify!($($cases |)+),
                         format!("{:?}", oplog_entry),

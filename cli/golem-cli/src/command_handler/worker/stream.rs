@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -23,7 +23,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{future, pin_mut, SinkExt, StreamExt, TryStreamExt};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
-use golem_common::model::{IdempotencyKey, Timestamp, WorkerEvent};
+use golem_common::model::{AgentEvent, IdempotencyKey, Timestamp};
 use native_tls::TlsConnector;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -56,7 +56,7 @@ impl WorkerConnection {
         worker_service_url: Url,
         auth_token: TokenSecret,
         component_id: &ComponentId,
-        worker_name: String,
+        agent_name: String,
         connect_options: AgentLogStreamOptions,
         allow_insecure: bool,
         format: Format,
@@ -66,7 +66,7 @@ impl WorkerConnection {
             worker_service_url,
             auth_token.secret().to_string(),
             component_id.0,
-            worker_name,
+            agent_name,
             allow_insecure,
         )?;
         let output = WorkerStreamOutput::new(connect_options, format);
@@ -147,7 +147,7 @@ impl WorkerConnection {
         worker_service_url: Url,
         auth_token: String,
         component_id: Uuid,
-        worker_name: String,
+        agent_name: String,
         allow_insecure: bool,
     ) -> anyhow::Result<(Request, Option<Connector>)> {
         let mut url = worker_service_url;
@@ -162,7 +162,7 @@ impl WorkerConnection {
             .push("components")
             .push(&component_id.to_string())
             .push("workers")
-            .push(&worker_name)
+            .push(&agent_name)
             .push("connect");
 
         debug!(url = url.as_str(), "Worker stream connect");
@@ -245,7 +245,7 @@ impl WorkerConnection {
                     match worker_event {
                         None => {}
                         Some(msg) => match msg {
-                            WorkerEvent::StdOut { timestamp, bytes } => {
+                            AgentEvent::StdOut { timestamp, bytes } => {
                                 if matching {
                                     output
                                         .emit_stdout(
@@ -255,7 +255,7 @@ impl WorkerConnection {
                                         .await;
                                 }
                             }
-                            WorkerEvent::StdErr { timestamp, bytes } => {
+                            AgentEvent::StdErr { timestamp, bytes } => {
                                 if matching {
                                     output
                                         .emit_stderr(
@@ -265,7 +265,7 @@ impl WorkerConnection {
                                         .await;
                                 }
                             }
-                            WorkerEvent::Log {
+                            AgentEvent::Log {
                                 timestamp,
                                 level,
                                 context,
@@ -275,7 +275,7 @@ impl WorkerConnection {
                                     output.emit_log(timestamp, level, context, message).await;
                                 }
                             }
-                            WorkerEvent::InvocationStart {
+                            AgentEvent::InvocationStart {
                                 timestamp,
                                 function,
                                 idempotency_key,
@@ -290,7 +290,7 @@ impl WorkerConnection {
                                         .await;
                                 }
                             }
-                            WorkerEvent::InvocationFinished {
+                            AgentEvent::InvocationFinished {
                                 timestamp,
                                 function,
                                 idempotency_key,
@@ -310,7 +310,7 @@ impl WorkerConnection {
                                     }
                                 }
                             }
-                            WorkerEvent::ClientLagged {
+                            AgentEvent::ClientLagged {
                                 number_of_missed_messages,
                             } => {
                                 output
@@ -344,10 +344,10 @@ impl WorkerConnection {
         }
     }
 
-    fn parse_websocket_message(message: Message) -> Option<WorkerEvent> {
+    fn parse_websocket_message(message: Message) -> Option<AgentEvent> {
         match message {
             Message::Text(str) => {
-                let parsed: serde_json::Result<WorkerEvent> = serde_json::from_str(str.as_str());
+                let parsed: serde_json::Result<AgentEvent> = serde_json::from_str(str.as_str());
 
                 match parsed {
                     Ok(parsed) => Some(parsed),
@@ -358,7 +358,7 @@ impl WorkerConnection {
                 }
             }
             Message::Binary(data) => {
-                let parsed: serde_json::Result<WorkerEvent> =
+                let parsed: serde_json::Result<AgentEvent> =
                     serde_json::from_slice(data.as_slice());
                 match parsed {
                     Ok(parsed) => Some(parsed),

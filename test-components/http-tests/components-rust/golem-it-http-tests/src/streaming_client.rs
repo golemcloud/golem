@@ -1,7 +1,6 @@
 use futures_concurrency::prelude::*;
 use golem_rust::{agent_definition, agent_implementation};
 use wstd::http::{Client, Request};
-use wstd::io::empty;
 
 #[agent_definition]
 pub trait StreamingClient {
@@ -12,6 +11,8 @@ pub trait StreamingClient {
     async fn raw_streaming_http_read(&self) -> String;
     async fn parallel_raw_streaming_http_reads(&self, n: u64) -> String;
     async fn streaming_http_then_sleep(&self) -> String;
+    async fn slow_body_stream(&self) -> u64;
+    async fn slow_body_stream_with_timeout(&self, timeout_ms: u64) -> Option<u64>;
 }
 
 struct StreamingClientImpl;
@@ -92,6 +93,42 @@ impl StreamingClient for StreamingClientImpl {
         format!("body_len={},slept", body.len())
     }
 
+    async fn slow_body_stream(&self) -> u64 {
+        let port = std::env::var("PORT").unwrap_or("9999".to_string());
+        let request = Request::get(format!("http://localhost:{port}/big-byte-array"))
+            .body(())
+            .expect("Failed to build request");
+
+        match Client::new().send(request).await {
+            Ok(mut response) => {
+                let body = response.body_mut();
+                match body.str_contents().await {
+                    Ok(contents) => contents.len() as u64,
+                    Err(err) => {
+                        println!("Failed to read response: {:?}", err);
+                        0
+                    }
+                }
+            }
+            Err(err) => {
+                println!("Request failed: {:?}", err);
+                0
+            }
+        }
+    }
+
+    async fn slow_body_stream_with_timeout(&self, timeout_ms: u64) -> Option<u64> {
+        let http_fut = async { Some(self.slow_body_stream().await) };
+        let timer_fut = async {
+            println!("!!! TIMER STARTED with {timeout_ms}");
+            wstd::task::sleep(wstd::time::Duration::from_millis(timeout_ms)).await;
+            println!("!!! TIMER ELAPSED");
+            None
+        };
+
+        (http_fut, timer_fut).race().await
+    }
+
     async fn parallel_streaming_http_reads(&self, n: u64) -> String {
         let r1 = async {
             let mut result = String::new();
@@ -128,7 +165,7 @@ impl StreamingClient for StreamingClientImpl {
 async fn send_streaming_request() -> Result<String, String> {
     let port = std::env::var("PORT").expect("Requires a PORT env var set");
     let request = Request::get(format!("http://localhost:{port}/streaming-chunks"))
-        .body(empty())
+        .body(())
         .map_err(|e| e.to_string())?;
 
     let mut response = Client::new()
@@ -136,8 +173,8 @@ async fn send_streaming_request() -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
     let body = response.body_mut();
-    let bytes = body.bytes().await.map_err(|e| e.to_string())?;
-    Ok(String::from_utf8(bytes.to_vec()).map_err(|e| e.to_string())?)
+    let contents = body.str_contents().await.map_err(|e| e.to_string())?;
+    Ok(contents.to_string())
 }
 
 /// Mimics the wasm-rquickjs/golem-wasi-http streaming read pattern:

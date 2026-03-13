@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,6 +18,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentClassName } from './agentClassName';
 import { Datetime } from 'wasi:clocks/wall-clock@0.2.3';
 import { Uuid } from 'golem:agent/host@1.5.0';
+import { getAgentId } from './internal/registry/agentId';
 
 /**
  * BaseAgent is the foundational class for defining agent implementations.
@@ -51,10 +52,16 @@ export class BaseAgent {
    * @throws Will throw if accessed before the agent is initialized.
    */
   getId(): AgentId {
-    throw new Error(
-      `AgentId is not available for \`${this.constructor.name}\`. ` +
-        `Ensure the class is decorated with @agent()`,
-    );
+    const agentId = getAgentId();
+
+    if (!agentId) {
+      throw new Error(
+        `AgentId is not available for \`${this.constructor.name}\`. ` +
+          `Ensure the class is decorated with @agent()`,
+      );
+    }
+
+    return agentId;
   }
 
   /**

@@ -285,13 +285,13 @@ paths:
             application/json:
               schema:
                 properties:
-                  request-id:
+                  request_id:
                     type: string
-                  resource-id:
+                  resource_id:
                     type: string
                 required:
-                - resource-id
-                - request-id
+                - resource_id
+                - request_id
                 type: object
           description: Response 200
   /http-agents/{agent-name}/path-and-query/{item-id}:
@@ -673,10 +673,10 @@ paths:
           application/json:
             schema:
               properties:
-                test-server-url:
+                test_server_url:
                   type: string
               required:
-              - test-server-url
+              - test_server_url
               type: object
         description: JSON body
         required: true
@@ -700,12 +700,12 @@ paths:
             application/json:
               schema:
                 properties:
-                  payload-length:
+                  payload_length:
                     format: int64
                     minimum: 0
                     type: integer
                 required:
-                - payload-length
+                - payload_length
                 type: object
           description: Response 200
   /webhooks/cors-agent/{promise-id}:

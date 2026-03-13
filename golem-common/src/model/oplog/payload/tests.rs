@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,7 +18,7 @@ use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
     SerializableDateTime, SerializableHttpErrorCode, SerializableHttpVersion,
-    SerializableIpAddress, SerializableIpAddresses,
+    SerializableIpAddress, SerializableIpAddresses, SerializableStreamError,
 };
 use crate::model::Timestamp;
 use http::Version;
@@ -31,6 +31,7 @@ use std::num::NonZeroU64;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
+use wasmtime_wasi::StreamError;
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
 };
@@ -310,6 +311,14 @@ proptest! {
         let bytes = desert_rust::serialize_to_byte_vec(&serialized).unwrap();
         let deserialized: SerializableIpAddress = desert_rust::deserialize(&bytes).unwrap();
         prop_assert_eq!(serialized, deserialized);
+    }
+
+    #[test]
+    fn roundtrip_stream_error_closed(_dummy in Just(())) {
+        let original = StreamError::Closed;
+        let serializable: SerializableStreamError = original.into();
+        let roundtripped: StreamError = serializable.into();
+        prop_assert!(matches!(roundtripped, StreamError::Closed));
     }
 
 }
