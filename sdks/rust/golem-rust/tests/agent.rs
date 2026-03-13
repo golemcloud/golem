@@ -24,11 +24,13 @@ mod tests {
         UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, AgentType, ConfigKeyValueType, ConfigValueType, Snapshotting, SnapshottingConfig,
+        AgentMode, AgentType, ConfigKeyValueType, ConfigValueType, ElementValue, Snapshotting,
+        SnapshottingConfig,
     };
+    use golem_rust::value_and_type::IntoValue;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, ConfigSchema, MultimodalSchema};
-    use golem_rust_macro::{description, endpoint, prompt};
+    use golem_rust_macro::{description, endpoint, prompt, FromValueAndType, IntoValue};
     use std::fmt::Debug;
     use test_r::test;
     use wasip2::clocks::wall_clock::Datetime;
@@ -1351,5 +1353,148 @@ mod tests {
                 )
             ]
         );
+    }
+
+    // --- Schema::from_element_value roundtrip tests ---
+    // These verify that the optimized from_element_value (which bypasses T::get_type())
+    // produces the same results as constructing a full ValueAndType.
+
+    #[test]
+    fn test_from_element_value_roundtrip_string() {
+        let original = "hello world".to_string();
+        let ev = ElementValue::ComponentModel(original.clone().into_value());
+        let recovered = String::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_u64() {
+        let original: u64 = 123456789;
+        let ev = ElementValue::ComponentModel(original.into_value());
+        let recovered = u64::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_bool() {
+        for original in [true, false] {
+            let ev = ElementValue::ComponentModel(original.into_value());
+            let recovered = bool::from_element_value(ev).unwrap();
+            assert_eq!(recovered, original);
+        }
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_option() {
+        let some_val: Option<u32> = Some(42);
+        let ev = ElementValue::ComponentModel(some_val.into_value());
+        let recovered = Option::<u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, Some(42));
+
+        let none_val: Option<u32> = None;
+        let ev = ElementValue::ComponentModel(none_val.into_value());
+        let recovered = Option::<u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, None);
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_vec() {
+        let original = vec![1u32, 2, 3, 4, 5];
+        let ev = ElementValue::ComponentModel(original.clone().into_value());
+        let recovered = Vec::<u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    struct TestStruct {
+        name: String,
+        age: u32,
+        active: bool,
+        score: f64,
+        tags: Vec<String>,
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_struct() {
+        let original = TestStruct {
+            name: "test user".to_string(),
+            age: 42,
+            active: true,
+            score: 99.5,
+            tags: vec!["a".to_string(), "b".to_string()],
+        };
+        let ev = ElementValue::ComponentModel(original.clone().into_value());
+        let recovered = TestStruct::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    struct NestedInner {
+        x: String,
+        y: u32,
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    struct NestedOuter {
+        id: u64,
+        items: Vec<NestedInner>,
+        label: Option<String>,
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_nested_struct() {
+        let original = NestedOuter {
+            id: 999,
+            items: vec![
+                NestedInner {
+                    x: "first".to_string(),
+                    y: 1,
+                },
+                NestedInner {
+                    x: "second".to_string(),
+                    y: 2,
+                },
+            ],
+            label: Some("nested test".to_string()),
+        };
+        let ev = ElementValue::ComponentModel(original.clone().into_value());
+        let recovered = NestedOuter::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    enum TestEnum {
+        A,
+        B(u32),
+        C { name: String, value: bool },
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_enum() {
+        for original in [
+            TestEnum::A,
+            TestEnum::B(42),
+            TestEnum::C {
+                name: "test".to_string(),
+                value: true,
+            },
+        ] {
+            let ev = ElementValue::ComponentModel(original.clone().into_value());
+            let recovered = TestEnum::from_element_value(ev).unwrap();
+            assert_eq!(recovered, original);
+        }
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_result() {
+        let ok_val: Result<String, u32> = Ok("success".to_string());
+        let ev = ElementValue::ComponentModel(ok_val.clone().into_value());
+        let recovered = Result::<String, u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, ok_val);
+
+        let err_val: Result<String, u32> = Err(404);
+        let ev = ElementValue::ComponentModel(err_val.clone().into_value());
+        let recovered = Result::<String, u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, err_val);
     }
 }
