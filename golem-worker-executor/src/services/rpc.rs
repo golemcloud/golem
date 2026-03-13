@@ -311,6 +311,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
                 self_created_by,
                 principal,
+                owned_agent_id.environment_id,
             )
             .await?;
 
@@ -352,6 +353,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
                 self_created_by,
                 principal,
+                owned_agent_id.environment_id,
             )
             .await?;
 

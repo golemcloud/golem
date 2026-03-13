@@ -586,7 +586,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
         let subscription = self.events().subscribe();
 
-        let output = self.lookup_invocation_result(&idempotency_key).await;
+        let output = async {
+            self.lookup_invocation_result(&idempotency_key).await
+        }
+        .instrument(span!(Level::INFO, "lookup_invocation_result"))
+        .await;
         match output {
             LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
@@ -616,9 +620,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ResultOrSubscription::Pending(subscription) => {
                 debug!("Waiting for idempotency key to complete",);
 
-                let result = self
-                    .wait_for_invocation_result(&idempotency_key, subscription)
-                    .await;
+                let result = async {
+                    self.wait_for_invocation_result(&idempotency_key, subscription)
+                        .await
+                }
+                .instrument(span!(Level::INFO, "wait_for_invocation_result"))
+                .await;
 
                 match result {
                     Ok(LookupResult::Complete(Ok(output))) => Ok(output),

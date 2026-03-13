@@ -92,6 +92,7 @@ impl CallAgentHandler {
                 invocation_context,
                 AuthCtx::impersonated_user(resolved_route.route.account_id),
                 proto_principal,
+                Some(resolved_route.route.environment_id),
             )
             .await?;
 

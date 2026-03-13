@@ -29,6 +29,7 @@ use golem_common::model::component::{
     ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
@@ -713,16 +714,22 @@ impl WorkerService {
         invocation_context: Option<InvocationContext>,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        known_environment_id: Option<EnvironmentId>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let component = self
-            .component_service
-            .get_latest_by_id(agent_id.component_id)
-            .await?;
+        let environment_id = match known_environment_id {
+            Some(id) => id,
+            None => {
+                self.component_service
+                    .get_latest_by_id(agent_id.component_id)
+                    .await?
+                    .environment_id
+            }
+        };
 
         let environment_auth_details = self
             .auth_service
             .authorize_environment_actions(
-                component.environment_id,
+                environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -737,7 +744,7 @@ impl WorkerService {
                 schedule_at,
                 idempotency_key,
                 invocation_context,
-                component.environment_id,
+                environment_id,
                 environment_auth_details.account_id_owning_environment,
                 auth_ctx,
                 principal,
@@ -877,6 +884,7 @@ impl WorkerService {
                 None,
                 auth,
                 principal,
+                Some(component_metadata.environment_id),
             )
             .await?;
 
@@ -917,9 +925,13 @@ impl WorkerService {
                 })?;
                 Ok(AgentInvocationResult {
                     result: Some(typed_data_value.into()),
+                    component_revision: Some(decode_revision),
                 })
             }
-            _ => Ok(AgentInvocationResult { result: None }),
+            _ => Ok(AgentInvocationResult {
+                result: None,
+                component_revision: output.component_revision,
+            }),
         }
     }
 }
