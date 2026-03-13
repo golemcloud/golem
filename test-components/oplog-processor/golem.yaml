@@ -9,7 +9,8 @@
 app: oplog-processor
 
 includes:
-- components-*/*/golem.yaml
+  - components-*/*/golem.yaml
+  - ../golem-test-components-common.yaml
 
 environments:
   local:

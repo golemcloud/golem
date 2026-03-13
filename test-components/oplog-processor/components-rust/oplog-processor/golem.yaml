@@ -1,6 +1,6 @@
 components:
   oplog:processor:
-    templates: rust
+    templates: rust, rust-test-component
 
 customCommands:
   copy:

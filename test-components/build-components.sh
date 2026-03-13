@@ -46,6 +46,8 @@ for arg in "$@"; do
   esac
 done
 
+GOLEM_CLI="${TEST_COMP_DIR:-$(pwd)}/../target/debug/golem-cli"
+
 should_clean() {
   [ "$clean_only" = true ] || [ "$rebuild" = true ]
 }
@@ -63,14 +65,14 @@ if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
 
     if should_clean; then
       echo "Cleaning $subdir..."
-      golem-cli clean
+      "$GOLEM_CLI" clean
       cargo clean
     fi
 
     if [ "$clean_only" = false ]; then
       echo "Building $subdir..."
-      golem-cli --preset release  build
-      golem-cli --preset release exec copy
+      "$GOLEM_CLI" --preset release  build
+      "$GOLEM_CLI" --preset release exec copy
     fi
 
     popd || exit
@@ -89,14 +91,14 @@ if [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
     if should_clean; then
       echo "Cleaning $subdir..."
       rm -rf node_modules
-      golem-cli clean
+      "$GOLEM_CLI" clean
     fi
 
     if [ "$clean_only" = false ]; then
       echo "Building $subdir..."
       npm install
-      golem-cli build
-      golem-cli exec copy
+      "$GOLEM_CLI" build
+      "$GOLEM_CLI" exec copy
     fi
 
     popd || exit
@@ -115,15 +117,15 @@ if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
     if should_clean; then
       echo "Cleaning $subdir..."
       rm -rf node_modules
-      golem-cli clean
+      "$GOLEM_CLI" clean
       cargo clean
     fi
 
     if [ "$clean_only" = false ]; then
       echo "Building $subdir..."
       npm install
-      golem-cli build
-      golem-cli exec copy
+      "$GOLEM_CLI" build
+      "$GOLEM_CLI" exec copy
     fi
 
     popd || exit
