@@ -16,8 +16,8 @@ pub mod memory;
 pub mod multi_sqlite;
 pub mod postgres;
 pub mod redis;
-pub mod routed;
 pub mod sqlite;
+pub mod namespace_routed;
 
 use async_trait::async_trait;
 use bytes::Bytes;

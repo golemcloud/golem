@@ -40,6 +40,7 @@ use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
     EngineConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    KeyValueStorageInnerConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
@@ -73,7 +74,7 @@ use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
-use crate::storage::keyvalue::routed::RoutedKeyValueStorage;
+use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -367,20 +368,21 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             );
             (None, None, key_value_storage)
         }
-        KeyValueStorageConfig::Routed(routed) => {
-            let redis_pool = RedisPool::configured(&routed.redis)
-                .await
-                .map_err(|err| anyhow!(err))?;
-            let redis_storage: Arc<dyn KeyValueStorage + Send + Sync> =
-                Arc::new(RedisKeyValueStorage::new(redis_pool.clone()));
-            let postgres_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-                PostgresKeyValueStorage::configured(&routed.postgres)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
+        KeyValueStorageConfig::NamespaceRouted(namespace_routed) => {
+            let (cache_redis, cache_sqlite, cache_storage) =
+                build_inner_key_value_storage(&namespace_routed.cache).await?;
+            let (persistent_redis, persistent_sqlite, persistent_storage) =
+                build_inner_key_value_storage(&namespace_routed.persistent).await?;
+
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                NamespaceRoutedKeyValueStorage::new(cache_storage, persistent_storage),
             );
-            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
-                Arc::new(RoutedKeyValueStorage::new(redis_storage, postgres_storage));
-            (Some(redis_pool), None, key_value_storage)
+
+            (
+                cache_redis.or(persistent_redis),
+                cache_sqlite.or(persistent_sqlite),
+                key_value_storage,
+            )
         }
         KeyValueStorageConfig::InMemory(_) => {
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
@@ -723,4 +725,59 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         .await;
 
     Ok((all, epoch_thread, epoch_stop))
+}
+
+async fn build_inner_key_value_storage(
+    config: &KeyValueStorageInnerConfig,
+) -> Result<
+    (
+        Option<RedisPool>,
+        Option<SqlitePool>,
+        Arc<dyn KeyValueStorage + Send + Sync>,
+    ),
+    anyhow::Error,
+> {
+    match config {
+        KeyValueStorageInnerConfig::Redis(redis) => {
+            let pool = RedisPool::configured(redis)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(RedisKeyValueStorage::new(pool.clone()));
+            Ok((Some(pool), None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::Postgres(postgres) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                PostgresKeyValueStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            Ok((None, None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::InMemory(_) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(InMemoryKeyValueStorage::new());
+            Ok((None, None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::Sqlite(sqlite) => {
+            let pool = SqlitePool::configured(sqlite)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                SqliteKeyValueStorage::new(pool.clone())
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            Ok((None, Some(pool), key_value_storage))
+        }
+        KeyValueStorageInnerConfig::MultiSqlite(multi_sqlite) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(MultiSqliteKeyValueStorage::new(
+                    &multi_sqlite.root_dir,
+                    multi_sqlite.max_connections,
+                    multi_sqlite.foreign_keys,
+                ));
+            Ok((None, None, key_value_storage))
+        }
+    }
 }

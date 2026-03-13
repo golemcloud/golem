@@ -18,17 +18,17 @@ use bytes::Bytes;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub struct RoutedKeyValueStorage {
-    redis: Arc<dyn KeyValueStorage + Send + Sync>,
-    postgres: Arc<dyn KeyValueStorage + Send + Sync>,
+pub struct NamespaceRoutedKeyValueStorage {
+    cache: Arc<dyn KeyValueStorage + Send + Sync>,
+    persistent: Arc<dyn KeyValueStorage + Send + Sync>,
 }
 
-impl RoutedKeyValueStorage {
+impl NamespaceRoutedKeyValueStorage {
     pub fn new(
-        redis: Arc<dyn KeyValueStorage + Send + Sync>,
-        postgres: Arc<dyn KeyValueStorage + Send + Sync>,
+        cache: Arc<dyn KeyValueStorage + Send + Sync>,
+        persistent: Arc<dyn KeyValueStorage + Send + Sync>,
     ) -> Self {
-        Self { redis, postgres }
+        Self { cache, persistent }
     }
 
     fn backend_for_namespace(
@@ -36,14 +36,14 @@ impl RoutedKeyValueStorage {
         namespace: &KeyValueStorageNamespace,
     ) -> &Arc<dyn KeyValueStorage + Send + Sync> {
         match namespace {
-            KeyValueStorageNamespace::Worker { .. } => &self.redis,
-            _ => &self.postgres,
+            KeyValueStorageNamespace::Worker { .. } => &self.cache,
+            _ => &self.persistent,
         }
     }
 }
 
 #[async_trait]
-impl KeyValueStorage for RoutedKeyValueStorage {
+impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
     async fn set(
         &self,
         svc_name: &'static str,

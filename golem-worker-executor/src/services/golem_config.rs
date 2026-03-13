@@ -556,7 +556,7 @@ impl SafeDisplay for OplogConfig {
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
     Postgres(KeyValueStoragePostgresConfig),
-    Routed(KeyValueStorageRoutedConfig),
+    NamespaceRouted(KeyValueStorageNamespaceRoutedConfig),
     Sqlite(DbSqliteConfig),
     MultiSqlite(KeyValueStorageMultiSqliteConfig),
     InMemory(KeyValueStorageInMemoryConfig),
@@ -574,8 +574,8 @@ impl SafeDisplay for KeyValueStorageConfig {
                 let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
-            KeyValueStorageConfig::Routed(inner) => {
-                let _ = writeln!(&mut result, "routed:");
+            KeyValueStorageConfig::NamespaceRouted(inner) => {
+                let _ = writeln!(&mut result, "namespace-routed:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             KeyValueStorageConfig::Sqlite(inner) => {
@@ -608,18 +608,57 @@ impl SafeDisplay for KeyValueStoragePostgresConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct KeyValueStorageRoutedConfig {
-    pub redis: RedisConfig,
-    pub postgres: KeyValueStoragePostgresConfig,
+pub struct KeyValueStorageNamespaceRoutedConfig {
+    pub cache: KeyValueStorageInnerConfig,
+    pub persistent: KeyValueStorageInnerConfig,
 }
 
-impl SafeDisplay for KeyValueStorageRoutedConfig {
+impl SafeDisplay for KeyValueStorageNamespaceRoutedConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        let _ = writeln!(&mut result, "redis:");
-        let _ = writeln!(&mut result, "{}", self.redis.to_safe_string_indented());
-        let _ = writeln!(&mut result, "postgres:");
-        let _ = writeln!(&mut result, "{}", self.postgres.to_safe_string_indented());
+        let _ = writeln!(&mut result, "cache:");
+        let _ = writeln!(&mut result, "{}", self.cache.to_safe_string_indented());
+        let _ = writeln!(&mut result, "persistent:");
+        let _ = writeln!(&mut result, "{}", self.persistent.to_safe_string_indented());
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum KeyValueStorageInnerConfig {
+    Redis(RedisConfig),
+    Postgres(KeyValueStoragePostgresConfig),
+    Sqlite(DbSqliteConfig),
+    MultiSqlite(KeyValueStorageMultiSqliteConfig),
+    InMemory(KeyValueStorageInMemoryConfig),
+}
+
+impl SafeDisplay for KeyValueStorageInnerConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            KeyValueStorageInnerConfig::Redis(inner) => {
+                let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageInnerConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageInnerConfig::Sqlite(inner) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageInnerConfig::MultiSqlite(inner) => {
+                let _ = writeln!(&mut result, "multi-sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageInnerConfig::InMemory(inner) => {
+                let _ = writeln!(&mut result, "in-memory:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+        }
         result
     }
 }

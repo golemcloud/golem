@@ -22,7 +22,7 @@ use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
 use golem_worker_executor::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
-use golem_worker_executor::storage::keyvalue::routed::RoutedKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
@@ -31,10 +31,10 @@ use uuid::{uuid, Uuid};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-async fn build_routed_kvs(
+async fn build_namespace_routed_kvs(
     deps: &WorkerExecutorTestDependencies,
 ) -> (
-    RoutedKeyValueStorage,
+    NamespaceRoutedKeyValueStorage,
     std::sync::Arc<RedisKeyValueStorage>,
     std::sync::Arc<PostgresKeyValueStorage>,
     DockerPostgresRdb,
@@ -91,14 +91,14 @@ async fn build_routed_kvs(
             .expect("Cannot create postgres key value storage for routed kvs tests"),
     );
 
-    let routed = RoutedKeyValueStorage::new(redis_storage.clone(), postgres_storage.clone());
+    let kvs = NamespaceRoutedKeyValueStorage::new(redis_storage.clone(), postgres_storage.clone());
 
-    (routed, redis_storage, postgres_storage, postgres)
+    (kvs, redis_storage, postgres_storage, postgres)
 }
 
 #[test]
 async fn routes_worker_namespace_to_redis(deps: &WorkerExecutorTestDependencies) {
-    let (routed, redis, postgres, _postgres_container) = build_routed_kvs(deps).await;
+    let (kvs, redis, postgres, _postgres_container) = build_namespace_routed_kvs(deps).await;
 
     let ns = KeyValueStorageNamespace::Worker {
         agent_id: AgentId {
@@ -109,8 +109,7 @@ async fn routes_worker_namespace_to_redis(deps: &WorkerExecutorTestDependencies)
     let key = "worker-route-key";
     let value = b"worker-route-value";
 
-    routed
-        .set("test", "api", "entity", ns.clone(), key, value)
+    kvs.set("test", "api", "entity", ns.clone(), key, value)
         .await
         .unwrap();
 
@@ -129,7 +128,7 @@ async fn routes_worker_namespace_to_redis(deps: &WorkerExecutorTestDependencies)
 
 #[test]
 async fn routes_non_worker_namespace_to_postgres(deps: &WorkerExecutorTestDependencies) {
-    let (routed, redis, postgres, _postgres_container) = build_routed_kvs(deps).await;
+    let (kvs, redis, postgres, _postgres_container) = build_namespace_routed_kvs(deps).await;
 
     let ns = KeyValueStorageNamespace::UserDefined {
         environment_id: EnvironmentId(uuid!("2ae7a48f-84fc-4951-b9ec-87d09fcb0fa4")),
@@ -138,8 +137,7 @@ async fn routes_non_worker_namespace_to_postgres(deps: &WorkerExecutorTestDepend
     let key = "user-route-key";
     let value = b"user-route-value";
 
-    routed
-        .set("test", "api", "entity", ns.clone(), key, value)
+    kvs.set("test", "api", "entity", ns.clone(), key, value)
         .await
         .unwrap();
 

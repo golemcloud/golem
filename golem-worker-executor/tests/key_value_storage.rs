@@ -28,8 +28,8 @@ use golem_worker_executor::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
-use golem_worker_executor::storage::keyvalue::routed::RoutedKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -235,19 +235,19 @@ async fn postgres_storage(
     Arc::new(PostgresKeyValueStorageWrapper { postgres })
 }
 
-struct RoutedKeyValueStorageWrapper {
+struct NamespaceRoutedKeyValueStorageWrapper {
     redis: Arc<dyn Redis + Send + Sync>,
     postgres: DockerPostgresRdb,
 }
 
-impl Debug for RoutedKeyValueStorageWrapper {
+impl Debug for NamespaceRoutedKeyValueStorageWrapper {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RoutedKeyValueStorageWrapper")
+        f.write_str("NamespaceRoutedKeyValueStorageWrapper")
     }
 }
 
 #[async_trait]
-impl GetKeyValueStorage for RoutedKeyValueStorageWrapper {
+impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
     async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
         let random_prefix = Uuid::new_v4();
         let redis_pool = RedisPool::configured(&RedisConfig {
@@ -298,12 +298,15 @@ impl GetKeyValueStorage for RoutedKeyValueStorageWrapper {
                 .expect("Cannot create postgres key value storage for routed kvs"),
         );
 
-        Arc::new(RoutedKeyValueStorage::new(redis_storage, postgres_storage))
+        Arc::new(NamespaceRoutedKeyValueStorage::new(
+            redis_storage,
+            postgres_storage,
+        ))
     }
 }
 
-#[test_dep(tagged_as = "routed")]
-async fn routed_storage(
+#[test_dep(tagged_as = "namespace_routed")]
+async fn namespace_routed_storage(
     deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     let redis = deps.redis.clone();
@@ -314,7 +317,7 @@ async fn routed_storage(
     let unique_network_id = Uuid::new_v4().to_string();
     let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
 
-    Arc::new(RoutedKeyValueStorageWrapper { redis, postgres })
+    Arc::new(NamespaceRoutedKeyValueStorageWrapper { redis, postgres })
 }
 
 #[derive(Debug)]
@@ -357,7 +360,7 @@ fn ns2() -> Namespaces {
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres", "routed");
+define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres", "namespace_routed");
 define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
 
 #[test]
