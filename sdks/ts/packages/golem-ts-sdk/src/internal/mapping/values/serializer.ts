@@ -161,47 +161,35 @@ export function serializeTsValueToTextReference(value: any): TextReference {
 }
 
 export function matchesType(value: any, type: AnalysedType): boolean {
+  const valueType = typeof value;
+
   switch (type.kind) {
     case 'bool':
-      return typeof value === 'boolean';
+      return valueType === 'boolean';
 
     case 'f64':
-      return typeof value === 'number';
-
     case 'f32':
-      return typeof value === 'number';
+    case 's32':
+    case 's16':
+    case 's8':
+    case 'u32':
+    case 'u16':
+    case 'u8':
+      return valueType === 'number';
 
     case 's64':
-      return typeof value === 'bigint';
-
-    case 's32':
-      return typeof value === 'number';
-
-    case 's16':
-      return typeof value === 'number';
-
-    case 's8':
-      return typeof value === 'number';
+      return valueType === 'bigint';
 
     case 'u64':
-      return typeof value === 'number' || typeof value === 'bigint';
-
-    case 'u32':
-      return typeof value === 'number';
-
-    case 'u16':
-      return typeof value === 'number';
-
-    case 'u8':
-      return typeof value === 'number';
+      return valueType === 'number' || valueType === 'bigint';
 
     case 'string':
-      return typeof value === 'string';
+      return valueType === 'string';
 
     case 'option':
       return value === undefined || value === null || matchesType(value, type.value.inner);
 
-    case 'list':
+    case 'list': {
       const isTypedArray = type.typedArray;
       const elemType = type.value.inner;
       const result = matchesArray(value, elemType, isTypedArray);
@@ -221,12 +209,13 @@ export function matchesType(value: any, type: AnalysedType): boolean {
       }
 
       return false;
+    }
 
     case 'tuple':
       return matchesTuple(value, type.value.items);
 
     case 'result':
-      if (typeof value !== 'object' || value === null) return false;
+      if (valueType !== 'object' || value === null) return false;
 
       if ('ok' in value) {
         if (value['ok'] === undefined || value['ok'] === null) {
@@ -245,31 +234,33 @@ export function matchesType(value: any, type: AnalysedType): boolean {
       }
 
     case 'enum':
-      return typeof value === 'string' && type.value.cases.includes(value.toString());
+      return valueType === 'string' && type.value.cases.includes(value.toString());
 
     // A variant can be tagged union or simple union
-    case 'variant':
+    case 'variant': {
+      if (value == null) return false;
+
       const nameAndOptions = type.value.cases;
 
       // There are two cases, if they are tagged types, or not
-      if (typeof value === 'object') {
+      if (valueType === 'object') {
         const keys = Object.keys(value);
 
         if (keys.includes('tag')) {
           const tagValue = value['tag'];
 
           if (typeof tagValue === 'string') {
-            const valueType = nameAndOptions.find(
+            const matchedCase = nameAndOptions.find(
               (nameType) => nameType.name === tagValue.toString(),
             );
 
-            if (!valueType) {
+            if (!matchedCase) {
               return false;
             }
 
-            const type = valueType.typ;
+            const caseType = matchedCase.typ;
 
-            if (!type) {
+            if (!caseType) {
               return keys.length === 1;
             }
 
@@ -279,32 +270,29 @@ export function matchesType(value: any, type: AnalysedType): boolean {
               return false;
             }
 
-            return matchesType(value[valueKey], type);
+            return matchesType(value[valueKey], caseType);
           }
         }
       }
 
       for (const unionType of nameAndOptions) {
-        const type = unionType.typ;
+        const caseTy = unionType.typ;
         const name = unionType.name;
 
-        if (!type) {
-          if (typeof value === 'string' && value === name) {
+        if (!caseTy) {
+          if (valueType === 'string' && value === name) {
             return true;
           }
           continue;
         }
 
-        // we don't care the name otherwise as they may be generated names
-
-        const result = matchesType(value, type);
-
-        if (result) {
+        if (matchesType(value, caseTy)) {
           return true;
         }
       }
 
       return false;
+    }
 
     // A record in analysed type can correspond to map or object
     // or interface
@@ -751,19 +739,18 @@ function serializeUnionToWitNodes(
     return serializeTaggedUnionToWitNodes(tsValue, nameOptionTypePairs, builder);
   }
 
-  for (const [idx, variant] of nameOptionTypePairs.entries()) {
+  for (let idx = 0; idx < nameOptionTypePairs.length; idx++) {
+    const variant = nameOptionTypePairs[idx];
     const analysedType = variant.typ;
 
     if (!analysedType) {
       if (tsValue === variant.name) {
-        return Either.right(builder.variantUnit(nameOptionTypePairs.findIndex((v) => v.name === variant.name)));
+        return Either.right(builder.variantUnit(idx));
       }
       continue;
     }
 
-    const matches = matchesType(tsValue, analysedType);
-
-    if (matches) {
+    if (matchesType(tsValue, analysedType)) {
       const varIdx = builder.addVariant(idx);
       const innerResult = serializeToWitNodes(tsValue, analysedType, builder);
       if (Either.isLeft(innerResult)) {
