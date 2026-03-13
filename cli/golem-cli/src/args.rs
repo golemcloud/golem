@@ -16,8 +16,8 @@ use crate::log::LogColorize;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::ScanCursor;
-use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::agent_secret::AgentSecretPath;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 
 pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     let pos = key_and_val.find('=').ok_or_else(|| {
@@ -146,7 +146,7 @@ pub fn parse_instant(
 
 #[cfg(test)]
 mod parse_worker_agent_config_tests {
-    use super::{parse_worker_agent_config, parse_agent_config_path};
+    use super::{parse_agent_config_path, parse_worker_agent_config};
     use golem_common::model::worker::WorkerAgentConfigEntry;
     use serde_json::json;
     use test_r::test;

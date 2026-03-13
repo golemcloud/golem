@@ -1104,7 +1104,7 @@ pub mod service {
             }
         }
     }
-    
+
     impl HasServiceName for AgentSecretsError {
         fn service_name() -> &'static str {
             "AgentSecrets"

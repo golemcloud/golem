@@ -1320,7 +1320,6 @@ pub mod api {
 
     pub mod agent_secret {
         use crate::args::parse_agent_secret_path;
-        use crate::model::environment::EnvironmentReference;
         use clap::Subcommand;
         use golem_common::model::agent_secret::{
             AgentSecretId, AgentSecretPath, AgentSecretRevision,
@@ -1330,9 +1329,6 @@ pub mod api {
         pub enum AgentSecretSubcommand {
             /// Create Agent Secret in the environment
             Create {
-                /// The environment to create the secret in
-                #[arg(long)]
-                environment: Option<EnvironmentReference>,
                 /// Path of the secret to create. The casing of path segments will be normalized during creation.
                 #[arg(long, value_parser = parse_agent_secret_path)]
                 path: AgentSecretPath,
@@ -1368,11 +1364,7 @@ pub mod api {
             },
 
             /// List Agent Secrets
-            List {
-                /// The environment to list the secrets in
-                #[arg(long)]
-                environment: Option<EnvironmentReference>,
-            },
+            List,
         }
     }
 

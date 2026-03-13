@@ -18,7 +18,7 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
-use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
+use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::agent_secret::AgentSecretCreateView;
 use anyhow::bail;
 use golem_client::api::AgentSecretsClient;
@@ -42,14 +42,10 @@ impl AgentSecretCommandHandler {
     pub async fn handle_command(&self, command: AgentSecretSubcommand) -> anyhow::Result<()> {
         match command {
             AgentSecretSubcommand::Create {
-                environment,
                 path,
                 secret_type,
                 secret_value,
-            } => {
-                self.cmd_create(environment, path, secret_type, secret_value)
-                    .await
-            }
+            } => self.cmd_create(path, secret_type, secret_value).await,
             AgentSecretSubcommand::UpdateValue {
                 id,
                 current_revision,
@@ -62,13 +58,12 @@ impl AgentSecretCommandHandler {
                 id,
                 current_revision,
             } => self.cmd_delete(id, current_revision).await,
-            AgentSecretSubcommand::List { environment } => self.cmd_list(environment).await,
+            AgentSecretSubcommand::List => self.cmd_list().await,
         }
     }
 
     async fn cmd_create(
         &self,
-        environment_reference: Option<EnvironmentReference>,
         path: AgentSecretPath,
         secret_type: String,
         secret_value: Option<String>,
@@ -76,10 +71,7 @@ impl AgentSecretCommandHandler {
         let environment = self
             .ctx
             .environment_handler()
-            .resolve_opt_environment_reference(
-                EnvironmentResolveMode::Any,
-                environment_reference.as_ref(),
-            )
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
         let clients = self.ctx.golem_clients().await?;
@@ -177,17 +169,11 @@ impl AgentSecretCommandHandler {
         Ok(())
     }
 
-    async fn cmd_list(
-        &self,
-        environment_reference: Option<EnvironmentReference>,
-    ) -> anyhow::Result<()> {
+    async fn cmd_list(&self) -> anyhow::Result<()> {
         let environment = self
             .ctx
             .environment_handler()
-            .resolve_opt_environment_reference(
-                EnvironmentResolveMode::Any,
-                environment_reference.as_ref(),
-            )
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
         let clients = self.ctx.golem_clients().await?;
