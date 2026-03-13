@@ -857,7 +857,7 @@ paths:
     post:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       - Environment
       summary: Create a new agent secret
       parameters:
@@ -931,7 +931,7 @@ paths:
     get:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       - Environment
       summary: Get all agent secrets of the environment
       parameters:
@@ -1000,7 +1000,7 @@ paths:
     get:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       summary: Get agent secret by id.
       parameters:
       - name: agent_secret_id
@@ -1067,7 +1067,7 @@ paths:
     patch:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       summary: Update agent secret
       parameters:
       - name: agent_secret_id
@@ -1141,7 +1141,7 @@ paths:
     delete:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       summary: Delete agent secret
       parameters:
       - name: agent_secret_id
