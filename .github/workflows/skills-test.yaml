@@ -124,7 +124,7 @@ jobs:
           mkdir -p /tmp/harness-run
           cp -rL tests/harness/* /tmp/harness-run/
           cp -r skills /tmp/harness-run/skills
-          cd /tmp/harness-run && git init && git add -A && git commit -m "init" --allow-empty
+          cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"
 
       - name: Run Skill Tests
         env:
