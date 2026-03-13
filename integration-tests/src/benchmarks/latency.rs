@@ -144,7 +144,7 @@ impl Benchmark for LatencyMedium {
         LatencyBenchmark::new(
             "benchmark_agent_ts",
             "benchmark:agent-ts",
-            "benchmark-agent",
+            "BenchmarkAgent",
             mode,
             verbosity,
             cluster_size,
