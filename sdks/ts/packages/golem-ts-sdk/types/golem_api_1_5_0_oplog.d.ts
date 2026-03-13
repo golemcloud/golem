@@ -80,11 +80,11 @@ declare module 'golem:api/oplog@1.5.0' {
     parameters: [string, string][];
   };
   export type RawLocalAgentConfigEntry = {
-    key: string[];
+    path: string[];
     value: WitValue;
   };
   export type LocalAgentConfigEntry = {
-    key: string[];
+    path: string[];
     value: ValueAndType;
   };
   export type CreateParameters = {

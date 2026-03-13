@@ -288,6 +288,34 @@ export class FooAgent extends BaseAgent {
     return;
   }
 
+  async fun46(
+    testInterfaceType: Types.TestInterfaceType,
+    optionalStringType: string | null,
+    optionalUnionType: UnionType | null,
+    unstructuredText: UnstructuredText,
+    unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
+    unstructuredBinary: UnstructuredBinary<['application/json']>,
+  ): Promise<void> {
+    const remoteClient = BarAgent.getPhantom(
+      {
+        lowBits: BigInt(1),
+        highBits: BigInt(2),
+      },
+      testInterfaceType,
+      optionalStringType,
+      optionalUnionType,
+      unstructuredText,
+      unstructuredTextWithLanguageCode,
+      unstructuredBinary,
+    );
+
+    await remoteClient.fun2('foo');
+
+    await remoteClient.fun2.trigger('foo');
+
+    await remoteClient.fun2.schedule({ seconds: 50000n, nanoseconds: 0 }, 'foo');
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
@@ -661,7 +689,52 @@ type AgentConfig = {
 
 @agent()
 export class ConfigAgent extends BaseAgent {
-  constructor(readonly config: Config<AgentConfig>) {
+  constructor(
+    before: number,
+    readonly config: Config<AgentConfig>,
+    after: boolean,
+  ) {
     super();
+  }
+
+  async fun1(): Promise<void> {
+    const remoteClient = ConfigAgent.get(1, {}, true);
+
+    await remoteClient.fun1();
+  }
+
+  async fun2(arg: number): Promise<void> {
+    const remoteClient = ConfigAgent.get(
+      1,
+      {
+        foo: 2,
+        nested: {
+          a: false,
+        },
+      },
+      true,
+    );
+
+    await remoteClient.fun1();
+    await remoteClient.fun2(1);
+  }
+
+  async fun3(): Promise<void> {
+    const remoteClient = ConfigAgent.getPhantom(
+      {
+        lowBits: BigInt(1),
+        highBits: BigInt(2),
+      },
+      1,
+      {
+        foo: 2,
+        nested: {
+          a: false,
+        },
+      },
+      true,
+    );
+    await remoteClient.fun1();
+    await remoteClient.fun2(1);
   }
 }

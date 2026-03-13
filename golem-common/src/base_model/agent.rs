@@ -382,7 +382,7 @@ pub struct AgentType {
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
     pub snapshotting: Snapshotting,
-    pub config: Vec<ConfigKeyValueType>,
+    pub config: Vec<AgentConfigDeclaration>,
 }
 
 impl AgentType {
@@ -390,7 +390,7 @@ impl AgentType {
         self.methods.sort_by(|a, b| a.name.cmp(&b.name));
         self.dependencies
             .sort_by(|a, b| a.type_name.cmp(&b.type_name));
-        self.config.sort_by(|a, b| a.key.cmp(&b.key));
+        self.config.sort_by(|a, b| a.path.cmp(&b.path));
 
         Self {
             type_name: self.type_name,
@@ -1115,6 +1115,18 @@ pub struct SnapshottingEveryNInvocation {
     pub count: u16,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "agent-config-source", owner = "golem:agent@1.5.0/common")
+)]
+#[repr(i32)]
+pub enum AgentConfigSource {
+    Local = 0,
+    Secret = 1,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -1122,49 +1134,15 @@ pub struct SnapshottingEveryNInvocation {
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct ConfigKeyValueType {
-    pub key: Vec<String>,
-    pub value: ConfigValueType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
+    wit(name = "agent-config-declaration", owner = "golem:agent@1.5.0/common")
 )]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub enum ConfigValueType {
-    Local(ConfigValueTypeLocal),
-    Shared(ConfigValueTypeShared),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", desert(transparent))]
-#[cfg_attr(feature = "full", wit_transparent)]
-pub struct ConfigValueTypeLocal {
-    pub value: AnalysedType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", desert(transparent))]
-#[cfg_attr(feature = "full", wit_transparent)]
-pub struct ConfigValueTypeShared {
-    pub value: AnalysedType,
+pub struct AgentConfigDeclaration {
+    pub source: AgentConfigSource,
+    pub path: Vec<String>,
+    pub value_type: AnalysedType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]

@@ -11,7 +11,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -72,6 +72,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_config_vars: BTreeMap<String, String>,
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
+        _agent_config: Vec<WorkerAgentConfigEntry>,
         _principal: Principal,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(

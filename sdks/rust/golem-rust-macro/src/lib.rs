@@ -52,7 +52,7 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
     agentic::derive_schema(input, &golem_rust_crate_ident)
 }
 
-#[proc_macro_derive(ConfigSchema)]
+#[proc_macro_derive(ConfigSchema, attributes(config_schema))]
 pub fn derive_config_schema(input: TokenStream) -> TokenStream {
     let golem_rust_crate_ident = get_golem_rust_crate_ident();
 

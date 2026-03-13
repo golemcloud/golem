@@ -34,7 +34,7 @@ export type TypeInfoInternal =
   | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
   | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type }
   | { tag: 'principal'; tsType: Type.Type }
-  | { tag: 'config'; tsType: Type.Type }
+  | { tag: 'config'; tsType: Type.Type & { kind: 'config' } }
   | {
       tag: 'multimodal';
       types: ParameterDetail[];

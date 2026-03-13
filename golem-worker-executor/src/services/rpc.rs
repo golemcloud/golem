@@ -41,6 +41,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{
     AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, WorkerId,
 };
@@ -61,6 +62,7 @@ pub trait Rpc: Send + Sync {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
@@ -261,6 +263,7 @@ impl Rpc for RemoteInvocationRpc {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
@@ -275,6 +278,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_config,
                 self_stack,
                 self_created_by,
+                agent_config,
                 principal,
             )
             .await?;
@@ -702,6 +706,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         if self
             .shard_service()
@@ -716,7 +721,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 owned_worker_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
-                Vec::new(),
+                agent_config,
                 None,
                 Some(self_worker_id.clone()),
                 &self_stack,
@@ -737,6 +742,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_env,
                     self_config,
                     self_stack,
+                    agent_config,
                 )
                 .await
         }

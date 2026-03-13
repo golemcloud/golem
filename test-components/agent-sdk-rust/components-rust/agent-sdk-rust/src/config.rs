@@ -5,6 +5,7 @@ use serde::Serialize;
 
 #[derive(ConfigSchema)]
 pub struct NestedConfig {
+    #[config_schema(secret)]
     pub nested_secret: Secret<i32>,
     pub a: bool,
     pub b: Vec<i32>,
@@ -20,14 +21,17 @@ pub struct AliasedNestedConfig {
 pub struct ConfigAgentConfig {
   pub foo: i32,
   pub bar: String,
+  #[config_schema(secret)]
   pub secret: Secret<String>,
+  #[config_schema(nested)]
   pub nested: NestedConfig,
+  #[config_schema(nested)]
   pub aliased_nested: AliasedNestedConfig,
 }
 
 #[agent_definition]
 pub trait ConfigAgent {
-    fn new(name: String, #[autoinject] config: Config<ConfigAgentConfig>) -> Self;
+    fn new(name: String, #[agent_config] config: Config<ConfigAgentConfig>) -> Self;
 
     fn echo_local_config(&self) -> String;
 }
@@ -38,7 +42,7 @@ struct ConfigAgentImpl {
 
 #[agent_implementation]
 impl ConfigAgent for ConfigAgentImpl {
-    fn new(_name: String, #[autoinject] config: Config<ConfigAgentConfig>) -> Self {
+    fn new(_name: String, #[agent_config] config: Config<ConfigAgentConfig>) -> Self {
         Self { config }
     }
 
@@ -70,13 +74,15 @@ pub struct NestedLocalAgentConfig {
 pub struct LocalConfigAgentConfig {
   pub foo: i32,
   pub bar: String,
+  #[config_schema(nested)]
   pub nested: NestedLocalAgentConfig,
+  #[config_schema(nested)]
   pub aliased_nested: AliasedNestedConfig,
 }
 
 #[agent_definition]
 pub trait LocalConfigAgent {
-    fn new(name: String, #[autoinject] config: Config<LocalConfigAgentConfig>) -> Self;
+    fn new(name: String, #[agent_config] config: Config<LocalConfigAgentConfig>) -> Self;
 
     fn echo_local_config(&self) -> String;
 }
@@ -87,7 +93,7 @@ struct LocalConfigAgentImpl {
 
 #[agent_implementation]
 impl LocalConfigAgent for LocalConfigAgentImpl {
-    fn new(_name: String, #[autoinject] config: Config<LocalConfigAgentConfig>) -> Self {
+    fn new(_name: String, #[agent_config] config: Config<LocalConfigAgentConfig>) -> Self {
         Self { config }
     }
 
@@ -104,15 +110,15 @@ impl LocalConfigAgent for LocalConfigAgentImpl {
     }
 }
 
-
 #[derive(ConfigSchema)]
 pub struct SharedConfigAgentConfig {
+    #[config_schema(secret)]
     pub secret: Secret<String>,
 }
 
 #[agent_definition]
 pub trait SharedConfigAgent {
-    fn new(name: String, #[autoinject] config: Config<SharedConfigAgentConfig>) -> Self;
+    fn new(name: String, #[agent_config] config: Config<SharedConfigAgentConfig>) -> Self;
 
     fn echo_local_config(&self) -> String;
 }
@@ -123,7 +129,7 @@ struct SharedConfigAgentImpl {
 
 #[agent_implementation]
 impl SharedConfigAgent for SharedConfigAgentImpl {
-    fn new(_name: String, #[autoinject] config: Config<SharedConfigAgentConfig>) -> Self {
+    fn new(_name: String, #[agent_config] config: Config<SharedConfigAgentConfig>) -> Self {
         Self { config }
     }
 
@@ -139,12 +145,13 @@ impl SharedConfigAgent for SharedConfigAgentImpl {
 
 #[derive(ConfigSchema)]
 pub struct LocalCasingSharedConfigAgentConfig {
+    #[config_schema(secret)]
     pub secret_path: Secret<String>,
 }
 
 #[agent_definition]
 pub trait LocalCasingSharedConfigAgent {
-    fn new(name: String, #[autoinject] config: Config<LocalCasingSharedConfigAgentConfig>) -> Self;
+    fn new(name: String, #[agent_config] config: Config<LocalCasingSharedConfigAgentConfig>) -> Self;
 
     fn echo_local_config(&self) -> String;
 }
@@ -155,7 +162,7 @@ struct LocalCasingSharedConfigAgentImpl {
 
 #[agent_implementation]
 impl LocalCasingSharedConfigAgent for LocalCasingSharedConfigAgentImpl {
-    fn new(_name: String, #[autoinject] config: Config<LocalCasingSharedConfigAgentConfig>) -> Self {
+    fn new(_name: String, #[agent_config] config: Config<LocalCasingSharedConfigAgentConfig>) -> Self {
         Self { config }
     }
 
@@ -166,5 +173,46 @@ impl LocalCasingSharedConfigAgent for LocalCasingSharedConfigAgentImpl {
         });
 
         serde_json::to_string(&result_json).unwrap()
+    }
+}
+
+#[derive(ConfigSchema)]
+pub struct RpcLocalConfigAgentConfig {
+  pub foo: i32,
+  pub nested_a: Option<bool>
+}
+
+#[agent_definition]
+pub trait RpcLocalConfigAgent {
+    fn new(name: String, #[agent_config] config: Config<RpcLocalConfigAgentConfig>) -> Self;
+
+    async fn echo_local_config(&self) -> String;
+}
+
+struct RpcLocalConfigAgentImpl {
+    name: String,
+    config: Config<RpcLocalConfigAgentConfig>
+}
+
+#[agent_implementation]
+impl RpcLocalConfigAgent for RpcLocalConfigAgentImpl {
+    fn new(name: String, #[agent_config] config: Config<RpcLocalConfigAgentConfig>) -> Self {
+        Self { name, config }
+    }
+
+    async fn echo_local_config(&self) -> String {
+        let config = self.config.get();
+        let client = LocalConfigAgentClient::get(
+            self.name.clone(),
+            LocalConfigAgentConfigRpc {
+                foo: Some(config.foo.clone()),
+                nested: NestedLocalAgentConfigRpc {
+                    a: config.nested_a,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        );
+        client.echo_local_config().await
     }
 }

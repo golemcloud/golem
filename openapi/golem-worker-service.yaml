@@ -2565,10 +2565,10 @@ components:
       type: object
       title: ParsedWorkerAgentConfigEntry
       required:
-      - key
+      - path
       - value
       properties:
-        key:
+        path:
           type: array
           items:
             type: string
