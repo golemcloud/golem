@@ -25,6 +25,7 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
@@ -653,6 +654,7 @@ impl WorkerCtx for Context {
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
@@ -682,6 +684,7 @@ impl WorkerCtx for Context {
             file_loader,
             worker_fork,
             agent_types_service,
+            environment_state_service,
             agent_webhooks_service,
             shard_service,
             http_connection_pool,

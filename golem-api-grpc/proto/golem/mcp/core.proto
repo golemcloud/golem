@@ -4,7 +4,7 @@ package golem.mcp;
 
 import "golem/common/environment.proto";
 import "golem/common/account_id.proto";
-import "golem/registry/agent_deployment.proto";
+import "golem/registry/agent.proto";
 
 message CompiledMcp {
   golem.common.AccountId account_id = 1;

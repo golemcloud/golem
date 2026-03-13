@@ -28,9 +28,9 @@ pub mod workerctx;
 #[cfg(test)]
 test_r::enable!();
 
-use self::services::agent_deployments::{AgentDeploymentsService, GrpcAgentDeploymentService};
 use self::services::agent_webhooks::AgentWebhooksService;
-use self::services::golem_config::AgentDeploymentsServiceConfig;
+use self::services::environment_state::{EnvironmentStateService, GrpcEnvironmentStateService};
+use self::services::golem_config::EnvironmentStateServiceConfig;
 use self::services::promise::LazyPromiseService;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
@@ -40,6 +40,7 @@ use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
     EngineConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    KeyValueStorageInnerConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
@@ -71,6 +72,8 @@ use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
+use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
+use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
@@ -141,12 +144,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
-    fn create_agent_deployments_service(
+    fn create_environment_state_service(
         &self,
-        config: &AgentDeploymentsServiceConfig,
+        config: &EnvironmentStateServiceConfig,
         registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn AgentDeploymentsService> {
-        Arc::new(GrpcAgentDeploymentService::new(
+    ) -> Arc<dyn EnvironmentStateService> {
+        Arc::new(GrpcEnvironmentStateService::new(
             registry_service,
             config.cache_capacity,
             config.cache_ttl,
@@ -248,6 +251,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
@@ -356,6 +360,30 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
                 Arc::new(RedisKeyValueStorage::new(pool.clone()));
             (Some(pool), None, key_value_storage)
+        }
+        KeyValueStorageConfig::Postgres(postgres) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                PostgresKeyValueStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            (None, None, key_value_storage)
+        }
+        KeyValueStorageConfig::NamespaceRouted(namespace_routed) => {
+            let (cache_redis, cache_sqlite, cache_storage) =
+                build_inner_key_value_storage(&namespace_routed.cache).await?;
+            let (persistent_redis, persistent_sqlite, persistent_storage) =
+                build_inner_key_value_storage(&namespace_routed.persistent).await?;
+
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                NamespaceRoutedKeyValueStorage::new(cache_storage, persistent_storage),
+            );
+
+            (
+                cache_redis.or(persistent_redis),
+                cache_sqlite.or(persistent_sqlite),
+                key_value_storage,
+            )
         }
         KeyValueStorageConfig::InMemory(_) => {
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
@@ -485,13 +513,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         blob_storage.clone(),
     );
 
-    let agent_deployments_service = bootstrap.create_agent_deployments_service(
-        &golem_config.agent_deployments_service,
+    let environment_state_service = bootstrap.create_environment_state_service(
+        &golem_config.environment_state_service,
         registry_service.clone(),
     );
 
     let agent_webhooks_service = Arc::new(AgentWebhooksService::new(
-        agent_deployments_service.clone(),
+        environment_state_service.clone(),
         golem_config
             .agent_webhooks_service
             .use_https_for_webhook_url,
@@ -676,6 +704,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             file_loader,
             oplog_processor_plugin,
             agent_type_service,
+            environment_state_service,
             agent_webhooks_service,
             registry_service,
             shutdown_token,
@@ -701,4 +730,59 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         .await;
 
     Ok((all, epoch_thread, epoch_stop))
+}
+
+async fn build_inner_key_value_storage(
+    config: &KeyValueStorageInnerConfig,
+) -> Result<
+    (
+        Option<RedisPool>,
+        Option<SqlitePool>,
+        Arc<dyn KeyValueStorage + Send + Sync>,
+    ),
+    anyhow::Error,
+> {
+    match config {
+        KeyValueStorageInnerConfig::Redis(redis) => {
+            let pool = RedisPool::configured(redis)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(RedisKeyValueStorage::new(pool.clone()));
+            Ok((Some(pool), None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::Postgres(postgres) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                PostgresKeyValueStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            Ok((None, None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::InMemory(_) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(InMemoryKeyValueStorage::new());
+            Ok((None, None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::Sqlite(sqlite) => {
+            let pool = SqlitePool::configured(sqlite)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                SqliteKeyValueStorage::new(pool.clone())
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            Ok((None, Some(pool), key_value_storage))
+        }
+        KeyValueStorageInnerConfig::MultiSqlite(multi_sqlite) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(MultiSqliteKeyValueStorage::new(
+                    &multi_sqlite.root_dir,
+                    multi_sqlite.max_connections,
+                    multi_sqlite.foreign_keys,
+                ));
+            Ok((None, None, key_value_storage))
+        }
+    }
 }

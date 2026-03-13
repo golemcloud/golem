@@ -44,8 +44,8 @@ use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation, PluginInstallationAction,
 };
-use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
+use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRevision};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
@@ -481,8 +481,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     owner_account_email: None,
                 },
             )
-            .await
-            .map_err(|e| anyhow!("Agent invocation failed: {e}"))?;
+            .await?;
 
         match result.result {
             Some(untyped_json) => {
@@ -948,9 +947,10 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
         Ok((application, environment))
     }
 
-    async fn deploy_environment(
+    async fn deploy_environment_with(
         &self,
         environment_id: EnvironmentId,
+        agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
     ) -> anyhow::Result<CurrentDeployment> {
         let client = self.registry_service_client().await;
 
@@ -965,7 +965,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                     current_revision: plan.current_revision,
                     expected_deployment_hash: plan.deployment_hash,
                     version: DeploymentVersion(Uuid::new_v4().to_string()),
-                    agent_secret_defaults: Vec::new(),
+                    agent_secret_defaults,
                 },
             )
             .await?;

@@ -44,6 +44,7 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
@@ -177,6 +178,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         file_loader: Arc<FileLoader>,
         worker_fork: Arc<dyn WorkerForkService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<HttpConnectionPool>,
@@ -272,6 +274,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 rdbms_service,
                 component_service,
                 agent_types_service,
+                environment_state_service,
                 agent_webhooks_service,
                 config.clone(),
                 owned_agent_id.clone(),
@@ -2875,6 +2878,7 @@ struct PrivateDurableWorkerState {
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
@@ -2966,6 +2970,7 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         config: Arc<GolemConfig>,
         owned_agent_id: OwnedAgentId,
@@ -3018,6 +3023,7 @@ impl PrivateDurableWorkerState {
             rdbms_service,
             component_service,
             agent_types_service,
+            environment_state_service,
             agent_webhooks_service,
             config,
             owned_agent_id,

@@ -46,27 +46,27 @@ async fn agent_with_only_component_local_agent_config(
         .name("golem-it:agent-sdk-ts")
         .with_local_agent_config(vec![
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["foo".to_string()],
                 value: json!(1),
             },
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["bar".to_string()],
                 value: json!("bar"),
             },
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["nested".to_string(), "a".to_string()],
                 value: json!(true),
             },
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["nested".to_string(), "b".to_string()],
                 value: json!([1, 2]),
             },
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["aliasedNested".to_string(), "c".to_string()],
                 value: json!(3),
             },
@@ -74,7 +74,7 @@ async fn agent_with_only_component_local_agent_config(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "test-agent");
+    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
@@ -120,7 +120,7 @@ async fn agent_with_only_worker_local_agent_config(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "test-agent");
+    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
@@ -193,12 +193,12 @@ async fn agent_with_mixed_local_agent_config(
         .name("golem-it:agent-sdk-ts")
         .with_local_agent_config(vec![
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["foo".to_string()],
                 value: json!(1),
             },
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["bar".to_string()],
                 value: json!("bar"),
             },
@@ -206,7 +206,7 @@ async fn agent_with_mixed_local_agent_config(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "test-agent");
+    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
@@ -275,12 +275,12 @@ async fn agent_with_mixed_local_agent_config_update(
         .name("golem-it:agent-sdk-ts")
         .with_local_agent_config(vec![
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["foo".to_string()],
                 value: json!(1),
             },
             LocalAgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
+                agent: AgentTypeName("LocalConfigAgent".to_string()),
                 key: vec!["bar".to_string()],
                 value: json!("bar"),
             },
@@ -288,7 +288,7 @@ async fn agent_with_mixed_local_agent_config_update(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "test-agent");
+    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
 
     let worker_id = user
         .start_agent_with(
@@ -328,12 +328,12 @@ async fn agent_with_mixed_local_agent_config_update(
             None,
             Some(vec![
                 LocalAgentConfigEntry {
-                    agent: AgentTypeName("ConfigAgent".to_string()),
+                    agent: AgentTypeName("LocalConfigAgent".to_string()),
                     key: vec!["foo".to_string()],
                     value: json!(3),
                 },
                 LocalAgentConfigEntry {
-                    agent: AgentTypeName("ConfigAgent".to_string()),
+                    agent: AgentTypeName("LocalConfigAgent".to_string()),
                     key: vec!["bar".to_string()],
                     value: json!("baz"),
                 },
@@ -386,7 +386,7 @@ async fn missing_local_agent_config_key(deps: &EnvBasedTestDependencies) -> anyh
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "test-agent");
+    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
 
     let result = user
         .try_start_agent_with(
@@ -437,7 +437,7 @@ async fn mistyped_local_agent_config_key(deps: &EnvBasedTestDependencies) -> any
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "test-agent");
+    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
 
     let result = user
         .try_start_agent_with(
@@ -494,7 +494,7 @@ async fn optional_local_agent_config_does_not_need_to_be_provided(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "test-agent");
+    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
