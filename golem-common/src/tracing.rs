@@ -476,8 +476,24 @@ pub mod filter {
 
         /// Filter for the OTLP layer: debug level by default, with
         /// `otel::tracing=trace` so context-propagation spans are exported.
+        ///
+        /// Unlike the other filters this does **not** read `RUST_LOG`.
+        /// `RUST_LOG` controls console verbosity and is often set to `warn`
+        /// in benchmark/CI runs, which would silently suppress all
+        /// INFO/DEBUG spans from OTLP export.  Instead the OTLP layer
+        /// always starts from `debug` and can be overridden via
+        /// `GOLEM_OTLP_LOG` if needed.
         pub fn default_otlp_env() -> Boxed {
-            env_with_directives(directive::default::debug(), directive::otlp_deps())
+            let mut builder = EnvFilter::builder()
+                .with_default_directive(directive::default::debug())
+                .with_env_var("GOLEM_OTLP_LOG")
+                .from_env_lossy();
+
+            for directive in directive::otlp_deps() {
+                builder = builder.add_directive(directive);
+            }
+
+            Box::new(builder)
         }
     }
 
