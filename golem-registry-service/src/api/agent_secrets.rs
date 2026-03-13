@@ -38,7 +38,7 @@ pub struct AgentSecretsApi {
 #[OpenApi(
     prefix_path = "/v1",
     tag = ApiTags::RegistryService,
-    tag = ApiTags::EnvironmentShares
+    tag = ApiTags::AgentSecrets
 )]
 impl AgentSecretsApi {
     pub fn new(
