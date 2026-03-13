@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { WitValue } from 'golem:core/types@1.5.0';
-import * as Either from '../../../newTypes/either';
 import {
   serializeBinaryReferenceToWitNodes,
   serializeTextReferenceToWitNodes,
@@ -25,14 +24,10 @@ import { WitNodeBuilder } from './WitNodeBuilder';
 
 export { WitValue } from 'golem:core/types@1.5.0';
 
-export const fromTsValueDefault = (
-  tsValue: any,
-  analysedType: AnalysedType,
-): Either.Either<WitValue, string> => {
+export const fromTsValueDefault = (tsValue: any, analysedType: AnalysedType): WitValue => {
   const builder = new WitNodeBuilder();
-  const result = serializeToWitNodes(tsValue, analysedType, builder);
-  if (Either.isLeft(result)) return result;
-  return Either.right(builder.build());
+  serializeToWitNodes(tsValue, analysedType, builder);
+  return builder.build();
 };
 
 // For RPC calls, we need wit-value representation of the binary reference (and not DataValue)

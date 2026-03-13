@@ -19,7 +19,6 @@ import {
   ParameterDetail,
 } from '../src/internal/mapping/values/dataValue';
 import { TypeInfoInternal } from '../src/internal/typeInfoInternal';
-import * as Either from '../src/newTypes/either';
 import {
   u32,
   str,
@@ -47,10 +46,16 @@ function makeAnalysedTypeInfo(analysedType: ReturnType<typeof u32>): TypeInfoInt
 
 const dummyPrincipal = { tag: 'anonymous' } as any;
 
+/** Assert that a DataValue is a tuple and return its elements */
+function expectTuple(dv: DataValue): ElementValue[] {
+  expect(dv.tag).toBe('tuple');
+  if (dv.tag !== 'tuple') throw new Error('Expected tuple DataValue');
+  return dv.val;
+}
+
 /** Extract the first element from a serialized tuple DataValue */
 function getFirstElement(dv: DataValue): ElementValue {
-  if (dv.tag !== 'tuple') throw new Error('Expected tuple DataValue');
-  return dv.val[0] as ElementValue;
+  return expectTuple(dv)[0];
 }
 
 // ─── Component-model element wrapping/unwrapping ───────────────────────────
@@ -58,85 +63,67 @@ function getFirstElement(dv: DataValue): ElementValue {
 describe('DataValue: component-model round-trip', () => {
   it('serializes a simple u32 into a tuple with a single component-model element', () => {
     const typeInfo = makeAnalysedTypeInfo(u32());
-    const result = serializeToDataValue(42, typeInfo);
-    expect(Either.isRight(result)).toBe(true);
-
-    const dv = (result as { tag: 'right'; val: any }).val;
-    expect(dv.tag).toBe('tuple');
-    expect(dv.val).toHaveLength(1);
-    expect(dv.val[0].tag).toBe('component-model');
+    const dv = serializeToDataValue(42, typeInfo);
+    const elems = expectTuple(dv);
+    expect(elems).toHaveLength(1);
+    expect(elems[0].tag).toBe('component-model');
   });
 
   it('deserializes a component-model DataValue back to the original value', () => {
     const typeInfo = makeAnalysedTypeInfo(u32());
-    const serialized = Either.getOrThrow(serializeToDataValue(42, typeInfo));
+    const serialized = serializeToDataValue(42, typeInfo);
 
     const paramDetails: ParameterDetail[] = [{ name: 'x', type: typeInfo }];
-    const deserialized = deserializeDataValue(serialized, paramDetails, dummyPrincipal);
-    expect(Either.isRight(deserialized)).toBe(true);
-    const values = (deserialized as { tag: 'right'; val: any[] }).val;
+    const values = deserializeDataValue(serialized, paramDetails, dummyPrincipal);
     expect(values).toEqual([42]);
   });
 
   it('round-trips a string value', () => {
     const typeInfo = makeAnalysedTypeInfo(str());
-    const serialized = Either.getOrThrow(serializeToDataValue('hello', typeInfo));
+    const serialized = serializeToDataValue('hello', typeInfo);
 
     const paramDetails: ParameterDetail[] = [{ name: 'msg', type: typeInfo }];
-    const deserialized = Either.getOrThrow(
-      deserializeDataValue(serialized, paramDetails, dummyPrincipal),
-    );
+    const deserialized = deserializeDataValue(serialized, paramDetails, dummyPrincipal);
     expect(deserialized).toEqual(['hello']);
   });
 
   it('round-trips a boolean value', () => {
     const typeInfo = makeAnalysedTypeInfo(bool());
-    const serialized = Either.getOrThrow(serializeToDataValue(true, typeInfo));
+    const serialized = serializeToDataValue(true, typeInfo);
 
     const paramDetails: ParameterDetail[] = [{ name: 'flag', type: typeInfo }];
-    const deserialized = Either.getOrThrow(
-      deserializeDataValue(serialized, paramDetails, dummyPrincipal),
-    );
+    const deserialized = deserializeDataValue(serialized, paramDetails, dummyPrincipal);
     expect(deserialized).toEqual([true]);
   });
 
   it('round-trips a record value', () => {
-    const recType = record(undefined, [
-      field('name', str()),
-      field('age', u32()),
-    ]);
+    const recType = record(undefined, [field('name', str()), field('age', u32())]);
     const typeInfo = makeAnalysedTypeInfo(recType);
     const input = { name: 'Alice', age: 30 };
-    const serialized = Either.getOrThrow(serializeToDataValue(input, typeInfo));
+    const serialized = serializeToDataValue(input, typeInfo);
 
     const paramDetails: ParameterDetail[] = [{ name: 'person', type: typeInfo }];
-    const deserialized = Either.getOrThrow(
-      deserializeDataValue(serialized, paramDetails, dummyPrincipal),
-    );
+    const deserialized = deserializeDataValue(serialized, paramDetails, dummyPrincipal);
     expect(deserialized).toEqual([input]);
   });
 
   it('round-trips an option value (Some)', () => {
     const optType = option(undefined, 'null', u32());
     const typeInfo = makeAnalysedTypeInfo(optType);
-    const serialized = Either.getOrThrow(serializeToDataValue(42, typeInfo));
+    const serialized = serializeToDataValue(42, typeInfo);
 
     const paramDetails: ParameterDetail[] = [{ name: 'opt', type: typeInfo }];
-    const deserialized = Either.getOrThrow(
-      deserializeDataValue(serialized, paramDetails, dummyPrincipal),
-    );
+    const deserialized = deserializeDataValue(serialized, paramDetails, dummyPrincipal);
     expect(deserialized).toEqual([42]);
   });
 
   it('round-trips an option value (None → null)', () => {
     const optType = option(undefined, 'null', u32());
     const typeInfo = makeAnalysedTypeInfo(optType);
-    const serialized = Either.getOrThrow(serializeToDataValue(null, typeInfo));
+    const serialized = serializeToDataValue(null, typeInfo);
 
     const paramDetails: ParameterDetail[] = [{ name: 'opt', type: typeInfo }];
-    const deserialized = Either.getOrThrow(
-      deserializeDataValue(serialized, paramDetails, dummyPrincipal),
-    );
+    const deserialized = deserializeDataValue(serialized, paramDetails, dummyPrincipal);
     expect(deserialized).toEqual([null]);
   });
 });
@@ -147,10 +134,7 @@ describe('DataValue: empty/void type', () => {
   it('serializes void return type as empty tuple', () => {
     const voidType = tuple(undefined, 'void', []);
     const typeInfo = makeAnalysedTypeInfo(voidType);
-    const result = serializeToDataValue(undefined, typeInfo);
-    expect(Either.isRight(result)).toBe(true);
-
-    const dv = (result as { tag: 'right'; val: any }).val;
+    const dv = serializeToDataValue(undefined, typeInfo);
     expect(dv.tag).toBe('tuple');
     expect(dv.val).toHaveLength(0);
   });
@@ -169,9 +153,7 @@ describe('DataValue: principal auto-injection', () => {
     const dataValue = { tag: 'tuple' as const, val: [] };
 
     const paramDetails: ParameterDetail[] = [{ name: 'caller', type: principalType }];
-    const result = deserializeDataValue(dataValue, paramDetails, dummyPrincipal);
-    expect(Either.isRight(result)).toBe(true);
-    const values = (result as { tag: 'right'; val: any[] }).val;
+    const values = deserializeDataValue(dataValue, paramDetails, dummyPrincipal);
     expect(values).toEqual([dummyPrincipal]);
   });
 
@@ -184,8 +166,8 @@ describe('DataValue: principal auto-injection', () => {
     const strTypeInfo = makeAnalysedTypeInfo(str());
 
     // Serialize a DataValue with just the non-principal params
-    const u32Serialized = Either.getOrThrow(serializeToDataValue(42, u32TypeInfo));
-    const strSerialized = Either.getOrThrow(serializeToDataValue('hello', strTypeInfo));
+    const u32Serialized = serializeToDataValue(42, u32TypeInfo);
+    const strSerialized = serializeToDataValue('hello', strTypeInfo);
 
     // Build a combined tuple DataValue with the two component-model elements
     const combinedDataValue: DataValue = {
@@ -199,9 +181,7 @@ describe('DataValue: principal auto-injection', () => {
       { name: 'message', type: strTypeInfo },
     ];
 
-    const result = Either.getOrThrow(
-      deserializeDataValue(combinedDataValue, paramDetails, dummyPrincipal),
-    );
+    const result = deserializeDataValue(combinedDataValue, paramDetails, dummyPrincipal);
     expect(result).toEqual([42, dummyPrincipal, 'hello']);
   });
 });
@@ -217,13 +197,10 @@ describe('DataValue: unstructured-text', () => {
     };
 
     const input = { tag: 'inline', val: 'hello world' };
-    const result = serializeToDataValue(input, textTypeInfo);
-    expect(Either.isRight(result)).toBe(true);
-
-    const dv = (result as { tag: 'right'; val: any }).val;
-    expect(dv.tag).toBe('tuple');
-    expect(dv.val).toHaveLength(1);
-    expect(dv.val[0].tag).toBe('unstructured-text');
+    const dv = serializeToDataValue(input, textTypeInfo);
+    const elems = expectTuple(dv);
+    expect(elems).toHaveLength(1);
+    expect(elems[0].tag).toBe('unstructured-text');
   });
 
   it('serializes unstructured text (url) to DataValue', () => {
@@ -234,13 +211,11 @@ describe('DataValue: unstructured-text', () => {
     };
 
     const input = { tag: 'url', val: 'https://example.com/text.txt' };
-    const result = serializeToDataValue(input, textTypeInfo);
-    expect(Either.isRight(result)).toBe(true);
-
-    const dv = (result as { tag: 'right'; val: any }).val;
-    expect(dv.tag).toBe('tuple');
-    expect(dv.val[0].tag).toBe('unstructured-text');
-    expect(dv.val[0].val.tag).toBe('url');
+    const dv = serializeToDataValue(input, textTypeInfo);
+    const elems = expectTuple(dv);
+    expect(elems[0].tag).toBe('unstructured-text');
+    const elem = elems[0] as ElementValue & { tag: 'unstructured-text' };
+    expect(elem.val.tag).toBe('url');
   });
 });
 
@@ -255,14 +230,12 @@ describe('DataValue: unstructured-binary', () => {
     };
 
     const input = { tag: 'url', val: 'https://example.com/image.png' };
-    const result = serializeToDataValue(input, binaryTypeInfo);
-    expect(Either.isRight(result)).toBe(true);
-
-    const dv = (result as { tag: 'right'; val: any }).val;
-    expect(dv.tag).toBe('tuple');
-    expect(dv.val).toHaveLength(1);
-    expect(dv.val[0].tag).toBe('unstructured-binary');
-    expect(dv.val[0].val.tag).toBe('url');
+    const dv = serializeToDataValue(input, binaryTypeInfo);
+    const elems = expectTuple(dv);
+    expect(elems).toHaveLength(1);
+    expect(elems[0].tag).toBe('unstructured-binary');
+    const elem = elems[0] as ElementValue & { tag: 'unstructured-binary' };
+    expect(elem.val.tag).toBe('url');
   });
 
   it('serializes unstructured binary (inline) to DataValue', () => {
@@ -277,34 +250,31 @@ describe('DataValue: unstructured-binary', () => {
       val: new Uint8Array([1, 2, 3]),
       mimeType: 'application/octet-stream',
     };
-    const result = serializeToDataValue(input, binaryTypeInfo);
-    expect(Either.isRight(result)).toBe(true);
-
-    const dv = (result as { tag: 'right'; val: any }).val;
-    expect(dv.val[0].tag).toBe('unstructured-binary');
-    expect(dv.val[0].val.tag).toBe('inline');
+    const dv = serializeToDataValue(input, binaryTypeInfo);
+    const elems = expectTuple(dv);
+    expect(elems[0].tag).toBe('unstructured-binary');
+    const elem = elems[0] as ElementValue & { tag: 'unstructured-binary' };
+    expect(elem.val.tag).toBe('inline');
   });
 });
 
 // ─── Error paths ───────────────────────────────────────────────────────────
 
 describe('DataValue: error paths', () => {
-  it('returns error when serializing Principal type', () => {
+  it('throws when serializing Principal type', () => {
     const principalType: TypeInfoInternal = {
       tag: 'principal',
       tsType: dummyTsType,
     };
-    const result = serializeToDataValue({}, principalType);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(() => serializeToDataValue({}, principalType)).toThrow();
   });
 
-  it('returns error when serializing Config type', () => {
+  it('throws when serializing Config type', () => {
     const configType: TypeInfoInternal = {
       tag: 'config',
       tsType: dummyTsType,
     };
-    const result = serializeToDataValue({}, configType);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(() => serializeToDataValue({}, configType)).toThrow();
   });
 });
 
@@ -316,9 +286,9 @@ describe('DataValue: mixed parameter lists', () => {
     const strInfo = makeAnalysedTypeInfo(str());
     const boolInfo = makeAnalysedTypeInfo(bool());
 
-    const u32Elem = Either.getOrThrow(serializeToDataValue(42, u32Info));
-    const strElem = Either.getOrThrow(serializeToDataValue('hello', strInfo));
-    const boolElem = Either.getOrThrow(serializeToDataValue(true, boolInfo));
+    const u32Elem = serializeToDataValue(42, u32Info);
+    const strElem = serializeToDataValue('hello', strInfo);
+    const boolElem = serializeToDataValue(true, boolInfo);
 
     const combined: DataValue = {
       tag: 'tuple',
@@ -331,9 +301,7 @@ describe('DataValue: mixed parameter lists', () => {
       { name: 'flag', type: boolInfo },
     ];
 
-    const result = Either.getOrThrow(
-      deserializeDataValue(combined, paramDetails, dummyPrincipal),
-    );
+    const result = deserializeDataValue(combined, paramDetails, dummyPrincipal);
     expect(result).toEqual([42, 'hello', true]);
   });
 
@@ -352,7 +320,7 @@ describe('DataValue: mixed parameter lists', () => {
     };
 
     // Only provide one element in DataValue but declare two params
-    const u32Elem = Either.getOrThrow(serializeToDataValue(42, u32Info));
+    const u32Elem = serializeToDataValue(42, u32Info);
     const dataValue: DataValue = {
       tag: 'tuple',
       val: [getFirstElement(u32Elem)],
@@ -363,9 +331,7 @@ describe('DataValue: mixed parameter lists', () => {
       { name: 'optional', type: optionalInfo },
     ];
 
-    const result = Either.getOrThrow(
-      deserializeDataValue(dataValue, paramDetails, dummyPrincipal),
-    );
+    const result = deserializeDataValue(dataValue, paramDetails, dummyPrincipal);
     expect(result).toEqual([42, undefined]);
   });
 });

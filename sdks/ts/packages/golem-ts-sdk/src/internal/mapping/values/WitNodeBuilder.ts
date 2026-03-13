@@ -218,7 +218,9 @@ export class WitNodeBuilder {
         node.val.val = childIdx;
         break;
       default:
-        throw new Error(`finishChild called on a node that is not option/variant/result: ${node.tag}`);
+        throw new Error(
+          `finishChild called on a node that is not option/variant/result: ${node.tag}`,
+        );
     }
   }
 

@@ -43,7 +43,6 @@ import {
 } from './arbitraries';
 import * as fc from 'fast-check';
 import { Type } from '@golemcloud/golem-ts-types-core';
-import * as Either from '../src/newTypes/either';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import { AnalysedType } from '../src/internal/mapping/types/analysedType';
 
@@ -385,11 +384,7 @@ describe('typescript value to wit value round-trip conversions', () => {
 });
 
 function runRoundTripTest<T>(data: T, type: [AnalysedType, Type.Type]) {
-  const witValueEither = WitValue.fromTsValueDefault(data, type[0]);
-
-  const witValue = Either.getOrElse(witValueEither, (err) => {
-    throw new Error(err);
-  });
+  const witValue = WitValue.fromTsValueDefault(data, type[0]);
 
   // Round trip ts-value -> wit-value -> ts-value
   const tsValueReturned = WitValue.toTsValue(witValue, type[0]);

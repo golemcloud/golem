@@ -1,29 +1,32 @@
 import { bench, describe } from 'vitest';
 import * as WitValue from '../../src/internal/mapping/values/WitValue';
-import * as Either from '../../src/newTypes/either';
 import {
   AnalysedType,
   str,
   u32,
   bool,
   u64,
+  s64,
+  f64,
   field,
   record,
   option,
   list,
+  result,
   variant,
   case_,
   unitCase,
 } from '../../src/internal/mapping/types/analysedType';
 import { getTestInterfaceType } from '../testUtils';
 import { TestInterfaceType } from '../testTypes';
-import { serializeToDataValue, deserializeDataValue } from '../../src/internal/mapping/values/dataValue';
+import {
+  serializeToDataValue,
+  deserializeDataValue,
+} from '../../src/internal/mapping/values/dataValue';
 
 // --- Helper ---
 function serialize(tsValue: any, typ: AnalysedType): WitValue.WitValue {
-  const result = WitValue.fromTsValueDefault(tsValue, typ);
-  if (Either.isLeft(result)) throw new Error(`Serialization failed: ${result.val}`);
-  return result.val;
+  return WitValue.fromTsValueDefault(tsValue, typ);
 }
 
 // =====================================================================
@@ -34,41 +37,103 @@ const stringType: AnalysedType = str();
 const u32Type: AnalysedType = u32();
 const boolType: AnalysedType = bool();
 const u64Type: AnalysedType = u64(true);
+const s64Type: AnalysedType = s64(true);
+const f64Type: AnalysedType = f64();
 
 const testString = 'hello world benchmark test string';
 const testNumber = 42;
 const testBool = true;
 const testBigint = 9007199254740993n;
+const testSignedBigint = 123456789n;
+const testFloat = 3.14159;
 
 const stringWit = serialize(testString, stringType);
 const u32Wit = serialize(testNumber, u32Type);
 const boolWit = serialize(testBool, boolType);
 const u64Wit = serialize(testBigint, u64Type);
+const s64Wit = serialize(testSignedBigint, s64Type);
+const f64Wit = serialize(testFloat, f64Type);
 
 describe('Primitives', () => {
-  bench('serialize string', () => {
-    WitValue.fromTsValueDefault(testString, stringType);
-  }, { time: 1000 });
+  bench(
+    'serialize string',
+    () => {
+      WitValue.fromTsValueDefault(testString, stringType);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize string', () => {
-    WitValue.toTsValue(stringWit, stringType);
-  }, { time: 1000 });
+  bench(
+    'deserialize string',
+    () => {
+      WitValue.toTsValue(stringWit, stringType);
+    },
+    { time: 1000 },
+  );
 
-  bench('serialize u32', () => {
-    WitValue.fromTsValueDefault(testNumber, u32Type);
-  }, { time: 1000 });
+  bench(
+    'serialize u32',
+    () => {
+      WitValue.fromTsValueDefault(testNumber, u32Type);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize u32', () => {
-    WitValue.toTsValue(u32Wit, u32Type);
-  }, { time: 1000 });
+  bench(
+    'deserialize u32',
+    () => {
+      WitValue.toTsValue(u32Wit, u32Type);
+    },
+    { time: 1000 },
+  );
 
-  bench('serialize bool', () => {
-    WitValue.fromTsValueDefault(testBool, boolType);
-  }, { time: 1000 });
+  bench(
+    'serialize bool',
+    () => {
+      WitValue.fromTsValueDefault(testBool, boolType);
+    },
+    { time: 1000 },
+  );
 
-  bench('serialize u64 (bigint)', () => {
-    WitValue.fromTsValueDefault(testBigint, u64Type);
-  }, { time: 1000 });
+  bench(
+    'serialize u64 (bigint)',
+    () => {
+      WitValue.fromTsValueDefault(testBigint, u64Type);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'serialize s64 (bigint)',
+    () => {
+      WitValue.fromTsValueDefault(testSignedBigint, s64Type);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'deserialize s64',
+    () => {
+      WitValue.toTsValue(s64Wit, s64Type);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'serialize f64',
+    () => {
+      WitValue.fromTsValueDefault(testFloat, f64Type);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'deserialize f64',
+    () => {
+      WitValue.toTsValue(f64Wit, f64Type);
+    },
+    { time: 1000 },
+  );
 });
 
 // =====================================================================
@@ -104,13 +169,21 @@ const flatRecordValue = {
 const flatRecordWit = serialize(flatRecordValue, flatRecordType);
 
 describe('Flat record (10 fields)', () => {
-  bench('serialize', () => {
-    WitValue.fromTsValueDefault(flatRecordValue, flatRecordType);
-  }, { time: 1000 });
+  bench(
+    'serialize',
+    () => {
+      WitValue.fromTsValueDefault(flatRecordValue, flatRecordType);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize', () => {
-    WitValue.toTsValue(flatRecordWit, flatRecordType);
-  }, { time: 1000 });
+  bench(
+    'deserialize',
+    () => {
+      WitValue.toTsValue(flatRecordWit, flatRecordType);
+    },
+    { time: 1000 },
+  );
 });
 
 // =====================================================================
@@ -148,13 +221,21 @@ const nestedRecordValue = {
 const nestedRecordWit = serialize(nestedRecordValue, outerRecordType);
 
 describe('Nested record (3 levels)', () => {
-  bench('serialize', () => {
-    WitValue.fromTsValueDefault(nestedRecordValue, outerRecordType);
-  }, { time: 1000 });
+  bench(
+    'serialize',
+    () => {
+      WitValue.fromTsValueDefault(nestedRecordValue, outerRecordType);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize', () => {
-    WitValue.toTsValue(nestedRecordWit, outerRecordType);
-  }, { time: 1000 });
+  bench(
+    'deserialize',
+    () => {
+      WitValue.toTsValue(nestedRecordWit, outerRecordType);
+    },
+    { time: 1000 },
+  );
 });
 
 // =====================================================================
@@ -166,13 +247,21 @@ const stringList = Array.from({ length: 1000 }, (_, i) => `item-${i}`);
 const stringListWit = serialize(stringList, listStringType);
 
 describe('List of 1000 strings', () => {
-  bench('serialize', () => {
-    WitValue.fromTsValueDefault(stringList, listStringType);
-  }, { time: 1000 });
+  bench(
+    'serialize',
+    () => {
+      WitValue.fromTsValueDefault(stringList, listStringType);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize', () => {
-    WitValue.toTsValue(stringListWit, listStringType);
-  }, { time: 1000 });
+  bench(
+    'deserialize',
+    () => {
+      WitValue.toTsValue(stringListWit, listStringType);
+    },
+    { time: 1000 },
+  );
 });
 
 // =====================================================================
@@ -185,13 +274,21 @@ for (let i = 0; i < 1000; i++) byteArray[i] = i & 0xff;
 const byteArrayWit = serialize(byteArray, listU8Type);
 
 describe('TypedArray (Uint8Array, 1000 bytes)', () => {
-  bench('serialize', () => {
-    WitValue.fromTsValueDefault(byteArray, listU8Type);
-  }, { time: 1000 });
+  bench(
+    'serialize',
+    () => {
+      WitValue.fromTsValueDefault(byteArray, listU8Type);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize', () => {
-    WitValue.toTsValue(byteArrayWit, listU8Type);
-  }, { time: 1000 });
+  bench(
+    'deserialize',
+    () => {
+      WitValue.toTsValue(byteArrayWit, listU8Type);
+    },
+    { time: 1000 },
+  );
 });
 
 // =====================================================================
@@ -222,14 +319,20 @@ const complexValue: TestInterfaceType = {
     g: [{ a: 'ga', b: 4, c: false }],
     h: ['h', 5, true],
     i: ['i', 6, { a: 'ia', b: 7, c: true }],
-    j: new Map([['k1', 1], ['k2', 2]]),
+    j: new Map([
+      ['k1', 1],
+      ['k2', 2],
+    ]),
     k: { n: 8 },
   },
   listProp: ['a', 'b', 'c'],
   listObjectProp: [{ a: 'la', b: 9, c: false }],
   tupleProp: ['t', 10, true],
   tupleObjectProp: ['to', 11, { a: 'ta', b: 12, c: false }],
-  mapProp: new Map([['m1', 100], ['m2', 200]]),
+  mapProp: new Map([
+    ['m1', 100],
+    ['m2', 200],
+  ]),
   uint8ArrayProp: new Uint8Array([1, 2, 3]),
   uint16ArrayProp: new Uint16Array([1, 2, 3]),
   uint32ArrayProp: new Uint32Array([1, 2, 3]),
@@ -247,31 +350,44 @@ const complexValue: TestInterfaceType = {
 const complexWit = serialize(complexValue, complexAnalysedType);
 
 describe('Complex type (TestInterfaceType)', () => {
-  bench('serialize', () => {
-    WitValue.fromTsValueDefault(complexValue, complexAnalysedType);
-  }, { time: 1000 });
+  bench(
+    'serialize',
+    () => {
+      WitValue.fromTsValueDefault(complexValue, complexAnalysedType);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize', () => {
-    WitValue.toTsValue(complexWit, complexAnalysedType);
-  }, { time: 1000 });
+  bench(
+    'deserialize',
+    () => {
+      WitValue.toTsValue(complexWit, complexAnalysedType);
+    },
+    { time: 1000 },
+  );
 });
 
 // =====================================================================
 // 7. List of 1000 records (extractor allocation stress test)
 // =====================================================================
 
-const listRecordType: AnalysedType = list('RecordList', undefined, undefined, record('Item', [
-  field('id', u32()),
-  field('name', str()),
-  field('active', bool()),
-  field('score', u32()),
-  field('email', str()),
-  field('count', u32()),
-  field('verified', bool()),
-  field('code', str()),
-  field('level', u32()),
-  field('label', str()),
-]));
+const listRecordType: AnalysedType = list(
+  'RecordList',
+  undefined,
+  undefined,
+  record('Item', [
+    field('id', u32()),
+    field('name', str()),
+    field('active', bool()),
+    field('score', u32()),
+    field('email', str()),
+    field('count', u32()),
+    field('verified', bool()),
+    field('code', str()),
+    field('level', u32()),
+    field('label', str()),
+  ]),
+);
 
 const recordList = Array.from({ length: 1000 }, (_, i) => ({
   id: i,
@@ -289,45 +405,66 @@ const recordList = Array.from({ length: 1000 }, (_, i) => ({
 const recordListWit = serialize(recordList, listRecordType);
 
 describe('List of 1000 records (10 fields each)', () => {
-  bench('serialize', () => {
-    WitValue.fromTsValueDefault(recordList, listRecordType);
-  }, { time: 1000 });
+  bench(
+    'serialize',
+    () => {
+      WitValue.fromTsValueDefault(recordList, listRecordType);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize', () => {
-    WitValue.toTsValue(recordListWit, listRecordType);
-  }, { time: 1000 });
+  bench(
+    'deserialize',
+    () => {
+      WitValue.toTsValue(recordListWit, listRecordType);
+    },
+    { time: 1000 },
+  );
 });
 
 // =====================================================================
 // 8. Variant/union
 // =====================================================================
 
-const variantType: AnalysedType = variant('MyVariant', [], [
-  case_('text', str()),
-  case_('number', u32()),
-  case_('payload', record('Payload', [
-    field('key', str()),
-    field('value', u32()),
-  ])),
-  unitCase('empty'),
-]);
+const variantType: AnalysedType = variant(
+  'MyVariant',
+  [],
+  [
+    case_('text', str()),
+    case_('number', u32()),
+    case_('payload', record('Payload', [field('key', str()), field('value', u32())])),
+    unitCase('empty'),
+  ],
+);
 
 const variantStringVal = { tag: 'text', val: 'hello' };
 const variantNumberVal = { tag: 'number', val: 42 };
 const variantRecordVal = { tag: 'payload', val: { key: 'k', value: 99 } };
 
 describe('Variant', () => {
-  bench('serialize string case', () => {
-    WitValue.fromTsValueDefault(variantStringVal, variantType);
-  }, { time: 1000 });
+  bench(
+    'serialize string case',
+    () => {
+      WitValue.fromTsValueDefault(variantStringVal, variantType);
+    },
+    { time: 1000 },
+  );
 
-  bench('serialize number case', () => {
-    WitValue.fromTsValueDefault(variantNumberVal, variantType);
-  }, { time: 1000 });
+  bench(
+    'serialize number case',
+    () => {
+      WitValue.fromTsValueDefault(variantNumberVal, variantType);
+    },
+    { time: 1000 },
+  );
 
-  bench('serialize record case', () => {
-    WitValue.fromTsValueDefault(variantRecordVal, variantType);
-  }, { time: 1000 });
+  bench(
+    'serialize record case',
+    () => {
+      WitValue.fromTsValueDefault(variantRecordVal, variantType);
+    },
+    { time: 1000 },
+  );
 });
 
 // =====================================================================
@@ -341,20 +478,80 @@ const invokeArgType: AnalysedType = record('InvokeArg', [
 ]);
 
 const invokeArg = { name: 'test', count: 10, active: true };
-const invokeTypeInfo = { tag: 'analysed' as const, val: invokeArgType, witType: undefined as any, tsType: undefined as any };
+const invokeTypeInfo = {
+  tag: 'analysed' as const,
+  val: invokeArgType,
+  witType: undefined as any,
+  tsType: undefined as any,
+};
 
-const preSerializedDataValue = Either.getOrThrow(serializeToDataValue(invokeArg, invokeTypeInfo));
+const preSerializedDataValue = serializeToDataValue(invokeArg, invokeTypeInfo);
 
 describe('Full invoke round-trip', () => {
-  bench('serialize to DataValue', () => {
-    serializeToDataValue(invokeArg, invokeTypeInfo);
-  }, { time: 1000 });
+  bench(
+    'serialize to DataValue',
+    () => {
+      serializeToDataValue(invokeArg, invokeTypeInfo);
+    },
+    { time: 1000 },
+  );
 
-  bench('deserialize from DataValue', () => {
-    deserializeDataValue(
-      preSerializedDataValue,
-      [{ name: 'arg', type: invokeTypeInfo }],
-      { tag: 'anonymous' },
-    );
-  }, { time: 1000 });
+  bench(
+    'deserialize from DataValue',
+    () => {
+      deserializeDataValue(preSerializedDataValue, [{ name: 'arg', type: invokeTypeInfo }], {
+        tag: 'anonymous',
+      });
+    },
+    { time: 1000 },
+  );
+});
+
+// =====================================================================
+// 10. Result type
+// =====================================================================
+
+const resultType: AnalysedType = result(
+  undefined,
+  { tag: 'inbuilt', okEmptyType: undefined, errEmptyType: undefined },
+  str(),
+  str(),
+);
+const resultOkVal = { tag: 'ok', val: 'success' };
+const resultErrVal = { tag: 'err', val: 'failure' };
+const resultOkWit = serialize(resultOkVal, resultType);
+const resultErrWit = serialize(resultErrVal, resultType);
+
+describe('Result type', () => {
+  bench(
+    'serialize ok',
+    () => {
+      WitValue.fromTsValueDefault(resultOkVal, resultType);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'serialize err',
+    () => {
+      WitValue.fromTsValueDefault(resultErrVal, resultType);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'deserialize ok',
+    () => {
+      WitValue.toTsValue(resultOkWit, resultType);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'deserialize err',
+    () => {
+      WitValue.toTsValue(resultErrWit, resultType);
+    },
+    { time: 1000 },
+  );
 });

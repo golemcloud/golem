@@ -22,11 +22,7 @@ export function deserializeNodes(nodes: WitNode[], index: number, analysedType: 
   const tag = n.tag;
 
   // Handle empty record → null/undefined/void
-  if (
-    tag === 'record-value' &&
-    (n.val as number[]).length === 0 &&
-    analysedType.kind === 'tuple'
-  ) {
+  if (tag === 'record-value' && (n.val as number[]).length === 0 && analysedType.kind === 'tuple') {
     if (analysedType.emptyType) {
       switch (analysedType.emptyType) {
         case 'null':

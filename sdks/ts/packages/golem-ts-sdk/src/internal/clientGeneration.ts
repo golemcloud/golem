@@ -14,7 +14,6 @@
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as WitValue from './mapping/values/WitValue';
-import * as Either from '../newTypes/either';
 import {
   getAgentType,
   makeAgentId,
@@ -47,7 +46,6 @@ import {
 } from './mapping/values/dataValue';
 import { randomUuid } from '../host/hostapi';
 import { AgentId } from '../agentId';
-import * as util from 'node:util';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
@@ -170,15 +168,7 @@ class WasmRpxProxyHandlerShared {
     let constructorDataValue: DataValue;
 
     if (args.length === 1 && this.constructorParamTypes[0].tag === 'multimodal') {
-      const dataValueEither = serializeToDataValue(args[0], this.constructorParamTypes[0]);
-
-      if (Either.isLeft(dataValueEither)) {
-        throw new Error(
-          `Failed to serialize multimodal constructor argument: ${dataValueEither.val}. Input is ${util.format(args)}`,
-        );
-      }
-
-      constructorDataValue = dataValueEither.val;
+      constructorDataValue = serializeToDataValue(args[0], this.constructorParamTypes[0]);
     } else {
       const elementValues: ElementValue[] = [];
       for (const [index, arg] of args.entries()) {
@@ -186,10 +176,7 @@ class WasmRpxProxyHandlerShared {
 
         switch (typeInfoInternal.tag) {
           case 'analysed':
-            const witValue = Either.getOrThrowWith(
-              WitValue.fromTsValueDefault(arg, typeInfoInternal.val),
-              (err) => new Error(`Failed to encode constructor parameter ${arg}: ${err}`),
-            );
+            const witValue = WitValue.fromTsValueDefault(arg, typeInfoInternal.val);
             const elementValue: ElementValue = {
               tag: 'component-model',
               val: witValue,
@@ -409,10 +396,7 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
 
     switch (param.type.tag) {
       case 'analysed': {
-        const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(fnArg, param.type.val),
-          (err) => new Error(`Failed to serialize arg ${param.name}: ${err}`),
-        );
+        const witValue = WitValue.fromTsValueDefault(fnArg, param.type.val);
         elementValues.push({ tag: 'component-model', val: witValue });
         break;
       }
@@ -435,15 +419,9 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
           'Internal error: Value of `Config` should not be serialized at any point during RPC call',
         );
       case 'multimodal': {
-        const dataValueEither = serializeToDataValue(fnArg, param.type);
-        if (Either.isLeft(dataValueEither)) {
-          throw new Error(
-            `Failed to serialize multimodal arg ${param.name}: ${dataValueEither.val}`,
-          );
-        }
         // For a multimodal param, the serialized DataValue is itself the result;
         // we wrap it as a single tuple with the multimodal elements
-        const multimodalDv = dataValueEither.val;
+        const multimodalDv = serializeToDataValue(fnArg, param.type);
         if (multimodalDv.tag === 'multimodal') {
           // Each multimodal element becomes part of the overall DataValue
           // But since params are tuple-based, we need to wrap multimodal as a single element
@@ -465,17 +443,14 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
 }
 
 function deserializeRpcResult(resultDataValue: DataValue, typeInfoInternal: TypeInfoInternal): any {
-  return Either.getOrThrowWith(
-    deserializeDataValue(
-      resultDataValue,
-      [
-        {
-          name: 'returnValue',
-          type: typeInfoInternal,
-        },
-      ],
-      { tag: 'anonymous' },
-    ),
-    (err) => new Error(`Failed to deserialize return value of RPC call: ${err}`),
+  return deserializeDataValue(
+    resultDataValue,
+    [
+      {
+        name: 'returnValue',
+        type: typeInfoInternal,
+      },
+    ],
+    { tag: 'anonymous' },
   )[0];
 }

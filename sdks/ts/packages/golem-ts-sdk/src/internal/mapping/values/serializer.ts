@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { AnalysedType, NameOptionTypePair, NameTypePair, TypedArray } from '../types/analysedType';
-import * as Either from '../../../newTypes/either';
 import {
   customSerializationError,
   enumMismatchInSerialize,
@@ -383,72 +382,71 @@ export function serializeToWitNodes(
   tsValue: any,
   analysedType: AnalysedType,
   builder: WitNodeBuilder,
-): Either.Either<number, string> {
+): number {
   switch (analysedType.kind) {
     case 'flags':
-      return Either.left(unhandledTypeError(tsValue, 'flags', undefined));
+      throw new Error(unhandledTypeError(tsValue, 'flags', undefined));
     case 'chr':
-      return Either.left(unhandledTypeError(tsValue, 'char', undefined));
+      throw new Error(unhandledTypeError(tsValue, 'char', undefined));
     case 'handle':
-      return Either.left(unhandledTypeError(tsValue, 'handle', undefined));
+      throw new Error(unhandledTypeError(tsValue, 'handle', undefined));
 
     case 'bool':
-      if (typeof tsValue !== 'boolean') return Either.left(typeMismatchInSerialize(tsValue, 'boolean'));
-      return Either.right(builder.bool(tsValue));
+      if (typeof tsValue !== 'boolean')
+        throw new Error(typeMismatchInSerialize(tsValue, 'boolean'));
+      return builder.bool(tsValue);
 
     case 'f32':
-      if (typeof tsValue !== 'number') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.f32(tsValue));
+      if (typeof tsValue !== 'number') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.f32(tsValue);
     case 'f64':
-      if (typeof tsValue !== 'number') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.f64(tsValue));
+      if (typeof tsValue !== 'number') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.f64(tsValue);
 
     case 'u8':
-      if (typeof tsValue !== 'number') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.u8(tsValue));
+      if (typeof tsValue !== 'number') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.u8(tsValue);
     case 'u16':
-      if (typeof tsValue !== 'number') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.u16(tsValue));
+      if (typeof tsValue !== 'number') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.u16(tsValue);
     case 'u32':
-      if (typeof tsValue !== 'number') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.u32(tsValue));
+      if (typeof tsValue !== 'number') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.u32(tsValue);
     case 's8':
-      if (typeof tsValue !== 'number') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.s8(tsValue));
+      if (typeof tsValue !== 'number') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.s8(tsValue);
     case 's16':
-      if (typeof tsValue !== 'number') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.s16(tsValue));
+      if (typeof tsValue !== 'number') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.s16(tsValue);
     case 's32':
-      if (typeof tsValue !== 'number') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.s32(tsValue));
+      if (typeof tsValue !== 'number') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.s32(tsValue);
 
     case 'u64':
       if (typeof tsValue === 'bigint') {
-        return Either.right(builder.u64(tsValue));
+        return builder.u64(tsValue);
       } else if (typeof tsValue === 'number') {
-        return Either.right(builder.u64(BigInt(tsValue)));
+        return builder.u64(BigInt(tsValue));
       } else {
-        return Either.left(typeMismatchInSerialize(tsValue, 'bigint'));
+        throw new Error(typeMismatchInSerialize(tsValue, 'bigint'));
       }
 
     case 's64':
-      if (typeof tsValue !== 'bigint') return Either.left(typeMismatchInSerialize(tsValue, 'number'));
-      return Either.right(builder.s64(tsValue));
+      if (typeof tsValue !== 'bigint') throw new Error(typeMismatchInSerialize(tsValue, 'number'));
+      return builder.s64(tsValue);
 
     case 'string':
-      if (typeof tsValue !== 'string') return Either.left(typeMismatchInSerialize(tsValue, 'string'));
-      return Either.right(builder.string(tsValue));
+      if (typeof tsValue !== 'string') throw new Error(typeMismatchInSerialize(tsValue, 'string'));
+      return builder.string(tsValue);
 
     case 'option': {
       const innerType = analysedType.value.inner;
       if (tsValue === null || tsValue === undefined) {
-        return Either.right(builder.optionNone());
+        return builder.optionNone();
       }
       const optIdx = builder.addOptionSome();
-      const innerResult = serializeToWitNodes(tsValue, innerType, builder);
-      if (Either.isLeft(innerResult)) return innerResult;
-      builder.finishChild(optIdx, innerResult.val);
-      return Either.right(optIdx);
+      builder.finishChild(optIdx, serializeToWitNodes(tsValue, innerType, builder));
+      return optIdx;
     }
 
     case 'list':
@@ -458,9 +456,9 @@ export function serializeToWitNodes(
       const tupleElems = analysedType.value.items;
       if (tupleElems.length === 0) {
         if (tsValue === null || tsValue === undefined) {
-          return Either.right(builder.addTuple());
+          return builder.addTuple();
         } else {
-          return Either.left(typeMismatchInSerialize(tsValue, `Array of length ${tupleElems.length}`));
+          throw new Error(typeMismatchInSerialize(tsValue, `Array of length ${tupleElems.length}`));
         }
       }
       return serializeTupleToWitNodes(tsValue, tupleElems, builder);
@@ -476,10 +474,10 @@ export function serializeToWitNodes(
       if (typeof tsValue === 'string') {
         const caseIdx = analysedType.value.cases.indexOf(tsValue);
         if (caseIdx !== -1) {
-          return Either.right(builder.enumValue(caseIdx));
+          return builder.enumValue(caseIdx);
         }
       }
-      return Either.left(enumMismatchInSerialize(analysedType.value.cases, tsValue));
+      throw new Error(enumMismatchInSerialize(analysedType.value.cases, tsValue));
     }
 
     case 'record':
@@ -490,47 +488,43 @@ export function serializeToWitNodes(
       const errType = analysedType.value.err;
 
       if (typeof tsValue !== 'object' || tsValue === null) {
-        return Either.left(typeMismatchInSerialize(tsValue, 'object'));
+        throw new Error(typeMismatchInSerialize(tsValue, 'object'));
       }
       if (!('tag' in tsValue)) {
-        return Either.left(missingObjectKey('tag', tsValue));
+        throw new Error(missingObjectKey('tag', tsValue));
       }
 
       switch (analysedType.resultType.tag) {
         case 'inbuilt': {
           const keys = Object.keys(tsValue);
-          if (!keys.includes('tag')) return Either.left(missingObjectKey('tag', tsValue));
-          if (!keys.includes('val')) return Either.left(missingObjectKey('val', tsValue));
+          if (!keys.includes('tag')) throw new Error(missingObjectKey('tag', tsValue));
+          if (!keys.includes('val')) throw new Error(missingObjectKey('val', tsValue));
 
           if (tsValue['tag'] === 'ok') {
             if (!okType) {
               if (analysedType.resultType.okEmptyType) {
-                return Either.right(builder.resultOkUnit());
+                return builder.resultOkUnit();
               }
-              return Either.left(customSerializationError('unresolved ok type'));
+              throw new Error(customSerializationError('unresolved ok type'));
             }
             const resIdx = builder.addResultOk();
-            const innerResult = serializeToWitNodes(tsValue['val'], okType, builder);
-            if (Either.isLeft(innerResult)) return innerResult;
-            builder.finishChild(resIdx, innerResult.val);
-            return Either.right(resIdx);
+            builder.finishChild(resIdx, serializeToWitNodes(tsValue['val'], okType, builder));
+            return resIdx;
           }
 
           if (tsValue['tag'] === 'err') {
             if (!errType) {
               if (analysedType.resultType.errEmptyType) {
-                return Either.right(builder.resultErrUnit());
+                return builder.resultErrUnit();
               }
-              return Either.left(customSerializationError('unresolved err type'));
+              throw new Error(customSerializationError('unresolved err type'));
             }
             const resIdx = builder.addResultErr();
-            const innerResult = serializeToWitNodes(tsValue['val'], errType, builder);
-            if (Either.isLeft(innerResult)) return innerResult;
-            builder.finishChild(resIdx, innerResult.val);
-            return Either.right(resIdx);
+            builder.finishChild(resIdx, serializeToWitNodes(tsValue['val'], errType, builder));
+            return resIdx;
           }
 
-          return Either.left(typeMismatchInSerialize(tsValue, 'Result'));
+          throw new Error(typeMismatchInSerialize(tsValue, 'Result'));
         }
 
         case 'custom': {
@@ -540,29 +534,31 @@ export function serializeToWitNodes(
           if (tsValue['tag'] === 'ok') {
             if (okType) {
               if (!okValueName) {
-                return Either.left(customSerializationError('unresolved key name for ok value'));
+                throw new Error(customSerializationError('unresolved key name for ok value'));
               }
               const resIdx = builder.addResultOk();
-              const innerResult = serializeToWitNodes(tsValue[okValueName], okType, builder);
-              if (Either.isLeft(innerResult)) return innerResult;
-              builder.finishChild(resIdx, innerResult.val);
-              return Either.right(resIdx);
+              builder.finishChild(
+                resIdx,
+                serializeToWitNodes(tsValue[okValueName], okType, builder),
+              );
+              return resIdx;
             }
-            return Either.right(builder.resultOkUnit());
+            return builder.resultOkUnit();
           } else if (typeof tsValue === 'object' && tsValue['tag'] === 'err') {
             if (errType) {
               if (!errValueName) {
-                return Either.left(customSerializationError('unresolved key name for err value'));
+                throw new Error(customSerializationError('unresolved key name for err value'));
               }
               const resIdx = builder.addResultErr();
-              const innerResult = serializeToWitNodes(tsValue[errValueName], errType, builder);
-              if (Either.isLeft(innerResult)) return innerResult;
-              builder.finishChild(resIdx, innerResult.val);
-              return Either.right(resIdx);
+              builder.finishChild(
+                resIdx,
+                serializeToWitNodes(tsValue[errValueName], errType, builder),
+              );
+              return resIdx;
             }
-            return Either.right(builder.resultErrUnit());
+            return builder.resultErrUnit();
           } else {
-            return Either.left(typeMismatchInSerialize(tsValue, 'object with tag property'));
+            throw new Error(typeMismatchInSerialize(tsValue, 'object with tag property'));
           }
         }
       }
@@ -574,91 +570,101 @@ function serializeListToWitNodes(
   tsValue: any,
   analysedType: AnalysedType & { kind: 'list' },
   builder: WitNodeBuilder,
-): Either.Either<number, string> {
+): number {
   const innerListType = analysedType.value.inner;
   const typedArray = analysedType.typedArray;
 
   if (typedArray) {
     switch (typedArray) {
       case 'u8': {
-        if (!(tsValue instanceof Uint8Array)) return Either.left(typeMismatchInSerialize(tsValue, 'Uint8Array'));
+        if (!(tsValue instanceof Uint8Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'Uint8Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.u8(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'u16': {
-        if (!(tsValue instanceof Uint16Array)) return Either.left(typeMismatchInSerialize(tsValue, 'Uint16Array'));
+        if (!(tsValue instanceof Uint16Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'Uint16Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.u16(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'u32': {
-        if (!(tsValue instanceof Uint32Array)) return Either.left(typeMismatchInSerialize(tsValue, 'Uint32Array'));
+        if (!(tsValue instanceof Uint32Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'Uint32Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.u32(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'big-u64': {
-        if (!(tsValue instanceof BigUint64Array)) return Either.left(typeMismatchInSerialize(tsValue, 'BigUint64Array'));
+        if (!(tsValue instanceof BigUint64Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'BigUint64Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.u64(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'i8': {
-        if (!(tsValue instanceof Int8Array)) return Either.left(typeMismatchInSerialize(tsValue, 'Int8Array'));
+        if (!(tsValue instanceof Int8Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'Int8Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.s8(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'i16': {
-        if (!(tsValue instanceof Int16Array)) return Either.left(typeMismatchInSerialize(tsValue, 'Int16Array'));
+        if (!(tsValue instanceof Int16Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'Int16Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.s16(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'i32': {
-        if (!(tsValue instanceof Int32Array)) return Either.left(typeMismatchInSerialize(tsValue, 'Int32Array'));
+        if (!(tsValue instanceof Int32Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'Int32Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.s32(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'big-i64': {
-        if (!(tsValue instanceof BigInt64Array)) return Either.left(typeMismatchInSerialize(tsValue, 'BigInt64Array'));
+        if (!(tsValue instanceof BigInt64Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'BigInt64Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.s64(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'f32': {
-        if (!(tsValue instanceof Float32Array)) return Either.left(typeMismatchInSerialize(tsValue, 'Float32Array'));
+        if (!(tsValue instanceof Float32Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'Float32Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.f32(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
       case 'f64': {
-        if (!(tsValue instanceof Float64Array)) return Either.left(typeMismatchInSerialize(tsValue, 'Float64Array'));
+        if (!(tsValue instanceof Float64Array))
+          throw new Error(typeMismatchInSerialize(tsValue, 'Float64Array'));
         const listIdx = builder.addList();
         const indices: number[] = new Array(tsValue.length);
         for (let i = 0; i < tsValue.length; i++) indices[i] = builder.f64(tsValue[i]);
         builder.finishSeq(listIdx, indices);
-        return Either.right(listIdx);
+        return listIdx;
       }
     }
   }
@@ -667,24 +673,26 @@ function serializeListToWitNodes(
     const listIdx = builder.addList();
     const childIndices: number[] = new Array(tsValue.length);
     for (let i = 0; i < tsValue.length; i++) {
-      const result = serializeToWitNodes(tsValue[i], innerListType, builder);
-      if (Either.isLeft(result)) return result;
-      childIndices[i] = result.val;
+      childIndices[i] = serializeToWitNodes(tsValue[i], innerListType, builder);
     }
     builder.finishSeq(listIdx, childIndices);
-    return Either.right(listIdx);
+    return listIdx;
   }
 
   if (tsValue instanceof Map) {
-    if (!innerListType || innerListType.kind !== 'tuple' || innerListType.value.items.length !== 2) {
-      return Either.left(typeMismatchInSerialize(tsValue, 'Map'));
+    if (
+      !innerListType ||
+      innerListType.kind !== 'tuple' ||
+      innerListType.value.items.length !== 2
+    ) {
+      throw new Error(typeMismatchInSerialize(tsValue, 'Map'));
     }
     const keyType = innerListType.value.items[0];
     const valueType = innerListType.value.items[1];
     return serializeKeyValuePairsToWitNodes(tsValue, keyType, valueType, builder);
   }
 
-  return Either.left(typeMismatchInSerialize(tsValue, 'Array'));
+  throw new Error(typeMismatchInSerialize(tsValue, 'Array'));
 }
 
 function serializeKeyValuePairsToWitNodes(
@@ -692,7 +700,7 @@ function serializeKeyValuePairsToWitNodes(
   keyType: AnalysedType,
   valueType: AnalysedType,
   builder: WitNodeBuilder,
-): Either.Either<number, string> {
+): number {
   const entries = Array.from(tsValue.entries());
   const listIdx = builder.addList();
   const tupleIndices: number[] = new Array(entries.length);
@@ -701,35 +709,31 @@ function serializeKeyValuePairsToWitNodes(
     const [key, value] = entries[i];
     const tupleIdx = builder.addTuple();
     const keyResult = serializeToWitNodes(key, keyType, builder);
-    if (Either.isLeft(keyResult)) return keyResult;
     const valueResult = serializeToWitNodes(value, valueType, builder);
-    if (Either.isLeft(valueResult)) return valueResult;
-    builder.finishSeq(tupleIdx, [keyResult.val, valueResult.val]);
+    builder.finishSeq(tupleIdx, [keyResult, valueResult]);
     tupleIndices[i] = tupleIdx;
   }
 
   builder.finishSeq(listIdx, tupleIndices);
-  return Either.right(listIdx);
+  return listIdx;
 }
 
 function serializeTupleToWitNodes(
   tsValue: any,
   tupleElemTypes: AnalysedType[],
   builder: WitNodeBuilder,
-): Either.Either<number, string> {
+): number {
   if (!Array.isArray(tsValue) || tsValue.length !== tupleElemTypes.length) {
-    return Either.left(typeMismatchInSerialize(tsValue, `Array of length ${tupleElemTypes.length}`));
+    throw new Error(typeMismatchInSerialize(tsValue, `Array of length ${tupleElemTypes.length}`));
   }
 
   const tupleIdx = builder.addTuple();
   const childIndices: number[] = new Array(tsValue.length);
   for (let i = 0; i < tsValue.length; i++) {
-    const result = serializeToWitNodes(tsValue[i], tupleElemTypes[i], builder);
-    if (Either.isLeft(result)) return result;
-    childIndices[i] = result.val;
+    childIndices[i] = serializeToWitNodes(tsValue[i], tupleElemTypes[i], builder);
   }
   builder.finishSeq(tupleIdx, childIndices);
-  return Either.right(tupleIdx);
+  return tupleIdx;
 }
 
 function serializeUnionToWitNodes(
@@ -737,7 +741,7 @@ function serializeUnionToWitNodes(
   taggedTypes: TaggedTypeMetadata[],
   nameOptionTypePairs: NameOptionTypePair[],
   builder: WitNodeBuilder,
-): Either.Either<number, string> {
+): number {
   if (taggedTypes.length > 0) {
     return serializeTaggedUnionToWitNodes(tsValue, nameOptionTypePairs, builder);
   }
@@ -748,73 +752,67 @@ function serializeUnionToWitNodes(
 
     if (!analysedType) {
       if (tsValue === variant.name) {
-        return Either.right(builder.variantUnit(idx));
+        return builder.variantUnit(idx);
       }
       continue;
     }
 
     if (matchesType(tsValue, analysedType)) {
       const varIdx = builder.addVariant(idx);
-      const innerResult = serializeToWitNodes(tsValue, analysedType, builder);
-      if (Either.isLeft(innerResult)) {
-        throw new Error(`Internal Error: ${innerResult.val}`);
-      }
-      builder.finishChild(varIdx, innerResult.val);
-      return Either.right(varIdx);
+      builder.finishChild(varIdx, serializeToWitNodes(tsValue, analysedType, builder));
+      return varIdx;
     }
   }
 
-  return Either.left(unionTypeMatchError(nameOptionTypePairs, tsValue));
+  throw new Error(unionTypeMatchError(nameOptionTypePairs, tsValue));
 }
 
 function serializeTaggedUnionToWitNodes(
   tsValue: any,
   nameOptionTypePairs: NameOptionTypePair[],
   builder: WitNodeBuilder,
-): Either.Either<number, string> {
+): number {
   if (typeof tsValue !== 'object' || tsValue === null) {
-    return Either.left(typeMismatchInSerialize(tsValue, 'object with tag property'));
+    throw new Error(typeMismatchInSerialize(tsValue, 'object with tag property'));
   }
 
   const keys = Object.keys(tsValue);
 
   if (!keys.includes('tag')) {
-    return Either.left(missingObjectKey('tag', tsValue));
+    throw new Error(missingObjectKey('tag', tsValue));
   }
 
-  for (const nameOptionTypePair of nameOptionTypePairs) {
+  for (let caseIdx = 0; caseIdx < nameOptionTypePairs.length; caseIdx++) {
+    const nameOptionTypePair = nameOptionTypePairs[caseIdx];
     const typeName = nameOptionTypePair.name;
     const typeOption = nameOptionTypePair.typ;
 
     if (tsValue['tag'] === typeName) {
       if (!typeOption) {
-        return Either.right(builder.variantUnit(nameOptionTypePairs.findIndex((v) => v.name === typeName)));
+        return builder.variantUnit(caseIdx);
       }
 
       const valueKey = keys.find((k) => k !== 'tag');
       if (!valueKey) {
-        return Either.left(`Missing value correspond to the tag ${typeName}`);
+        throw new Error(`Missing value correspond to the tag ${typeName}`);
       }
 
-      const caseIdx = nameOptionTypePairs.findIndex((v) => v.name === typeName);
       const varIdx = builder.addVariant(caseIdx);
-      const innerResult = serializeToWitNodes(tsValue[valueKey], typeOption, builder);
-      if (Either.isLeft(innerResult)) return innerResult;
-      builder.finishChild(varIdx, innerResult.val);
-      return Either.right(varIdx);
+      builder.finishChild(varIdx, serializeToWitNodes(tsValue[valueKey], typeOption, builder));
+      return varIdx;
     }
   }
 
-  return Either.left(unionTypeMatchError(nameOptionTypePairs, tsValue));
+  throw new Error(unionTypeMatchError(nameOptionTypePairs, tsValue));
 }
 
 function serializeObjectToWitNodes(
   tsValue: any,
   nameTypePairs: NameTypePair[],
   builder: WitNodeBuilder,
-): Either.Either<number, string> {
+): number {
   if (typeof tsValue !== 'object' || tsValue === null) {
-    return Either.left(typeMismatchInSerialize(tsValue, 'object'));
+    throw new Error(typeMismatchInSerialize(tsValue, 'object'));
   }
 
   const recIdx = builder.addRecord();
@@ -847,13 +845,11 @@ function serializeObjectToWitNodes(
       }
     }
 
-    const fieldResult = serializeToWitNodes(tsValue[key], type, builder);
-    if (Either.isLeft(fieldResult)) return Either.left(fieldResult.val);
-    childIndices.push(fieldResult.val);
+    childIndices.push(serializeToWitNodes(tsValue[key], type, builder));
   }
 
   builder.finishSeq(recIdx, childIndices);
-  return Either.right(recIdx);
+  return recIdx;
 }
 
 export function serializeBinaryReferenceToWitNodes(tsValue: any, builder: WitNodeBuilder): number {

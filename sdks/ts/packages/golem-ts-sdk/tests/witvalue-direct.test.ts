@@ -14,7 +14,6 @@
 
 import { describe, it, expect } from 'vitest';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
-import * as Either from '../src/newTypes/either';
 import {
   AnalysedType,
   bool,
@@ -48,10 +47,7 @@ import { Result } from '../src/host/result';
  * then deserialize back and assert equality with the original value.
  */
 function roundTrip(tsValue: any, analysedType: AnalysedType, expectedRootTag?: string): any {
-  const eitherWit = WitValue.fromTsValueDefault(tsValue, analysedType);
-  expect(Either.isRight(eitherWit), `serialization should succeed, got: ${Either.isLeft(eitherWit) ? eitherWit.val : ''}`).toBe(true);
-
-  const witValue = (eitherWit as { tag: 'right'; val: WitValue.WitValue }).val;
+  const witValue = WitValue.fromTsValueDefault(tsValue, analysedType);
 
   if (expectedRootTag) {
     // After build() canonicalization, the root is always at index 0
@@ -68,8 +64,7 @@ function expectRoundTrip(tsValue: any, analysedType: AnalysedType, expectedRootT
 }
 
 function expectSerializationError(tsValue: any, analysedType: AnalysedType) {
-  const eitherWit = WitValue.fromTsValueDefault(tsValue, analysedType);
-  expect(Either.isLeft(eitherWit)).toBe(true);
+  expect(() => WitValue.fromTsValueDefault(tsValue, analysedType)).toThrow();
 }
 
 // ─── Primitives ────────────────────────────────────────────────────────────
@@ -119,9 +114,7 @@ describe('WitValue direct: primitives', () => {
     it('round-trips number via bigint conversion (isBigInt=false)', () => {
       // u64 serializer converts numbers to bigint; deserializer with isBigInt=false returns number
       const typ = u64(false);
-      const eitherWit = WitValue.fromTsValueDefault(42, typ);
-      expect(Either.isRight(eitherWit)).toBe(true);
-      const witValue = (eitherWit as { tag: 'right'; val: WitValue.WitValue }).val;
+      const witValue = WitValue.fromTsValueDefault(42, typ);
       expect(witValue.nodes[0].tag).toBe('prim-u64');
       const back = WitValue.toTsValue(witValue, typ);
       // When isBigInt=false the deserializer calls convertToNumber which returns the bigint value directly
@@ -167,7 +160,8 @@ describe('WitValue direct: primitives', () => {
 
   describe('f64', () => {
     it('round-trips 0', () => expectRoundTrip(0, f64(), 'prim-float64'));
-    it('round-trips large float', () => expectRoundTrip(1.7976931348623157e308, f64(), 'prim-float64'));
+    it('round-trips large float', () =>
+      expectRoundTrip(1.7976931348623157e308, f64(), 'prim-float64'));
     it('rejects boolean', () => expectSerializationError(true, f64()));
   });
 
@@ -316,34 +310,23 @@ describe('WitValue direct: tuple', () => {
     const typ = tuple(undefined, 'void', []);
     // The serializer serializes void/undefined as record with 0 fields
     // Deserializer returns undefined for emptyType=void
-    const eitherWit = WitValue.fromTsValueDefault(undefined, typ);
-    // void tuple might not serialize at all or might produce an empty record
-    // Let's check what actually happens
-    if (Either.isRight(eitherWit)) {
-      const witValue = eitherWit.val;
-      const back = WitValue.toTsValue(witValue, typ);
-      expect(back).toBeUndefined();
-    }
+    const witValue = WitValue.fromTsValueDefault(undefined, typ);
+    const back = WitValue.toTsValue(witValue, typ);
+    expect(back).toBeUndefined();
   });
 
   it('round-trips empty tuple → null (emptyType=null)', () => {
     const typ = tuple(undefined, 'null', []);
-    const eitherWit = WitValue.fromTsValueDefault(null, typ);
-    if (Either.isRight(eitherWit)) {
-      const witValue = eitherWit.val;
-      const back = WitValue.toTsValue(witValue, typ);
-      expect(back).toBeNull();
-    }
+    const witValue = WitValue.fromTsValueDefault(null, typ);
+    const back = WitValue.toTsValue(witValue, typ);
+    expect(back).toBeNull();
   });
 
   it('round-trips empty tuple → undefined (emptyType=undefined)', () => {
     const typ = tuple(undefined, 'undefined', []);
-    const eitherWit = WitValue.fromTsValueDefault(undefined, typ);
-    if (Either.isRight(eitherWit)) {
-      const witValue = eitherWit.val;
-      const back = WitValue.toTsValue(witValue, typ);
-      expect(back).toBeUndefined();
-    }
+    const witValue = WitValue.fromTsValueDefault(undefined, typ);
+    const back = WitValue.toTsValue(witValue, typ);
+    expect(back).toBeUndefined();
   });
 
   it('round-trips nested tuple', () => {
@@ -366,14 +349,8 @@ describe('WitValue direct: record', () => {
   });
 
   it('round-trips nested record', () => {
-    const innerTyp = record(undefined, [
-      field('x', f64()),
-      field('y', f64()),
-    ]);
-    const outerTyp = record(undefined, [
-      field('label', str()),
-      field('point', innerTyp),
-    ]);
+    const innerTyp = record(undefined, [field('x', f64()), field('y', f64())]);
+    const outerTyp = record(undefined, [field('label', str()), field('point', innerTyp)]);
     expectRoundTrip({ label: 'origin', point: { x: 0.0, y: 0.0 } }, outerTyp);
   });
 
@@ -409,10 +386,7 @@ describe('WitValue direct: variant', () => {
         { tagLiteralName: 'text', valueType: ['val', { kind: 'string' } as any] },
         { tagLiteralName: 'number', valueType: ['val', { kind: 'number' } as any] },
       ],
-      [
-        case_('text', str()),
-        case_('number', u32()),
-      ],
+      [case_('text', str()), case_('number', u32())],
     );
     expectRoundTrip({ tag: 'text', val: 'hello' }, typ, 'variant-value');
   });
@@ -424,10 +398,7 @@ describe('WitValue direct: variant', () => {
         { tagLiteralName: 'none', valueType: undefined },
         { tagLiteralName: 'some', valueType: ['val', { kind: 'string' } as any] },
       ],
-      [
-        unitCase('none'),
-        case_('some', str()),
-      ],
+      [unitCase('none'), case_('some', str())],
     );
     expectRoundTrip({ tag: 'none' }, typ, 'variant-value');
   });
@@ -436,16 +407,11 @@ describe('WitValue direct: variant', () => {
     const typ = variant(
       undefined,
       [], // no tagged types = simple union
-      [
-        case_('case-number', u32()),
-        case_('case-string', str()),
-      ],
+      [case_('case-number', u32()), case_('case-string', str())],
     );
     // For untagged variants, the TS value is the raw value and the deserializer
     // returns the deserialized form based on caseIdx
-    const witEither = WitValue.fromTsValueDefault(42, typ);
-    expect(Either.isRight(witEither)).toBe(true);
-    const witValue = (witEither as { tag: 'right'; val: WitValue.WitValue }).val;
+    const witValue = WitValue.fromTsValueDefault(42, typ);
     const back = WitValue.toTsValue(witValue, typ);
     expect(back).toBe(42);
   });
@@ -626,13 +592,8 @@ describe('WitValue direct: error paths', () => {
 
 describe('WitValue direct: edge cases', () => {
   it('root-first WitValue produced by builder', () => {
-    const typ = record(undefined, [
-      field('name', str()),
-      field('age', u32()),
-    ]);
-    const eitherWit = WitValue.fromTsValueDefault({ name: 'Alice', age: 30 }, typ);
-    expect(Either.isRight(eitherWit)).toBe(true);
-    const witValue = (eitherWit as { tag: 'right'; val: WitValue.WitValue }).val;
+    const typ = record(undefined, [field('name', str()), field('age', u32())]);
+    const witValue = WitValue.fromTsValueDefault({ name: 'Alice', age: 30 }, typ);
     // After build() canonicalization, root (record-value) is at index 0
     expect(witValue.nodes[0].tag).toBe('record-value');
   });
@@ -645,28 +606,15 @@ describe('WitValue direct: edge cases', () => {
   it('tagged union with null input returns error', () => {
     const typ = variant(
       undefined,
-      [
-        { tagLiteralName: 'text', valueType: ['val', { kind: 'string' } as any] },
-      ],
-      [
-        case_('text', str()),
-      ],
+      [{ tagLiteralName: 'text', valueType: ['val', { kind: 'string' } as any] }],
+      [case_('text', str())],
     );
     expectSerializationError(null, typ);
   });
 
   it('untagged variant with bigint selects u64 case', () => {
-    const typ = variant(
-      undefined,
-      [],
-      [
-        case_('case-u64', u64(true)),
-        case_('case-string', str()),
-      ],
-    );
-    const eitherWit = WitValue.fromTsValueDefault(42n, typ);
-    expect(Either.isRight(eitherWit), `serialization should succeed, got: ${Either.isLeft(eitherWit) ? eitherWit.val : ''}`).toBe(true);
-    const witValue = (eitherWit as { tag: 'right'; val: WitValue.WitValue }).val;
+    const typ = variant(undefined, [], [case_('case-u64', u64(true)), case_('case-string', str())]);
+    const witValue = WitValue.fromTsValueDefault(42n, typ);
     const back = WitValue.toTsValue(witValue, typ);
     expect(back).toBe(42n);
   });
