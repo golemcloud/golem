@@ -519,8 +519,21 @@ pub fn init_tracing<F>(config: &TracingConfig, make_filter: F) -> Option<SdkTrac
 where
     F: Fn(Output) -> filter::Boxed,
 {
+    init_tracing_returning_provider(config, make_filter).map(|(tracer, _provider)| tracer)
+}
+
+/// Like [`init_tracing`] but also returns the [`SdkTracerProvider`] so the
+/// caller can call [`SdkTracerProvider::shutdown`] before process exit to
+/// flush pending OTLP spans.
+pub fn init_tracing_returning_provider<F>(
+    config: &TracingConfig,
+    make_filter: F,
+) -> Option<(SdkTracer, opentelemetry_sdk::trace::SdkTracerProvider)>
+where
+    F: Fn(Output) -> filter::Boxed,
+{
     let mut layers = Vec::new();
-    let mut result_tracer = None;
+    let mut result = None;
 
     if config.otlp.enabled {
         let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -546,7 +559,7 @@ where
 
         let tracer = tracer_provider.tracer(config.otlp.service_name.clone());
         let telemetry = tracing_opentelemetry::layer().with_tracer(tracer.clone());
-        result_tracer = Some(tracer);
+        result = Some((tracer, tracer_provider));
 
         layers.push(telemetry.with_filter(make_filter(Output::Otlp)).boxed());
     }
@@ -615,7 +628,7 @@ where
         );
     }
 
-    result_tracer
+    result
 }
 
 pub fn init_tracing_with_default_env_filter(config: &TracingConfig) -> Option<SdkTracer> {

@@ -20,6 +20,8 @@ golem-service-base = { workspace = true }
 golem-wasm = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 applying = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
@@ -36,6 +38,8 @@ log = { workspace = true }
 prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
+reqwest-middleware = { workspace = true }
+reqwest-tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
@@ -51,6 +55,7 @@ tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-core = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 tryhard = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

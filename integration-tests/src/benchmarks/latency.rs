@@ -26,7 +26,7 @@ use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
 use std::time::Duration;
-use tracing::{info, Level};
+use tracing::{Instrument, Level};
 
 pub struct LatencySmall {
     config: RunConfig,
@@ -267,10 +267,14 @@ impl LatencyBenchmark {
     pub async fn warmup(&self, config: &RunConfig) {
         if !config.disable_compilation_cache {
             let duration = Duration::from_secs(15);
-            info!("Waiting {duration:?} for compilation cache");
-            tokio::time::sleep(duration).await;
-        } else {
-            info!("Skipping waiting for compilation cache, as it is disabled");
+            async {
+                tokio::time::sleep(duration).await;
+            }
+            .instrument(tracing::info_span!(
+                "wait_compilation_cache",
+                duration_secs = duration.as_secs()
+            ))
+            .await;
         }
     }
 

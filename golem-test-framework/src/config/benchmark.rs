@@ -45,7 +45,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use golem_common::tracing::directive::warn;
-use golem_common::tracing::{init_tracing, TracingConfig};
+use golem_common::tracing::{init_tracing_returning_provider, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
@@ -215,8 +215,13 @@ pub enum TestMode {
 }
 
 impl BenchmarkTestDependencies {
-    pub fn init_logging(params: &BenchmarkCliParameters) {
-        init_tracing(
+    /// Initializes logging/tracing. Returns the `SdkTracerProvider` if OTLP
+    /// is enabled — the caller must call `provider.shutdown()` before process
+    /// exit to flush pending spans.
+    pub fn init_logging(
+        params: &BenchmarkCliParameters,
+    ) -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
+        init_tracing_returning_provider(
             &TracingConfig::test_pretty("benchmarks")
                 .with_env_overrides()
                 .use_stderr()
@@ -237,7 +242,8 @@ impl BenchmarkTestDependencies {
                     .concat(),
                 ),
             },
-        );
+        )
+        .map(|(_tracer, provider)| provider)
     }
 
     #[allow(clippy::too_many_arguments)]

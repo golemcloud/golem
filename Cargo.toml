@@ -203,7 +203,9 @@ range-set-blaze = "0.1.16"
 rayon = "1.11.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
-reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }
+reqwest = { version = "0.13.1", features = ["gzip", "json", "multipart", "stream", "query"] }
+reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "query"] }
+reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_30"] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
 rmcp = {version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
