@@ -701,17 +701,16 @@ function serializeKeyValuePairsToWitNodes(
   valueType: AnalysedType,
   builder: WitNodeBuilder,
 ): number {
-  const entries = Array.from(tsValue.entries());
   const listIdx = builder.addList();
-  const tupleIndices: number[] = new Array(entries.length);
+  const tupleIndices: number[] = new Array(tsValue.size);
 
-  for (let i = 0; i < entries.length; i++) {
-    const [key, value] = entries[i];
+  let i = 0;
+  for (const [key, value] of tsValue) {
     const tupleIdx = builder.addTuple();
     const keyResult = serializeToWitNodes(key, keyType, builder);
     const valueResult = serializeToWitNodes(value, valueType, builder);
     builder.finishSeq(tupleIdx, [keyResult, valueResult]);
-    tupleIndices[i] = tupleIdx;
+    tupleIndices[i++] = tupleIdx;
   }
 
   builder.finishSeq(listIdx, tupleIndices);

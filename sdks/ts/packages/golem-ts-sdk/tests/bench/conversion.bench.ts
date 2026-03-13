@@ -12,6 +12,7 @@ import {
   record,
   option,
   list,
+  tuple,
   result,
   variant,
   case_,
@@ -521,6 +522,60 @@ const resultOkVal = { tag: 'ok', val: 'success' };
 const resultErrVal = { tag: 'err', val: 'failure' };
 const resultOkWit = serialize(resultOkVal, resultType);
 const resultErrWit = serialize(resultErrVal, resultType);
+
+// =====================================================================
+// 10b. Map serialization (100 entries) – targets #8
+// =====================================================================
+
+const mapInnerType: AnalysedType = tuple('MapEntry', undefined, [str(), u32()]);
+const mapType: AnalysedType = list('StringToU32Map', undefined, undefined, mapInnerType);
+const smallMap = new Map(Array.from({ length: 100 }, (_, i) => [`key-${i}`, i] as [string, number]));
+const smallMapWit = serialize(smallMap, mapType);
+
+describe('Map (100 string→u32 entries)', () => {
+  bench(
+    'serialize',
+    () => {
+      WitValue.fromTsValueDefault(smallMap, mapType);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'deserialize',
+    () => {
+      WitValue.toTsValue(smallMapWit, mapType);
+    },
+    { time: 1000 },
+  );
+});
+
+// =====================================================================
+// 10c. Map serialization (1000 entries) – targets #8
+// =====================================================================
+
+const largeMap = new Map(
+  Array.from({ length: 1000 }, (_, i) => [`key-${i}`, i] as [string, number]),
+);
+const largeMapWit = serialize(largeMap, mapType);
+
+describe('Map (1000 string→u32 entries)', () => {
+  bench(
+    'serialize',
+    () => {
+      WitValue.fromTsValueDefault(largeMap, mapType);
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    'deserialize',
+    () => {
+      WitValue.toTsValue(largeMapWit, mapType);
+    },
+    { time: 1000 },
+  );
+});
 
 describe('Result type', () => {
   bench(
