@@ -53,6 +53,7 @@ use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
 use crate::services::plan::PlanService;
@@ -95,6 +96,7 @@ pub struct Services {
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     pub environment_service: Arc<EnvironmentService>,
     pub environment_share_service: Arc<EnvironmentShareService>,
+    pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
     pub login_system: LoginSystem,
@@ -299,6 +301,11 @@ impl Services {
 
         let deployed_mcp_service = Arc::new(DeployedMcpService::new(repos.deployment_repo.clone()));
 
+        let environment_state_service = Arc::new(EnvironmentStateService::new(
+            deployment_service.clone(),
+            agent_secret_service.clone(),
+        ));
+
         Ok(Self {
             account_service,
             account_usage_service,
@@ -317,6 +324,7 @@ impl Services {
             environment_plugin_grant_service,
             environment_service,
             environment_share_service,
+            environment_state_service,
             http_api_deployment_service,
             mcp_deployment_service,
             login_system,
