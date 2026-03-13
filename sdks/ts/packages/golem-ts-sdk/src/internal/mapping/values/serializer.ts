@@ -472,12 +472,15 @@ export function serializeToWitNodes(
       return serializeUnionToWitNodes(tsValue, taggedTypes, variantTypes, builder);
     }
 
-    case 'enum':
-      if (typeof tsValue === 'string' && analysedType.value.cases.includes(tsValue.toString())) {
-        return Either.right(builder.enumValue(analysedType.value.cases.indexOf(tsValue.toString())));
-      } else {
-        return Either.left(enumMismatchInSerialize(analysedType.value.cases, tsValue));
+    case 'enum': {
+      if (typeof tsValue === 'string') {
+        const caseIdx = analysedType.value.cases.indexOf(tsValue);
+        if (caseIdx !== -1) {
+          return Either.right(builder.enumValue(caseIdx));
+        }
       }
+      return Either.left(enumMismatchInSerialize(analysedType.value.cases, tsValue));
+    }
 
     case 'record':
       return serializeObjectToWitNodes(tsValue, analysedType.value.fields, builder);
