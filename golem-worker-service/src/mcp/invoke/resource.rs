@@ -209,6 +209,7 @@ fn convert_to_resource_content(
             match value {
                 BinaryReference::Inline(BinarySource { data, binary_type }) => {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+
                     Ok(ResourceContents::BlobResourceContents {
                         uri: uri.to_string(),
                         mime_type: Some(binary_type.mime_type),
