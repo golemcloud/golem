@@ -37,7 +37,8 @@ pub fn get_output_mcp_schema(data_schema: &DataSchema) -> Option<McpSchema> {
                 // Setting any schema for any unstructured content is either imposing bad user experience, or indeterministic results
                 // Also says, `OutputSchema` is for structured output here: https://modelcontextprotocol.io/specification/2025-11-25/server/tools#output-schema
                 // although optional
-                let is_structured = matches!(schemas.elements[0].schema, ElementSchema::ComponentModel(_));
+                let is_structured =
+                    matches!(schemas.elements[0].schema, ElementSchema::ComponentModel(_));
 
                 if is_structured {
                     Some(McpSchema::from_named_element_schemas(&schemas.elements))
@@ -55,9 +56,7 @@ pub fn get_output_mcp_schema(data_schema: &DataSchema) -> Option<McpSchema> {
         // then clients prefer to not render the image (and simply emit base64), or actual decode and fail due to large size b64, and at times succeeds,
         // or worse case, it can go in circles (it decodes to image, but finds the output schema to be b64 and decides to encode it again)
         // https://modelcontextprotocol.io/specification/2025-11-25/server/tools#listing-tools
-        DataSchema::Multimodal(_) => {
-          None
-        }
+        DataSchema::Multimodal(_) => None,
     }
 }
 // for mcp output schema

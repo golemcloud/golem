@@ -22,7 +22,10 @@ use golem_common::base_model::agent::*;
 use golem_common::model::agent::ParsedAgentId;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
-use rmcp::model::{AnnotateAble, CallToolResult, Content, JsonObject, RawAudioContent, RawContent, RawEmbeddedResource, ResourceContents};
+use rmcp::model::{
+    AnnotateAble, CallToolResult, Content, JsonObject, RawAudioContent, RawContent,
+    RawEmbeddedResource, ResourceContents,
+};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -172,8 +175,7 @@ pub fn map_agent_response_to_tool_result(
             let mut contents: Vec<Content> = vec![];
 
             for named in elements {
-                let tool_result =
-                    convert_elem_value_to_mcp_tool_response(&named.value)?;
+                let tool_result = convert_elem_value_to_mcp_tool_response(&named.value)?;
 
                 match tool_result {
                     ToolResult::Default(json_value) => {
@@ -215,19 +217,21 @@ fn convert_elem_value_to_mcp_tool_response(
     element: &ElementValue,
 ) -> Result<ToolResult, ErrorData> {
     match element {
-        ElementValue::ComponentModel(component_model_value) => {
-            component_model_value.value.to_json_value().map_err(|e| {
+        ElementValue::ComponentModel(component_model_value) => component_model_value
+            .value
+            .to_json_value()
+            .map_err(|e| {
                 ErrorData::internal_error(
                     format!("Failed to serialize component model response: {e}"),
                     None,
                 )
-            }).map(ToolResult::Default)
-        }
+            })
+            .map(ToolResult::Default),
 
         ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
-            TextReference::Inline(TextSource { data, .. }) => {
-                Ok(ToolResult::Content(RawContent::text(data.clone()).no_annotation()))
-            }
+            TextReference::Inline(TextSource { data, .. }) => Ok(ToolResult::Content(
+                RawContent::text(data.clone()).no_annotation(),
+            )),
             TextReference::Url(_) => Err(ErrorData::internal_error(
                 "A text reference URL can only be part of tool input and not output".to_string(),
                 None,
@@ -237,62 +241,57 @@ fn convert_elem_value_to_mcp_tool_response(
         ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
             match value {
                 BinaryReference::Inline(BinarySource { data, binary_type }) => {
-
                     let mime_type = binary_type.mime_type.as_str();
 
                     match mime_type {
                         "image/png" | "image/jpeg" | "image/gif" | "image/webp" => {
                             let b64 = base64::engine::general_purpose::STANDARD.encode(data);
 
-                           Ok(ToolResult::Content(RawContent::image(
-                                b64,
-                                mime_type.to_string(),
-                           ).no_annotation()))
+                            Ok(ToolResult::Content(
+                                RawContent::image(b64, mime_type.to_string()).no_annotation(),
+                            ))
                         }
 
                         "audio/mpeg" | "audio/wav" | "audio/ogg" => {
                             let b64 = base64::engine::general_purpose::STANDARD.encode(data);
 
-                            Ok(ToolResult::Content(RawContent::Audio(
-                               RawAudioContent {
+                            Ok(ToolResult::Content(
+                                RawContent::Audio(RawAudioContent {
                                     data: b64,
                                     mime_type: mime_type.to_string(),
-                               }
-                            ).no_annotation()))
+                                })
+                                .no_annotation(),
+                            ))
                         }
 
                         "text/plain" | "text/csv" | "application/pdf" => {
                             let data_str = String::from_utf8_lossy(data).to_string();
-                            Ok(ToolResult::Content(RawContent::Resource(
-                                RawEmbeddedResource {
+                            Ok(ToolResult::Content(
+                                RawContent::Resource(RawEmbeddedResource {
                                     meta: None,
                                     resource: ResourceContents::TextResourceContents {
                                         uri: "data:".to_string(),
                                         mime_type: Some(mime_type.to_string()),
                                         text: data_str,
                                         meta: None,
-                                    }
-                                }
-                             ).no_annotation(
-                            )))
-                        }
-
-                        _ => {
-                            Ok(ToolResult::Content(
-                                RawContent::Resource(
-                                    RawEmbeddedResource {
-                                        meta: None,
-                                        resource: ResourceContents::BlobResourceContents {
-                                            uri: "data:".to_string(),
-                                            mime_type: Some(mime_type.to_string()),
-                                            blob: base64::engine::general_purpose::STANDARD.encode(data),
-                                            meta: None,
-                                        },
-                                    }
-                                ).no_annotation()
+                                    },
+                                })
+                                .no_annotation(),
                             ))
-
                         }
+
+                        _ => Ok(ToolResult::Content(
+                            RawContent::Resource(RawEmbeddedResource {
+                                meta: None,
+                                resource: ResourceContents::BlobResourceContents {
+                                    uri: "data:".to_string(),
+                                    mime_type: Some(mime_type.to_string()),
+                                    blob: base64::engine::general_purpose::STANDARD.encode(data),
+                                    meta: None,
+                                },
+                            })
+                            .no_annotation(),
+                        )),
                     }
                 }
                 BinaryReference::Url(_) => Err(ErrorData::internal_error(
