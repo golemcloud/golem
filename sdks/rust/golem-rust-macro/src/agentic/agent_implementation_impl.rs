@@ -319,15 +319,15 @@ fn generate_method_param_extraction(
     post_method_param_extraction_logic: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let input_param_index_init = quote! {
-      let mut input_param_index = 0;
+      let mut input_param_index: usize = 0;
       let __agent_type_name = golem_rust::agentic::AgentTypeName(#agent_type_name.to_string());
     };
 
     let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(original_method_param_idx, ident)| {
         let ident_result = format_ident!("{}_result", ident);
         quote! {
-           let #ident_result = match &input {
-               golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
+           let #ident_result = match &mut __input_variant {
+               __InputVariant::Tuple(ref mut values) => {
                     let enriched_schema = golem_rust::agentic::get_method_parameter_type(
                         &__agent_type_name,
                         #method_name,
@@ -351,14 +351,13 @@ fn generate_method_param_extraction(
                         }
 
                         golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema) => {
-                            let value = values.get(input_param_index);
-
-                            let element_value_result = match value {
-                                Some(v) => Ok(v.clone()),
-                                None => Err(golem_rust::agentic::invalid_input_error(format!("Missing arguments in method {}", #method_name))),
+                            let element_value = if input_param_index < values.len() {
+                                values[input_param_index].take().ok_or_else(|| {
+                                    golem_rust::agentic::invalid_input_error(format!("Argument already consumed in method {}", #method_name))
+                                })?
+                            } else {
+                                return Err(golem_rust::agentic::invalid_input_error(format!("Missing arguments in method {}", #method_name)));
                             };
-
-                            let element_value = element_value_result?;
 
                             // only increment the input_param_index for non auto-injected parameters
                             input_param_index += 1;
@@ -369,8 +368,8 @@ fn generate_method_param_extraction(
                         }
                     }
                 },
-              golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
-                   let deserialized_value = golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::Multimodal(elements.clone()), golem_rust::agentic::StructuredSchema::Multimodal(vec![])).map_err(|e| {
+              __InputVariant::Multimodal(ref mut elements) => {
+                   let deserialized_value = golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::Multimodal(elements.take().unwrap_or_default()), golem_rust::agentic::StructuredSchema::Multimodal(vec![])).map_err(|e| {
                    golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #original_method_param_idx, #method_name, e))
                  })?;
                    Ok(deserialized_value)
@@ -383,6 +382,20 @@ fn generate_method_param_extraction(
     }).collect();
 
     quote! {
+        enum __InputVariant {
+            Tuple(Vec<Option<golem_rust::golem_agentic::golem::agent::common::ElementValue>>),
+            Multimodal(Option<Vec<(String, golem_rust::golem_agentic::golem::agent::common::ElementValue)>>),
+        }
+
+        let mut __input_variant = match input {
+            golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
+                __InputVariant::Tuple(values.into_iter().map(Some).collect())
+            },
+            golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
+                __InputVariant::Multimodal(Some(elements))
+            },
+        };
+
         #input_param_index_init
         #(#extraction)*
         #post_method_param_extraction_logic
@@ -478,9 +491,8 @@ fn generate_constructor_extraction(
         } else {
             let ident_result = format_ident!("{}_result", ident);
             quote! {
-                // params is the input to `initiate` function
-                let #ident_result = match &params {
-                    golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
+                let #ident_result = match &mut __ctor_input {
+                    __CtorInputVariant::Tuple(ref mut values) => {
                         let enriched_schema = golem_rust::agentic::get_constructor_parameter_type(
                             &__agent_type_name,
                             #constructor_param_index,
@@ -503,12 +515,13 @@ fn generate_constructor_extraction(
                             }
 
                             golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema) => {
-                                let element_value_result = match values.get(input_param_index) {
-                                    Some(v) => Ok(v.clone()),
-                                    None => Err(golem_rust::agentic::invalid_input_error(format!("Missing constructor arguments for agent {}", #agent_type_name))),
+                                let element_value = if input_param_index < values.len() {
+                                    values[input_param_index].take().ok_or_else(|| {
+                                        golem_rust::agentic::invalid_input_error(format!("Constructor argument already consumed for agent {}", #agent_type_name))
+                                    })?
+                                } else {
+                                    return Err(golem_rust::agentic::invalid_input_error(format!("Missing constructor arguments for agent {}", #agent_type_name)));
                                 };
-
-                                let element_value = element_value_result?;
 
                                 // only increment the input_param_index for non auto injected parameters
                                 input_param_index += 1;
@@ -519,7 +532,7 @@ fn generate_constructor_extraction(
                             }
                         }
                     },
-                    golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(_) => {
+                    __CtorInputVariant::Multimodal(_) => {
                         // TODO; support multimodal and add call back logic since the parameter names differ for multimodal
                         Err(golem_rust::agentic::internal_error("Multimodal input not supported currently"))
                     }
@@ -531,6 +544,20 @@ fn generate_constructor_extraction(
     }).collect::<Vec<_>>();
 
     quote! {
+        enum __CtorInputVariant {
+            Tuple(Vec<Option<golem_rust::golem_agentic::golem::agent::common::ElementValue>>),
+            Multimodal(Option<Vec<(String, golem_rust::golem_agentic::golem::agent::common::ElementValue)>>),
+        }
+
+        let mut __ctor_input = match params {
+            golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
+                __CtorInputVariant::Tuple(values.into_iter().map(Some).collect())
+            },
+            golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
+                __CtorInputVariant::Multimodal(Some(elements))
+            },
+        };
+
         #input_param_index_init
         #(#extraction)*
         #call_back
