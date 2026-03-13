@@ -1242,15 +1242,15 @@ impl ForwardingOplogState {
                 )
                 .await
             {
-                Ok(InvocationStatus::Complete) => {
-                    // Old target has finished, proceed with migration
+                Ok(InvocationStatus::Complete | InvocationStatus::Pending) => {
+                    // Old target has received the batch (complete or queued), proceed with migration
                 }
                 Ok(status) => {
                     tracing::debug!(
                         plugin = %grant_id,
                         old_target = %old_target,
                         ?status,
-                        "Locality recovery: old target has not finished last batch, skipping"
+                        "Locality recovery: old target has not received last batch yet, skipping"
                     );
                     continue;
                 }
