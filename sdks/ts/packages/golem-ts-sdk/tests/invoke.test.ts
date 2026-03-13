@@ -49,7 +49,6 @@ import {
   unstructuredTextWithLCArb,
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import * as Value from '../src/internal/mapping/values/Value';
 import { BinaryReference, DataValue, ElementValue, TextReference } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
@@ -152,14 +151,14 @@ test('BarAgent can be successfully initiated', () => {
           (error) => new Error(error),
         );
 
-        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
+        expect(optionalStringWit.nodes[0].tag).toEqual('option-value');
 
         const optionalUnionWit = Either.getOrThrowWith(
           WitValue.fromTsValueDefault(unionValue, arg2.val),
           (error) => new Error(error),
         );
 
-        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
+        expect(optionalUnionWit.nodes[0].tag).toEqual('option-value');
 
         const textReference: TextReference = {
           tag: 'url',

@@ -36,7 +36,6 @@ import {
 import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
-import * as Value from '../values/Value';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 import { Config, Secret } from '../../..';
 import { Type } from '@golemcloud/golem-ts-types-core';
@@ -281,7 +280,7 @@ export function deserializeDataValue(
 
               if (!paramDetail) {
                 throw new Error(
-                  `Unable to process multimodal input of elem ${util.format(Value.fromWitValue(elem.val))}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
+                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
                 );
               }
 
@@ -289,7 +288,7 @@ export function deserializeDataValue(
 
               if (paramType.tag !== 'analysed') {
                 throw new Error(
-                  `Internal error: Unknown parameter type for multimodal input ${util.format(Value.fromWitValue(elem.val))} with name ${name}`,
+                  `Internal error: Unknown parameter type for multimodal input ${util.format(elem.val)} with name ${name}`,
                 );
               }
 
