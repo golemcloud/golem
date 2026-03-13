@@ -15,10 +15,10 @@
 // A wrapper over golem-ts-types-core/TypeMetadata to be used from user's code
 // for them to register its types with the SDk.
 
-import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata, MetadataJSON } from '@golemcloud/golem-ts-types-core';
 
 export const TypescriptTypeRegistry = {
-  register(typeMetadata: any): void {
+  register(typeMetadata: MetadataJSON): void {
     TypeMetadata.loadFromJson(typeMetadata);
   },
 };
