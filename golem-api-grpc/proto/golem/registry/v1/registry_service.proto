@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.registry.v1;
 
 import "golem/auth/auth_ctx.proto";
+import "golem/auth/auth_details_for_environment.proto";
 import "golem/common/account_id.proto";
 import "golem/common/application.proto";
 import "golem/common/empty.proto";
@@ -13,13 +14,13 @@ import "golem/component/agent.proto";
 import "golem/component/component.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
-import "golem/registry/fuel_usage_update.proto";
-import "golem/registry/agent_deployment.proto";
-import "golem/registry/v1/registry_service_error.proto";
-import "golem/worker/worker_id.proto";
 import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
-import "golem/auth/auth_details_for_environment.proto";
+import "golem/registry/agent.proto";
+import "golem/registry/environment_state.proto";
+import "golem/registry/fuel_usage_update.proto";
+import "golem/registry/v1/registry_service_error.proto";
+import "golem/worker/worker_id.proto";
 
 service RegistryService {
   // auth api
@@ -50,7 +51,7 @@ service RegistryService {
   // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
   rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
-  rpc GetAgentDeployments (GetAgentDeploymentsRequest) returns (GetAgentDeploymentsResponse);
+  rpc GetCurrentEnvironmentState (GetCurrentEnvironmentStateRequest) returns (GetCurrentEnvironmentStateResponse);
 }
 
 message AuthenticateTokenRequest {
@@ -339,17 +340,17 @@ message GetActiveMcpForDomainSuccessResponse {
   golem.mcp.CompiledMcp compiled_mcp = 1;
 }
 
-message GetAgentDeploymentsRequest {
+message GetCurrentEnvironmentStateRequest {
   golem.common.EnvironmentId environment_id = 1;
 }
 
-message GetAgentDeploymentsResponse {
+message GetCurrentEnvironmentStateResponse {
   oneof result {
-    GetAgentDeploymentsSuccessResponse success = 1;
+    GetCurrentEnvironmentStateSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
+}
 
-  message GetAgentDeploymentsSuccessResponse {
-    repeated AgentDeploymentDetails agent_deployment_details = 1;
-  }
+message GetCurrentEnvironmentStateSuccessResponse {
+  EnvironmentState environment_state = 1;
 }

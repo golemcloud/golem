@@ -12,15 +12,15 @@ use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    AgentDeploymentsServiceConfig, GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
+    EnvironmentStateServiceConfig, GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -41,7 +41,7 @@ use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::All;
 use golem_worker_executor::{Bootstrap, RunDetails};
-use golem_worker_executor_test_utils::agent_deployments_service::DisabledAgentDeploymentsService;
+use golem_worker_executor_test_utils::agent_deployments_service::DisabledEnvironmentStateService;
 use golem_worker_executor_test_utils::component_service::ComponentServiceLocalFileSystem;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
@@ -75,12 +75,12 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         Arc::new(ActiveWorkers::<DebugContext>::new(&golem_config.memory))
     }
 
-    fn create_agent_deployments_service(
+    fn create_environment_state_service(
         &self,
-        _config: &AgentDeploymentsServiceConfig,
+        _config: &EnvironmentStateServiceConfig,
         _registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn AgentDeploymentsService> {
-        Arc::new(DisabledAgentDeploymentsService)
+    ) -> Arc<dyn EnvironmentStateService> {
+        Arc::new(DisabledEnvironmentStateService)
     }
 
     fn create_component_service(
@@ -135,6 +135,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
@@ -198,6 +199,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
@@ -235,6 +237,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             shutdown_token.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             http_connection_pool.clone(),
@@ -272,6 +275,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            environment_state_service,
             additional_deps,
             leak_sentinel,
         ))
