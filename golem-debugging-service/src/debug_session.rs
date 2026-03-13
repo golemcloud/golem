@@ -505,6 +505,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 target_agent_id: params.target_agent_id,
                 confirmed_up_to: params.confirmed_up_to,
                 sending_up_to: params.sending_up_to,
+                last_batch_start: params.last_batch_start,
             })
         }
     }

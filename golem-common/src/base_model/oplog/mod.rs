@@ -554,12 +554,14 @@ oplog_entry! {
             target_agent_id: AgentId,
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,
+            last_batch_start: OplogIndex,
         }
         public {
             plugin: PluginInstallationDescription,
             target_agent_id: AgentId,
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,
+            last_batch_start: OplogIndex,
         }
     }
 }

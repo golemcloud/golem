@@ -13,7 +13,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::AgentInvocationOutput;
-use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
+use golem_common::model::{AgentId, IdempotencyKey, InvocationStatus, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
@@ -274,5 +274,14 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError> {
         unimplemented!()
+    }
+
+    async fn lookup_invocation_status(
+        &self,
+        _agent_id: &AgentId,
+        _idempotency_key: IdempotencyKey,
+        _caller_account_id: AccountId,
+    ) -> Result<InvocationStatus, WorkerProxyError> {
+        Ok(InvocationStatus::Unknown)
     }
 }

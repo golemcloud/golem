@@ -1243,7 +1243,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+    pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result.cache(&self.owned_agent_id, self).await;
@@ -2345,6 +2345,7 @@ impl InvocationResult {
                     Ok(AgentInvocationOutput {
                         result: invocation_result,
                         consumed_fuel: Some(consumed_fuel as u64),
+                        invocation_status: None,
                         component_revision: Some(component_revision),
                     })
                 }

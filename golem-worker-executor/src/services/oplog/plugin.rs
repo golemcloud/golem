@@ -17,6 +17,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
+use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     HasComponentService, HasOplogProcessorPlugin, HasShardService, HasWorkerActivator,
 };
@@ -36,8 +37,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    IdempotencyKey, OwnedAgentId, ScanCursor, ShardId,
+    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord,
+    IdempotencyKey, InvocationStatus, OwnedAgentId, ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -61,6 +62,7 @@ struct LivePluginState {
     confirmed_up_to: OplogIndex,
     sending_up_to: OplogIndex,
     send_in_progress: bool,
+    last_batch_start: OplogIndex,
 }
 
 #[async_trait]
@@ -82,17 +84,17 @@ pub trait OplogProcessorPlugin: Send + Sync {
         entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError>;
 
-    async fn get_last_processed_index(
+    async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
+
+    async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError>;
+
+    async fn lookup_invocation_status(
         &self,
         environment_id: EnvironmentId,
         plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
-        source_agent_id: AgentId,
-    ) -> Result<OplogIndex, WorkerExecutorError>;
-
-    async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
-
-    async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError>;
+        idempotency_key: &IdempotencyKey,
+    ) -> Result<InvocationStatus, WorkerExecutorError>;
 }
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
@@ -102,6 +104,7 @@ pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     component_service: Arc<dyn ComponentService>,
     shard_service: Arc<dyn ShardService>,
     worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+    worker_proxy: Arc<dyn WorkerProxy>,
 }
 
 type WorkerKey = (EnvironmentId, PluginRegistrationId);
@@ -119,12 +122,14 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         component_service: Arc<dyn ComponentService>,
         shard_service: Arc<dyn ShardService>,
         worker_activator: Arc<dyn WorkerActivator<Ctx>>,
+        worker_proxy: Arc<dyn WorkerProxy>,
     ) -> Self {
         Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
             component_service,
             shard_service,
             worker_activator,
+            worker_proxy,
         }
     }
 
@@ -296,58 +301,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         Ok(())
     }
 
-    async fn get_last_processed_index(
-        &self,
-        environment_id: EnvironmentId,
-        plugin: &InstalledPlugin,
-        target_agent_id: &AgentId,
-        source_agent_id: AgentId,
-    ) -> Result<OplogIndex, WorkerExecutorError> {
-        let plugin_component_id = plugin
-            .oplog_processor_component_id
-            .ok_or(anyhow!("missing oplog processor plugin component id"))?;
-        let plugin_component_revision =
-            plugin.oplog_processor_component_revision.ok_or(anyhow!(
-                "missing oplog processor plugin component revision"
-            ))?;
-        let plugin_component = self
-            .component_service
-            .get_metadata(plugin_component_id, Some(plugin_component_revision))
-            .await?;
-
-        let target_owned = OwnedAgentId::new(environment_id, target_agent_id);
-        let worker = self
-            .worker_activator
-            .get_or_create_running(
-                plugin_component.account_id,
-                &target_owned,
-                None,
-                None,
-                Vec::new(),
-                Some(plugin_component_revision),
-                None,
-                &InvocationContextStack::fresh(),
-                Principal::anonymous(),
-            )
-            .await?;
-
-        let output = worker
-            .invoke_and_await(AgentInvocation::GetLastProcessedIndex {
-                idempotency_key: IdempotencyKey::fresh(),
-                source_agent_id,
-            })
-            .await?;
-
-        match output.result {
-            AgentInvocationResult::GetLastProcessedIndex {
-                last_processed_index,
-            } => Ok(last_processed_index),
-            other => Err(WorkerExecutorError::unknown(format!(
-                "Unexpected result from get-last-processed-index: {other:?}"
-            ))),
-        }
-    }
-
     async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
         let assignment = self.shard_service.current_assignment()?;
         let shard_id = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
@@ -382,6 +335,27 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
 
         Ok(())
     }
+
+    async fn lookup_invocation_status(
+        &self,
+        environment_id: EnvironmentId,
+        plugin: &InstalledPlugin,
+        target_agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+    ) -> Result<InvocationStatus, WorkerExecutorError> {
+        let running_plugin = self
+            .resolve_plugin_worker(environment_id, plugin)
+            .await?;
+
+        self.worker_proxy
+            .lookup_invocation_status(
+                target_agent_id,
+                idempotency_key.clone(),
+                running_plugin.account_id,
+            )
+            .await
+            .map_err(|e| WorkerExecutorError::unknown(format!("Lookup invocation status failed: {e}")))
+    }
 }
 
 impl<Ctx: WorkerCtx> Clone for PerExecutorOplogProcessorPlugin<Ctx> {
@@ -391,6 +365,7 @@ impl<Ctx: WorkerCtx> Clone for PerExecutorOplogProcessorPlugin<Ctx> {
             component_service: self.component_service.clone(),
             shard_service: self.shard_service.clone(),
             worker_activator: self.worker_activator.clone(),
+            worker_proxy: self.worker_proxy.clone(),
         }
     }
 }
@@ -690,6 +665,7 @@ impl ForwardingOplog {
                         confirmed_up_to: cp.confirmed_up_to,
                         sending_up_to: cp.sending_up_to,
                         send_in_progress: false,
+                        last_batch_start: cp.last_batch_start,
                     },
                 );
             }
@@ -700,6 +676,7 @@ impl ForwardingOplog {
                     confirmed_up_to: OplogIndex::NONE,
                     sending_up_to: OplogIndex::NONE,
                     send_in_progress: false,
+                    last_batch_start: OplogIndex::NONE,
                 });
             }
             state
@@ -782,7 +759,7 @@ impl Oplog for ForwardingOplog {
             }
         }
         state.commit_count += 1;
-        if state.commit_count > self.max_commit_count {
+        if state.commit_count >= self.max_commit_count {
             state.try_flush().await;
         }
         result
@@ -893,6 +870,7 @@ impl ForwardingOplogState {
                         confirmed_up_to: cp.confirmed_up_to,
                         sending_up_to: cp.sending_up_to,
                         send_in_progress: false,
+                        last_batch_start: cp.last_batch_start,
                     }
                 } else {
                     LivePluginState {
@@ -900,6 +878,7 @@ impl ForwardingOplogState {
                         confirmed_up_to: OplogIndex::NONE,
                         sending_up_to: OplogIndex::NONE,
                         send_in_progress: false,
+                        last_batch_start: OplogIndex::NONE,
                     }
                 };
                 e.insert(live);
@@ -1001,6 +980,7 @@ impl ForwardingOplogState {
                         &id,
                         live.confirmed_up_to,
                         live.confirmed_up_to,
+                        live.last_batch_start,
                     )
                     .await;
                     if let Some(s) = self.plugin_state.get_mut(&grant_id) {
@@ -1047,7 +1027,7 @@ impl ForwardingOplogState {
         }
 
         if !is_retry {
-            self.write_checkpoint(grant_id, &target_agent_id, live.confirmed_up_to, batch_end)
+            self.write_checkpoint(grant_id, &target_agent_id, live.confirmed_up_to, batch_end, batch_start)
                 .await;
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.sending_up_to = batch_end;
@@ -1066,12 +1046,13 @@ impl ForwardingOplogState {
             .await
         {
             Ok(()) => {
-                self.write_checkpoint(grant_id, &target_agent_id, batch_end, batch_end)
+                self.write_checkpoint(grant_id, &target_agent_id, batch_end, batch_end, batch_start)
                     .await;
                 if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                     s.confirmed_up_to = batch_end;
                     s.sending_up_to = batch_end;
                     s.send_in_progress = false;
+                    s.last_batch_start = batch_start;
                 }
             }
             Err(err) => {
@@ -1116,6 +1097,7 @@ impl ForwardingOplogState {
         target_agent_id: &AgentId,
         confirmed_up_to: OplogIndex,
         sending_up_to: OplogIndex,
+        last_batch_start: OplogIndex,
     ) {
         let checkpoint = OplogEntry::OplogProcessorCheckpoint {
             timestamp: golem_common::model::Timestamp::now_utc(),
@@ -1123,6 +1105,7 @@ impl ForwardingOplogState {
             target_agent_id: target_agent_id.clone(),
             confirmed_up_to,
             sending_up_to,
+            last_batch_start,
         };
         self.buffer.push_back(checkpoint.clone());
         self.inner.add(checkpoint).await;
@@ -1180,7 +1163,6 @@ impl ForwardingOplogState {
         let status = self.last_known_status.read().await.clone();
         // Ensure plugin_state is reconciled with current status
         self.reconcile_plugin_state(&status);
-        let source_agent_id = self.initial_worker_metadata.agent_id.clone();
         let environment_id = self.initial_worker_metadata.environment_id;
 
         // Collect candidates: plugins with a target that might be non-local
@@ -1228,45 +1210,62 @@ impl ForwardingOplogState {
                 None => continue,
             };
 
-            let confirmed = match self.plugin_state.get(&grant_id) {
-                Some(s) => s.confirmed_up_to,
+            let (confirmed, last_batch_start) = match self.plugin_state.get(&grant_id) {
+                Some(s) => (s.confirmed_up_to, s.last_batch_start),
                 None => continue,
             };
 
-            // Query the old target for its last processed index
-            let last_processed = match self
+            // Recompute the idempotency key for the last confirmed batch
+            if last_batch_start == confirmed {
+                // No batch has been confirmed yet (sentinel value), skip
+                tracing::debug!(
+                    plugin = %grant_id,
+                    "Locality recovery: no confirmed batch yet, skipping"
+                );
+                continue;
+            }
+
+            let last_key = oplog_processor_idempotency_key(
+                &self.initial_worker_metadata.agent_id,
+                &grant_id,
+                last_batch_start,
+                confirmed,
+            );
+
+            match self
                 .oplog_plugins
-                .get_last_processed_index(
+                .lookup_invocation_status(
                     environment_id,
                     &plugin,
                     &old_target,
-                    source_agent_id.clone(),
+                    &last_key,
                 )
                 .await
             {
-                Ok(idx) => idx,
+                Ok(InvocationStatus::Complete) => {
+                    // Old target has finished, proceed with migration
+                }
+                Ok(status) => {
+                    tracing::debug!(
+                        plugin = %grant_id,
+                        old_target = %old_target,
+                        ?status,
+                        "Locality recovery: old target has not finished last batch, skipping"
+                    );
+                    continue;
+                }
                 Err(err) => {
                     tracing::warn!(
                         plugin = %grant_id,
                         old_target = %old_target,
                         error = %err,
-                        "Locality recovery: failed to query old target"
+                        "Locality recovery: failed to query old target status"
                     );
                     continue;
                 }
-            };
-
-            if last_processed < confirmed {
-                tracing::debug!(
-                    plugin = %grant_id,
-                    last_processed = %last_processed,
-                    confirmed = %confirmed,
-                    "Locality recovery: old target has not caught up, skipping"
-                );
-                continue;
             }
 
-            // Old target has caught up — migrate to a new local worker
+            // Migrate to a new local worker
             let new_target = match self
                 .oplog_plugins
                 .resolve_target(environment_id, &plugin)
@@ -1313,7 +1312,7 @@ impl ForwardingOplogState {
                 }
             }
 
-            self.write_checkpoint(grant_id, &new_target, confirmed, confirmed)
+            self.write_checkpoint(grant_id, &new_target, confirmed, confirmed, last_batch_start)
                 .await;
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.target_agent_id = Some(new_target.clone());
@@ -1515,22 +1514,22 @@ mod tests {
             Ok(())
         }
 
-        async fn get_last_processed_index(
-            &self,
-            _environment_id: EnvironmentId,
-            _plugin: &InstalledPlugin,
-            _target_agent_id: &AgentId,
-            _source_agent_id: AgentId,
-        ) -> Result<OplogIndex, WorkerExecutorError> {
-            Ok(OplogIndex::NONE)
-        }
-
         async fn is_local(&self, _agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
             Ok(true)
         }
 
         async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
             Ok(())
+        }
+
+        async fn lookup_invocation_status(
+            &self,
+            _environment_id: EnvironmentId,
+            _plugin: &InstalledPlugin,
+            _target_agent_id: &AgentId,
+            _idempotency_key: &IdempotencyKey,
+        ) -> Result<InvocationStatus, WorkerExecutorError> {
+            Ok(InvocationStatus::Unknown)
         }
     }
 
@@ -1777,6 +1776,7 @@ mod tests {
                     confirmed_up_to: OplogIndex::NONE,
                     sending_up_to: OplogIndex::NONE,
                     send_in_progress: false,
+                    last_batch_start: OplogIndex::NONE,
                 },
             )]),
         };
@@ -1874,6 +1874,7 @@ mod tests {
                     confirmed_up_to: OplogIndex::NONE,
                     sending_up_to: OplogIndex::NONE,
                     send_in_progress: false,
+                    last_batch_start: OplogIndex::NONE,
                 },
             )]),
         };

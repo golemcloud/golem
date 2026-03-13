@@ -372,12 +372,14 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 target_agent_id,
                 confirmed_up_to,
                 sending_up_to,
+                last_batch_start,
             }) => Self::OplogProcessorCheckpoint(oplog::OplogProcessorCheckpointParameters {
                 timestamp: timestamp.into(),
                 plugin: plugin.into(),
                 target_agent_id: target_agent_id.into(),
                 confirmed_up_to: confirmed_up_to.into(),
                 sending_up_to: sending_up_to.into(),
+                last_batch_start: last_batch_start.into(),
             }),
         }
     }
@@ -1072,6 +1074,9 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     ),
                     sending_up_to: golem_common::model::OplogIndex::from_u64(
                         params.sending_up_to,
+                    ),
+                    last_batch_start: golem_common::model::OplogIndex::from_u64(
+                        params.last_batch_start,
                     ),
                 })
             }

@@ -705,8 +705,8 @@ impl WorkerService {
     pub async fn invoke_agent(
         &self,
         agent_id: &AgentId,
-        method_name: String,
-        method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
+        method_name: Option<String>,
+        method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -844,11 +844,10 @@ impl WorkerService {
 
         let proto_mode = match request.mode {
             AgentInvocationMode::Await => {
-                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32
             }
             AgentInvocationMode::Schedule => {
-                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule
-                    as i32
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32
             }
         };
 
@@ -869,8 +868,8 @@ impl WorkerService {
         let output = self
             .invoke_agent(
                 &agent_id,
-                request.method_name,
-                proto_method_parameters,
+                Some(request.method_name),
+                Some(proto_method_parameters),
                 proto_mode,
                 proto_schedule_at,
                 request.idempotency_key,

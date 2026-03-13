@@ -13,6 +13,7 @@ import "golem/worker/complete_parameters.proto";
 import "golem/worker/cursor.proto";
 import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
@@ -130,16 +131,11 @@ message RevertWorkerResponse {
   }
 }
 
-enum AgentInvocationMode {
-  AGENT_INVOCATION_MODE_AWAIT = 0;
-  AGENT_INVOCATION_MODE_SCHEDULE = 1;
-}
-
 message InvokeAgentRequest {
   golem.worker.AgentId agent_id = 1;
-  string method_name = 2;
-  golem.component.UntypedDataValue method_parameters = 3;
-  AgentInvocationMode mode = 4;
+  optional string method_name = 2;
+  optional golem.component.UntypedDataValue method_parameters = 3;
+  golem.worker.AgentInvocationMode mode = 4;
   optional google.protobuf.Timestamp schedule_at = 5;
   optional golem.worker.IdempotencyKey idempotency_key = 6;
   optional golem.worker.InvocationContext context = 7;
@@ -158,4 +154,5 @@ message InvokeAgentSuccess {
   optional golem.component.UntypedDataValue result = 1;
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
+  optional golem.worker.InvocationStatus status = 4;
 }

@@ -2184,6 +2184,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 let output = AgentInvocationOutput {
                                     result: invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
+                                    invocation_status: None,
                                     component_revision: Some(component_revision),
                                 };
                                 if let Err(err) = store

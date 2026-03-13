@@ -612,6 +612,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         component_service.clone(),
         shard_service.clone(),
         lazy_worker_activator.clone(),
+        worker_proxy.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(

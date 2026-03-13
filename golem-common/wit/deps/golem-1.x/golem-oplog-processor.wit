@@ -24,13 +24,4 @@ interface oplog-processor {
     /// The `first-entry-index` parameter contains the index of the first entry in the list of `entries`.
     /// The `entries` parameter always contains at least one element.
     process: func(account-info: account-info, config: list<tuple<string, string>>, component-id: component-id, agent-id: agent-id, metadata: agent-metadata, first-entry-index: oplog-index, entries: list<oplog-entry>) -> result<_, string>;
-
-    /// Returns the last oplog index this processor has durably persisted for the given source agent.
-    ///
-    /// The processor's `process` function must not return success until it has durably persisted
-    /// its per-source cursor at least up to the batch end.
-    ///
-    /// This is used by the locality recovery mechanism to determine when it is safe to switch
-    /// to a new local plugin worker.
-    get-last-processed-index: func(source-agent-id: agent-id) -> oplog-index;
 }

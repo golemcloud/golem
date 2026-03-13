@@ -37,8 +37,6 @@ struct InvocationRecord {
 thread_local! {
     static CURRENT_INVOCATIONS: RefCell<HashMap<String, AgentInvocationStartedParameters>> =
         RefCell::new(HashMap::new());
-    static LAST_PROCESSED_INDEX: RefCell<HashMap<String, OplogIndex>> =
-        RefCell::new(HashMap::new());
 }
 
 struct OplogProcessorComponent;
@@ -125,11 +123,6 @@ impl OplogProcessorGuest for OplogProcessorComponent {
         }
 
         let entry_count = indexed_entries.len() as u64;
-        let last_index = first_entry_index + entry_count - 1;
-        let source_key = format!("{worker_id:?}");
-        LAST_PROCESSED_INDEX.with(|lpi| {
-            lpi.borrow_mut().insert(source_key, last_index);
-        });
 
         if let Some(url) = callback_url {
             let batch = BatchCallback {
@@ -158,10 +151,6 @@ impl OplogProcessorGuest for OplogProcessorComponent {
         Ok(())
     }
 
-    fn get_last_processed_index(source_agent_id: AgentId) -> OplogIndex {
-        let source_key = format!("{source_agent_id:?}");
-        LAST_PROCESSED_INDEX.with(|lpi| lpi.borrow().get(&source_key).copied().unwrap_or(0))
-    }
 }
 
 golem_rust::oplog_processor::export_oplog_processor!(OplogProcessorComponent with_types_in golem_rust::oplog_processor);

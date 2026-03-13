@@ -370,6 +370,7 @@ message OplogProcessorCheckpointParameters {
   AgentId target_agent_id = 3;
   uint64 confirmed_up_to = 4;
   uint64 sending_up_to = 5;
+  uint64 last_batch_start = 6;
 }
 
 message OplogEntryWithIndex {

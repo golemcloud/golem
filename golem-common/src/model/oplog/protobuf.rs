@@ -614,6 +614,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                             .try_into()?,
                         confirmed_up_to: OplogIndex::from_u64(value.confirmed_up_to),
                         sending_up_to: OplogIndex::from_u64(value.sending_up_to),
+                        last_batch_start: OplogIndex::from_u64(value.last_batch_start),
                     },
                 ))
             }
@@ -1068,6 +1069,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             target_agent_id: Some(params.target_agent_id.into()),
                             confirmed_up_to: params.confirmed_up_to.into(),
                             sending_up_to: params.sending_up_to.into(),
+                            last_batch_start: params.last_batch_start.into(),
                         },
                     )),
                 }

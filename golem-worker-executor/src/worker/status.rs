@@ -886,6 +886,7 @@ fn calculate_oplog_processor_checkpoints(
                 target_agent_id,
                 confirmed_up_to,
                 sending_up_to,
+                last_batch_start,
                 ..
             } => {
                 result.insert(
@@ -894,6 +895,7 @@ fn calculate_oplog_processor_checkpoints(
                         target_agent_id: Some(target_agent_id.clone()),
                         confirmed_up_to: *confirmed_up_to,
                         sending_up_to: *sending_up_to,
+                        last_batch_start: *last_batch_start,
                     },
                 );
             }
@@ -905,6 +907,7 @@ fn calculate_oplog_processor_checkpoints(
                         target_agent_id: None,
                         confirmed_up_to: *idx,
                         sending_up_to: *idx,
+                        last_batch_start: *idx,
                     },
                 );
             }
@@ -933,6 +936,7 @@ fn calculate_oplog_processor_checkpoints(
                             target_agent_id: None,
                             confirmed_up_to: *idx,
                             sending_up_to: *idx,
+                            last_batch_start: *idx,
                         },
                     );
                 }
@@ -2127,6 +2131,7 @@ mod test {
                     target_agent_id: target.clone(),
                     confirmed_up_to: OplogIndex::from_u64(5),
                     sending_up_to: OplogIndex::from_u64(10),
+                    last_batch_start: OplogIndex::NONE,
                 },
             ),
             (
@@ -2137,6 +2142,7 @@ mod test {
                     target_agent_id: target.clone(),
                     confirmed_up_to: OplogIndex::from_u64(10),
                     sending_up_to: OplogIndex::from_u64(20),
+                    last_batch_start: OplogIndex::NONE,
                 },
             ),
         ]);
@@ -2175,6 +2181,7 @@ mod test {
                     target_agent_id: target_a.clone(),
                     confirmed_up_to: OplogIndex::from_u64(5),
                     sending_up_to: OplogIndex::from_u64(10),
+                    last_batch_start: OplogIndex::NONE,
                 },
             ),
             (
@@ -2185,6 +2192,7 @@ mod test {
                     target_agent_id: target_b.clone(),
                     confirmed_up_to: OplogIndex::from_u64(3),
                     sending_up_to: OplogIndex::from_u64(7),
+                    last_batch_start: OplogIndex::NONE,
                 },
             ),
         ]);
@@ -2220,16 +2228,17 @@ mod test {
                 plugin_grant_id: grant_id,
                 target_agent_id: target.clone(),
                 confirmed_up_to: OplogIndex::from_u64(5),
-                sending_up_to: OplogIndex::from_u64(5),
-            },
-        )]);
+                    sending_up_to: OplogIndex::from_u64(5),
+                    last_batch_start: OplogIndex::NONE,
+                },
+                )]);
 
-        let result =
-            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+                let result =
+                calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
 
-        let state = result.get(&grant_id).unwrap();
-        assert_eq!(state.target_agent_id, Some(target));
-    }
+                let state = result.get(&grant_id).unwrap();
+                assert_eq!(state.target_agent_id, Some(target));
+                }
 
     // --------------------------------------------------------------------------
     // U3: Checkpoint cleanup — deactivated plugins evicted, in-flight retained
@@ -2252,6 +2261,7 @@ mod test {
                 }),
                 confirmed_up_to: OplogIndex::from_u64(10),
                 sending_up_to: OplogIndex::from_u64(10),
+                last_batch_start: OplogIndex::NONE,
             },
         )]);
 
@@ -2282,6 +2292,7 @@ mod test {
                 }),
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(15),
+                last_batch_start: OplogIndex::NONE,
             },
         )]);
 
@@ -2316,6 +2327,7 @@ mod test {
                 }),
                 confirmed_up_to: OplogIndex::from_u64(10),
                 sending_up_to: OplogIndex::from_u64(10),
+                last_batch_start: OplogIndex::NONE,
             },
         )]);
 
@@ -2340,6 +2352,7 @@ mod test {
                     },
                     confirmed_up_to: OplogIndex::from_u64(12),
                     sending_up_to: OplogIndex::from_u64(12),
+                    last_batch_start: OplogIndex::NONE,
                 },
             ),
         ]);
@@ -2412,6 +2425,7 @@ mod test {
                 target_agent_id: Some(target.clone()),
                 confirmed_up_to: OplogIndex::from_u64(3),
                 sending_up_to: OplogIndex::from_u64(8),
+                last_batch_start: OplogIndex::NONE,
             },
         )]);
 

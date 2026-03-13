@@ -82,6 +82,17 @@ use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
 
+/// Status of an idempotency key lookup on a worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationStatus {
+    /// The idempotency key is not known (never seen or expired).
+    Unknown,
+    /// The invocation is queued or currently executing.
+    Pending,
+    /// The invocation has completed (successfully or with an error).
+    Complete,
+}
+
 impl AgentId {
     const AGENT_ID_MAX_LENGTH: usize = 512;
 
@@ -757,6 +768,7 @@ pub struct OplogProcessorCheckpointState {
     pub target_agent_id: Option<AgentId>,
     pub confirmed_up_to: OplogIndex,
     pub sending_up_to: OplogIndex,
+    pub last_batch_start: OplogIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -767,7 +779,6 @@ pub enum AgentInvocationKind {
     LoadSnapshot,
     SaveSnapshot,
     ProcessOplogEntries,
-    GetLastProcessedIndex,
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -805,10 +816,6 @@ pub enum AgentInvocation {
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
     },
-    GetLastProcessedIndex {
-        idempotency_key: IdempotencyKey,
-        source_agent_id: AgentId,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -837,9 +844,6 @@ pub enum AgentInvocationPayload {
         first_entry_index: OplogIndex,
         entries: Vec<crate::model::oplog::OplogEntry>,
     },
-    GetLastProcessedIndex {
-        source_agent_id: AgentId,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -851,13 +855,13 @@ pub enum AgentInvocationResult {
     LoadSnapshot { error: Option<String> },
     SaveSnapshot { snapshot: RawSnapshotData },
     ProcessOplogEntries { error: Option<String> },
-    GetLastProcessedIndex { last_processed_index: OplogIndex },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentInvocationOutput {
     pub result: AgentInvocationResult,
     pub consumed_fuel: Option<u64>,
+    pub invocation_status: Option<InvocationStatus>,
     pub component_revision: Option<ComponentRevision>,
 }
 
@@ -960,10 +964,6 @@ impl AgentInvocationResult {
                 AgentInvocationResult::ProcessOplogEntries { error: a },
                 AgentInvocationResult::ProcessOplogEntries { error: b },
             ) => a == b,
-            (
-                AgentInvocationResult::GetLastProcessedIndex { last_processed_index: a },
-                AgentInvocationResult::GetLastProcessedIndex { last_processed_index: b },
-            ) => a == b,
             _ => false,
         }
     }
@@ -1017,12 +1017,6 @@ impl AgentInvocation {
                 first_entry_index,
                 entries,
             },
-            AgentInvocationPayload::GetLastProcessedIndex { source_agent_id } => {
-                Self::GetLastProcessedIndex {
-                    idempotency_key,
-                    source_agent_id,
-                }
-            }
         }
     }
 
@@ -1095,14 +1089,6 @@ impl AgentInvocation {
                 },
                 InvocationContextStack::fresh(),
             ),
-            Self::GetLastProcessedIndex {
-                idempotency_key,
-                source_agent_id,
-            } => (
-                idempotency_key,
-                AgentInvocationPayload::GetLastProcessedIndex { source_agent_id },
-                InvocationContextStack::fresh(),
-            ),
         }
     }
 
@@ -1119,9 +1105,6 @@ impl AgentInvocation {
                 idempotency_key, ..
             } => Some(idempotency_key),
             Self::ProcessOplogEntries {
-                idempotency_key, ..
-            } => Some(idempotency_key),
-            Self::GetLastProcessedIndex {
                 idempotency_key, ..
             } => Some(idempotency_key),
             Self::SaveSnapshot { idempotency_key } => Some(idempotency_key),
@@ -1152,7 +1135,6 @@ impl AgentInvocation {
             Self::LoadSnapshot { .. } => AgentInvocationKind::LoadSnapshot,
             Self::SaveSnapshot { .. } => AgentInvocationKind::SaveSnapshot,
             Self::ProcessOplogEntries { .. } => AgentInvocationKind::ProcessOplogEntries,
-            Self::GetLastProcessedIndex { .. } => AgentInvocationKind::GetLastProcessedIndex,
         }
     }
 
@@ -1164,7 +1146,6 @@ impl AgentInvocation {
             Self::LoadSnapshot { .. } => "load-snapshot".to_string(),
             Self::SaveSnapshot { .. } => "save-snapshot".to_string(),
             Self::ProcessOplogEntries { .. } => "process-oplog-entries".to_string(),
-            Self::GetLastProcessedIndex { .. } => "get-last-processed-index".to_string(),
         }
     }
 }

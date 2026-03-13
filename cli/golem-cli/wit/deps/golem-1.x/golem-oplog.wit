@@ -336,6 +336,7 @@ interface oplog {
         target-agent-id: agent-id,
         confirmed-up-to: oplog-index,
         sending-up-to: oplog-index,
+        last-batch-start: oplog-index,
     }
 
     record timestamp {
@@ -489,6 +490,7 @@ interface oplog {
         target-agent-id: agent-id,
         confirmed-up-to: oplog-index,
         sending-up-to: oplog-index,
+        last-batch-start: oplog-index,
     }
 
     variant oplog-entry {
