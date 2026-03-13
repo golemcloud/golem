@@ -36,7 +36,7 @@
     "format": "prettier --write \"src/**/*\"",
     "format:check": "prettier --check \"src/**/*\"",
     "build": "tsc --noEmit && rollup -c",
-    "test": "tsc --noEmit",
+    "test": "tsc --noEmit && vitest run",
     "dev": "rollup -c -w"
   },
   "keywords": [],

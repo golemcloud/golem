@@ -117,6 +117,7 @@ openssl-sys = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+expectrl = { workspace = true }
 goldenfile = { workspace = true }
 golem-wasm = { workspace = true, features = ["proptest"] }
 log = { workspace = true }

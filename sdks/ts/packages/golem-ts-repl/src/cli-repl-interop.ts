@@ -343,7 +343,23 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
       }
 
       const values = result.json.agents
-        .map((agent: any) => agent.agentName)
+        .map((agent: any) => {
+          const agentName = agent?.agentName;
+          if (typeof agentName !== 'string') {
+            return undefined;
+          }
+
+          if (!cli.isMultiComponentMode) {
+            return agentName;
+          }
+
+          const componentName = agent?.componentName;
+          if (typeof componentName !== 'string') {
+            return undefined;
+          }
+
+          return `${componentName}/${agentName}`;
+        })
         .filter((value: unknown): value is string => typeof value === 'string');
 
       return filterByPrefix(values, currentToken);
@@ -390,6 +406,10 @@ class GolemCli {
     this.cwd = opts.cwd;
     this.clientConfig = opts.clientConfig;
     this.multiComponentMode = opts.multiComponentMode;
+  }
+
+  get isMultiComponentMode(): boolean {
+    return this.multiComponentMode;
   }
 
   async run(opts: { args: string[]; mode: 'inherit' | 'collect' }): Promise<{
@@ -606,7 +626,7 @@ function commandPathToReplCommandName(segments: string[]): string {
   return parts.join('-');
 }
 
-function parseRawArgs(rawArgs: string): string[] {
+export function parseRawArgs(rawArgs: string): string[] {
   const args: string[] = [];
   let current = '';
   let inSingle = false;
@@ -627,6 +647,67 @@ function parseRawArgs(rawArgs: string): string[] {
 
   function isIdentChar(ch: string): boolean {
     return /[A-Za-z0-9_-]/.test(ch);
+  }
+
+  function isComponentName(value: string): boolean {
+    return /^[a-z0-9-]+(?::[a-z0-9-]+)?$/.test(value);
+  }
+
+  function tryReadAgentCallOpenParenIndex(start: number): number | undefined {
+    let simpleAgentEnd = start;
+    while (simpleAgentEnd < rawArgs.length && isIdentChar(rawArgs[simpleAgentEnd])) {
+      simpleAgentEnd += 1;
+    }
+
+    if (simpleAgentEnd === start) {
+      return;
+    }
+
+    if (rawArgs[simpleAgentEnd] === '(') {
+      return simpleAgentEnd;
+    }
+
+    let componentEnd = start;
+    while (componentEnd < rawArgs.length && /[a-z0-9-]/.test(rawArgs[componentEnd])) {
+      componentEnd += 1;
+    }
+
+    if (componentEnd === start) {
+      return;
+    }
+
+    if (rawArgs[componentEnd] === ':') {
+      componentEnd += 1;
+      const secondSegmentStart = componentEnd;
+      while (componentEnd < rawArgs.length && /[a-z0-9-]/.test(rawArgs[componentEnd])) {
+        componentEnd += 1;
+      }
+      if (componentEnd === secondSegmentStart) {
+        return;
+      }
+    }
+
+    const componentName = rawArgs.slice(start, componentEnd);
+    if (!isComponentName(componentName)) {
+      return;
+    }
+
+    if (rawArgs[componentEnd] !== '/') {
+      return;
+    }
+
+    let agentEnd = componentEnd + 1;
+    while (agentEnd < rawArgs.length && isIdentChar(rawArgs[agentEnd])) {
+      agentEnd += 1;
+    }
+
+    if (agentEnd === componentEnd + 1) {
+      return;
+    }
+
+    if (rawArgs[agentEnd] === '(') {
+      return agentEnd;
+    }
   }
 
   for (let i = 0; i < rawArgs.length; i += 1) {
@@ -720,17 +801,14 @@ function parseRawArgs(rawArgs: string): string[] {
       continue;
     }
 
-    if (current.length === 0 && isIdentChar(ch)) {
-      let j = i;
-      while (j < rawArgs.length && isIdentChar(rawArgs[j])) {
-        j += 1;
-      }
-      if (rawArgs[j] === '(') {
-        current += rawArgs.slice(i, j);
+    if (current.length === 0 && (isIdentChar(ch) || /[A-Za-z0-9-]/.test(ch))) {
+      const openParenIndex = tryReadAgentCallOpenParenIndex(i);
+      if (openParenIndex !== undefined) {
+        current += rawArgs.slice(i, openParenIndex);
         current += '(';
         inAgent = true;
         agentDepth = 1;
-        i = j;
+        i = openParenIndex;
         continue;
       }
     }

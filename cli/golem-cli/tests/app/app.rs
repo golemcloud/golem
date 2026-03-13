@@ -5,6 +5,7 @@ use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
 use indoc::indoc;
 use std::path::Path;
+use std::time::Duration;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
 
@@ -144,6 +145,78 @@ async fn completion(_tracing: &Tracing) {
 
     let outputs = ctx.cli([cmd::COMPLETION, "zsh"]).await;
     assert!(outputs.success(), "zsh");
+}
+
+#[test]
+async fn ts_repl_interactive(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-repl-interactive";
+
+    ctx.start_server().await;
+
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:ts-main"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cli_interactive([cmd::REPL, flag::LANGUAGE, "ts", flag::YES], move |repl| {
+        repl.set_expect_timeout(Some(Duration::from_secs(30)));
+        repl.expect_str("golem-ts-repl[test-app-repl-interactive][local]>")?;
+        repl.expect_str("Available agent client types:")?;
+        repl.expect_str("CounterAgent.get(name: string)")?;
+        repl.expect_str("increment: () => number")?;
+
+        repl.set_expect_timeout(Some(Duration::from_secs(2)));
+
+        // Hints on "enter"
+        {
+            repl.send_line_and_expect_str("Counter", "CounterAgent")?;
+            repl.send_line_and_expect_regex("CounterAgent.", "get .* getPhantom ")?;
+            repl.send_line_and_expect_str(
+                "CounterAgent.get",
+                "(method) CounterAgent.get(name: string): CounterAgent",
+            )?;
+            repl.send_line_and_expect_str("CounterAgent.get(", "\"?\"")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\")", "> CounterAgent")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\").", "increment")?;
+        }
+
+        // Hints on "tab"
+        {
+            repl.send_and_expect_str("Counter\t", "Agent")?;
+            repl.send_line("")?;
+
+            repl.send_and_expect_regex("CounterAgent.\t\t", "get .* getPhantom ")?; // TODO: why does this require two tabs?
+            repl.send_line("")?;
+
+            repl.send_and_expect_str("CounterAgent.g\t", "et")?;
+            repl.send_line("")?;
+
+            repl.send_and_expect_regex("CounterAgent.get\t\t", "get .* getPhantom")?; // TODO: why does this require two tabs?
+            repl.send_line("")?;
+
+            repl.send_and_expect_str("CounterAgent.get(\t", "\"?\"")?;
+            repl.send_line("")?;
+
+            repl.send_and_expect_str("CounterAgent.get(\"xyz\").\t\t", "increment")?; // TODO: why does this require two tabs?
+            repl.send_line("")?;
+        }
+
+        // TODO: tests with multi components
+
+        // TODO: tests with complex constructor agent type info
+
+        Ok(())
+    })
+    .await;
 }
 
 #[test]
