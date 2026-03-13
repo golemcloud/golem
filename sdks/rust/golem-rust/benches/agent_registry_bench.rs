@@ -25,14 +25,12 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 mod bench {
     use golem_rust::agentic::{
-        get_constructor_parameter_type, get_enriched_agent_type_by_name,
-        get_method_parameter_type, get_method_parameter_types_by_index, register_agent_type,
-        AgentTypeName, EnrichedAgentMethod, EnrichedElementSchema, ExtendedAgentConstructor,
-        ExtendedAgentType, ExtendedDataSchema,
+        get_constructor_parameter_type, get_enriched_agent_type_by_name, get_method_parameter_type,
+        get_method_parameter_types_by_index, register_agent_type, AgentTypeName,
+        EnrichedAgentMethod, EnrichedElementSchema, ExtendedAgentConstructor, ExtendedAgentType,
+        ExtendedDataSchema,
     };
-    use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, ElementSchema, Snapshotting,
-    };
+    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, ElementSchema, Snapshotting};
     use golem_wasm::golem_core_1_5_x::types::{NamedWitTypeNode, WitType, WitTypeNode};
     use std::hint::black_box;
     use std::time::Instant;
@@ -182,8 +180,7 @@ mod bench {
             ),
             ITERATIONS,
             || {
-                let schemas =
-                    get_method_parameter_types_by_index(&agent_type_name, 5).unwrap();
+                let schemas = get_method_parameter_types_by_index(&agent_type_name, 5).unwrap();
                 for i in 0..PARAMS {
                     black_box(schemas.get(i));
                 }

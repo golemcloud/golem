@@ -218,9 +218,7 @@ pub fn get_method_parameter_types_by_index(
 
 fn extract_all_parameter_schemas(schema: &ExtendedDataSchema) -> Vec<EnrichedElementSchema> {
     match schema {
-        ExtendedDataSchema::Tuple(items) => {
-            items.iter().map(|(_, s)| s.clone()).collect()
-        }
+        ExtendedDataSchema::Tuple(items) => items.iter().map(|(_, s)| s.clone()).collect(),
         ExtendedDataSchema::Multimodal(items) => items
             .iter()
             .map(|(_, s)| EnrichedElementSchema::ElementSchema(s.clone()))
@@ -236,9 +234,11 @@ fn extract_parameter_schema(
         ExtendedDataSchema::Tuple(items) => items
             .get(parameter_index)
             .map(|(_, element_schema)| element_schema.clone()),
-        ExtendedDataSchema::Multimodal(items) => items
-            .get(parameter_index)
-            .map(|(_, element_schema)| EnrichedElementSchema::ElementSchema(element_schema.clone())),
+        ExtendedDataSchema::Multimodal(items) => {
+            items.get(parameter_index).map(|(_, element_schema)| {
+                EnrichedElementSchema::ElementSchema(element_schema.clone())
+            })
+        }
     }
 }
 

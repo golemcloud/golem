@@ -50,7 +50,7 @@ fn bench_loop<F: Fn() -> u64>(label: &str, iterations: usize, f: F) -> std::time
 ///   result.expect(format!("rpc call to {} failed", method_name).as_str())
 #[inline(never)]
 fn eager_format(result: Result<u64, String>, method_name: &str) -> u64 {
-    result.expect(format!("rpc call to {} failed", method_name).as_str())
+    result.unwrap_or_else(|_| panic!("rpc call to {} failed", method_name))
 }
 
 /// Simulates the proposed fix:
@@ -68,7 +68,10 @@ fn bench_eager_vs_lazy_format() {
     println!("Eager format!() vs Lazy unwrap_or_else");
     println!("========================================\n");
 
-    println!("--- Happy path (Result::Ok) - {} iterations ---", ITERATIONS);
+    println!(
+        "--- Happy path (Result::Ok) - {} iterations ---",
+        ITERATIONS
+    );
     println!("  This is the hot path: every successful RPC call pays the cost.\n");
 
     let method_name = "do_something";
@@ -124,13 +127,13 @@ fn bench_eager_vs_lazy_format() {
     println!("\n--- Trigger path (Result<(), String>) ---\n");
 
     let eager_trigger = bench_loop("eager  format!().as_str()", ITERATIONS, || {
-        let result: Result<(), String> = Ok(());
-        result.expect(format!("rpc call to trigger {} failed", black_box(method_name)).as_str());
+        let result: Result<(), String> = black_box(Ok(()));
+        result.unwrap_or_else(|_| panic!("rpc call to trigger {} failed", black_box(method_name)));
         0u64
     });
 
     let lazy_trigger = bench_loop("lazy   unwrap_or_else    ", ITERATIONS, || {
-        let result: Result<(), String> = Ok(());
+        let result: Result<(), String> = black_box(Ok(()));
         let mn = black_box(method_name);
         result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", mn, e));
         0u64
