@@ -23,6 +23,7 @@ use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::Pool;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+use golem_service_base::repo::RepoError;
 use include_dir::include_dir;
 use sqlx::Row;
 use std::path::{Path, PathBuf};
@@ -134,7 +135,7 @@ impl RoutingTablePersistence for RoutingTablePostgresPersistence {
             )
             .bind(encoded))
             .await
-            .map_err(|err| ShardManagerError::PostgresError(sqlx::Error::Protocol(err.to_string())))?;
+            .map_err(ShardManagerError::PostgresError)?;
 
         Ok(())
     }
@@ -147,12 +148,12 @@ impl RoutingTablePersistence for RoutingTablePostgresPersistence {
                 "SELECT state FROM shard_manager_state WHERE id = 1",
             ))
             .await
-            .map_err(|err| {
-                ShardManagerError::PostgresError(sqlx::Error::Protocol(err.to_string()))
-            })?;
+            .map_err(ShardManagerError::PostgresError)?;
 
         if let Some(row) = row {
-            let bytes: Vec<u8> = row.try_get("state")?;
+            let bytes: Vec<u8> = row
+                .try_get("state")
+                .map_err(|err| RepoError::InternalError(anyhow::Error::msg(err)))?;
             let shard_manager_state: ShardManagerState =
                 deserialize(&bytes).map_err(ShardManagerError::SerializationError)?;
             Ok(shard_manager_state.get_routing_table())

@@ -17,6 +17,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::retriable_error::IsRetriableError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 
@@ -39,7 +40,7 @@ pub enum ShardManagerError {
     #[error("Redis error {0}")]
     RedisError(#[from] golem_common::redis::RedisError),
     #[error("Postgres error {0}")]
-    PostgresError(#[from] sqlx::Error),
+    PostgresError(#[from] RepoError),
     #[error("Migration error {0}")]
     MigrationError(#[from] anyhow::Error),
     #[error("IO error {0}")]
