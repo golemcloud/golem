@@ -584,16 +584,14 @@ impl WorkerProxy for RemoteWorkerProxy {
             .into_inner();
 
         match response.result {
-            Some(invoke_agent_response::Result::Success(success)) => {
-                match success.status {
-                    Some(status) => {
-                        Ok(golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(status)
-                            .map(InvocationStatus::from)
-                            .unwrap_or(InvocationStatus::Unknown))
-                    }
-                    None => Ok(InvocationStatus::Unknown),
-                }
-            }
+            Some(invoke_agent_response::Result::Success(success)) => match success.status {
+                Some(status) => Ok(
+                    golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(status)
+                        .map(InvocationStatus::from)
+                        .unwrap_or(InvocationStatus::Unknown),
+                ),
+                None => Ok(InvocationStatus::Unknown),
+            },
             Some(invoke_agent_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),

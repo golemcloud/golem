@@ -826,10 +826,7 @@ mod tests {
     }
 
     fn extract_function_names(batches: &[BatchCallback]) -> Vec<String> {
-        let mut all: Vec<_> = batches
-            .iter()
-            .flat_map(|b| b.invocations.iter())
-            .collect();
+        let mut all: Vec<_> = batches.iter().flat_map(|b| b.invocations.iter()).collect();
         all.sort_by_key(|i| i.oplog_index);
         all.into_iter().map(|i| i.fn_name.clone()).collect()
     }

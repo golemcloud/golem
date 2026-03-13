@@ -51,11 +51,11 @@ pub use crate::base_model::*;
 
 use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision};
-use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use self::environment::EnvironmentId;
 use self::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::AccountId;
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
@@ -702,7 +702,8 @@ pub struct AgentStatusRecord {
     pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
     pub active_plugins: HashSet<EnvironmentPluginGrantId>,
-    pub oplog_processor_checkpoints: HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
+    pub oplog_processor_checkpoints:
+        HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update

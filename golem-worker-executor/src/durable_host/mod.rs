@@ -1107,10 +1107,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     target_revision,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
-                                        component_metadata
-                                            .installed_plugins
-                                            .into_iter()
-                                            .map(|installation| installation.environment_plugin_grant_id),
+                                        component_metadata.installed_plugins.into_iter().map(
+                                            |installation| installation.environment_plugin_grant_id,
+                                        ),
                                     ),
                                 )
                                 .await;
@@ -1369,10 +1368,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 target_revision,
                                 component_metadata.component_size,
                                 HashSet::from_iter(
-                                    component_metadata
-                                        .installed_plugins
-                                        .into_iter()
-                                        .map(|installation| installation.environment_plugin_grant_id),
+                                    component_metadata.installed_plugins.into_iter().map(
+                                        |installation| installation.environment_plugin_grant_id,
+                                    ),
                                 ),
                             )
                             .await;
@@ -1843,7 +1841,9 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId>,
+        new_active_plugins: HashSet<
+            golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
+        >,
     ) {
         info!("Worker update to {} finished successfully", target_revision);
         let entry = OplogEntry::successful_update(

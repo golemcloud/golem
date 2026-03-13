@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
+use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
@@ -36,11 +38,8 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
-use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::component::PluginPriority;
 use crate::model::{
-    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp,
-    TransactionId,
+    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
 use golem_wasm::analysis::analysed_type::{
     bool, f64, field, handle, list, option, r#enum, record, result_err, result_ok, s16, s32, str,

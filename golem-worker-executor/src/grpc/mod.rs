@@ -1538,7 +1538,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 match installation {
                     Some(installation) => {
                         let grant_id = installation.environment_plugin_grant_id;
-                        if metadata.last_known_status.active_plugins.contains(&grant_id) {
+                        if metadata
+                            .last_known_status
+                            .active_plugins
+                            .contains(&grant_id)
+                        {
                             warn!("Plugin is already activated");
                             Ok(())
                         } else {
@@ -1612,7 +1616,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match installation {
             Some(installation) => {
                 let grant_id = installation.environment_plugin_grant_id;
-                if !metadata.last_known_status.active_plugins.contains(&grant_id) {
+                if !metadata
+                    .last_known_status
+                    .active_plugins
+                    .contains(&grant_id)
+                {
                     warn!("Plugin is already deactivated");
                     Ok(())
                 } else {
@@ -1650,27 +1658,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
-        if matches!(mode, golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup) {
+        if matches!(
+            mode,
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
+        ) {
             let worker = self.get_or_create_pending(&request).await?;
             let lookup = worker.lookup_invocation_result(&ik).await;
             let inv_status = match lookup {
                 crate::model::LookupResult::Complete(_) => InvocationStatus::Complete,
                 crate::model::LookupResult::Pending => InvocationStatus::Pending,
-                crate::model::LookupResult::New
-                | crate::model::LookupResult::Interrupted => InvocationStatus::Unknown,
+                crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
+                    InvocationStatus::Unknown
+                }
             };
-            return Ok((Some(AgentInvocationOutput {
-                result: AgentInvocationResult::AgentInitialization,
-                consumed_fuel: None,
-                invocation_status: Some(inv_status),
-                component_revision: None,
-            }), None));
+            return Ok((
+                Some(AgentInvocationOutput {
+                    result: AgentInvocationResult::AgentInitialization,
+                    consumed_fuel: None,
+                    invocation_status: Some(inv_status),
+                    component_revision: None,
+                }),
+                None,
+            ));
         }
 
-        let method_name = request.method_name.clone()
-            .ok_or(WorkerExecutorError::invalid_request(
-                "method_name is required for non-lookup invocations",
-            ))?;
+        let method_name =
+            request
+                .method_name
+                .clone()
+                .ok_or(WorkerExecutorError::invalid_request(
+                    "method_name is required for non-lookup invocations",
+                ))?;
 
         let method_parameters: UntypedDataValue = request
             .method_parameters
@@ -2653,24 +2671,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await
         {
             Ok((result, _status)) => {
-                let (result_value, fuel_consumed, component_revision, invocation_status) = match result {
-                    Some(output) => {
-                        let value = match &output.result {
-                            AgentInvocationResult::AgentMethod { output } => Some(output.clone().into()),
-                            _ => None,
-                        };
-                        let proto_status = output.invocation_status.map(|s| {
-                            golem_api_grpc::proto::golem::worker::InvocationStatus::from(s) as i32
-                        });
-                        (
-                            value,
-                            output.consumed_fuel,
-                            output.component_revision.map(|r| r.get()),
-                            proto_status,
-                        )
-                    }
-                    None => (None, None, None, None),
-                };
+                let (result_value, fuel_consumed, component_revision, invocation_status) =
+                    match result {
+                        Some(output) => {
+                            let value = match &output.result {
+                                AgentInvocationResult::AgentMethod { output } => {
+                                    Some(output.clone().into())
+                                }
+                                _ => None,
+                            };
+                            let proto_status = output.invocation_status.map(|s| {
+                                golem_api_grpc::proto::golem::worker::InvocationStatus::from(s)
+                                    as i32
+                            });
+                            (
+                                value,
+                                output.consumed_fuel,
+                                output.component_revision.map(|r| r.get()),
+                                proto_status,
+                            )
+                        }
+                        None => (None, None, None, None),
+                    };
                 record.succeed(Ok(Response::new(InvokeAgentResponse {
                     result: Some(
                         golem::workerexecutor::v1::invoke_agent_response::Result::Success(

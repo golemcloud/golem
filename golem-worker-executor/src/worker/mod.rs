@@ -41,13 +41,13 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
 use futures::channel::oneshot;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
-use golem_common::model::component::ComponentRevision;
-use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::component::ComponentFilePath;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};

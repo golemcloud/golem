@@ -399,8 +399,8 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAgentRequest,
     ) -> Result<InvokeAgentSuccess, GrpcAgentError> {
-        let is_lookup = request.mode()
-            == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
+        let is_lookup =
+            request.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
 
         let auth: AuthCtx = request
             .auth_ctx
@@ -448,9 +448,9 @@ impl WorkerGrpcApi {
             }
             _ => None,
         };
-        let proto_status = output.invocation_status.map(|s| {
-            golem_api_grpc::proto::golem::worker::InvocationStatus::from(s) as i32
-        });
+        let proto_status = output
+            .invocation_status
+            .map(|s| golem_api_grpc::proto::golem::worker::InvocationStatus::from(s) as i32);
         Ok(InvokeAgentSuccess {
             result: result_value,
             fuel_consumed: output.consumed_fuel,

@@ -14,8 +14,8 @@
 
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
-use golem_common::model::agent::UntypedDataValue;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::oplog::host_functions::{
     host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName,
 };

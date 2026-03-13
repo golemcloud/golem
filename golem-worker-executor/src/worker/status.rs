@@ -1,7 +1,7 @@
 use crate::services::{HasConfig, HasOplogService};
 use async_recursion::async_recursion;
-use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::base_model::OplogIndex;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -902,14 +902,14 @@ fn calculate_oplog_processor_checkpoints(
             OplogEntry::ActivatePlugin {
                 plugin_grant_id, ..
             } => {
-                result.entry(*plugin_grant_id).or_insert(
-                    OplogProcessorCheckpointState {
+                result
+                    .entry(*plugin_grant_id)
+                    .or_insert(OplogProcessorCheckpointState {
                         target_agent_id: None,
                         confirmed_up_to: *idx,
                         sending_up_to: *idx,
                         last_batch_start: *idx,
-                    },
-                );
+                    });
             }
             OplogEntry::DeactivatePlugin {
                 plugin_grant_id, ..
@@ -931,14 +931,14 @@ fn calculate_oplog_processor_checkpoints(
                         || state.sending_up_to > state.confirmed_up_to
                 });
                 for grant_id in new_active_plugins {
-                    result.entry(*grant_id).or_insert(
-                        OplogProcessorCheckpointState {
+                    result
+                        .entry(*grant_id)
+                        .or_insert(OplogProcessorCheckpointState {
                             target_agent_id: None,
                             confirmed_up_to: *idx,
                             sending_up_to: *idx,
                             last_batch_start: *idx,
-                        },
-                    );
+                        });
                 }
             }
             _ => {}
@@ -946,8 +946,7 @@ fn calculate_oplog_processor_checkpoints(
     }
 
     result.retain(|grant_id, state| {
-        active_plugins.contains(grant_id)
-            || state.sending_up_to > state.confirmed_up_to
+        active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
     });
 
     result
@@ -979,10 +978,10 @@ mod test {
         calculate_oplog_processor_checkpoints,
     };
     use async_trait::async_trait;
+    use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::base_model::OplogIndex;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{Principal, UntypedDataValue, UntypedElementValue};
-    use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -2147,8 +2146,12 @@ mod test {
             ),
         ]);
 
-        let result =
-            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            HashMap::new(),
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
         assert_eq!(result.len(), 1);
         let state = result.get(&grant_id).unwrap();
@@ -2197,8 +2200,12 @@ mod test {
             ),
         ]);
 
-        let result =
-            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            HashMap::new(),
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
         assert_eq!(result.len(), 2);
 
@@ -2228,17 +2235,21 @@ mod test {
                 plugin_grant_id: grant_id,
                 target_agent_id: target.clone(),
                 confirmed_up_to: OplogIndex::from_u64(5),
-                    sending_up_to: OplogIndex::from_u64(5),
-                    last_batch_start: OplogIndex::NONE,
-                },
-                )]);
+                sending_up_to: OplogIndex::from_u64(5),
+                last_batch_start: OplogIndex::NONE,
+            },
+        )]);
 
-                let result =
-                calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            HashMap::new(),
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
-                let state = result.get(&grant_id).unwrap();
-                assert_eq!(state.target_agent_id, Some(target));
-                }
+        let state = result.get(&grant_id).unwrap();
+        assert_eq!(state.target_agent_id, Some(target));
+    }
 
     // --------------------------------------------------------------------------
     // U3: Checkpoint cleanup — deactivated plugins evicted, in-flight retained
@@ -2266,11 +2277,15 @@ mod test {
         )]);
 
         let entries = BTreeMap::new();
-        let result =
-            calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            initial,
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
         assert!(
-            result.get(&grant_id).is_none(),
+            !result.contains_key(&grant_id),
             "Deactivated plugin with no in-flight batch should be evicted"
         );
     }
@@ -2297,11 +2312,15 @@ mod test {
         )]);
 
         let entries = BTreeMap::new();
-        let result =
-            calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            initial,
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
         assert!(
-            result.get(&grant_id).is_some(),
+            result.contains_key(&grant_id),
             "Deactivated plugin with in-flight batch should be retained"
         );
         let state = result.get(&grant_id).unwrap();
@@ -2357,15 +2376,19 @@ mod test {
             ),
         ]);
 
-        let result =
-            calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            initial,
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
         assert!(
-            result.get(&old_grant).is_none(),
+            !result.contains_key(&old_grant),
             "Old grant should be dropped after SuccessfulUpdate with different active set"
         );
         assert!(
-            result.get(&new_grant).is_some(),
+            result.contains_key(&new_grant),
             "New grant should be present"
         );
     }
@@ -2389,8 +2412,12 @@ mod test {
             },
         )]);
 
-        let result =
-            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            HashMap::new(),
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
         assert_eq!(result.len(), 1);
         let state = result.get(&grant_id).unwrap();
@@ -2437,8 +2464,12 @@ mod test {
             },
         )]);
 
-        let result =
-            calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            initial,
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
         let state = result.get(&grant_id).unwrap();
         assert_eq!(
@@ -2480,8 +2511,12 @@ mod test {
             ),
         ]);
 
-        let result =
-            calculate_oplog_processor_checkpoints(HashMap::new(), &active_plugins, &deleted_regions, &entries);
+        let result = calculate_oplog_processor_checkpoints(
+            HashMap::new(),
+            &active_plugins,
+            &deleted_regions,
+            &entries,
+        );
 
         let state = result.get(&grant_id).unwrap();
         assert_eq!(

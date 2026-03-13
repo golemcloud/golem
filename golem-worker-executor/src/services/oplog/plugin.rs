@@ -37,8 +37,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord,
-    IdempotencyKey, InvocationStatus, OwnedAgentId, ScanCursor, ShardId,
+    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey, InvocationStatus,
+    OwnedAgentId, ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -234,9 +234,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         environment_id: EnvironmentId,
         plugin: &InstalledPlugin,
     ) -> Result<AgentId, WorkerExecutorError> {
-        let running_plugin = self
-            .resolve_plugin_worker(environment_id, plugin)
-            .await?;
+        let running_plugin = self.resolve_plugin_worker(environment_id, plugin).await?;
         Ok(running_plugin.owned_agent_id.agent_id)
     }
 
@@ -343,9 +341,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         target_agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
-        let running_plugin = self
-            .resolve_plugin_worker(environment_id, plugin)
-            .await?;
+        let running_plugin = self.resolve_plugin_worker(environment_id, plugin).await?;
 
         self.worker_proxy
             .lookup_invocation_status(
@@ -354,7 +350,9 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 running_plugin.account_id,
             )
             .await
-            .map_err(|e| WorkerExecutorError::unknown(format!("Lookup invocation status failed: {e}")))
+            .map_err(|e| {
+                WorkerExecutorError::unknown(format!("Lookup invocation status failed: {e}"))
+            })
     }
 }
 
@@ -886,15 +884,13 @@ impl ForwardingOplogState {
         }
 
         self.plugin_state.retain(|grant_id, state| {
-            status.active_plugins.contains(grant_id)
-                || state.sending_up_to > state.confirmed_up_to
+            status.active_plugins.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
         });
 
         self.plugin_state
             .iter()
             .filter(|(id, state)| {
-                status.active_plugins.contains(id)
-                    || state.sending_up_to > state.confirmed_up_to
+                status.active_plugins.contains(id) || state.sending_up_to > state.confirmed_up_to
             })
             .map(|(id, _)| *id)
             .collect()
@@ -1027,8 +1023,14 @@ impl ForwardingOplogState {
         }
 
         if !is_retry {
-            self.write_checkpoint(grant_id, &target_agent_id, live.confirmed_up_to, batch_end, batch_start)
-                .await;
+            self.write_checkpoint(
+                grant_id,
+                &target_agent_id,
+                live.confirmed_up_to,
+                batch_end,
+                batch_start,
+            )
+            .await;
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.sending_up_to = batch_end;
             }
@@ -1046,8 +1048,14 @@ impl ForwardingOplogState {
             .await
         {
             Ok(()) => {
-                self.write_checkpoint(grant_id, &target_agent_id, batch_end, batch_end, batch_start)
-                    .await;
+                self.write_checkpoint(
+                    grant_id,
+                    &target_agent_id,
+                    batch_end,
+                    batch_end,
+                    batch_start,
+                )
+                .await;
                 if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                     s.confirmed_up_to = batch_end;
                     s.sending_up_to = batch_end;
@@ -1072,14 +1080,18 @@ impl ForwardingOplogState {
         }
 
         if !self.buffer.is_empty() && start >= self.buffer_start_idx {
-            let buffer_end_idx = self
-                .buffer_start_idx
-                .range_end(self.buffer.len() as u64);
+            let buffer_end_idx = self.buffer_start_idx.range_end(self.buffer.len() as u64);
             let request_end_idx = start.range_end(count as u64);
 
             if request_end_idx <= buffer_end_idx {
                 let offset = (start.as_u64() - self.buffer_start_idx.as_u64()) as usize;
-                return self.buffer.iter().skip(offset).take(count).cloned().collect();
+                return self
+                    .buffer
+                    .iter()
+                    .skip(offset)
+                    .take(count)
+                    .cloned()
+                    .collect();
             }
         }
 
@@ -1189,8 +1201,8 @@ impl ForwardingOplogState {
         for (grant_id, old_target) in candidates {
             // Check if the target is already local
             match self.oplog_plugins.is_local(&old_target).await {
-                Ok(true) => continue,  // already local
-                Ok(false) => {}        // non-local, try recovery
+                Ok(true) => continue, // already local
+                Ok(false) => {}       // non-local, try recovery
                 Err(err) => {
                     tracing::warn!(
                         plugin = %grant_id,
@@ -1234,12 +1246,7 @@ impl ForwardingOplogState {
 
             match self
                 .oplog_plugins
-                .lookup_invocation_status(
-                    environment_id,
-                    &plugin,
-                    &old_target,
-                    &last_key,
-                )
+                .lookup_invocation_status(environment_id, &plugin, &old_target, &last_key)
                 .await
             {
                 Ok(InvocationStatus::Complete | InvocationStatus::Pending) => {
@@ -1312,8 +1319,14 @@ impl ForwardingOplogState {
                 }
             }
 
-            self.write_checkpoint(grant_id, &new_target, confirmed, confirmed, last_batch_start)
-                .await;
+            self.write_checkpoint(
+                grant_id,
+                &new_target,
+                confirmed,
+                confirmed,
+                last_batch_start,
+            )
+            .await;
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
                 s.target_agent_id = Some(new_target.clone());
             }

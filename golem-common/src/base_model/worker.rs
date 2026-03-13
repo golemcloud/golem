@@ -14,8 +14,8 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentFilePermissions, ComponentRevision};
-use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::environment::EnvironmentId;
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::oplog::AgentResourceId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};

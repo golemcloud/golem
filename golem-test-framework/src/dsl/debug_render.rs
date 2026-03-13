@@ -441,11 +441,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 "{pad}confirmed up to:   {}",
                 &params.confirmed_up_to
             );
-            let _ = writeln!(
-                result,
-                "{pad}sending up to:     {}",
-                &params.sending_up_to
-            );
+            let _ = writeln!(result, "{pad}sending up to:     {}", &params.sending_up_to);
         }
     }
 

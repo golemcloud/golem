@@ -68,10 +68,7 @@ struct InvocationRecord {
 
 /// Extract function names from batches, sorted by oplog_index.
 fn extract_function_names(batches: &[BatchCallback]) -> Vec<String> {
-    let mut all: Vec<_> = batches
-        .iter()
-        .flat_map(|b| b.invocations.iter())
-        .collect();
+    let mut all: Vec<_> = batches.iter().flat_map(|b| b.invocations.iter()).collect();
     all.sort_by_key(|i| i.oplog_index);
     all.into_iter().map(|i| i.fn_name.clone()).collect()
 }
@@ -1044,14 +1041,8 @@ async fn oplog_processor_multiple_plugins_independent(
     let batches_a = wait_for_invocations(&received_a, 4, Duration::from_secs(60)).await;
     let batches_b = wait_for_invocations(&received_b, 4, Duration::from_secs(60)).await;
 
-    assert_function_names(
-        &batches_a,
-        &["agent-initialization", "add", "add", "add"],
-    );
-    assert_function_names(
-        &batches_b,
-        &["agent-initialization", "add", "add", "add"],
-    );
+    assert_function_names(&batches_a, &["agent-initialization", "add", "add", "add"]);
+    assert_function_names(&batches_b, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches_a);
     assert_unique_oplog_indices(&batches_b);
 
@@ -1172,10 +1163,7 @@ async fn oplog_processor_partial_plugin_failure(
     // Current bug: re-buffer on partial failure (plugin B fails) causes plugin A
     // to receive duplicate entries.
     let batches_a = wait_for_invocations(&received_a, 4, Duration::from_secs(60)).await;
-    assert_function_names(
-        &batches_a,
-        &["agent-initialization", "add", "add", "add"],
-    );
+    assert_function_names(&batches_a, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches_a);
 
     // Worker should still be running despite plugin B's failure
@@ -1604,8 +1592,7 @@ async fn oplog_processor_rapid_invocations(deps: &EnvBasedTestDependencies) -> a
     }
 
     // init + n adds
-    let batches =
-        wait_for_invocations(&received_batches, 1 + n, Duration::from_secs(120)).await;
+    let batches = wait_for_invocations(&received_batches, 1 + n, Duration::from_secs(120)).await;
 
     let fn_names = extract_function_names(&batches);
     assert!(

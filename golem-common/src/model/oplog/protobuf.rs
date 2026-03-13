@@ -34,10 +34,11 @@ use crate::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
-    OplogProcessorCheckpointParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetSpanAttributeParams, SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
@@ -148,7 +149,11 @@ impl From<PluginInstallationDescription>
 {
     fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
         golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
-            environment_plugin_grant_id: Some(plugin_installation_description.environment_plugin_grant_id.into()),
+            environment_plugin_grant_id: Some(
+                plugin_installation_description
+                    .environment_plugin_grant_id
+                    .into(),
+            ),
             plugin_priority: plugin_installation_description.plugin_priority.0,
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
@@ -600,24 +605,19 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     data,
                 }))
             }
-            oplog_entry::Entry::OplogProcessorCheckpoint(value) => {
-                Ok(PublicOplogEntry::OplogProcessorCheckpoint(
-                    OplogProcessorCheckpointParams {
-                        timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
-                        plugin: value
-                            .plugin
-                            .ok_or("Missing plugin field")?
-                            .try_into()?,
-                        target_agent_id: value
-                            .target_agent_id
-                            .ok_or("Missing target_agent_id field")?
-                            .try_into()?,
-                        confirmed_up_to: OplogIndex::from_u64(value.confirmed_up_to),
-                        sending_up_to: OplogIndex::from_u64(value.sending_up_to),
-                        last_batch_start: OplogIndex::from_u64(value.last_batch_start),
-                    },
-                ))
-            }
+            oplog_entry::Entry::OplogProcessorCheckpoint(value) => Ok(
+                PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    plugin: value.plugin.ok_or("Missing plugin field")?.try_into()?,
+                    target_agent_id: value
+                        .target_agent_id
+                        .ok_or("Missing target_agent_id field")?
+                        .try_into()?,
+                    confirmed_up_to: OplogIndex::from_u64(value.confirmed_up_to),
+                    sending_up_to: OplogIndex::from_u64(value.sending_up_to),
+                    last_batch_start: OplogIndex::from_u64(value.last_batch_start),
+                }),
+            ),
         }
     }
 }

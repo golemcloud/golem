@@ -37,9 +37,9 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,

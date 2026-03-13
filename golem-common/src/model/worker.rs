@@ -157,7 +157,11 @@ mod protobuf {
                 component_size: value.component_size,
                 total_linear_memory_size: value.total_linear_memory_size,
                 owned_resources,
-                active_plugins: value.active_plugins.into_iter().map(|id| id.into()).collect(),
+                active_plugins: value
+                    .active_plugins
+                    .into_iter()
+                    .map(|id| id.into())
+                    .collect(),
                 skipped_regions: value
                     .skipped_regions
                     .into_iter()
