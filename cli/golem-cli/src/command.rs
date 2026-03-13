@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::api::agent_secret::AgentSecretSubcommand;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
@@ -44,6 +45,7 @@ use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -790,6 +792,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
     },
+    /// Manage Agent Secrets
+    AgentSecret {
+        #[clap(subcommand)]
+        subcommand: AgentSecretSubcommand,
+    },
     /// Generate shell completion
     Completion {
         /// Selects shell
@@ -1098,7 +1105,7 @@ pub mod worker {
             /// wasi:config entries visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
             config_vars: Vec<(String, String)>,
-            /// agent config for entries
+            /// agent config entries
             #[arg(short, long, value_parser = parse_worker_agent_config)]
             agent_config: Vec<WorkerAgentConfigEntry>,
         },
@@ -1308,6 +1315,56 @@ pub mod api {
                 domain: String,
             },
             /// List API deployment for API definition
+            List,
+        }
+    }
+
+    pub mod agent_secret {
+        use crate::command::parse_agent_secret_path;
+        use clap::Subcommand;
+        use golem_common::model::agent_secret::{
+            AgentSecretId, AgentSecretPath, AgentSecretRevision,
+        };
+
+        #[derive(Debug, Subcommand)]
+        pub enum AgentSecretSubcommand {
+            /// Create Agent Secret in the environment
+            Create {
+                /// Path of the secret to create. The casing of path segments will be normalized during creation.
+                #[arg(long, value_parser = parse_agent_secret_path)]
+                path: AgentSecretPath,
+                /// Description of the agent type in json
+                #[arg(long)]
+                secret_type: String,
+                /// Value of the secret in json
+                #[arg(long)]
+                secret_value: Option<String>,
+            },
+
+            /// Update Agent Secret
+            UpdateValue {
+                /// Id of the secret to update
+                #[arg(long)]
+                id: AgentSecretId,
+                /// Current revision of the agent secret
+                #[arg(long)]
+                current_revision: AgentSecretRevision,
+                /// Value of the secret in json
+                #[arg(long)]
+                secret_value: Option<String>,
+            },
+
+            /// Update Agent Secret
+            Delete {
+                /// Id of the secret to delete
+                #[arg(long)]
+                id: AgentSecretId,
+                /// Current revision of the agent secret
+                #[arg(long)]
+                current_revision: AgentSecretRevision,
+            },
+
+            /// List Agent Secrets
             List,
         }
     }
@@ -1663,7 +1720,7 @@ fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
 fn parse_worker_agent_config(s: &str) -> anyhow::Result<WorkerAgentConfigEntry> {
     let (path, value) = split_worker_agent_config_path_and_value(s)?;
 
-    let path = parse_worker_agent_config_path(path)?;
+    let path = parse_agent_config_path(path)?;
 
     let value: serde_json::Value = serde_json::from_str(value)?;
 
@@ -1696,8 +1753,12 @@ fn split_worker_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str
     Err(anyhow!("expected unescaped '=' separating key and value"))
 }
 
-fn parse_worker_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
-    let mut keys = Vec::new();
+pub fn parse_agent_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
+    Ok(AgentSecretPath(parse_agent_config_path(input)?))
+}
+
+pub fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
+    let mut path = Vec::new();
     let mut buf = String::new();
 
     let mut chars = input.chars().peekable();
@@ -1716,7 +1777,7 @@ fn parse_worker_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
             }
 
             '.' if !in_quotes => {
-                push_agent_config_path_segment(&mut keys, &mut buf)?;
+                push_agent_config_path_segment(&mut path, &mut buf)?;
             }
 
             _ => buf.push(c),
@@ -1727,9 +1788,9 @@ fn parse_worker_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
         return Err(anyhow!("unterminated quote"));
     }
 
-    push_agent_config_path_segment(&mut keys, &mut buf)?;
+    push_agent_config_path_segment(&mut path, &mut buf)?;
 
-    Ok(keys)
+    Ok(path)
 }
 
 fn push_agent_config_path_segment(keys: &mut Vec<String>, buf: &mut String) -> anyhow::Result<()> {
@@ -2015,7 +2076,7 @@ mod test {
 
 #[cfg(test)]
 mod parse_worker_agent_config_tests {
-    use crate::command::{parse_worker_agent_config, parse_worker_agent_config_path};
+    use crate::command::{parse_agent_config_path, parse_worker_agent_config};
     use golem_common::model::worker::WorkerAgentConfigEntry;
     use serde_json::json;
     use test_r::test;
@@ -2112,13 +2173,13 @@ mod parse_worker_agent_config_tests {
 
     #[test]
     fn unterminated_quote_in_path() {
-        let err = parse_worker_agent_config_path(r#""foo.bar.baz"#).unwrap_err();
+        let err = parse_agent_config_path(r#""foo.bar.baz"#).unwrap_err();
         assert!(err.to_string().contains("unterminated quote"));
     }
 
     #[test]
     fn dangling_escape() {
-        let err = parse_worker_agent_config_path(r#"foo.bar\"#).unwrap_err();
+        let err = parse_agent_config_path(r#"foo.bar\"#).unwrap_err();
         assert!(err.to_string().contains("dangling escape"));
     }
 }

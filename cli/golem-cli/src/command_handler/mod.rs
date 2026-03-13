@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::agent_secret::AgentSecretCommandHandler;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::{
@@ -51,6 +52,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{debug, Level};
 
+mod agent_secret;
 mod api;
 mod app;
 mod bridge;
@@ -396,6 +398,12 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 GolemCliSubcommand::Cloud { subcommand } => {
                     self.ctx.cloud_handler().handle_command(subcommand).await
                 }
+                GolemCliSubcommand::AgentSecret { subcommand } => {
+                    self.ctx
+                        .agent_secret_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
                 GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
             }
         })
@@ -414,6 +422,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       by moving these simple factory methods into the specific handlers on-demand,
 //       if the need ever arises
 pub trait Handlers {
+    fn agent_secret_handler(&self) -> AgentSecretCommandHandler;
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
     fn api_handler(&self) -> ApiCommandHandler;
@@ -437,6 +446,10 @@ pub trait Handlers {
 }
 
 impl Handlers for Arc<Context> {
+    fn agent_secret_handler(&self) -> AgentSecretCommandHandler {
+        AgentSecretCommandHandler::new(self.clone())
+    }
+
     fn api_domain_handler(&self) -> ApiDomainCommandHandler {
         ApiDomainCommandHandler::new(self.clone())
     }

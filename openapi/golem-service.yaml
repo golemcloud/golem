@@ -2481,7 +2481,7 @@ paths:
     get:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       - Environment
       summary: Get all agent secrets of the environment
       operationId: get_environment_agent_secrets
@@ -2550,7 +2550,7 @@ paths:
     post:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       - Environment
       summary: Create a new agent secret
       operationId: create_agent_secret
@@ -2626,7 +2626,7 @@ paths:
     get:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       summary: Get agent secret by id.
       operationId: get_agent_secret
       parameters:
@@ -2694,7 +2694,7 @@ paths:
     patch:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       summary: Update agent secret
       operationId: update_agent_secret
       parameters:
@@ -2769,7 +2769,7 @@ paths:
     delete:
       tags:
       - RegistryService
-      - EnvironmentShares
+      - AgentSecrets
       summary: Delete agent secret
       operationId: delete_agent_secret
       parameters:
