@@ -4223,6 +4223,7 @@ dependencies = [
  "openapiv3",
  "serde",
  "serde_yaml",
+ "test-r",
 ]
 
 [[package]]

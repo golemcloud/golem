@@ -214,6 +214,8 @@ impl<C: PrintContext> Add<NewLine> for TreePrinter<C> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::printer::{PrintContext, TreePrinter};
 
     struct StringContext {
