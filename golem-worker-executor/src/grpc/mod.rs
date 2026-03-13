@@ -61,8 +61,8 @@ use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
-    AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor,
-    ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation,
+    AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
+    OwnedAgentId, ScanCursor, ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -1522,48 +1522,50 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match metadata {
             Some(metadata) => {
-                // Worker exists
-                if metadata
-                    .last_known_status
-                    .active_plugins
-                    .contains(&plugin_priority)
-                {
-                    warn!("Plugin is already activated");
-                    Ok(())
-                } else {
-                    let component_metadata = self
-                        .component_service()
-                        .get_metadata(
-                            owned_agent_id.agent_id.component_id,
-                            Some(metadata.last_known_status.component_revision),
-                        )
-                        .await?;
+                let component_metadata = self
+                    .component_service()
+                    .get_metadata(
+                        owned_agent_id.agent_id.component_id,
+                        Some(metadata.last_known_status.component_revision),
+                    )
+                    .await?;
 
-                    if component_metadata
-                        .installed_plugins
-                        .iter()
-                        .any(|installation| installation.priority == plugin_priority)
-                    {
-                        let worker = Worker::get_or_create_suspended(
-                            self,
-                            auth_ctx.account_id(),
-                            &owned_agent_id,
-                            None,
-                            None,
-                            Vec::new(),
-                            None,
-                            None,
-                            &InvocationContextStack::fresh(),
-                            principal,
-                        )
-                        .await?;
-                        worker.activate_plugin(plugin_priority).await?;
-                        Ok(())
-                    } else {
-                        Err(WorkerExecutorError::invalid_request(
-                            "Plugin installation does not belong to this worker's component",
-                        ))
+                let installation = component_metadata
+                    .installed_plugins
+                    .iter()
+                    .find(|installation| installation.priority == plugin_priority);
+
+                match installation {
+                    Some(installation) => {
+                        let grant_id = installation.environment_plugin_grant_id;
+                        if metadata
+                            .last_known_status
+                            .active_plugins
+                            .contains(&grant_id)
+                        {
+                            warn!("Plugin is already activated");
+                            Ok(())
+                        } else {
+                            let worker = Worker::get_or_create_suspended(
+                                self,
+                                auth_ctx.account_id(),
+                                &owned_agent_id,
+                                None,
+                                None,
+                                Vec::new(),
+                                None,
+                                None,
+                                &InvocationContextStack::fresh(),
+                                principal,
+                            )
+                            .await?;
+                            worker.activate_plugin(grant_id).await?;
+                            Ok(())
+                        }
                     }
+                    None => Err(WorkerExecutorError::invalid_request(
+                        "Plugin installation does not belong to this worker's component",
+                    )),
                 }
             }
             None => Err(WorkerExecutorError::worker_not_found(
@@ -1598,62 +1600,101 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        // Worker exists
-        if !metadata
-            .last_known_status
-            .active_plugins
-            .contains(&plugin_priority)
-        {
-            warn!("Plugin is already deactivated");
-            Ok(())
-        } else {
-            let component_metadata = self
-                .component_service()
-                .get_metadata(
-                    owned_agent_id.agent_id.component_id,
-                    Some(metadata.last_known_status.component_revision),
-                )
-                .await?;
+        let component_metadata = self
+            .component_service()
+            .get_metadata(
+                owned_agent_id.agent_id.component_id,
+                Some(metadata.last_known_status.component_revision),
+            )
+            .await?;
 
-            if component_metadata
-                .installed_plugins
-                .iter()
-                .any(|installation| installation.priority == plugin_priority)
-            {
-                let worker = Worker::get_or_create_suspended(
-                    self,
-                    auth_ctx.account_id(),
-                    &owned_agent_id,
-                    None,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal,
-                )
-                .await?;
-                worker.deactivate_plugin(plugin_priority).await?;
-                Ok(())
-            } else {
-                Err(WorkerExecutorError::invalid_request(
-                    "Plugin installation does not belong to this worker's component",
-                ))
+        let installation = component_metadata
+            .installed_plugins
+            .iter()
+            .find(|installation| installation.priority == plugin_priority);
+
+        match installation {
+            Some(installation) => {
+                let grant_id = installation.environment_plugin_grant_id;
+                if !metadata
+                    .last_known_status
+                    .active_plugins
+                    .contains(&grant_id)
+                {
+                    warn!("Plugin is already deactivated");
+                    Ok(())
+                } else {
+                    let worker = Worker::get_or_create_suspended(
+                        self,
+                        auth_ctx.account_id(),
+                        &owned_agent_id,
+                        None,
+                        None,
+                        Vec::new(),
+                        None,
+                        None,
+                        &InvocationContextStack::fresh(),
+                        principal,
+                    )
+                    .await?;
+                    worker.deactivate_plugin(grant_id).await?;
+                    Ok(())
+                }
             }
+            None => Err(WorkerExecutorError::invalid_request(
+                "Plugin installation does not belong to this worker's component",
+            )),
         }
     }
 
     async fn invoke_agent_internal(
         &self,
         request: InvokeAgentRequest,
-    ) -> Result<Option<AgentInvocationOutput>, WorkerExecutorError> {
-        let method_name = request.method_name.clone();
+    ) -> Result<(Option<AgentInvocationOutput>, Option<i32>), WorkerExecutorError> {
+        let idempotency_key: Option<IdempotencyKey> =
+            request.idempotency_key.clone().map(|k| k.into());
+
+        let mode = request.mode();
+
+        let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+
+        if matches!(
+            mode,
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
+        ) {
+            let worker = self.get_or_create_pending(&request).await?;
+            let lookup = worker.lookup_invocation_result(&ik).await;
+            let inv_status = match lookup {
+                crate::model::LookupResult::Complete(_) => InvocationStatus::Complete,
+                crate::model::LookupResult::Pending => InvocationStatus::Pending,
+                crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
+                    InvocationStatus::Unknown
+                }
+            };
+            return Ok((
+                Some(AgentInvocationOutput {
+                    result: AgentInvocationResult::AgentInitialization,
+                    consumed_fuel: None,
+                    invocation_status: Some(inv_status),
+                    component_revision: None,
+                }),
+                None,
+            ));
+        }
+
+        let method_name =
+            request
+                .method_name
+                .clone()
+                .ok_or(WorkerExecutorError::invalid_request(
+                    "method_name is required for non-lookup invocations",
+                ))?;
 
         let method_parameters: UntypedDataValue = request
             .method_parameters
             .clone()
             .ok_or(WorkerExecutorError::invalid_request(
-                "method_parameters not found",
+                "method_parameters is required for non-lookup invocations",
             ))?
             .try_into()
             .map_err(|e| {
@@ -1661,11 +1702,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "failed converting method_parameters: {e}"
                 ))
             })?;
-
-        let idempotency_key: Option<IdempotencyKey> =
-            request.idempotency_key.clone().map(|k| k.into());
-
-        let mode = request.mode();
 
         let schedule_at: Option<DateTime<Utc>> = request
             .schedule_at
@@ -1692,11 +1728,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?
             .unwrap_or_else(Principal::anonymous);
 
-        let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
         let invocation_context = from_proto_invocation_context(&request.context);
 
         let invocation = AgentInvocation::AgentMethod {
-            idempotency_key: ik,
+            idempotency_key: ik.clone(),
             method_name,
             input: method_parameters,
             invocation_context,
@@ -1704,12 +1739,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         match mode {
-            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
                 let worker = self.get_or_create(&request).await?;
                 let invocation_output = worker.invoke_and_await(invocation).await?;
-                Ok(Some(invocation_output))
+                Ok((Some(invocation_output), None))
             }
-            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
                 match schedule_at {
                     Some(scheduled_time) => {
                         self.scheduler_service()
@@ -1722,14 +1757,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 },
                             )
                             .await;
-                        Ok(None)
+                        Ok((None, None))
                     }
                     None => {
                         let worker = self.get_or_create(&request).await?;
                         worker.invoke(invocation).await?;
-                        Ok(None)
+                        Ok((None, None))
                     }
                 }
+            }
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup => {
+                unreachable!("Lookup mode handled above")
             }
         }
     }
@@ -1822,7 +1860,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             component_size: latest_status.component_size,
             total_linear_memory_size: latest_status.total_linear_memory_size,
             owned_resources,
-            active_plugins: active_plugins.into_iter().map(|id| id.0).collect(),
+            active_plugins: active_plugins.into_iter().map(|id| id.into()).collect(),
             skipped_regions: latest_status
                 .skipped_regions
                 .into_regions()
@@ -2632,21 +2670,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(result) => {
-                let (result_value, fuel_consumed, component_revision) = match result {
-                    Some(output) => {
-                        let value = match output.result {
-                            AgentInvocationResult::AgentMethod { output } => Some(output.into()),
-                            _ => None,
-                        };
-                        (
-                            value,
-                            output.consumed_fuel,
-                            output.component_revision.map(|r| r.get()),
-                        )
-                    }
-                    None => (None, None, None),
-                };
+            Ok((result, _status)) => {
+                let (result_value, fuel_consumed, component_revision, invocation_status) =
+                    match result {
+                        Some(output) => {
+                            let value = match &output.result {
+                                AgentInvocationResult::AgentMethod { output } => {
+                                    Some(output.clone().into())
+                                }
+                                _ => None,
+                            };
+                            let proto_status = output.invocation_status.map(|s| {
+                                golem_api_grpc::proto::golem::worker::InvocationStatus::from(s)
+                                    as i32
+                            });
+                            (
+                                value,
+                                output.consumed_fuel,
+                                output.component_revision.map(|r| r.get()),
+                                proto_status,
+                            )
+                        }
+                        None => (None, None, None, None),
+                    };
                 record.succeed(Ok(Response::new(InvokeAgentResponse {
                     result: Some(
                         golem::workerexecutor::v1::invoke_agent_response::Result::Success(
@@ -2654,6 +2700,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 result: result_value,
                                 fuel_consumed,
                                 component_revision,
+                                status: invocation_status,
                             },
                         ),
                     ),

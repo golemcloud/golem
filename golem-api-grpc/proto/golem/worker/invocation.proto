@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package golem.worker;
+
+enum AgentInvocationMode {
+  AGENT_INVOCATION_MODE_AWAIT = 0;
+  AGENT_INVOCATION_MODE_SCHEDULE = 1;
+  AGENT_INVOCATION_MODE_LOOKUP = 2;
+}
+
+enum InvocationStatus {
+  INVOCATION_STATUS_UNKNOWN = 0;
+  INVOCATION_STATUS_PENDING = 1;
+  INVOCATION_STATUS_COMPLETE = 2;
+}

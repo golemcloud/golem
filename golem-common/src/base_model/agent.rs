@@ -119,6 +119,7 @@ pub enum AgentMode {
 pub enum AgentInvocationMode {
     Await,
     Schedule,
+    Lookup,
 }
 
 #[derive(

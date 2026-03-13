@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
-    InitialComponentFile, LocalAgentConfigEntry, PluginInstallation,
+    InitialComponentFile, LocalAgentConfigEntry, PluginInstallation, PluginInstallationAction,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -212,6 +212,7 @@ impl TestDsl for TestWorkerExecutor {
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
         local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        _plugin_updates: Vec<PluginInstallationAction>,
     ) -> anyhow::Result<ComponentDto> {
         if local_agent_config.is_some() {
             return Err(anyhow!(
@@ -348,9 +349,9 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
                 agent_id: Some(agent_id.clone().into()),
-                method_name: method_name.to_string(),
+                method_name: Some(method_name.to_string()),
                 method_parameters: Some(UntypedDataValue::from(params).into()),
-                mode: workerexecutor::v1::AgentInvocationMode::Schedule as i32,
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
                 schedule_at: None,
                 idempotency_key: Some(idempotency_key.clone().into()),
                 component_owner_account_id: Some(component.account_id.into()),
@@ -395,9 +396,9 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
                 agent_id: Some(worker_agent_id.clone().into()),
-                method_name: method_name.to_string(),
+                method_name: Some(method_name.to_string()),
                 method_parameters: Some(UntypedDataValue::from(params).into()),
-                mode: workerexecutor::v1::AgentInvocationMode::Await as i32,
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
                 idempotency_key: Some(key.into()),
                 component_owner_account_id: Some(component.account_id.into()),

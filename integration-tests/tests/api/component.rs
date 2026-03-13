@@ -99,6 +99,7 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             None,
             None,
             None,
+            Vec::new(),
         )
         .await?;
 
@@ -154,6 +155,7 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 ("var2".to_string(), "value2".to_string()),
             ])),
             None,
+            Vec::new(),
         )
         .await?;
 
@@ -1116,6 +1118,7 @@ async fn add_new_local_agent_config_entry_during_update(
                 value: json!("value"),
             },
         ]),
+        Vec::new(),
     )
     .await?;
 
@@ -1162,6 +1165,7 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
                     value: json!(1),
                 },
             ]),
+            Vec::new(),
         )
         .await;
 

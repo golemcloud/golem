@@ -63,7 +63,7 @@ impl Benchmark for ColdStartUnknownSmall {
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_agent_rust_release",
-            "rust-benchmark-agent",
+            "RustBenchmarkAgent",
             mode,
             verbosity,
             cluster_size,
@@ -142,7 +142,7 @@ impl Benchmark for ColdStartUnknownMedium {
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_agent_ts",
-            "benchmark-agent",
+            "BenchmarkAgent",
             mode,
             verbosity,
             cluster_size,

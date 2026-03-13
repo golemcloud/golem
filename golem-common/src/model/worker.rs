@@ -63,7 +63,7 @@ mod protobuf {
         ExportedResourceMetadata, FailedUpdate, ParsedWorkerCreationLocalAgentConfigEntry,
         PendingUpdate, SuccessfulUpdate, UpdateRecord, WorkerCreationLocalAgentConfigEntry,
     };
-    use crate::model::component::PluginPriority;
+    use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use crate::model::oplog::AgentResourceId;
     use crate::model::regions::OplogRegion;
     use crate::model::{AgentResourceDescription, OplogIndex};
@@ -113,8 +113,8 @@ mod protobuf {
                 active_plugins: value
                     .active_plugins
                     .into_iter()
-                    .map(PluginPriority)
-                    .collect::<HashSet<_, _>>(),
+                    .map(EnvironmentPluginGrantId::try_from)
+                    .collect::<Result<HashSet<_, _>, _>>()?,
                 skipped_regions: value
                     .skipped_regions
                     .into_iter()
@@ -157,7 +157,11 @@ mod protobuf {
                 component_size: value.component_size,
                 total_linear_memory_size: value.total_linear_memory_size,
                 owned_resources,
-                active_plugins: value.active_plugins.into_iter().map(|id| id.0).collect(),
+                active_plugins: value
+                    .active_plugins
+                    .into_iter()
+                    .map(|id| id.into())
+                    .collect(),
                 skipped_regions: value
                     .skipped_regions
                     .into_iter()
