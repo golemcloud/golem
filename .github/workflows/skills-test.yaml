@@ -118,11 +118,17 @@ jobs:
           cd tests/harness
           npm install
           npm run build
+          npm install -g tsx
 
       - name: Setup isolated test directory
         run: |
           mkdir -p /tmp/harness-run
-          cp -rL tests/harness/* /tmp/harness-run/
+          cp -r tests/harness/dist /tmp/harness-run/dist
+          cp -r tests/harness/node_modules /tmp/harness-run/node_modules
+          cp -r tests/harness/src /tmp/harness-run/src
+          cp -r tests/harness/scenarios /tmp/harness-run/scenarios
+          cp tests/harness/package.json /tmp/harness-run/
+          cp tests/harness/tsconfig.json /tmp/harness-run/
           cp -r skills /tmp/harness-run/skills
           cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"
 
@@ -134,7 +140,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           cd /tmp/harness-run
-          npx tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios --skills ./skills
+          tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios --skills ./skills
 
       - name: Upload Results
         if: always()
