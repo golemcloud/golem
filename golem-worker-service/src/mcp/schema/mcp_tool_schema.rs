@@ -12,21 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::schema::mcp_schema::McpInputSchema;
-use crate::mcp::schema::mcp_schema_mapping::get_mcp_schema;
+use crate::mcp::schema::mcp_schema::McpSchema;
+use crate::mcp::schema::mcp_schema_mapping::get_input_mcp_schema;
 use golem_common::base_model::agent::AgentMethod;
+use crate::mcp::schema::get_output_mcp_schema;
 
 pub struct McpToolSchema {
-    pub input_schema: McpInputSchema,
-    pub output_schema: Option<McpInputSchema>,
+    pub input_schema: McpSchema, // for unstructured input, we will still have an MCP schema
+    // Many clients work if output schema is optional, where it can be null whenever the result is unstructured
+    pub output_schema: Option<McpSchema>,
 }
 
 pub fn get_mcp_tool_schema(method: &AgentMethod) -> McpToolSchema {
-    let input_schema = get_mcp_schema(&method.input_schema);
-    let output_schema = get_mcp_schema(&method.output_schema);
+    let input_schema = get_input_mcp_schema(&method.input_schema);
+    let output_schema = get_output_mcp_schema(&method.output_schema);
 
     McpToolSchema {
         input_schema,
-        output_schema: Some(output_schema),
+        output_schema
     }
 }

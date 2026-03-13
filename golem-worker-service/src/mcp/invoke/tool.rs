@@ -22,7 +22,7 @@ use golem_common::base_model::agent::*;
 use golem_common::model::agent::ParsedAgentId;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
-use rmcp::model::{CallToolResult, JsonObject};
+use rmcp::model::{AnnotateAble, CallToolResult, Content, JsonObject, RawAudioContent, RawContent, RawEmbeddedResource, ResourceContents};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -135,43 +135,76 @@ pub fn map_agent_response_to_tool_result(
                 };
 
                 let element = elements.into_iter().next().unwrap();
-                let json_value = convert_elem_value_to_mcp_tool_response(&element)?;
-
-                // Wrap in an object keyed by the schema element name to match the
-                // advertised outputSchema (which must be type: object per MCP spec).
-                let structured = match element_name {
-                    Some(name) => json!({ name: json_value }),
-                    None => json_value,
-                };
-
-                Ok(CallToolResult::structured(structured))
+                let too_result = convert_elem_value_to_mcp_tool_response(&element)?;
+                
+                match too_result {
+                    ToolResult::Default(value) => {
+                        let json_value = value;
+                        // Wrap in an object keyed by the schema element name to match the
+                        // advertised outputSchema (which must be type: object per MCP spec).
+                        let structured = match element_name {
+                            Some(name) => json!({ name: json_value }),
+                            None => json_value,
+                        };
+                        
+                        Ok(CallToolResult::structured(structured))
+                    }
+                    ToolResult::Content(content) => {
+                        // For content results, we put the content in the "content" field of the tool result,
+                        // and still provide the structured JSON for the rest of the schema (if any).
+                        Ok(CallToolResult {
+                            content: vec![content],
+                            structured_content: None,
+                            is_error: Some(false),
+                            meta: None,
+                        })
+                    }
+                }
             }
             _ => Err(ErrorData::internal_error(
                 "Unexpected number of response tuple elements".to_string(),
                 None,
             )),
         },
+        
+        // multimodal 
         DataValue::Multimodal(NamedElementValues { elements }) => {
-            let mut parts = Vec::new();
+            let mut contents: Vec<Content> = vec![];
 
             for named in elements {
-                let value_json = convert_elem_value_to_mcp_tool_response(&named.value)?;
-                parts.push(json!({
-                    "name": named.name,
-                    "value": value_json,
-                }));
+                let tool_result = 
+                    convert_elem_value_to_mcp_tool_response(&named.value)?;
+                
+                match tool_result {
+                    ToolResult::Default(json_value) => {
+                        contents.push(Content::text(json_value.to_string()));
+                    }
+                    
+                    // Mostly multimodal is a collection of binary or unstructured text data
+                    ToolResult::Content(content) => {
+                        contents.push(content);
+                    }
+                }
             }
-
-            let structured = json!({ "parts" : parts });
-
+            
             Ok(CallToolResult {
-                content: vec![],
-                structured_content: Some(structured),
+                content: contents,
+                structured_content: None,
                 is_error: Some(false),
                 meta: None,
             })
         }
     }
+}
+
+// https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-result
+// Unstructured types are part of content-array, but note that it's better of sending `none` outputSchema
+// when the types are unstructured.
+
+#[derive(Debug)]
+pub enum ToolResult {
+    Default(serde_json::Value),
+    Content(Content),
 }
 
 // Mapping from ElementValue to the JSON format expected by MCP clients
@@ -180,7 +213,7 @@ pub fn map_agent_response_to_tool_result(
 // Any changes in this mapping should be carefully tested with actual MCP clients
 fn convert_elem_value_to_mcp_tool_response(
     element: &ElementValue,
-) -> Result<serde_json::Value, ErrorData> {
+) -> Result<ToolResult, ErrorData> {
     match element {
         ElementValue::ComponentModel(component_model_value) => {
             component_model_value.value.to_json_value().map_err(|e| {
@@ -188,38 +221,79 @@ fn convert_elem_value_to_mcp_tool_response(
                     format!("Failed to serialize component model response: {e}"),
                     None,
                 )
-            })
+            }).map(ToolResult::Default)
         }
+        
         ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
-            TextReference::Inline(TextSource { data, text_type }) => {
-                let mut obj = serde_json::Map::new();
-                obj.insert("data".to_string(), json!(data));
-                if let Some(tt) = text_type {
-                    obj.insert("languageCode".to_string(), json!(tt.language_code));
-                }
-                Ok(serde_json::Value::Object(obj))
+            TextReference::Inline(TextSource { data, .. }) => {
+                Ok(ToolResult::Content(RawContent::text(data.clone()).no_annotation()))
             }
             TextReference::Url(_) => Err(ErrorData::internal_error(
                 "A text reference URL can only be part of tool input and not output".to_string(),
                 None,
             )),
         },
+        
         ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
             match value {
                 BinaryReference::Inline(BinarySource { data, binary_type }) => {
-                    // https://modelcontextprotocol.info/docs/concepts/resources/#binary-resources
-                    // Binary resources contain raw binary data encoded in base64.
-                    // Note that when unstructured-binary response is part of a `tool`, we simply `normalize` to the way
-                    // component-model behaves, but the schema information has explicit descriptions around the base64 encoding.
-                    // This is the best approximation we can make to expose a method as a mcp tool that returns binary data.
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
 
-                    // Also for tools, we don't use `ResourceContents` and it's impossible. So for tools, we will
-                    // strictly stick on `JsonObject` output schema (and that's the only way to do it)
-                    Ok(json!({
-                        "data": b64,
-                        "mimeType": binary_type.mime_type,
-                    }))
+                    let mime_type = binary_type.mime_type.as_str();
+
+                    match mime_type {
+                        "image/png" | "image/jpeg" | "image/gif" | "image/webp" => {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+
+                           Ok(ToolResult::Content(RawContent::image(
+                                b64,
+                                mime_type.to_string(),
+                           ).no_annotation()))
+                        }
+
+                        "audio/mpeg" | "audio/wav" | "audio/ogg" => {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+
+                            Ok(ToolResult::Content(RawContent::Audio(
+                               RawAudioContent {
+                                    data: b64,
+                                    mime_type: mime_type.to_string(),
+                               }
+                            ).no_annotation()))
+                        }
+
+                        "text/plain" | "text/csv" | "application/pdf" => {
+                            let data_str = String::from_utf8_lossy(data).to_string();
+                            Ok(ToolResult::Content(RawContent::Resource(
+                                RawEmbeddedResource {
+                                    meta: None,
+                                    resource: ResourceContents::TextResourceContents {
+                                        uri: "data:".to_string(),
+                                        mime_type: Some(mime_type.to_string()),
+                                        text: data_str,
+                                        meta: None,
+                                    }
+                                }
+                             ).no_annotation(
+                            )))
+                        }
+
+                        _ => {
+                            Ok(ToolResult::Content(
+                                RawContent::Resource(
+                                    RawEmbeddedResource {
+                                        meta: None,
+                                        resource: ResourceContents::BlobResourceContents {
+                                            uri: "data:".to_string(),
+                                            mime_type: Some(mime_type.to_string()),
+                                            blob: base64::engine::general_purpose::STANDARD.encode(data),
+                                            meta: None,
+                                        },
+                                    }
+                                ).no_annotation()
+                            ))
+
+                        }
+                    }
                 }
                 BinaryReference::Url(_) => Err(ErrorData::internal_error(
                     "A binary reference URL can only be part of tool input and not output"

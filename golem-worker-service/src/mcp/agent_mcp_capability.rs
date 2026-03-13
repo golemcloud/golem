@@ -14,7 +14,7 @@
 
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::schema::{McpToolSchema, get_mcp_schema, get_mcp_tool_schema};
+use crate::mcp::schema::{McpToolSchema, get_input_mcp_schema, get_mcp_tool_schema};
 use golem_common::base_model::account::AccountId;
 use golem_common::base_model::agent::{
     AgentMethod, AgentTypeName, DataSchema, ElementSchema, NamedElementSchemas,
@@ -52,7 +52,7 @@ impl McpAgentCapability {
                 agent_type_name.0
             );
 
-            let constructor_schema = get_mcp_schema(&constructor.input_schema);
+            let constructor_schema = get_input_mcp_schema(&constructor.input_schema);
 
             let McpToolSchema {
                 mut input_schema,
