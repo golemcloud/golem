@@ -804,7 +804,7 @@ impl WorkerService {
             })?;
 
         let constructor_parameters: DataValue = DataValue::try_from_untyped_json(
-            request.parameters.clone(),
+            request.parameters,
             agent_type.constructor.input_schema.clone(),
         )
         .map_err(|err| {
