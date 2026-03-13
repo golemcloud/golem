@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, gemini, opencode]
+        agent: [claude-code, gemini, opencode, codex]
         language: [ts]
         exclude:
           - agent: claude-code
@@ -97,11 +97,17 @@ jobs:
 
       - name: Install Gemini CLI
         if: matrix.agent == 'gemini'
-        run: npm install -g @google/gemini-cli
+        run: |
+          npm install -g @google/gemini-cli
+          mkdir -p ~/.gemini
 
       - name: Install OpenCode
         if: matrix.agent == 'opencode'
         run: npm install -g opencode-ai
+
+      - name: Install Codex CLI
+        if: matrix.agent == 'codex'
+        run: npm install -g @openai/codex
 
       - name: Install Harness Dependencies
         run: |
@@ -111,7 +117,8 @@ jobs:
       - name: Run Skill Tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           cd tests/harness
           npx tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios
