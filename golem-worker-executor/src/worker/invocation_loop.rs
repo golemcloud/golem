@@ -609,7 +609,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 self.parent.parsed_agent_id.as_ref(),
             )?;
 
-            Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids, component_metadata))
+            Ok::<_, WorkerExecutorError>((
+                lowered,
+                local_span_ids,
+                inherited_span_ids,
+                component_metadata,
+            ))
         }
         .instrument(span!(Level::INFO, "prepare_invocation_context"))
         .await?;

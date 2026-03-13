@@ -74,8 +74,7 @@ use uuid::Uuid;
 pub struct NameResolutionCache {
     app_names: Cache<ApplicationId, (), ApplicationName, String>,
     env_names: Cache<EnvironmentId, (), EnvironmentName, String>,
-    component_revisions:
-        Cache<(ComponentId, ComponentRevision), (), ComponentDto, String>,
+    component_revisions: Cache<(ComponentId, ComponentRevision), (), ComponentDto, String>,
 }
 
 impl Default for NameResolutionCache {
@@ -520,11 +519,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 .context("Invalid component_revision in response")?;
                 let component_at_rev = self
                     .name_cache
-                    .resolve_component_at_revision(
-                        &component.id,
-                        revision,
-                        &registry_client,
-                    )
+                    .resolve_component_at_revision(&component.id, revision, &registry_client)
                     .await?;
                 let agent_type = component_at_rev
                     .metadata

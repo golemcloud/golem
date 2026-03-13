@@ -459,10 +459,8 @@ impl EnvVarBuilder {
             );
             // Increase the BatchSpanProcessor queue size from the default (2048)
             // to avoid dropping spans under high throughput (e.g. benchmarks).
-            self.env_vars.insert(
-                "OTEL_BSP_MAX_QUEUE_SIZE".to_string(),
-                "262144".to_string(),
-            );
+            self.env_vars
+                .insert("OTEL_BSP_MAX_QUEUE_SIZE".to_string(), "262144".to_string());
         }
         self
     }

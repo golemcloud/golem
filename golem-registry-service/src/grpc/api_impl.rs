@@ -493,7 +493,7 @@ impl RegistryServiceGrpcApi {
             .transpose()
             .map_err(|e: String| e)?;
 
-        let agent_type = self
+        let resolved = self
             .deployment_service
             .resolve_agent_type_by_names(
                 &app_name,
@@ -506,7 +506,8 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(ResolveAgentTypeByNamesSuccessResponse {
-            agent_type: Some(RegisteredAgentType::from(agent_type).into()),
+            agent_type: Some(resolved.registered_agent_type.into()),
+            environment_id: Some(resolved.environment_id.into()),
         })
     }
 

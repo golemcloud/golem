@@ -586,11 +586,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
         let subscription = self.events().subscribe();
 
-        let output = async {
-            self.lookup_invocation_result(&idempotency_key).await
-        }
-        .instrument(span!(Level::INFO, "lookup_invocation_result"))
-        .await;
+        let output = async { self.lookup_invocation_result(&idempotency_key).await }
+            .instrument(span!(Level::INFO, "lookup_invocation_result"))
+            .await;
         match output {
             LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
