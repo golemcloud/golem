@@ -1,12 +1,14 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, prompt};
 use golem_rust::agentic::{BasicModality, Multimodal, UnstructuredBinary, UnstructuredText};
 use crate::location_details::LocationDetails;
 
 // These agent methods are tools, since they take arguments, but with constructor params
 #[agent_definition]
 trait WeatherAgent {
+    #[prompt("You are a weather agent. Help the user get weather information for cities.")]
     fn new(name: String) -> Self;
 
+    #[prompt("Get a weather report for a specific city")]
     fn get_weather_report_for_city(&self, city: String) -> String;
     fn get_weather_report_for_city_with_images(&self, city: String) -> Multimodal;
     fn get_weather_report_for_city_text(&self, city: String) -> UnstructuredText;

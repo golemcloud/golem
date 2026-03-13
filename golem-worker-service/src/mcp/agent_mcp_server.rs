@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
+use crate::mcp::agent_mcp_prompt::{AgentMcpPrompt, PromptRegistry};
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, McpResourceUri, ResourceRegistry};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::{McpCapabilityLookup, invoke};
@@ -33,6 +34,7 @@ pub struct GolemAgentMcpServer {
     tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
     tools: Arc<DashMap<String, Tool>>,
     resources: Arc<RwLock<ResourceRegistry>>,
+    prompts: Arc<RwLock<PromptRegistry>>,
     domain: Arc<RwLock<Option<Domain>>>,
     mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
     worker_service: Arc<WorkerService>,
@@ -47,6 +49,7 @@ impl GolemAgentMcpServer {
             tool_router: Arc::new(RwLock::new(None)),
             tools: Arc::new(DashMap::new()),
             resources: Arc::new(RwLock::new(ResourceRegistry::default())),
+            prompts: Arc::new(RwLock::new(PromptRegistry::default())),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
             domain: Arc::new(RwLock::new(None)),
             mcp_definitions_lookup,
@@ -65,7 +68,11 @@ impl GolemAgentMcpServer {
     async fn build_capabilities(
         &self,
         domain: &Domain,
-    ) -> (ToolRouter<GolemAgentMcpServer>, Vec<AgentMcpResource>) {
+    ) -> (
+        ToolRouter<GolemAgentMcpServer>,
+        Vec<AgentMcpResource>,
+        Vec<AgentMcpPrompt>,
+    ) {
         let capabilities = get_agent_capabilities(domain, &self.mcp_definitions_lookup).await;
 
         let mut router = ToolRouter::<GolemAgentMcpServer>::new();
@@ -74,13 +81,14 @@ impl GolemAgentMcpServer {
             router = router.with_route(tool);
         }
 
-        (router, capabilities.resources)
+        (router, capabilities.resources, capabilities.prompts)
     }
 }
 
 pub struct AgentCapabilities {
     pub tools: Vec<AgentMcpTool>,
     pub resources: Vec<AgentMcpResource>,
+    pub prompts: Vec<AgentMcpPrompt>,
 }
 
 pub async fn get_agent_capabilities(
@@ -94,12 +102,14 @@ pub async fn get_agent_capabilities(
             return AgentCapabilities {
                 tools: vec![],
                 resources: vec![],
+                prompts: vec![],
             };
         }
     };
 
     let mut tools = vec![];
     let mut resources = vec![];
+    let mut prompts = vec![];
 
     let account_id = compiled_mcp.account_id;
     let environment_id = compiled_mcp.environment_id;
@@ -139,7 +149,24 @@ pub async fn get_agent_capabilities(
 
                 let component_id = registered_agent_type.implemented_by.component_id;
 
+                if let Some(prompt_hint) = &agent_type.constructor.prompt_hint {
+                    prompts.push(AgentMcpPrompt::from_constructor_hint(
+                        &agent_type.type_name,
+                        &agent_type.description,
+                        prompt_hint,
+                    ));
+                }
+
                 for method in &agent_type.methods {
+                    if let Some(prompt_hint) = &method.prompt_hint {
+                        prompts.push(AgentMcpPrompt::from_method_hint(
+                            &agent_type.type_name,
+                            method,
+                            &agent_type.constructor,
+                            prompt_hint,
+                        ));
+                    }
+
                     let agent_method_mcp = McpAgentCapability::from_agent_method(
                         &account_id,
                         &environment_id,
@@ -171,13 +198,18 @@ pub async fn get_agent_capabilities(
     }
 
     tracing::info!(
-        "Found {} tools and {} resources for domain {}",
+        "Found {} tools, {} resources, and {} prompts for domain {}",
         tools.len(),
         resources.len(),
+        prompts.len(),
         domain.0
     );
 
-    AgentCapabilities { tools, resources }
+    AgentCapabilities {
+        tools,
+        resources,
+        prompts,
+    }
 }
 
 #[allow(deprecated)]
@@ -284,6 +316,38 @@ impl ServerHandler for GolemAgentMcpServer {
         })
     }
 
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, McpError> {
+        let registry = self.prompts.read().await;
+        let prompt_list = registry.list_prompts();
+
+        tracing::info!("Listing {} prompts", prompt_list.len());
+
+        Ok(ListPromptsResult {
+            prompts: prompt_list,
+            next_cursor: None,
+            meta: None,
+        })
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, McpError> {
+        let registry = self.prompts.read().await;
+
+        registry
+            .get_by_name(&request.name)
+            .map(|p| p.get_prompt_result())
+            .ok_or_else(|| {
+                McpError::invalid_params(format!("Prompt not found: {}", request.name), None)
+            })
+    }
+
     async fn read_resource(
         &self,
         ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
@@ -342,7 +406,8 @@ impl ServerHandler for GolemAgentMcpServer {
 
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
-                let (router, agent_resources) = self.build_capabilities(&domain).await;
+                let (router, agent_resources, agent_prompts) =
+                    self.build_capabilities(&domain).await;
 
                 for tool in router.list_all() {
                     self.tools.insert(tool.name.to_string(), tool);
@@ -351,6 +416,11 @@ impl ServerHandler for GolemAgentMcpServer {
                 let mut resources = self.resources.write().await;
                 for resource in agent_resources {
                     resources.insert(resource);
+                }
+
+                let mut prompts = self.prompts.write().await;
+                for prompt in agent_prompts {
+                    prompts.insert(prompt);
                 }
 
                 *self.domain.write().await = Some(domain);

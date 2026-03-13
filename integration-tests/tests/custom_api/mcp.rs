@@ -177,6 +177,15 @@ impl McpClient {
     async fn read_resource(&self, uri: &str) -> anyhow::Result<Value> {
         self.request("resources/read", json!({ "uri": uri })).await
     }
+
+    async fn list_prompts(&self) -> anyhow::Result<Vec<Value>> {
+        let result = self.request("prompts/list", json!({})).await?;
+        Ok(result["prompts"].as_array().cloned().unwrap_or_default())
+    }
+
+    async fn get_prompt(&self, name: &str) -> anyhow::Result<Value> {
+        self.request("prompts/get", json!({ "name": name })).await
+    }
 }
 
 pub struct McpTestContext {
@@ -649,6 +658,78 @@ async fn read_dynamic_resource_binary(ctx: &McpTestContext) -> anyhow::Result<()
 
     assert_eq!(contents[0]["mimeType"].as_str(), Some("image/png"));
     assert_eq!(contents[0]["blob"].as_str(), Some("AQID"));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_prompts(ctx: &McpTestContext) -> anyhow::Result<()> {
+    let client = ctx.connect_mcp_client().await?;
+    let prompts = client.list_prompts().await?;
+
+    let prompt_names: Vec<String> = prompts
+        .iter()
+        .filter_map(|p| p["name"].as_str().map(String::from))
+        .collect();
+
+    assert!(
+        prompt_names.contains(&"WeatherAgent".to_string()),
+        "Expected WeatherAgent prompt in {:?}",
+        prompt_names
+    );
+
+    assert!(
+        prompt_names.contains(&"WeatherAgent-get_weather_report_for_city".to_string()),
+        "Expected WeatherAgent-get_weather_report_for_city prompt in {:?}",
+        prompt_names
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_prompt_agent_level(ctx: &McpTestContext) -> anyhow::Result<()> {
+    let client = ctx.connect_mcp_client().await?;
+
+    let result = client.get_prompt("WeatherAgent").await?;
+
+    let messages = result["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"].as_str(), Some("user"));
+
+    let text = messages[0]["content"]["text"].as_str().unwrap();
+    assert_eq!(
+        text,
+        "You are a weather agent. Help the user get weather information for cities."
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn get_prompt_method(ctx: &McpTestContext) -> anyhow::Result<()> {
+    let client = ctx.connect_mcp_client().await?;
+
+    let result = client
+        .get_prompt("WeatherAgent-get_weather_report_for_city")
+        .await?;
+
+    let messages = result["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"].as_str(), Some("user"));
+
+    let text = messages[0]["content"]["text"].as_str().unwrap();
+    let expected = "Get a weather report for a specific city\n\n\
+                    Expected JSON input properties: name, city\n\n\
+                    Output: result: Str";
+    assert_eq!(
+        text, expected,
+        "Method prompt text mismatch.\nGot: {}\nExpected: {}",
+        text, expected
+    );
 
     Ok(())
 }
