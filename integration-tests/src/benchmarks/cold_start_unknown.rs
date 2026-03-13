@@ -142,7 +142,7 @@ impl Benchmark for ColdStartUnknownMedium {
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_agent_ts",
-            "benchmark-agent",
+            "BenchmarkAgent",
             mode,
             verbosity,
             cluster_size,
