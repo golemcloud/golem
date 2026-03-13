@@ -117,6 +117,14 @@ jobs:
         run: |
           cd tests/harness
           npm install
+          npm run build
+
+      - name: Setup isolated test directory
+        run: |
+          mkdir -p /tmp/harness-run
+          cp -rL tests/harness/* /tmp/harness-run/
+          cp -r skills /tmp/harness-run/skills
+          cd /tmp/harness-run && git init && git add -A && git commit -m "init" --allow-empty
 
       - name: Run Skill Tests
         env:
@@ -125,12 +133,12 @@ jobs:
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          cd tests/harness
-          npx tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios
+          cd /tmp/harness-run
+          npx tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios --skills ./skills
 
       - name: Upload Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: results-${{ matrix.agent }}-${{ matrix.language }}
-          path: tests/harness/results/
+          path: /tmp/harness-run/results/
