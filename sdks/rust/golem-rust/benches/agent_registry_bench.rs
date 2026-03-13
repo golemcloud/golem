@@ -26,8 +26,9 @@ test_r::enable!();
 mod bench {
     use golem_rust::agentic::{
         get_constructor_parameter_type, get_enriched_agent_type_by_name,
-        get_method_parameter_type, register_agent_type, AgentTypeName, EnrichedAgentMethod,
-        EnrichedElementSchema, ExtendedAgentConstructor, ExtendedAgentType, ExtendedDataSchema,
+        get_method_parameter_type, get_method_parameter_types_by_index, register_agent_type,
+        AgentTypeName, EnrichedAgentMethod, EnrichedElementSchema, ExtendedAgentConstructor,
+        ExtendedAgentType, ExtendedDataSchema,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentMode, ElementSchema, Snapshotting,
@@ -164,6 +165,28 @@ mod bench {
             || {
                 let name = AgentTypeName("BenchAgent".to_string());
                 black_box(get_method_parameter_type(&name, "method_5", 2));
+            },
+        );
+
+        // --- get_method_parameter_types_by_index (batch, Fix 4a+6) ---
+        println!("\n--- get_method_parameter_types_by_index (batch by method index) ---");
+
+        bench_loop("batch all params by method index", ITERATIONS, || {
+            black_box(get_method_parameter_types_by_index(&agent_type_name, 5));
+        });
+
+        bench_loop(
+            &format!(
+                "batch + index into vec for {} params (new hot path)",
+                PARAMS
+            ),
+            ITERATIONS,
+            || {
+                let schemas =
+                    get_method_parameter_types_by_index(&agent_type_name, 5).unwrap();
+                for i in 0..PARAMS {
+                    black_box(schemas.get(i));
+                }
             },
         );
 

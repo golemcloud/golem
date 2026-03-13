@@ -204,6 +204,30 @@ pub fn get_method_parameter_type(
     extract_parameter_schema(&method.input_schema, parameter_index)
 }
 
+pub fn get_method_parameter_types_by_index(
+    agent_type_name: &AgentTypeName,
+    method_index: usize,
+) -> Option<Vec<EnrichedElementSchema>> {
+    let state = get_state();
+    let agent_types = state.agent_types.borrow();
+    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+    let method = agent_type.methods.get(method_index)?;
+
+    Some(extract_all_parameter_schemas(&method.input_schema))
+}
+
+fn extract_all_parameter_schemas(schema: &ExtendedDataSchema) -> Vec<EnrichedElementSchema> {
+    match schema {
+        ExtendedDataSchema::Tuple(items) => {
+            items.iter().map(|(_, s)| s.clone()).collect()
+        }
+        ExtendedDataSchema::Multimodal(items) => items
+            .iter()
+            .map(|(_, s)| EnrichedElementSchema::ElementSchema(s.clone()))
+            .collect(),
+    }
+}
+
 fn extract_parameter_schema(
     schema: &ExtendedDataSchema,
     parameter_index: usize,
