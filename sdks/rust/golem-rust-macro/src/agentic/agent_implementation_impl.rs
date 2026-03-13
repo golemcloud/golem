@@ -320,6 +320,7 @@ fn generate_method_param_extraction(
 ) -> proc_macro2::TokenStream {
     let input_param_index_init = quote! {
       let mut input_param_index = 0;
+      let __agent_type_name = golem_rust::agentic::AgentTypeName(#agent_type_name.to_string());
     };
 
     let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(original_method_param_idx, ident)| {
@@ -328,7 +329,7 @@ fn generate_method_param_extraction(
            let #ident_result = match &input {
                golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
                     let enriched_schema = golem_rust::agentic::get_method_parameter_type(
-                        &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
+                        &__agent_type_name,
                         #method_name,
                         #original_method_param_idx,
                     ).ok_or_else(|| {
@@ -464,6 +465,7 @@ fn generate_constructor_extraction(
     // tuple to extract each parameter into the `initiate` function
     let input_param_index_init = quote! {
       let mut input_param_index = 0;
+      let __agent_type_name = golem_rust::agentic::AgentTypeName(#agent_type_name.to_string());
     };
 
     let extraction: Vec<proc_macro2::TokenStream> = ctor_params.iter().enumerate().map(|(constructor_param_index, (ident, pat_type))| {
@@ -480,7 +482,7 @@ fn generate_constructor_extraction(
                 let #ident_result = match &params {
                     golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
                         let enriched_schema = golem_rust::agentic::get_constructor_parameter_type(
-                            &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
+                            &__agent_type_name,
                             #constructor_param_index,
                         ).ok_or_else(|| {
                             golem_rust::agentic::internal_error(format!(

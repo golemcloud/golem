@@ -16,6 +16,7 @@ test_r::enable!();
 
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
+#[test_r::sequential]
 mod tests {
     use golem_rust::agentic::{create_webhook, Principal, Secret};
     use golem_rust::agentic::{
