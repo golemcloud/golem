@@ -19,10 +19,9 @@ import {
   serializeTextReferenceToWitNodes,
   serializeToWitNodes,
 } from './serializer';
-import { deserializeFromExtractor } from './deserializer';
+import { deserializeNodes } from './deserializer';
 import { AnalysedType } from '../types/analysedType';
 import { WitNodeBuilder } from './WitNodeBuilder';
-import { WitNodeExtractor } from './WitNodeExtractor';
 
 export { WitValue } from 'golem:core/types@1.5.0';
 
@@ -51,6 +50,5 @@ export const fromTsValueBinaryReference = (tsValue: any): WitValue => {
 };
 
 export const toTsValue = (witValue: WitValue, expectedType: AnalysedType): any => {
-  const extractor = new WitNodeExtractor(witValue.nodes, 0);
-  return deserializeFromExtractor(extractor, expectedType);
+  return deserializeNodes(witValue.nodes, 0, expectedType);
 };

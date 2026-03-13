@@ -257,7 +257,49 @@ describe('Complex type (TestInterfaceType)', () => {
 });
 
 // =====================================================================
-// 7. Variant/union
+// 7. List of 1000 records (extractor allocation stress test)
+// =====================================================================
+
+const listRecordType: AnalysedType = list('RecordList', undefined, undefined, record('Item', [
+  field('id', u32()),
+  field('name', str()),
+  field('active', bool()),
+  field('score', u32()),
+  field('email', str()),
+  field('count', u32()),
+  field('verified', bool()),
+  field('code', str()),
+  field('level', u32()),
+  field('label', str()),
+]));
+
+const recordList = Array.from({ length: 1000 }, (_, i) => ({
+  id: i,
+  name: `user-${i}`,
+  active: i % 2 === 0,
+  score: i * 10,
+  email: `user${i}@test.com`,
+  count: i % 100,
+  verified: i % 3 === 0,
+  code: `CODE-${i}`,
+  level: i % 10,
+  label: `label-${i}`,
+}));
+
+const recordListWit = serialize(recordList, listRecordType);
+
+describe('List of 1000 records (10 fields each)', () => {
+  bench('serialize', () => {
+    WitValue.fromTsValueDefault(recordList, listRecordType);
+  }, { time: 1000 });
+
+  bench('deserialize', () => {
+    WitValue.toTsValue(recordListWit, listRecordType);
+  }, { time: 1000 });
+});
+
+// =====================================================================
+// 8. Variant/union
 // =====================================================================
 
 const variantType: AnalysedType = variant('MyVariant', [], [
@@ -289,7 +331,7 @@ describe('Variant', () => {
 });
 
 // =====================================================================
-// 8. Full invoke round-trip simulation
+// 9. Full invoke round-trip simulation
 // =====================================================================
 
 const invokeArgType: AnalysedType = record('InvokeArg', [

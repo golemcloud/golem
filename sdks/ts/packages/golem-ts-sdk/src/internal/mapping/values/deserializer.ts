@@ -12,19 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { WitNode } from 'golem:core/types@1.5.0';
 import { typeMismatchInDeserialize } from './errors';
 import { AnalysedType } from '../types/analysedType';
 import { Result } from '../../../host/result';
-import { WitNodeExtractor } from './WitNodeExtractor';
 
-export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedType: AnalysedType): any {
+export function deserializeNodes(nodes: WitNode[], index: number, analysedType: AnalysedType): any {
+  const n = nodes[index];
+  const tag = n.tag;
+
   // Handle empty record → null/undefined/void
   if (
-    extractor.isRecord() &&
-    extractor.recordLength() === 0 &&
+    tag === 'record-value' &&
+    (n.val as number[]).length === 0 &&
     analysedType.kind === 'tuple'
   ) {
-    // record-value with 0 children used as empty tuple (host compatibility)
     if (analysedType.emptyType) {
       switch (analysedType.emptyType) {
         case 'null':
@@ -37,12 +39,8 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
   }
 
   // Handle option
-  if (extractor.isOption()) {
-    const optResult = extractor.option();
-    if (optResult === undefined) {
-      throw new Error(typeMismatchInDeserialize(extractor.tag(), 'option'));
-    }
-    if (optResult === null) {
+  if (tag === 'option-value') {
+    if (n.val === undefined) {
       // None
       if (analysedType.kind === 'option') {
         if (analysedType.emptyType === 'null') return null;
@@ -52,30 +50,28 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
     }
     // Some
     const innerType = analysedType.kind === 'option' ? analysedType.value.inner : analysedType;
-    return deserializeFromExtractor(optResult, innerType);
+    return deserializeNodes(nodes, n.val as number, innerType);
   }
 
   // Handle enum
   if (analysedType.kind === 'enum') {
-    const enumIdx = extractor.enumValue();
-    if (enumIdx === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'enum'));
-    return analysedType.value.cases[enumIdx];
+    if (tag !== 'enum-value') throw new Error(typeMismatchInDeserialize(tag, 'enum'));
+    return analysedType.value.cases[n.val as number];
   }
 
   switch (analysedType.kind) {
     case 'bool': {
-      const val = extractor.bool();
-      if (val === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'boolean'));
-      return val;
+      if (tag !== 'prim-bool') throw new Error(typeMismatchInDeserialize(tag, 'boolean'));
+      return n.val;
     }
 
     case 'u64':
-      if (analysedType.isBigInt) return convertToBigIntFromExtractor(extractor);
-      return convertToNumberFromExtractor(extractor);
+      if (analysedType.isBigInt) return convertToBigInt(nodes, index);
+      return convertToNumber(nodes, index);
 
     case 's64':
-      if (analysedType.isBigInt) return convertToBigIntFromExtractor(extractor);
-      return convertToNumberFromExtractor(extractor);
+      if (analysedType.isBigInt) return convertToBigInt(nodes, index);
+      return convertToNumber(nodes, index);
 
     case 's8':
     case 'u8':
@@ -85,117 +81,72 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
     case 'u32':
     case 'f32':
     case 'f64':
-      return convertToNumberFromExtractor(extractor);
+      return convertToNumber(nodes, index);
 
     case 'string': {
-      const val = extractor.string();
-      if (val === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'string'));
-      return val;
+      if (tag !== 'prim-string') throw new Error(typeMismatchInDeserialize(tag, 'string'));
+      return n.val;
     }
 
     case 'list': {
+      if (tag !== 'list-value') {
+        const expectedType = analysedType.typedArray ?? (analysedType.mapType ? 'map' : 'array');
+        throw new Error(typeMismatchInDeserialize(tag, expectedType));
+      }
+      const childIndices = n.val as number[];
+      const len = childIndices.length;
       const typedArray = analysedType.typedArray;
 
       if (typedArray) {
         switch (typedArray) {
           case 'u8': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'Uint8Array'));
             const arr = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToNumberFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToNumber(nodes, childIndices[i]);
             return arr;
           }
           case 'u16': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'Uint16Array'));
             const arr = new Uint16Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToNumberFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToNumber(nodes, childIndices[i]);
             return arr;
           }
           case 'u32': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'Uint32Array'));
             const arr = new Uint32Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToNumberFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToNumber(nodes, childIndices[i]);
             return arr;
           }
           case 'big-u64': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'BigUint64Array'));
             const arr = new BigUint64Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToBigIntFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToBigInt(nodes, childIndices[i]);
             return arr;
           }
           case 'i8': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'Int8Array'));
             const arr = new Int8Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToNumberFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToNumber(nodes, childIndices[i]);
             return arr;
           }
           case 'i16': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'Int16Array'));
             const arr = new Int16Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToNumberFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToNumber(nodes, childIndices[i]);
             return arr;
           }
           case 'i32': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'Int32Array'));
             const arr = new Int32Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToNumberFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToNumber(nodes, childIndices[i]);
             return arr;
           }
           case 'big-i64': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'BigInt64Array'));
             const arr = new BigInt64Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToBigIntFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToBigInt(nodes, childIndices[i]);
             return arr;
           }
           case 'f32': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'Float32Array'));
             const arr = new Float32Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToNumberFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToNumber(nodes, childIndices[i]);
             return arr;
           }
           case 'f64': {
-            const len = extractor.listLength();
-            if (len === undefined) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'Float64Array'));
             const arr = new Float64Array(len);
-            for (let i = 0; i < len; i++) {
-              const elem = extractor.listElement(i)!;
-              arr[i] = convertToNumberFromExtractor(elem);
-            }
+            for (let i = 0; i < len; i++) arr[i] = convertToNumber(nodes, childIndices[i]);
             return arr;
           }
         }
@@ -203,9 +154,6 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
 
       // Map type
       if (analysedType.mapType) {
-        const elements = extractor.listElements();
-        if (!elements) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'map'));
-
         const elemType = analysedType.value.inner;
         if (!elemType || elemType.kind !== 'tuple' || elemType.value.items.length !== 2) {
           throw new Error(`Unable to infer the type of Map`);
@@ -215,14 +163,18 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
         const valueType = elemType.value.items[1];
         const map = new Map();
 
-        for (const tupleExtractor of elements) {
-          const keyExtractor = tupleExtractor.tupleElement(0);
-          const valueExtractor = tupleExtractor.tupleElement(1);
-          if (!keyExtractor || !valueExtractor) {
-            throw new Error(typeMismatchInDeserialize(tupleExtractor.tag(), 'map'));
+        for (let i = 0; i < len; i++) {
+          const tupleIdx = childIndices[i];
+          const tupleNode = nodes[tupleIdx];
+          if (tupleNode.tag !== 'tuple-value') {
+            throw new Error(typeMismatchInDeserialize(tupleNode.tag, 'map'));
           }
-          const k = deserializeFromExtractor(keyExtractor, keyType);
-          const v = deserializeFromExtractor(valueExtractor, valueType);
+          const tupleChildren = tupleNode.val as number[];
+          if (tupleChildren.length < 2) {
+            throw new Error(typeMismatchInDeserialize(tupleNode.tag, 'map'));
+          }
+          const k = deserializeNodes(nodes, tupleChildren[0], keyType);
+          const v = deserializeNodes(nodes, tupleChildren[1], valueType);
           map.set(k, v);
         }
 
@@ -230,19 +182,22 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
       }
 
       // Regular list
-      const elements = extractor.listElements();
-      if (!elements) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'array'));
-
       const elemType = analysedType.value.inner;
       if (!elemType) throw new Error(`Unable to infer the type of Array`);
-      return elements.map((e) => deserializeFromExtractor(e, elemType));
+      const result = new Array(len);
+      for (let i = 0; i < len; i++) {
+        result[i] = deserializeNodes(nodes, childIndices[i], elemType);
+      }
+      return result;
     }
 
     case 'tuple': {
       const emptyType = analysedType.emptyType;
-      const tupleLen = extractor.tupleLength();
 
-      if (tupleLen !== undefined) {
+      if (tag === 'tuple-value') {
+        const tupleChildren = n.val as number[];
+        const tupleLen = tupleChildren.length;
+
         if (emptyType) {
           switch (emptyType) {
             case 'null':
@@ -256,38 +211,39 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
         }
 
         if (tupleLen !== analysedType.value.items.length) {
-          throw new Error(typeMismatchInDeserialize(extractor.tag(), 'tuple'));
+          throw new Error(typeMismatchInDeserialize(tag, 'tuple'));
         }
 
         const result: any[] = new Array(tupleLen);
         for (let i = 0; i < tupleLen; i++) {
-          const elemExtractor = extractor.tupleElement(i)!;
-          result[i] = deserializeFromExtractor(elemExtractor, analysedType.value.items[i]);
+          result[i] = deserializeNodes(nodes, tupleChildren[i], analysedType.value.items[i]);
         }
         return result;
       }
 
-      throw new Error(typeMismatchInDeserialize(extractor.tag(), 'tuple'));
+      throw new Error(typeMismatchInDeserialize(tag, 'tuple'));
     }
 
     case 'result': {
-      const res = extractor.result();
-      if (!res) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'result'));
+      if (tag !== 'result-value') throw new Error(typeMismatchInDeserialize(tag, 'result'));
+      const resVal = n.val as { tag: 'ok' | 'err'; val?: number };
+      const resTag = resVal.tag;
+      const innerIdx = resVal.val;
 
       switch (analysedType.resultType.tag) {
         case 'inbuilt': {
           const inbuiltOkType = analysedType.value.ok;
           const inbuiltErrType = analysedType.value.err;
 
-          if (inbuiltOkType && res.tag === 'ok' && res.inner) {
-            return Result.ok(deserializeFromExtractor(res.inner, inbuiltOkType));
+          if (inbuiltOkType && resTag === 'ok' && innerIdx !== undefined) {
+            return Result.ok(deserializeNodes(nodes, innerIdx, inbuiltOkType));
           }
 
-          if (inbuiltErrType && res.tag === 'err' && res.inner) {
-            return Result.err(deserializeFromExtractor(res.inner, inbuiltErrType));
+          if (inbuiltErrType && resTag === 'err' && innerIdx !== undefined) {
+            return Result.err(deserializeNodes(nodes, innerIdx, inbuiltErrType));
           }
 
-          if (res.tag === 'ok' && !res.inner && analysedType.resultType.okEmptyType) {
+          if (resTag === 'ok' && innerIdx === undefined && analysedType.resultType.okEmptyType) {
             switch (analysedType.resultType.okEmptyType) {
               case 'null':
                 return Result.ok(null);
@@ -297,7 +253,7 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
             }
           }
 
-          if (res.tag === 'err' && !res.inner && analysedType.resultType.errEmptyType) {
+          if (resTag === 'err' && innerIdx === undefined && analysedType.resultType.errEmptyType) {
             switch (analysedType.resultType.errEmptyType) {
               case 'null':
                 return Result.err(null);
@@ -307,7 +263,7 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
             }
           }
 
-          throw new Error(typeMismatchInDeserialize(extractor.tag(), 'result'));
+          throw new Error(typeMismatchInDeserialize(tag, 'result'));
         }
 
         case 'custom': {
@@ -317,75 +273,75 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
           const errType = analysedType.value.err;
 
           if (okName && errName && okType && errType) {
-            if (res.tag === 'ok' && res.inner) {
-              return { tag: 'ok', [okName]: deserializeFromExtractor(res.inner, okType) };
+            if (resTag === 'ok' && innerIdx !== undefined) {
+              return { tag: 'ok', [okName]: deserializeNodes(nodes, innerIdx, okType) };
             }
-            if (res.tag === 'err' && res.inner) {
-              return { tag: 'err', [errName]: deserializeFromExtractor(res.inner, errType) };
+            if (resTag === 'err' && innerIdx !== undefined) {
+              return { tag: 'err', [errName]: deserializeNodes(nodes, innerIdx, errType) };
             }
           }
 
           if (okName && okType && !errType) {
-            if (res.tag === 'ok' && res.inner) {
-              return { tag: 'ok', [okName]: deserializeFromExtractor(res.inner, okType) };
+            if (resTag === 'ok' && innerIdx !== undefined) {
+              return { tag: 'ok', [okName]: deserializeNodes(nodes, innerIdx, okType) };
             } else {
               return { tag: 'err' };
             }
           }
 
           if (errName && errType && !okType) {
-            if (res.tag === 'err' && res.inner) {
-              return { tag: 'err', [errName]: deserializeFromExtractor(res.inner, errType) };
+            if (resTag === 'err' && innerIdx !== undefined) {
+              return { tag: 'err', [errName]: deserializeNodes(nodes, innerIdx, errType) };
             } else {
               return { tag: 'ok' };
             }
           }
 
-          if (okName && !okType && res.tag === 'ok') {
-            if (!res.inner) {
+          if (okName && !okType && resTag === 'ok') {
+            if (innerIdx === undefined) {
               return { tag: 'ok', [okName]: undefined };
             }
           }
 
-          if (errName && !errType && res.tag === 'err') {
-            if (!res.inner) {
+          if (errName && !errType && resTag === 'err') {
+            if (innerIdx === undefined) {
               return { tag: 'err', [errName]: undefined };
             }
           }
 
-          throw new Error(typeMismatchInDeserialize(extractor.tag(), 'result'));
+          throw new Error(typeMismatchInDeserialize(tag, 'result'));
         }
       }
     }
 
     case 'variant': {
-      const v = extractor.variant();
-      if (!v) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'variant'));
+      if (tag !== 'variant-value') throw new Error(typeMismatchInDeserialize(tag, 'variant'));
+      const [caseIdx, maybeChildIdx] = n.val as [number, number | undefined];
 
       const taggedMetadata = analysedType.taggedTypes;
       const variants = analysedType.value.cases;
 
       if (taggedMetadata.length > 0) {
-        const caseType = variants[v.caseIdx];
+        const caseType = variants[caseIdx];
         const tagValue = caseType.name;
         const valueType = caseType.typ;
 
         if (valueType) {
-          if (!v.inner) {
+          if (maybeChildIdx === undefined) {
             if (valueType.kind === 'option') {
               return { tag: tagValue };
             }
-            throw new Error(typeMismatchInDeserialize(extractor.tag(), 'union'));
+            throw new Error(typeMismatchInDeserialize(tag, 'union'));
           }
 
-          const result = deserializeFromExtractor(v.inner, valueType);
+          const result = deserializeNodes(nodes, maybeChildIdx, valueType);
 
           const metadata = analysedType.taggedTypes.find(
             (lit) => lit.tagLiteralName === tagValue,
           )?.valueType;
 
           if (!metadata) {
-            throw new Error(typeMismatchInDeserialize(extractor.tag(), 'union'));
+            throw new Error(typeMismatchInDeserialize(tag, 'union'));
           }
 
           return { tag: tagValue, [metadata[0]]: result };
@@ -394,41 +350,55 @@ export function deserializeFromExtractor(extractor: WitNodeExtractor, analysedTy
         }
       }
 
-      const variantCase = variants[v.caseIdx];
+      const variantCase = variants[caseIdx];
       const type = variantCase.typ;
 
       if (!type) {
         return variantCase.name;
       }
 
-      if (!v.inner) {
-        throw new Error(typeMismatchInDeserialize(extractor.tag(), 'union'));
+      if (maybeChildIdx === undefined) {
+        throw new Error(typeMismatchInDeserialize(tag, 'union'));
       }
 
-      return deserializeFromExtractor(v.inner, type);
+      return deserializeNodes(nodes, maybeChildIdx, type);
     }
 
     case 'record': {
+      if (tag !== 'record-value') throw new Error(typeMismatchInDeserialize(tag, 'object'));
+      const childIndices = n.val as number[];
       const fields = analysedType.value.fields;
       const obj: Record<string, any> = {};
       for (let i = 0; i < fields.length; i++) {
-        const child = extractor.field(i);
-        if (!child) throw new Error(typeMismatchInDeserialize(extractor.tag(), 'object'));
-        obj[fields[i].name] = deserializeFromExtractor(child, fields[i].typ);
+        obj[fields[i].name] = deserializeNodes(nodes, childIndices[i], fields[i].typ);
       }
       return obj;
     }
   }
 }
 
-function convertToNumberFromExtractor(extractor: WitNodeExtractor): number {
-  const val = extractor.number();
-  if (val !== undefined) return val;
-  throw new Error(typeMismatchInDeserialize(extractor.tag(), 'number'));
+function convertToNumber(nodes: WitNode[], index: number): number {
+  const n = nodes[index];
+  switch (n.tag) {
+    case 'prim-u8':
+    case 'prim-u16':
+    case 'prim-u32':
+    case 'prim-s8':
+    case 'prim-s16':
+    case 'prim-s32':
+    case 'prim-float32':
+    case 'prim-float64':
+      return n.val as number;
+    case 'prim-u64':
+    case 'prim-s64':
+      return Number(n.val);
+    default:
+      throw new Error(typeMismatchInDeserialize(n.tag, 'number'));
+  }
 }
 
-function convertToBigIntFromExtractor(extractor: WitNodeExtractor): bigint {
-  const val = extractor.bigint();
-  if (val !== undefined) return val;
-  throw new Error(typeMismatchInDeserialize(extractor.tag(), 'bigint'));
+function convertToBigInt(nodes: WitNode[], index: number): bigint {
+  const n = nodes[index];
+  if (n.tag === 'prim-u64' || n.tag === 'prim-s64') return n.val as bigint;
+  throw new Error(typeMismatchInDeserialize(n.tag, 'bigint'));
 }
