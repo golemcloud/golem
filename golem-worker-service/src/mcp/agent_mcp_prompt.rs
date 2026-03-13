@@ -149,29 +149,54 @@ fn describe_input(
     }
 }
 
-fn describe_element(element: &NamedElementSchema) -> String {
+fn describe_output_element(element: &NamedElementSchema) -> String {
     let type_label = match &element.schema {
-        ElementSchema::ComponentModel(cm) => format!("{:?}", cm.element_type),
-        ElementSchema::UnstructuredText(_) => "text".to_string(),
-        ElementSchema::UnstructuredBinary(_) => "binary".to_string(),
+        ElementSchema::ComponentModel(_) => {
+            "json result".to_string() // there is no need to repeat the output
+        }
+
+        ElementSchema::UnstructuredText(text_desc) => {
+            if let Some(desc) = &text_desc.restrictions {
+                if desc.is_empty() {
+                    return "text".to_string();
+                }
+
+                return format!("text with with one of the following language codes: {}", desc.iter().map(|x| x.language_code.clone()).collect::<Vec<_>>().join(", "))
+            }
+
+            return "text".to_string();
+        },
+        ElementSchema::UnstructuredBinary(binary) => {
+            if let Some(restrictions) = &binary.restrictions {
+                if restrictions.is_empty() {
+                    return "binary".to_string();
+                }
+
+                return format!("binary with one of the following mime-types: {}", restrictions.iter().map(|x| x.mime_type.clone()).collect::<Vec<_>>().join(", "))
+            }
+
+            "binary".to_string()
+        }
     };
+
     format!("{}: {}", element.name, type_label)
 }
+
 
 fn describe_output(schema: &DataSchema) -> Option<String> {
     match schema {
         DataSchema::Tuple(schemas) => match schemas.elements.as_slice() {
             [] => None,
-            [single] => Some(format!("Output: {}", describe_element(single))),
+            [single] => Some(format!("output hint: {}", describe_output_element(single))),
             _ => None,
         },
         DataSchema::Multimodal(schemas) => {
             if schemas.elements.is_empty() {
                 return None;
             }
-            let parts: Vec<String> = schemas.elements.iter().map(describe_element).collect();
+            let parts: Vec<String> = schemas.elements.iter().map(describe_output_element).collect();
             Some(format!(
-                "Output is a \"parts\" array with elements: {}",
+                "output hint: multimodal response: {}",
                 parts.join(", ")
             ))
         }

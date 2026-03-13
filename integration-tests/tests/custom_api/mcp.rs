@@ -398,11 +398,12 @@ async fn call_tool_weather_agent_unstructured_binary(ctx: &McpTestContext) -> an
         .await?;
 
     assert_eq!(result["isError"], json!(false));
-    let structured = &result["structuredContent"];
+
+    let contents = &result["content"];
 
     // Binary data is base64 encoded: vec![1, 2, 3] -> "AQID"
-    assert_eq!(structured["data"], "AQID");
-    assert_eq!(structured["mimeType"], "image/png");
+    assert_eq!(contents[0]["data"], "AQID");
+    assert_eq!(contents[0]["mimeType"], "image/png");
 
     Ok(())
 }
