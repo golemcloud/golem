@@ -354,7 +354,7 @@ fn generate_method_code(
                 golem_rust::agentic::await_invoke_result(rpc_result_future).await;
 
             let rpc_result_ok =
-                rpc_result.expect(format!("rpc call to {} failed", #remote_token).as_str());
+                rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
 
             #process_invoke_result
         }
@@ -365,7 +365,7 @@ fn generate_method_code(
             let rpc_result: Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> =
                 self.wasm_rpc.invoke(#remote_token, &input);
 
-            rpc_result.expect(format!("rpc call to trigger {} failed", #remote_token).as_str());
+            rpc_result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e));
         }
 
         pub fn #schedule_name(#(#input_defs),*, scheduled_time: golem_rust::wasip2::clocks::wall_clock::Datetime) {
