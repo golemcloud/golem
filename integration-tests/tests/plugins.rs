@@ -150,6 +150,7 @@ async fn start_callback_server() -> (String, Arc<Mutex<Vec<BatchCallback>>>, Joi
 
 /// Starts an HTTP callback server that can be gated — when `enabled` is false it returns 503.
 /// Returns (callback_url, received_batches, enabled_flag, server_handle).
+#[allow(dead_code)]
 async fn start_callback_server_gated() -> (
     String,
     Arc<Mutex<Vec<BatchCallback>>>,
