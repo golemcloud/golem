@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::schema::get_output_mcp_schema;
-use crate::mcp::schema::mcp_schema::McpSchema;
-use crate::mcp::schema::mcp_schema_mapping::get_input_mcp_schema;
-use golem_common::base_model::agent::AgentMethod;
+use crate::mcp::schema::mcp_schema::McpInputSchema;
+use golem_common::base_model::agent::{AgentMethod, DataSchema};
+use golem_common::model::agent::ElementSchema;
 
 pub struct McpToolSchema {
-    pub input_schema: McpSchema, // for unstructured input, we will still have an MCP schema
+    pub input_schema: McpInputSchema, // for unstructured input, we will still have an MCP schema
     // Many clients work if output schema is optional, where it can be null whenever the result is unstructured
-    pub output_schema: Option<McpSchema>,
+    pub output_schema: Option<McpInputSchema>,
 }
 
 pub fn get_mcp_tool_schema(method: &AgentMethod) -> McpToolSchema {
@@ -30,5 +29,51 @@ pub fn get_mcp_tool_schema(method: &AgentMethod) -> McpToolSchema {
     McpToolSchema {
         input_schema,
         output_schema,
+    }
+}
+
+pub fn get_input_mcp_schema(data_schema: &DataSchema) -> McpInputSchema {
+    match data_schema {
+        DataSchema::Tuple(schemas) => McpInputSchema::from_named_element_schemas(&schemas.elements),
+
+        DataSchema::Multimodal(schemas) => {
+            McpInputSchema::from_multimodal_element_schemas(&schemas.elements)
+        }
+    }
+}
+
+fn get_output_mcp_schema(data_schema: &DataSchema) -> Option<McpInputSchema> {
+    match data_schema {
+        DataSchema::Tuple(schemas) => {
+            // This in reality will be just "{result_value: T}"
+            if schemas.elements.len() == 1 {
+                // If the output schema is structured (i.e. component model), we can represent it as MCP schema,
+                // otherwise we will just return None and let clients handle it as unstructured output. This is also in accordance
+                // with the MCP protocol, and probably the main reason why protocol says it's optional
+                // Setting any schema for any unstructured content is either imposing bad user experience, or indeterministic results
+                // Also says, `OutputSchema` is for structured output here: https://modelcontextprotocol.io/specification/2025-11-25/server/tools#output-schema
+                // although optional
+                let is_structured =
+                    matches!(schemas.elements[0].schema, ElementSchema::ComponentModel(_));
+
+                if is_structured {
+                    Some(McpInputSchema::from_named_element_schemas(
+                        &schemas.elements,
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+
+        // This is decided after testing with several MCP clients, and the actual MCP protocol also considers mainly just `inputSchema`
+        // If we set `outputSchema` (similar to input schema for multimodal), clients find it difficult to render the output
+        // and behaves inconsistently. Example: If the output multimodal schema is represented using `rmcp::model::JsonObject` (tool output schema) instead of `None`,
+        // then clients prefer to not render the image (and simply emit base64), or actual decode and fail due to large size b64, and at times succeeds,
+        // or worse case, it can go in circles (it decodes to image, but finds the output schema to be b64 and decides to encode it again)
+        // https://modelcontextprotocol.io/specification/2025-11-25/server/tools#listing-tools
+        DataSchema::Multimodal(_) => None,
     }
 }
