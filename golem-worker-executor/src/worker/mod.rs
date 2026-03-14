@@ -44,6 +44,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
 use futures::channel::oneshot;
+use futures::FutureExt;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
@@ -2268,7 +2269,10 @@ impl RunningWorker {
 
             match data_mut.check_interrupt() {
                 Some(kind) => Err(kind.into()),
-                None => Ok(UpdateDeadline::Yield(1)),
+                None => Ok(UpdateDeadline::YieldCustom(
+                    1,
+                    tokio::task::yield_now().boxed(),
+                )),
             }
         });
         store
