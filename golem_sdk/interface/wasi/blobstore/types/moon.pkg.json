@@ -1,1 +1,0 @@
-{ "import": [{ "path" : "golemcloud/golem_sdk/interface/wasi/io/streams", "alias" : "streams" }], "warn-list": "-44" }

@@ -1,1 +1,0 @@
-{ "import": [{ "path" : "golemcloud/golem_sdk/interface/golem/api/context", "alias" : "context" }, { "path" : "golemcloud/golem_sdk/interface/golem/api/host", "alias" : "host" }, { "path" : "golemcloud/golem_sdk/interface/golem/core/types", "alias" : "types" }, { "path" : "golemcloud/golem_sdk/interface/wasi/clocks/wallClock", "alias" : "wallClock" }], "warn-list": "-44" }
