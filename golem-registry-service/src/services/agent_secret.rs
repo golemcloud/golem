@@ -262,9 +262,19 @@ impl AgentSecretService {
             EnvironmentAction::ViewAgentSecret,
         )?;
 
+        let result = self.list_in_environment_unchecked(environment.id).await?;
+
+        Ok(result)
+    }
+
+    // list in environment without checking auth / confirming the environment is not deleted.
+    pub async fn list_in_environment_unchecked(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<AgentSecret>, AgentSecretError> {
         let result = self
             .agent_secret_repo
-            .get_for_environment(environment.id.0)
+            .get_for_environment(environment_id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())

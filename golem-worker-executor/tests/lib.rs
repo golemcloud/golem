@@ -32,6 +32,7 @@ pub mod http;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
+pub mod namespace_routed_key_value_storage;
 pub mod observability;
 pub mod rdbms;
 pub mod ignite_service;

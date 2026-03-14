@@ -14,6 +14,8 @@
 
 pub mod memory;
 pub mod multi_sqlite;
+pub mod namespace_routed;
+pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 
