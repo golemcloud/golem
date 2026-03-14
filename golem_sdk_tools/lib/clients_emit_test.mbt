@@ -15,6 +15,7 @@ test "generate_client_code - counter agent with no-arg methods" {
         params: [],
         return_type: None,
         param_schema_options: {},
+        http_endpoint: None,
       },
       {
         name: "get_value",
@@ -23,6 +24,7 @@ test "generate_client_code - counter agent with no-arg methods" {
         params: [],
         return_type: Some(@lib.ParamType::Simple("UInt64")),
         param_schema_options: {},
+        http_endpoint: None,
       },
     ],
     has_init: false,
@@ -31,6 +33,7 @@ test "generate_client_code - counter agent with no-arg methods" {
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
+    http_mount: None,
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
@@ -188,6 +191,7 @@ test "generate_client_code - agent with unstructured text param and return" {
         params: [("input", @lib.ParamType::Simple("@types.UnstructuredText"))],
         return_type: Some(@lib.ParamType::Simple("@types.UnstructuredText")),
         param_schema_options: {},
+        http_endpoint: None,
       },
       {
         name: "upload_binary",
@@ -196,6 +200,7 @@ test "generate_client_code - agent with unstructured text param and return" {
         params: [("data", @lib.ParamType::Simple("UnstructuredBinary"))],
         return_type: None,
         param_schema_options: {},
+        http_endpoint: None,
       },
     ],
     has_init: false,
@@ -204,6 +209,7 @@ test "generate_client_code - agent with unstructured text param and return" {
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
+    http_mount: None,
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
@@ -240,6 +246,7 @@ test "generate_client_code - agent with multimodal param" {
         ],
         return_type: None,
         param_schema_options: {},
+        http_endpoint: None,
       },
       {
         name: "analyze",
@@ -250,6 +257,7 @@ test "generate_client_code - agent with multimodal param" {
           @lib.ParamType::MultimodalType(@lib.ParamType::Simple("TextOrBinary")),
         ),
         param_schema_options: {},
+        http_endpoint: None,
       },
     ],
     has_init: false,
@@ -258,6 +266,7 @@ test "generate_client_code - agent with multimodal param" {
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
+    http_mount: None,
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
@@ -290,6 +299,7 @@ test "generate_client_code - agent with multimodal constructor" {
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
+    http_mount: None,
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
@@ -316,6 +326,7 @@ test "generate_client_code - agent with params" {
         params: [("task", @lib.ParamType::Simple("TaskInfo"))],
         return_type: Some(@lib.ParamType::Simple("UInt64")),
         param_schema_options: {},
+        http_endpoint: None,
       },
     ],
     has_init: false,
@@ -324,6 +335,7 @@ test "generate_client_code - agent with params" {
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
+    http_mount: None,
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)

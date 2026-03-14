@@ -50,7 +50,7 @@ pub(all) struct ConstructedAgent {
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@types.DataValue) -> Result[ConstructedAgent, @common.AgentError]
+  construct : (@types.DataValue, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
 }
 
 pub(all) enum SnapshotFormat {
@@ -64,7 +64,7 @@ pub impl Show for SnapshotFormat
 
 // Traits
 pub(open) trait RawAgent {
-  invoke(Self, String, @types.DataValue) -> Result[@types.DataValue, @common.AgentError]
+  invoke(Self, String, @types.DataValue, @common.Principal) -> Result[@types.DataValue, @common.AgentError]
 }
 
 pub(open) trait Snapshottable {

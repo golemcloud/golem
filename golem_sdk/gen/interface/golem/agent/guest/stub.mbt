@@ -20,14 +20,14 @@ pub fn initialize(
 pub fn invoke(
   method_name : String,
   input : @types.DataValue,
-  _principal : @common.Principal,
+  principal : @common.Principal,
 ) -> Result[@types.DataValue, @common.AgentError] {
   match @agents.get_agent_instance() {
     None =>
       @agents.panic_with_message(
         "get_definition", "Agent instance is not initialized",
       )
-    Some(instance) => instance.interface.invoke(method_name, input)
+    Some(instance) => instance.interface.invoke(method_name, input, principal)
   }
 }
 

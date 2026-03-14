@@ -1,5 +1,12 @@
 app: golem-sdk-example1
 
+httpApi:
+  deployments:
+    local:
+      - domain: localhost:9006
+        agents:
+          WeatherAgent: {}
+
 environments:
   local:
     server: local

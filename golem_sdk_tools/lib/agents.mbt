@@ -46,6 +46,26 @@ pub(all) struct SchemaOptions {
 } derive(Show, Eq)
 
 ///|
+/// HTTP endpoint information parsed from `#derive.endpoint` annotations on methods.
+pub(all) struct HttpEndpointInfo {
+  method : String
+  path : String
+  headers : Array[(String, String)]
+  auth : Bool?
+  cors : Array[String]
+} derive(Show, Eq)
+
+///|
+/// HTTP mount information parsed from `#derive.mount` annotations on agent structs.
+pub(all) struct HttpMountInfo {
+  path : String
+  auth : Bool?
+  phantom : Bool
+  cors : Array[String]
+  webhook_suffix : String?
+} derive(Show, Eq)
+
+///|
 /// Parsed information about a public agent method.
 pub(all) struct MethodInfo {
   name : String
@@ -54,6 +74,7 @@ pub(all) struct MethodInfo {
   params : Array[(String, ParamType)]
   return_type : ParamType?
   param_schema_options : Map[String, SchemaOptions]
+  http_endpoint : HttpEndpointInfo?
 } derive(Show)
 
 ///|
@@ -88,6 +109,7 @@ pub(all) struct AgentInfo {
   has_snapshottable : Bool
   has_json_derives : Bool
   fields : Array[(String, Bool)]
+  http_mount : HttpMountInfo?
 } derive(Show)
 
 ///|
@@ -478,6 +500,34 @@ pub fn is_unstructured_binary_type(pt : ParamType) -> Bool {
 }
 
 ///|
+/// Returns true if the parameter type is `Principal` or `@common.Principal`.
+pub fn is_principal_type(pt : ParamType) -> Bool {
+  match pt {
+    Simple(name) => name == "Principal" || name == "@common.Principal"
+    _ => false
+  }
+}
+
+///|
+/// Filters out `Principal` parameters from a parameter list.
+pub fn visible_params(
+  params : Array[(String, ParamType)],
+) -> Array[(String, ParamType)] {
+  params.filter(fn(p) { not(is_principal_type(p.1)) })
+}
+
+///|
+/// Returns the index of the first `Principal` parameter, if any.
+pub fn find_principal_index(params : Array[(String, ParamType)]) -> Int? {
+  for i, p in params {
+    if is_principal_type(p.1) {
+      return Some(i)
+    }
+  }
+  None
+}
+
+///|
 /// Validates that a `Multimodal` type is not nested inside another container type.
 fn validate_no_nested_multimodal(
   param_name : String,
@@ -604,6 +654,230 @@ fn extract_schema_restrictions(
 }
 
 ///|
+/// Extracts the mount path from a `#derive.mount("path")` attribute.
+fn extract_mount_path(attrs : @list.List[@attribute.Attribute]) -> String? {
+  let mut result : String? = None
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "mount" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) => result = Some(s)
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Extracts the mount auth flag from a `#derive.mount_auth(true/false)` attribute.
+fn extract_mount_auth(attrs : @list.List[@attribute.Attribute]) -> Bool? {
+  let mut result : Bool? = None
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "mount_auth" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(Bool(b)) => result = Some(b)
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Extracts CORS origins from a `#derive.mount_cors("o1", "o2")` attribute.
+fn extract_mount_cors(
+  attrs : @list.List[@attribute.Attribute],
+) -> Array[String] {
+  let result : Array[String] = []
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "mount_cors" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) => result.push(s)
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Extracts the webhook suffix from a `#derive.mount_webhook("path")` attribute.
+fn extract_mount_webhook(attrs : @list.List[@attribute.Attribute]) -> String? {
+  let mut result : String? = None
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "mount_webhook" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) => result = Some(s)
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Extracts the phantom flag from a `#derive.mount_phantom(true/false)` attribute. Default: false.
+fn extract_mount_phantom(attrs : @list.List[@attribute.Attribute]) -> Bool {
+  let mut result = false
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "mount_phantom" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(Bool(b)) => result = b
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+let http_methods : Array[String] = [
+  "get", "post", "put", "delete", "patch", "head", "options", "trace", "connect",
+]
+
+///|
+/// Extracts the HTTP endpoint from a `#derive.endpoint(get="/path")` attribute.
+fn extract_endpoint(
+  attrs : @list.List[@attribute.Attribute],
+) -> HttpEndpointInfo? raise AgentParseError {
+  let mut result : HttpEndpointInfo? = None
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "endpoint" }, props)) => {
+        let found : Array[(String, String)] = []
+        props.each(fn(prop) {
+          match prop {
+            Labeled(label, String(path)) =>
+              if http_methods.contains(label) {
+                found.push((label, path))
+              }
+            _ => ()
+          }
+        })
+        if found.length() > 1 {
+          raise AgentParseError(
+            "Multiple HTTP methods in #derive.endpoint: found " +
+            found.length().to_string(),
+          )
+        } else if found.length() == 0 {
+          raise AgentParseError(
+            "#derive.endpoint requires exactly one HTTP method (e.g. get=\"/path\")",
+          )
+        } else {
+          let (method, path) = found[0]
+          result = Some({ method, path, headers: [], auth: None, cors: [] })
+        }
+      }
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Extracts endpoint headers from `#derive.endpoint_header("Header-Name", "param")` attributes.
+fn extract_endpoint_headers(
+  attrs : @list.List[@attribute.Attribute],
+) -> Array[(String, String)] {
+  let result : Array[(String, String)] = []
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "endpoint_header" }, props)) => {
+        let strings : Array[String] = []
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) => strings.push(s)
+            _ => ()
+          }
+        })
+        if strings.length() >= 2 {
+          result.push((strings[0], strings[1]))
+        }
+      }
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Extracts the endpoint auth flag from a `#derive.endpoint_auth(true/false)` attribute.
+fn extract_endpoint_auth(attrs : @list.List[@attribute.Attribute]) -> Bool? {
+  let mut result : Bool? = None
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "endpoint_auth" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(Bool(b)) => result = Some(b)
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Extracts CORS origins from a `#derive.endpoint_cors("o1", "o2")` attribute.
+fn extract_endpoint_cors(
+  attrs : @list.List[@attribute.Attribute],
+) -> Array[String] {
+  let result : Array[String] = []
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "endpoint_cors" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) => result.push(s)
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Builds a composite `HttpEndpointInfo` from individual endpoint attributes.
+fn build_endpoint_info(
+  attrs : @list.List[@attribute.Attribute],
+) -> HttpEndpointInfo? raise AgentParseError {
+  let endpoint = extract_endpoint(attrs)
+  match endpoint {
+    Some(ep) => {
+      let headers = extract_endpoint_headers(attrs)
+      let auth = extract_endpoint_auth(attrs)
+      let cors = extract_endpoint_cors(attrs)
+      Some({ ..ep, headers, auth, cors })
+    }
+    None => None
+  }
+}
+
+///|
 /// Extracts method parameter names and types from a function declaration AST.
 fn extract_method_params(
   fun_decl : @syntax.FunDecl,
@@ -663,6 +937,7 @@ pub fn parse_agents(
   let agent_snapshottable : Map[String, Bool] = {}
   let agent_json_derives : Map[String, Bool] = {}
   let agent_fields : Map[String, Array[(String, Bool)]] = {}
+  let agent_mounts : Map[String, HttpMountInfo?] = {}
   let mut has_init = false
   // Parse all files first, then run passes over all AST nodes
   // to avoid file-ordering dependencies
@@ -725,6 +1000,20 @@ pub fn parse_agents(
             _ => ()
           }
           agent_fields[name] = field_info
+          // Extract HTTP mount info
+          let mount_path = extract_mount_path(type_decl.attrs)
+          let mount_info = match mount_path {
+            Some(path) =>
+              Some({
+                path,
+                auth: extract_mount_auth(type_decl.attrs),
+                phantom: extract_mount_phantom(type_decl.attrs),
+                cors: extract_mount_cors(type_decl.attrs),
+                webhook_suffix: extract_mount_webhook(type_decl.attrs),
+              })
+            None => None
+          }
+          agent_mounts[name] = mount_info
         }
       }
       _ => ()
@@ -792,6 +1081,7 @@ pub fn parse_agents(
                   let desc = if doc == "" { method_name } else { doc }
                   let hint = extract_prompt_hint(fun_decl.attrs)
                   let restrictions = extract_schema_restrictions(fun_decl.attrs)
+                  let endpoint = build_endpoint_info(fun_decl.attrs)
                   match agent_methods.get(name) {
                     Some(methods) =>
                       methods.push({
@@ -801,6 +1091,7 @@ pub fn parse_agents(
                         params,
                         return_type,
                         param_schema_options: restrictions,
+                        http_endpoint: endpoint,
                       })
                     None => ()
                   }
@@ -857,6 +1148,7 @@ pub fn parse_agents(
           has_snapshottable: agent_snapshottable.get(name).unwrap_or(false),
           has_json_derives: agent_json_derives.get(name).unwrap_or(false),
           fields: agent_fields.get(name).unwrap_or([]),
+          http_mount: agent_mounts.get(name).unwrap_or(None),
         })
       None => raise AgentParseError("Agent '\{name}' has no ::new constructor")
     }
@@ -868,13 +1160,14 @@ pub fn parse_agents(
       let (pname, pt) = param
       validate_no_nested_multimodal(pname, pt)
     }
-    // Validate multimodal is sole constructor param
-    let has_multimodal_ctor = agent.constructor_params
+    // Validate multimodal is sole non-Principal constructor param
+    let ctor_visible = visible_params(agent.constructor_params)
+    let has_multimodal_ctor = ctor_visible
       .iter()
       .find_first(fn(p) { is_multimodal_type(p.1) })
-    if has_multimodal_ctor is Some(_) && agent.constructor_params.length() != 1 {
+    if has_multimodal_ctor is Some(_) && ctor_visible.length() != 1 {
       raise AgentParseError(
-        "Multimodal parameter in constructor of agent '\{agent.name}' must be the only parameter",
+        "Multimodal parameter in constructor of agent '\{agent.name}' must be the only non-Principal parameter",
       )
     }
     for rname, _ in agent.constructor_schema_options {
@@ -897,13 +1190,14 @@ pub fn parse_agents(
         Some(rt) => validate_no_nested_multimodal("return", rt)
         None => ()
       }
-      // Validate multimodal params
-      let has_multimodal_param = meth.params
+      // Validate multimodal params (only non-Principal params count)
+      let meth_visible = visible_params(meth.params)
+      let has_multimodal_param = meth_visible
         .iter()
         .find_first(fn(p) { is_multimodal_type(p.1) })
-      if has_multimodal_param is Some(_) && meth.params.length() != 1 {
+      if has_multimodal_param is Some(_) && meth_visible.length() != 1 {
         raise AgentParseError(
-          "Multimodal parameter in method '\{meth.name}' must be the only parameter",
+          "Multimodal parameter in method '\{meth.name}' must be the only non-Principal parameter",
         )
       }
       for rname, _ in meth.param_schema_options {
@@ -914,7 +1208,26 @@ pub fn parse_agents(
           )
         }
       }
+      // Validate at most one Principal param per method
+      let principal_count = meth.params
+        .filter(fn(p) { is_principal_type(p.1) })
+        .length()
+      if principal_count > 1 {
+        raise AgentParseError(
+          "Method '\{meth.name}' of agent '\{agent.name}' has \{principal_count} Principal parameters; at most one is allowed",
+        )
+      }
+    }
+    // Validate at most one Principal param per constructor
+    let ctor_principal_count = agent.constructor_params
+      .filter(fn(p) { is_principal_type(p.1) })
+      .length()
+    if ctor_principal_count > 1 {
+      raise AgentParseError(
+        "Constructor of agent '\{agent.name}' has \{ctor_principal_count} Principal parameters; at most one is allowed",
+      )
     }
   }
+  validate_http_routes(agents)
   agents
 }

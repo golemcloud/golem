@@ -152,6 +152,7 @@ test "generate_agent_registration for simple agent" {
       has_json_derives: false,
       snapshotting: Disabled,
       fields: [],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -186,7 +187,7 @@ test "generate_agent_registration for simple agent" {
       #|      snapshotting: @common.Snapshotting::Disabled,
       #|      config: [],
       #|    },
-      #|    construct: fn(input) {
+      #|    construct: fn(input, principal) {
       #|      try {
       #|        let elements = @extractor.extract_tuple(input)
       #|        guard elements.length() == 1 else {
@@ -210,7 +211,12 @@ test "generate_agent_registration for simple agent" {
       #|}
       #|
       #|///|
-      #|impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for Counter with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      other => Err(@common.AgentError::InvalidMethod(other))
@@ -243,6 +249,7 @@ test "generate_agent_registration with methods" {
           params: [],
           return_type: None,
           param_schema_options: {},
+          http_endpoint: None,
         },
         {
           name: "add",
@@ -251,6 +258,7 @@ test "generate_agent_registration with methods" {
           params: [("value", Simple("UInt64"))],
           return_type: Some(Simple("UInt64")),
           param_schema_options: {},
+          http_endpoint: None,
         },
       ],
       has_init: false,
@@ -259,6 +267,7 @@ test "generate_agent_registration with methods" {
       has_json_derives: false,
       snapshotting: Disabled,
       fields: [],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -324,7 +333,7 @@ test "generate_agent_registration with methods" {
       #|      snapshotting: @common.Snapshotting::Disabled,
       #|      config: [],
       #|    },
-      #|    construct: fn(input) {
+      #|    construct: fn(input, principal) {
       #|      try {
       #|        let elements = @extractor.extract_tuple(input)
       #|        guard elements.length() == 1 else {
@@ -348,7 +357,12 @@ test "generate_agent_registration with methods" {
       #|}
       #|
       #|///|
-      #|impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for Counter with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      "increment" => {
@@ -441,6 +455,7 @@ test "generate_agent_registration with prompt_hints" {
           params: [],
           return_type: None,
           param_schema_options: {},
+          http_endpoint: None,
         },
       ],
       has_init: false,
@@ -449,6 +464,7 @@ test "generate_agent_registration with prompt_hints" {
       has_json_derives: false,
       snapshotting: Disabled,
       fields: [],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -492,7 +508,7 @@ test "generate_agent_registration with prompt_hints" {
       #|      snapshotting: @common.Snapshotting::Disabled,
       #|      config: [],
       #|    },
-      #|    construct: fn(input) {
+      #|    construct: fn(input, principal) {
       #|      try {
       #|        let elements = @extractor.extract_tuple(input)
       #|        guard elements.length() == 1 else {
@@ -516,7 +532,12 @@ test "generate_agent_registration with prompt_hints" {
       #|}
       #|
       #|///|
-      #|impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for Counter with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      "increment" => {
@@ -1024,6 +1045,7 @@ test "build_raw_agent_impl for counter-like agent" {
         params: [],
         return_type: None,
         param_schema_options: {},
+        http_endpoint: None,
       },
       {
         name: "get_value",
@@ -1032,6 +1054,7 @@ test "build_raw_agent_impl for counter-like agent" {
         params: [],
         return_type: Some(Simple("UInt64")),
         param_schema_options: {},
+        http_endpoint: None,
       },
       {
         name: "add",
@@ -1040,6 +1063,7 @@ test "build_raw_agent_impl for counter-like agent" {
         params: [("value", Simple("UInt64"))],
         return_type: Some(Simple("UInt64")),
         param_schema_options: {},
+        http_endpoint: None,
       },
     ],
     has_init: false,
@@ -1048,6 +1072,7 @@ test "build_raw_agent_impl for counter-like agent" {
     has_json_derives: false,
     snapshotting: Disabled,
     fields: [],
+    http_mount: None,
   }
   let impl_ = build_raw_agent_impl(agent)
   let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
@@ -1055,7 +1080,12 @@ test "build_raw_agent_impl for counter-like agent" {
     output,
     content=(
       #|///|
-      #|impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for Counter with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      "increment" => {
@@ -1272,6 +1302,7 @@ test "generate_agent_registration with cross-package types" {
           params: [("order", Simple("@types.Order"))],
           return_type: Some(Simple("@types.Result")),
           param_schema_options: {},
+          http_endpoint: None,
         },
       ],
       has_init: false,
@@ -1280,6 +1311,7 @@ test "generate_agent_registration with cross-package types" {
       has_json_derives: false,
       snapshotting: Disabled,
       fields: [],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1337,7 +1369,7 @@ test "generate_agent_registration with cross-package types" {
       #|      snapshotting: @common.Snapshotting::Disabled,
       #|      config: [],
       #|    },
-      #|    construct: fn(input) {
+      #|    construct: fn(input, principal) {
       #|      try {
       #|        let elements = @extractor.extract_tuple(input)
       #|        guard elements.length() == 1 else {
@@ -1361,7 +1393,12 @@ test "generate_agent_registration with cross-package types" {
       #|}
       #|
       #|///|
-      #|impl @agents.RawAgent for OrderAgent with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for OrderAgent with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      "process" => {
@@ -1516,6 +1553,7 @@ test "generate_agent_registration with ephemeral mode" {
       has_json_derives: false,
       snapshotting: Disabled,
       fields: [],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1543,7 +1581,7 @@ test "generate_agent_registration with ephemeral mode" {
       #|      snapshotting: @common.Snapshotting::Disabled,
       #|      config: [],
       #|    },
-      #|    construct: fn(input) {
+      #|    construct: fn(input, principal) {
       #|      try {
       #|        let elements = @extractor.extract_tuple(input)
       #|        guard elements.length() == 0 else {
@@ -1566,7 +1604,12 @@ test "generate_agent_registration with ephemeral mode" {
       #|}
       #|
       #|///|
-      #|impl @agents.RawAgent for Worker with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for Worker with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      other => Err(@common.AgentError::InvalidMethod(other))
@@ -1632,6 +1675,7 @@ test "generate_agent_registration with multimodal return uses to_data_value" {
           params: [("input", MultimodalType(Simple("TextOrBinary")))],
           return_type: Some(MultimodalType(Simple("TextOrBinary"))),
           param_schema_options: {},
+          http_endpoint: None,
         },
       ],
       has_init: false,
@@ -1640,6 +1684,7 @@ test "generate_agent_registration with multimodal return uses to_data_value" {
       has_json_derives: false,
       snapshotting: Disabled,
       fields: [],
+      http_mount: None,
     },
   ]
   let impl_ = build_raw_agent_impl(agents[0])
@@ -1648,7 +1693,12 @@ test "generate_agent_registration with multimodal return uses to_data_value" {
     output,
     content=(
       #|///|
-      #|impl @agents.RawAgent for EchoAgent with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for EchoAgent with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      "echo" => {
@@ -1911,6 +1961,7 @@ test "generate_agent_registration with snapshotting periodic" {
       has_snapshottable: false,
       has_json_derives: false,
       fields: [],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1940,7 +1991,7 @@ test "generate_agent_registration with snapshotting periodic" {
       #|      ),
       #|      config: [],
       #|    },
-      #|    construct: fn(input) {
+      #|    construct: fn(input, principal) {
       #|      try {
       #|        let elements = @extractor.extract_tuple(input)
       #|        guard elements.length() == 0 else {
@@ -1963,7 +2014,12 @@ test "generate_agent_registration with snapshotting periodic" {
       #|}
       #|
       #|///|
-      #|impl @agents.RawAgent for Worker with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for Worker with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      other => Err(@common.AgentError::InvalidMethod(other))
@@ -1995,6 +2051,7 @@ test "generate_agent_registration with snapshotting default" {
       has_snapshottable: false,
       has_json_derives: false,
       fields: [],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -2024,7 +2081,7 @@ test "generate_agent_registration with snapshotting default" {
       #|      ),
       #|      config: [],
       #|    },
-      #|    construct: fn(input) {
+      #|    construct: fn(input, principal) {
       #|      try {
       #|        let elements = @extractor.extract_tuple(input)
       #|        guard elements.length() == 0 else {
@@ -2047,7 +2104,12 @@ test "generate_agent_registration with snapshotting default" {
       #|}
       #|
       #|///|
-      #|impl @agents.RawAgent for Worker with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for Worker with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      other => Err(@common.AgentError::InvalidMethod(other))
@@ -2079,6 +2141,7 @@ test "generate_agent_registration with snapshotting every_n" {
       has_snapshottable: false,
       has_json_derives: false,
       fields: [],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -2108,7 +2171,7 @@ test "generate_agent_registration with snapshotting every_n" {
       #|      ),
       #|      config: [],
       #|    },
-      #|    construct: fn(input) {
+      #|    construct: fn(input, principal) {
       #|      try {
       #|        let elements = @extractor.extract_tuple(input)
       #|        guard elements.length() == 0 else {
@@ -2131,7 +2194,12 @@ test "generate_agent_registration with snapshotting every_n" {
       #|}
       #|
       #|///|
-      #|impl @agents.RawAgent for Worker with invoke(self, method_name, input) {
+      #|impl @agents.RawAgent for Worker with invoke(
+      #|  self,
+      #|  method_name,
+      #|  input,
+      #|  principal,
+      #|) {
       #|  try {
       #|    match method_name {
       #|      other => Err(@common.AgentError::InvalidMethod(other))
@@ -2260,6 +2328,7 @@ test "generate_agent_registration with json derives generates direct Snapshottab
       has_json_derives: true,
       snapshotting: Disabled,
       fields: [("name", false), ("value", true)],
+      http_mount: None,
     },
   ]
   let impls = generate_agent_registration(agents)

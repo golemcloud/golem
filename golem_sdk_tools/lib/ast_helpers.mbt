@@ -101,6 +101,12 @@ fn make_int_expr(n : Int) -> @syntax.Expr {
 }
 
 ///|
+/// Creates a boolean literal expression.
+fn make_bool_expr(b : Bool) -> @syntax.Expr {
+  @syntax.Expr::Constant(c=@syntax.Constant::Bool(b), loc=dummy_loc)
+}
+
+///|
 /// Creates a UInt64 literal expression.
 fn make_uint64_expr(n : UInt64) -> @syntax.Expr {
   @syntax.Expr::Constant(

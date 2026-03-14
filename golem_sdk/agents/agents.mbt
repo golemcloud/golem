@@ -76,7 +76,7 @@ pub(all) struct ConstructedAgent {
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@rpcTypes.DataValue) -> Result[
+  construct : (@rpcTypes.DataValue, @common.Principal) -> Result[
     ConstructedAgent,
     @common.AgentError,
   ]
@@ -109,7 +109,7 @@ pub fn construct_and_set_instance(
         "Agent type not found: \{agent_type}",
       )
     Some(registered_agent) => {
-      let constructed = (registered_agent.construct)(input)
+      let constructed = (registered_agent.construct)(input, principal)
       match constructed {
         Ok(constructed) => {
           set_agent_instance({
@@ -139,8 +139,10 @@ pub fn[T] panic_with_message(context : String, message : String) -> T {
 /// Low-level trait that every agent must implement. Generated code provides
 /// `invoke` dispatch by method name.
 pub(open) trait RawAgent {
-  invoke(Self, method_name : String, input : @rpcTypes.DataValue) -> Result[
-    @rpcTypes.DataValue,
-    @common.AgentError,
-  ]
+  invoke(
+    Self,
+    method_name : String,
+    input : @rpcTypes.DataValue,
+    principal : @common.Principal,
+  ) -> Result[@rpcTypes.DataValue, @common.AgentError]
 }
