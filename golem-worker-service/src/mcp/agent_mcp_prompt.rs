@@ -151,9 +151,7 @@ fn describe_input(
 
 fn describe_output_element(element: &NamedElementSchema) -> String {
     match &element.schema {
-        ElementSchema::ComponentModel(_) => {
-            "json result".to_string()
-        }
+        ElementSchema::ComponentModel(_) => "json result".to_string(),
 
         ElementSchema::UnstructuredText(text_desc) => {
             if let Some(desc) = &text_desc.restrictions {
@@ -161,25 +159,37 @@ fn describe_output_element(element: &NamedElementSchema) -> String {
                     return "text".to_string();
                 }
 
-                return format!("text with with one of the following language codes: {}", desc.iter().map(|x| x.language_code.clone()).collect::<Vec<_>>().join(", "))
+                return format!(
+                    "text with with one of the following language codes: {}",
+                    desc.iter()
+                        .map(|x| x.language_code.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
 
             "text".to_string()
-        },
+        }
         ElementSchema::UnstructuredBinary(binary) => {
             if let Some(restrictions) = &binary.restrictions {
                 if restrictions.is_empty() {
                     return "binary".to_string();
                 }
 
-                return format!("binary with one of the following mime-types: {}", restrictions.iter().map(|x| x.mime_type.clone()).collect::<Vec<_>>().join(", "))
+                return format!(
+                    "binary with one of the following mime-types: {}",
+                    restrictions
+                        .iter()
+                        .map(|x| x.mime_type.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
 
             "binary".to_string()
         }
     }
 }
-
 
 fn describe_output(schema: &DataSchema) -> Option<String> {
     match schema {
@@ -192,7 +202,11 @@ fn describe_output(schema: &DataSchema) -> Option<String> {
             if schemas.elements.is_empty() {
                 return None;
             }
-            let parts: Vec<String> = schemas.elements.iter().map(describe_output_element).collect();
+            let parts: Vec<String> = schemas
+                .elements
+                .iter()
+                .map(describe_output_element)
+                .collect();
             Some(format!(
                 "output hint: multimodal response: {}",
                 parts.join(", ")
