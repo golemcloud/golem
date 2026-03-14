@@ -27,9 +27,10 @@ components-rust/                  # Component crates (each becomes a WASM compon
     src/lib.rs                    # Agent definitions and implementations
     Cargo.toml                    # Must use crate-type = ["cdylib"]
     golem.yaml                    # Component-level manifest (templates, env, dependencies)
-common-rust/                      # Shared Golem Rust templates
-  golem.yaml                      # Build templates for all Rust components
 golem-temp/                       # Build artifacts (gitignored)
+  common/                         # Shared Golem templates (generated on-demand)
+    rust/                         # Shared Golem Rust templates
+      golem.yaml                  # Build templates for all Rust components
 ```
 
 ## Prerequisites
@@ -258,8 +259,6 @@ pub struct MyData {
 }
 ```
 
-Shared types can be placed in `common-rust/common-lib/` and used across components.
-
 ### Method annotations
 
 ```rust
@@ -375,7 +374,7 @@ This creates a new directory under `components-rust/` with the standard structur
 ## Application Manifest (golem.yaml)
 
 - Root `golem.yaml`: app name, includes, witDeps, environments
-- `common-rust/golem.yaml`: build templates (debug/release profiles) shared by all Rust components
+- `golem-temp/common-rust/golem.yaml`: build templates (debug/release profiles) shared by all Rust components
 - `components-rust/<name>/golem.yaml`: component-specific config (templates reference, env vars, dependencies)
 
 Key fields in component manifest:
@@ -411,13 +410,12 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 - All agent method parameters passed by value (no references)
 - All custom types need `Schema` derive (plus `IntoValue` and `FromValueAndType`, which `Schema` implies)
 - `proc-macro-enable` must be true in rust-analyzer settings (already configured in `.vscode/settings.json`)
-- Do not manually edit files in `.wit/` directories — they are auto-managed by the build tooling
-- `golem-temp/` and `target/` are gitignored build artifacts
+- `golem-temp/` and `target/` are gitignored build artifacts, do not manually edit files in those directories
 
 ## Formatting and Linting
 
 ```shell
-cargo fmt                        # Format code
+cargo fmt                            # Format code
 cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
 ```
 

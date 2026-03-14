@@ -21,27 +21,70 @@ use golem_common::base_model::application::ApplicationName;
 use golem_common::base_model::component::ComponentName;
 use heck::{ToKebabCase, ToSnakeCase};
 use include_dir::{Dir, DirEntry};
-use itertools::Itertools;
-use std::borrow::Cow;
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 const ON_DEMAND_COMMON_HASH_FILE_NAME: &str = ".golem-template-content-hash";
 
-#[derive(Debug, Copy, Clone)]
-enum TargetExistsResolveMode {
-    #[allow(dead_code)]
-    Skip,
-    MergeOrSkip,
-    Fail,
-    MergeOrFail,
+pub trait TemplateGeneratorTargetFs {
+    type Output;
+
+    fn exists(&self, path: &Path) -> bool;
+    fn write_file(&mut self, path: &Path, contents: String) -> anyhow::Result<()>;
+    fn finish(self) -> Self::Output;
 }
 
-type MergeContents = Box<dyn FnOnce(&[u8]) -> anyhow::Result<Vec<u8>>>;
+#[derive(Debug, Default)]
+pub struct StdFs;
 
-enum TargetExistsResolveDecision {
-    Skip,
-    Merge(MergeContents),
+impl TemplateGeneratorTargetFs for StdFs {
+    type Output = ();
+
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    fn write_file(&mut self, path: &Path, contents: String) -> anyhow::Result<()> {
+        fs::write_str(path, contents)
+    }
+
+    fn finish(self) -> Self::Output {}
+}
+
+#[derive(Debug, Default)]
+pub struct InMemoryFs {
+    files: BTreeMap<PathBuf, String>,
+}
+
+impl InMemoryFs {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn files(&self) -> &BTreeMap<PathBuf, String> {
+        &self.files
+    }
+
+    pub fn get(&self, path: &Path) -> Option<&str> {
+        self.files.get(path).map(|s| s.as_str())
+    }
+}
+
+impl TemplateGeneratorTargetFs for InMemoryFs {
+    type Output = InMemoryFs;
+
+    fn exists(&self, path: &Path) -> bool {
+        self.files.contains_key(path)
+    }
+
+    fn write_file(&mut self, path: &Path, contents: String) -> anyhow::Result<()> {
+        self.files.insert(path.to_path_buf(), contents);
+        Ok(())
+    }
+
+    fn finish(self) -> Self::Output {
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,40 +103,38 @@ struct GeneratorContext<'a> {
     component_name: Option<&'a ComponentName>,
     target_path: &'a Path,
     sdk_overrides: &'a SdkOverrides,
-    resolve_mode: TargetExistsResolveMode,
 }
 
-pub fn generate_commons_by_template(
+pub fn generate_commons_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
     application_name: &ApplicationName,
     target_path: &Path,
     sdk_overrides: &SdkOverrides,
-) -> anyhow::Result<()> {
+    mut target: T,
+) -> anyhow::Result<T::Output> {
     if !template.metadata.is_common() {
         bail!("Template {} is not a common template", template.name);
     }
 
-    if let Some(skip_if_exists) = template.skip_if_exists() {
-        if target_path.join(skip_if_exists).exists() {
-            return Ok(());
-        }
-    }
-
-    generate_root_directory(&GeneratorContext {
-        template,
-        application_name: Some(application_name),
-        component_name: None,
-        target_path,
-        sdk_overrides,
-        resolve_mode: TargetExistsResolveMode::MergeOrSkip,
-    })
+    generate_root_directory(
+        &mut target,
+        &GeneratorContext {
+            template,
+            application_name: Some(application_name),
+            component_name: None,
+            target_path,
+            sdk_overrides,
+        },
+    )?;
+    Ok(target.finish())
 }
 
-pub fn generate_on_demand_commons_by_template(
+pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
     target_path: &Path,
     sdk_overrides: &SdkOverrides,
-) -> anyhow::Result<()> {
+    mut target: T,
+) -> anyhow::Result<T::Output> {
     if !template.metadata.is_common_on_demand() {
         bail!(
             "Template {} is not a common on demand template",
@@ -106,53 +147,88 @@ pub fn generate_on_demand_commons_by_template(
         if target_path.exists() && hash_path.exists() {
             let stored_hash = fs::read_to_string(&hash_path)?;
             if stored_hash.trim() == content_hash {
-                return Ok(());
+                return Ok(target.finish());
             }
         }
     }
 
     fs::remove(target_path)?;
 
-    generate_root_directory(&GeneratorContext {
-        template,
-        application_name: None,
-        component_name: None,
-        target_path,
-        sdk_overrides,
-        resolve_mode: TargetExistsResolveMode::Fail,
-    })?;
+    generate_root_directory(
+        &mut target,
+        &GeneratorContext {
+            template,
+            application_name: None,
+            component_name: None,
+            target_path,
+            sdk_overrides,
+        },
+    )?;
 
     if let Some(content_hash) = template.content_hash.as_deref() {
         let hash_path = target_path.join(ON_DEMAND_COMMON_HASH_FILE_NAME);
         fs::write_str(hash_path, content_hash)?;
     }
 
-    Ok(())
+    Ok(target.finish())
 }
 
-pub fn generate_component_by_template(
+pub fn generate_component_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
     target_path: &Path,
     application_name: &ApplicationName,
     component_name: &ComponentName,
     sdk_overrides: &SdkOverrides,
-) -> anyhow::Result<()> {
+    mut target: T,
+) -> anyhow::Result<T::Output> {
     if !template.metadata.is_component() {
         bail!("Template {} is not a component template", template.name);
     }
 
-    generate_root_directory(&GeneratorContext {
-        template,
-        application_name: Some(application_name),
-        component_name: Some(component_name),
-        target_path,
-        sdk_overrides,
-        resolve_mode: TargetExistsResolveMode::MergeOrFail,
-    })
+    generate_root_directory(
+        &mut target,
+        &GeneratorContext {
+            template,
+            application_name: Some(application_name),
+            component_name: Some(component_name),
+            target_path,
+            sdk_overrides,
+        },
+    )?;
+    Ok(target.finish())
 }
 
-fn generate_root_directory(ctx: &GeneratorContext<'_>) -> anyhow::Result<()> {
+pub fn generate_agent_by_template<T: TemplateGeneratorTargetFs>(
+    template: &AppTemplate,
+    target_path: &Path,
+    application_name: &ApplicationName,
+    component_name: &ComponentName,
+    sdk_overrides: &SdkOverrides,
+    mut target: T,
+) -> anyhow::Result<T::Output> {
+    if !template.metadata.is_agent() {
+        bail!("Template {} is not an agent template", template.name);
+    }
+
+    generate_root_directory(
+        &mut target,
+        &GeneratorContext {
+            template,
+            application_name: Some(application_name),
+            component_name: Some(component_name),
+            target_path,
+            sdk_overrides,
+        },
+    )?;
+    Ok(target.finish())
+}
+
+fn generate_root_directory<T: TemplateGeneratorTargetFs>(
+    target: &mut T,
+    ctx: &GeneratorContext<'_>,
+) -> anyhow::Result<()> {
     generate_directory(
+        target,
         ctx,
         &TEMPLATES_DIR,
         &ctx.template.template_path,
@@ -160,13 +236,13 @@ fn generate_root_directory(ctx: &GeneratorContext<'_>) -> anyhow::Result<()> {
     )
 }
 
-fn generate_directory(
+fn generate_directory<T: TemplateGeneratorTargetFs>(
+    target: &mut T,
     ctx: &GeneratorContext<'_>,
     templates_dir: &Dir<'_>,
     source: &Path,
-    target: &Path,
+    target_path: &Path,
 ) -> anyhow::Result<()> {
-    fs::create_dir_all(target)?;
     for entry in templates_dir
         .get_dir(source)
         .unwrap_or_else(|| panic!("Could not find entry {source:?}"))
@@ -178,7 +254,13 @@ fn generate_directory(
             let name = transform_file_name(ctx, name);
             match entry {
                 DirEntry::Dir(dir) => {
-                    generate_directory(ctx, templates_dir, dir.path(), &target.join(&name))?;
+                    generate_directory(
+                        target,
+                        ctx,
+                        templates_dir,
+                        dir.path(),
+                        &target_path.join(&name),
+                    )?;
                 }
                 DirEntry::File(file) => {
                     let content_transform = match (ctx.template.metadata.is_common(), name.as_str())
@@ -200,10 +282,11 @@ fn generate_directory(
                     };
 
                     instantiate_file(
+                        target,
                         ctx,
                         templates_dir,
                         file.path(),
-                        &target.join(&name),
+                        &target_path.join(&name),
                         content_transform,
                     )?;
                 }
@@ -213,36 +296,26 @@ fn generate_directory(
     Ok(())
 }
 
-fn instantiate_file(
+fn instantiate_file<T: TemplateGeneratorTargetFs>(
+    target: &mut T,
     ctx: &GeneratorContext<'_>,
     dir: &Dir<'_>,
     source: &Path,
-    target: &Path,
+    target_path: &Path,
     content_transforms: Vec<Transform>,
 ) -> anyhow::Result<()> {
-    match get_resolved_contents(ctx, dir, source, target)? {
-        Some(contents) => {
-            if content_transforms.is_empty() {
-                Ok(fs::write(target, contents)?)
-            } else {
-                Ok(fs::write(
-                    target,
-                    transform(
-                        ctx,
-                        std::str::from_utf8(contents.as_ref()).map_err(|err| {
-                            anyhow!(
-                                "Failed to decode as utf8, source: {}, err: {}",
-                                source.display(),
-                                err
-                            )
-                        })?,
-                        &content_transforms,
-                    ),
-                )?)
-            }
-        }
-        None => Ok(()),
+    if target.exists(target_path) {
+        bail!("Target {} already exists", target_path.display());
     }
+
+    let contents = get_contents(dir, source)?;
+    let rendered = if content_transforms.is_empty() {
+        contents.to_string()
+    } else {
+        transform(ctx, contents, &content_transforms)
+    };
+
+    target.write_file(target_path, rendered)
 }
 
 fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Transform]) -> String {
@@ -271,9 +344,6 @@ fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Tra
                      ),
             )
             .replace("    # golem-app-manifest-dep-env-vars-doc", &DEP_ENV_VARS_DOC)
-            .replace("    # golem-app-manifest-env-presets",
-                     "", // "    # TODO: atomic\n"
-            )
     };
 
     let transform_app_name = |str: &str| -> String {
@@ -320,94 +390,9 @@ fn transform_file_name(ctx: &GeneratorContext<'_>, file_name: impl AsRef<str>) -
     transform(ctx, file_name, &[Transform::ComponentName]).replace("Cargo.toml._", "Cargo.toml")
 }
 
-fn check_target(
-    target: &Path,
-    resolve_mode: TargetExistsResolveMode,
-) -> anyhow::Result<Option<TargetExistsResolveDecision>> {
-    if !target.exists() {
-        return Ok(None);
-    }
-
-    let get_merge = || -> anyhow::Result<Option<TargetExistsResolveDecision>> {
-        let file_name = target
-            .file_name()
-            .ok_or_else(|| anyhow!("Failed to get file name for target: {}", target.display()))
-            .and_then(|file_name| {
-                file_name.to_str().ok_or_else(|| {
-                    anyhow!(
-                        "Failed to convert file name to string: {}",
-                        file_name.to_string_lossy()
-                    )
-                })
-            })?;
-
-        match file_name {
-            ".gitignore" => {
-                let target = target.to_path_buf();
-                let current_content = fs::read_to_string(&target)?;
-                Ok(Some(TargetExistsResolveDecision::Merge(Box::new(
-                    move |new_content: &[u8]| -> anyhow::Result<Vec<u8>> {
-                        Ok(current_content
-                            .lines()
-                            .chain(
-                                std::str::from_utf8(new_content).map_err(|err| {
-                                    anyhow!(
-                                        "Failed to decode new content for merge as utf8, target: {}, err: {}",
-                                        target.display(),
-                                        err
-                                    )
-                                })?.lines(),
-                            )
-                            .collect::<BTreeSet<&str>>()
-                            .iter()
-                            .join("\n")
-                            .into_bytes())
-                    },
-                ))))
-            }
-            _ => Ok(None),
-        }
-    };
-
-    let target_already_exists = || {
-        Err(anyhow!(format!(
-            "Target ({}) already exists!",
-            target.display()
-        )))
-    };
-
-    match resolve_mode {
-        TargetExistsResolveMode::Skip => Ok(Some(TargetExistsResolveDecision::Skip)),
-        TargetExistsResolveMode::MergeOrSkip => match get_merge()? {
-            Some(merge) => Ok(Some(merge)),
-            None => Ok(Some(TargetExistsResolveDecision::Skip)),
-        },
-        TargetExistsResolveMode::Fail => target_already_exists(),
-        TargetExistsResolveMode::MergeOrFail => match get_merge()? {
-            Some(merge) => Ok(Some(merge)),
-            None => target_already_exists(),
-        },
-    }
-}
-
-fn get_contents<'a>(dir: &Dir<'a>, source: &'a Path) -> anyhow::Result<&'a [u8]> {
-    Ok(dir
-        .get_file(source)
+fn get_contents<'a>(dir: &Dir<'a>, source: &'a Path) -> anyhow::Result<&'a str> {
+    dir.get_file(source)
         .ok_or_else(|| anyhow!("Could not find entry {}", source.display()))?
-        .contents())
-}
-
-fn get_resolved_contents<'a>(
-    ctx: &GeneratorContext<'a>,
-    dir: &Dir<'a>,
-    source: &'a Path,
-    target: &'a Path,
-) -> anyhow::Result<Option<Cow<'a, [u8]>>> {
-    match check_target(target, ctx.resolve_mode)? {
-        None => Ok(Some(Cow::Borrowed(get_contents(dir, source)?))),
-        Some(TargetExistsResolveDecision::Skip) => Ok(None),
-        Some(TargetExistsResolveDecision::Merge(merge)) => {
-            Ok(Some(Cow::Owned(merge(get_contents(dir, source)?)?)))
-        }
-    }
+        .contents_utf8()
+        .ok_or_else(|| anyhow!("File contents are not valid UTF-8: {}", source.display()))
 }

@@ -44,7 +44,6 @@ use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use lenient_bool::LenientBool;
@@ -631,12 +630,13 @@ pub enum GolemCliCommandPartialMatch {
 #[derive(Debug, Subcommand)]
 pub enum GolemCliSubcommand {
     // App scoped root commands---------------------------------------------------------------------
-    /// Create a new application
+    /// Create a new application, component, or agent
     New {
-        /// Application folder name where the new application should be created
-        application_name: Option<ApplicationName>,
-        /// Languages that the application should support
-        language: Vec<GuestLanguage>,
+        /// Application folder path where the new application should be created, use `.` for the current directory or for an existing application
+        application_path: PathBuf,
+        /// Optional template names to apply, in non-interactive mode at least one template must be specified
+        #[arg(long, short)]
+        template: Vec<String>,
     },
     /// Build all or selected components in the application
     Build {
@@ -958,6 +958,7 @@ pub mod component {
 
     #[derive(Debug, Subcommand)]
     pub enum ComponentSubcommand {
+        // TODO: FCL: drop, and handle by golem new
         /// Create new component in the current application
         New {
             /// Template to be used for the new component
@@ -965,6 +966,7 @@ pub mod component {
             /// Name of the new component in 'namespace:name' form
             component_name: Option<ComponentName>,
         },
+        // TODO: FCL: root
         /// List or search component templates
         Templates {
             /// Optional filter for language or template name

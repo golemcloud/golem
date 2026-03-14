@@ -20,20 +20,19 @@ Key concepts:
 ## Project Structure
 
 ```
-golem.yaml                        # Root application manifest
-package.json                      # Root package.json (npm workspaces)
-components-ts/                    # Component directories (each becomes a WASM component)
+golem.yaml                            # Root application manifest
+package.json                          # Root package.json (npm workspaces)
+components-ts/                        # Component directories (each becomes a WASM component)
   <component-name>/
-    src/main.ts                   # Agent definitions and implementations
-    package.json                  # Component-level package.json
-    rollup.config.mjs             # Rollup config (imports shared base config)
-    tsconfig.json                 # TypeScript config (extends shared base)
-    golem.yaml                    # Component-level manifest (templates, env, dependencies)
-common-ts/                        # Shared TypeScript Golem templates and configuration
-  golem.yaml                      # Build templates for all TS components
-  rollup.config.component.mjs     # Shared Rollup configuration
-  tsconfig.component.json         # Shared TypeScript configuration
-golem-temp/                       # Build artifacts (gitignored)
+    src/main.ts                       # Agent definitions and implementations
+    package.json                      # Component-level package.json
+    tsconfig.json                     # TypeScript config
+    golem.yaml                        # Component-level manifest (templates, env, dependencies)
+golem-temp/                           # Build artifacts (gitignored)
+  common/                             # Shared Golem templates and configuration (generated on-demand)
+    ts/                               # Shared TypeScript Golem templates and configuration
+      golem.yaml                      # Build templates for all TS components
+      rollup.config.component.mjs     # Shared Rollup configuration
 ```
 
 ## Prerequisites
@@ -256,8 +255,6 @@ class WeatherAgent extends BaseAgent {
 }
 ```
 
-Shared types can be placed in `common-ts/src/` and imported as `common/lib` across components.
-
 ### Method annotations
 
 ```typescript
@@ -382,7 +379,7 @@ This creates a new directory under `components-ts/` with the standard structure.
 ## Application Manifest (golem.yaml)
 
 - Root `golem.yaml`: app name, includes, environments
-- `common-ts/golem.yaml`: build templates (TypeScript compilation, Rollup bundling, WASM composition) shared by all TS components
+- `golem-temp/common/ts/golem.yaml`: build templates (TypeScript compilation, Rollup bundling, WASM composition) shared by all TS components
 - `components-ts/<name>/golem.yaml`: component-specific config (templates reference, env vars, dependencies)
 
 Key fields in component manifest:
@@ -421,7 +418,6 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 - TypeScript **enums are not supported** — use string literal unions instead
 - All agent classes must extend `BaseAgent` and be decorated with `@agent()`
 - Constructor parameters define agent identity — they must be serializable types
-- Do not modify `rollup.config.mjs` or `common-ts/rollup.config.component.mjs` — they are pre-configured for Golem's build pipeline
 - Do not manually edit files in `golem-temp/` — they are auto-generated build artifacts
 - The build pipeline uses `golem-typegen` to extract type metadata from TypeScript via decorators; ensure `experimentalDecorators` and `emitDecoratorMetadata` are enabled in `tsconfig.json`
 

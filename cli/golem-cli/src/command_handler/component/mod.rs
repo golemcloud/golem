@@ -56,7 +56,6 @@ use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -117,6 +116,7 @@ impl ComponentCommandHandler {
         })
     }
 
+    // TODO: FCL: drop
     async fn cmd_new(
         &self,
         template: Option<ComponentTemplateName>,
@@ -128,7 +128,7 @@ impl ComponentCommandHandler {
         //   - checking that we are inside an application
         //   - switching to the root dir as a side effect
         //   - getting existing component names
-        let (existing_component_names, application_name) = {
+        let (existing_component_names, _application_name) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
             (
@@ -141,7 +141,7 @@ impl ComponentCommandHandler {
             )
         };
 
-        let Some((template, component_name)) = ({
+        let Some((_template, component_name)) = ({
             match (template, component_name) {
                 (Some(template), Some(component_package_name)) => {
                     Some((template, component_package_name))
@@ -171,14 +171,14 @@ impl ComponentCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        self.ctx.app_handler().generate_component(
+        // TODO: FCL
+        /*self.ctx.app_handler().generate_component(
             &application_name,
             &component_name,
             &PathBuf::from("."),
             template.as_str(),
-        )?;
-
-        Ok(())
+        )?;*/
+        todo!()
     }
 
     fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {

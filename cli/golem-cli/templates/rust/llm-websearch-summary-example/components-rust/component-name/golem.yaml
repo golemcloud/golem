@@ -21,5 +21,3 @@ components:
       GOOGLE_SEARCH_ENGINE_ID: "changeme"
 
     # golem-app-manifest-dep-env-vars-doc
-
-    # golem-app-manifest-env-presets

@@ -2,9 +2,6 @@
 
 app: app-name
 
-includes:
-- components-*/*/golem.yaml
-
 environments:
   local:
     server: local
