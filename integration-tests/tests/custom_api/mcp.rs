@@ -323,7 +323,7 @@ async fn call_tool_weather_agent_string(ctx: &McpTestContext) -> anyhow::Result<
 
     assert_eq!(result["isError"], json!(false));
     assert_eq!(
-        result["structuredContent"],
+        result["structuredContent"]["return_value"],
         json!("Agent test-agent: This is a weather report for Sydney")
     );
 
@@ -343,18 +343,22 @@ async fn call_tool_weather_agent_multimodal(ctx: &McpTestContext) -> anyhow::Res
         .await?;
 
     assert_eq!(result["isError"], json!(false));
-    let structured = &result["structuredContent"];
 
-    let parts = structured["parts"].as_array().unwrap();
-    assert_eq!(parts.len(), 2);
+    let multimodal_array = &result["content"].as_array().unwrap();
 
-    assert!(parts[0]["value"]["data"]
+    assert_eq!(multimodal_array.len(), 2);
+
+    let unstructured_text_content = &multimodal_array[0];
+
+    assert!(unstructured_text_content["text"]
         .as_str()
         .unwrap()
         .contains("snow fall in Sydney"));
 
-    assert_eq!(parts[1]["value"]["mimeType"], "image/png");
-    assert!(parts[1]["value"]["data"].as_str().is_some());
+    let image_content = &multimodal_array[1];
+
+    assert_eq!(image_content["data"].as_str().unwrap(), "AQID");
+    assert_eq!(image_content["mimeType"].as_str().unwrap(), "image/png");
 
     Ok(())
 }
@@ -372,15 +376,13 @@ async fn call_tool_weather_agent_unstructured_text(ctx: &McpTestContext) -> anyh
         .await?;
 
     assert_eq!(result["isError"], json!(false));
-    let structured = &result["structuredContent"];
-    assert!(
-        structured["data"]
-            .as_str()
-            .unwrap()
-            .contains("unstructured weather report for Sydney"),
-        "Expected unstructured text, got: {:?}",
-        structured
-    );
+
+    let unstructured_text = &result["content"].as_array().unwrap();
+
+    assert!(unstructured_text[0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("unstructured weather report for Sydney"),);
 
     Ok(())
 }
@@ -398,11 +400,12 @@ async fn call_tool_weather_agent_unstructured_binary(ctx: &McpTestContext) -> an
         .await?;
 
     assert_eq!(result["isError"], json!(false));
-    let structured = &result["structuredContent"];
+
+    let contents = &result["content"];
 
     // Binary data is base64 encoded: vec![1, 2, 3] -> "AQID"
-    assert_eq!(structured["data"], "AQID");
-    assert_eq!(structured["mimeType"], "image/png");
+    assert_eq!(contents[0]["data"], "AQID");
+    assert_eq!(contents[0]["mimeType"], "image/png");
 
     Ok(())
 }
@@ -420,7 +423,7 @@ async fn call_tool_weather_agent_component_model(ctx: &McpTestContext) -> anyhow
         .await?;
 
     assert_eq!(result["isError"], json!(false));
-    let structured = &result["structuredContent"];
+    let structured = &result["structuredContent"]["return_value"];
 
     assert_eq!(structured["lat"], json!(0.0));
     assert_eq!(structured["long"], json!(0.0));
@@ -444,7 +447,7 @@ async fn call_tool_singleton_string(ctx: &McpTestContext) -> anyhow::Result<()> 
 
     assert_eq!(result["isError"], json!(false));
     assert_eq!(
-        result["structuredContent"],
+        result["structuredContent"]["return_value"],
         json!("This is a weather report for Darwin.")
     );
 
@@ -464,11 +467,13 @@ async fn call_tool_singleton_component_model(ctx: &McpTestContext) -> anyhow::Re
         .await?;
 
     assert_eq!(result["isError"], json!(false));
-    let structured = &result["structuredContent"];
-    assert_eq!(structured["lat"], json!(0.0));
-    assert_eq!(structured["long"], json!(0.0));
-    assert_eq!(structured["country"], "Unknown");
-    assert_eq!(structured["population"], 0);
+
+    let location = &result["structuredContent"]["return_value"];
+
+    assert_eq!(location["lat"], json!(0.0));
+    assert_eq!(location["long"], json!(0.0));
+    assert_eq!(location["country"], "Unknown");
+    assert_eq!(location["population"], 0);
 
     Ok(())
 }
@@ -724,7 +729,7 @@ async fn get_prompt_method(ctx: &McpTestContext) -> anyhow::Result<()> {
     let text = messages[0]["content"]["text"].as_str().unwrap();
     let expected = "Get a weather report for a specific city\n\n\
                     Expected JSON input properties: name, city\n\n\
-                    Output: result: Str";
+                    output hint: JSON";
     assert_eq!(
         text, expected,
         "Method prompt text mismatch.\nGot: {}\nExpected: {}",
