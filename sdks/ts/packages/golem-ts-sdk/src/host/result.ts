@@ -289,8 +289,12 @@ function tap<T, E>(this: Result<T, E>, f: (value: T) => void): Result<T, E> {
 function flatMap<T, T2>(this: Result.Ok<T>, f: (value: T) => Result.Ok<T2>): Result.Ok<T2>;
 function flatMap<T, E2>(this: Result.Ok<T>, f: (value: T) => Result.Err<E2>): Result.Err<E2>;
 function flatMap<T, T2, E2>(this: Result.Ok<T>, f: (value: T) => Result<T2, E2>): Result<T2, E2>;
-function flatMap<T, E, T2, E2>(this: Result.Err<E>, f: (value: T) => Result<T2, E2>): Result.Err<E>;
+function flatMap<T, E, _T2, E2>(
+  this: Result.Err<E>,
+  f: (value: T) => Result<_T2, E2>,
+): Result.Err<E>;
 function flatMap<T, E, T2>(this: Result<T, E>, f: (value: T) => Result.Ok<T2>): Result<T2, E>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function flatMap<T, E, T2, E2>(
   this: Result<T, E>,
   f: (value: T) => Result.Err<E2>,

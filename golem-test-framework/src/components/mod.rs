@@ -301,7 +301,7 @@ pub async fn wait_for_startup_http(
     loop {
         let client = golem_client::api::HealthCheckClientLive {
             context: golem_client::Context {
-                client: new_reqwest_client(),
+                client: reqwest_middleware::ClientBuilder::new(new_reqwest_client()).build(),
                 base_url: Url::from_str(&format!("http://{host}:{http_port}"))
                     .expect("Can't parse HTTP URL for health check"),
                 security_token: Security::Empty,
@@ -457,6 +457,10 @@ impl EnvVarBuilder {
                 "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
                 service_name.to_string(),
             );
+            // Increase the BatchSpanProcessor queue size from the default (2048)
+            // to avoid dropping spans under high throughput (e.g. benchmarks).
+            self.env_vars
+                .insert("OTEL_BSP_MAX_QUEUE_SIZE".to_string(), "262144".to_string());
         }
         self
     }
@@ -467,8 +471,22 @@ impl EnvVarBuilder {
 }
 
 fn new_reqwest_client() -> reqwest::Client {
+    new_reqwest_client_with_headers(reqwest::header::HeaderMap::new())
+}
+
+fn new_reqwest_client_with_headers(headers: reqwest::header::HeaderMap) -> reqwest::Client {
     reqwest::ClientBuilder::new()
         .danger_accept_invalid_certs(true)
+        .default_headers(headers)
         .build()
         .expect("Failed to build reqwest client")
+}
+
+/// Creates a reqwest client wrapped with OpenTelemetry tracing middleware.
+/// The middleware automatically injects trace context (traceparent/tracestate headers)
+/// into every outgoing request at send time, so the client can be cached and reused.
+pub(crate) fn new_reqwest_client_with_tracing() -> reqwest_middleware::ClientWithMiddleware {
+    reqwest_middleware::ClientBuilder::new(new_reqwest_client())
+        .with(reqwest_tracing::TracingMiddleware::default())
+        .build()
 }

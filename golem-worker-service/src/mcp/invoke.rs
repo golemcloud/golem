@@ -95,6 +95,7 @@ pub async fn agent_invoke(
             None,
             auth_ctx,
             proto_principal,
+            Some(mcp_tool.environment_id),
         )
         .await
         .map_err(|e| {

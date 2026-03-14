@@ -25,7 +25,7 @@ use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
-use tracing::{info, Level};
+use tracing::{info, Instrument, Level};
 
 pub struct Sleep {
     config: RunConfig,
@@ -119,27 +119,30 @@ impl Benchmark for Sleep {
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        info!("Warming up {} workers...", context.agent_ids.len());
+        async {
+            let result_futures = context
+                .agent_ids
+                .iter()
+                .map(move |agent_id| async move {
+                    let user_clone = context.user.clone();
 
-        let result_futures = context
-            .agent_ids
-            .iter()
-            .map(move |agent_id| async move {
-                let user_clone = context.user.clone();
-
-                crate::benchmarks::invoke_and_await_agent(
-                    &user_clone,
-                    &context.component,
-                    agent_id,
-                    "sleep",
-                    data_value!(10u64),
-                )
-                .await
-            })
-            .collect::<Vec<_>>();
-        let _ = result_futures.join().await;
-
-        info!("Warmed up {} workers", context.agent_ids.len());
+                    crate::benchmarks::invoke_and_await_agent(
+                        &user_clone,
+                        &context.component,
+                        agent_id,
+                        "sleep",
+                        data_value!(10u64),
+                    )
+                    .await
+                })
+                .collect::<Vec<_>>();
+            let _ = result_futures.join().await;
+        }
+        .instrument(tracing::info_span!(
+            "warmup_sleep",
+            worker_count = context.agent_ids.len()
+        ))
+        .await;
     }
 
     async fn run(

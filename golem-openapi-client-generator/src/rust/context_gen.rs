@@ -20,7 +20,7 @@ use convert_case::{Case, Casing};
 use openapiv3::{OpenAPI, ReferenceOr, SecurityScheme};
 
 fn client() -> TreePrinter<RustContext> {
-    rust_name("reqwest", "Client")
+    rust_name("reqwest_middleware", "ClientWithMiddleware")
 }
 
 fn url() -> TreePrinter<RustContext> {

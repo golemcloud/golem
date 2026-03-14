@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{AgentTypeName, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -107,4 +108,5 @@ pub struct AgentInvocationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvocationResult {
     pub result: Option<UntypedJsonDataValue>,
+    pub component_revision: Option<ComponentRevision>,
 }

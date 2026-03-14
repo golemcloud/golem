@@ -25,7 +25,7 @@ use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
-use tracing::{info, Level};
+use tracing::{info, Instrument, Level};
 
 pub struct DurabilityOverhead {
     config: RunConfig,
@@ -122,19 +122,19 @@ impl Benchmark for DurabilityOverhead {
 
         for n in 0..self.config.size {
             durable_persistent_agent_ids.push(agent_id!(
-                "rust-benchmark-agent",
+                "RustBenchmarkAgent",
                 format!("test-{n}-persistent")
             ));
             durable_nonpersistent_agent_ids.push(agent_id!(
-                "rust-benchmark-agent",
+                "RustBenchmarkAgent",
                 format!("test-{n}-nonpersistent")
             ));
             ephemeral_agent_ids.push(agent_id!(
-                "rust-ephemeral-benchmark-agent",
+                "RustEphemeralBenchmarkAgent",
                 format!("test-{n}-ephemeral")
             ));
             durable_persistent_commit_agent_ids.push(agent_id!(
-                "rust-benchmark-agent",
+                "RustBenchmarkAgent",
                 format!("test-{n}-persistent-commit")
             ));
         }
@@ -154,13 +154,7 @@ impl Benchmark for DurabilityOverhead {
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        info!(
-            "Warming up {} workers...",
-            context.durable_persistent_agent_ids.len()
-                + context.durable_nonpersistent_agent_ids.len()
-        );
-
-        async fn warmup(
+        async fn warmup_group(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
             ids: &[ParsedAgentId],
@@ -182,24 +176,20 @@ impl Benchmark for DurabilityOverhead {
             let _ = result_futures.join().await;
         }
 
-        warmup(
+        warmup_group(
             &context.user,
             &context.component,
             &context.durable_persistent_agent_ids,
         )
+        .instrument(tracing::info_span!("warmup_durable_persistent"))
         .await;
-        warmup(
+        warmup_group(
             &context.user,
             &context.component,
             &context.durable_nonpersistent_agent_ids,
         )
+        .instrument(tracing::info_span!("warmup_durable_nonpersistent"))
         .await;
-
-        info!(
-            "Warmed up {} workers",
-            context.durable_persistent_agent_ids.len()
-                + context.durable_nonpersistent_agent_ids.len()
-        );
     }
 
     async fn run(
@@ -209,93 +199,110 @@ impl Benchmark for DurabilityOverhead {
         recorder: BenchmarkRecorder,
     ) {
         let length = self.config.length as u32;
-        let result_futures1 = context
-            .durable_persistent_agent_ids
-            .iter()
-            .map(move |agent_id| async move {
-                let user_clone = context.user.clone();
-                invoke_and_await_agent(
-                    &user_clone,
-                    &context.component,
-                    agent_id,
-                    "oplog_heavy",
-                    data_value!(length, true, false),
-                )
-                .await
-            })
-            .collect::<Vec<_>>();
-        let results1 = result_futures1.join().await;
-        for (idx, result) in results1.iter().enumerate() {
-            result.record(&recorder, "durable-persistent-", idx.to_string().as_str());
-        }
 
-        let result_futures2 = context
-            .durable_nonpersistent_agent_ids
-            .iter()
-            .map(move |agent_id| async move {
-                let user_clone = context.user.clone();
-                invoke_and_await_agent(
-                    &user_clone,
-                    &context.component,
-                    agent_id,
-                    "oplog_heavy",
-                    data_value!(length, false, false),
-                )
-                .await
-            })
-            .collect::<Vec<_>>();
-        let results2 = result_futures2.join().await;
-        for (idx, result) in results2.iter().enumerate() {
-            result.record(
-                &recorder,
-                "durable-non-persistent-",
-                idx.to_string().as_str(),
-            );
+        async {
+            let result_futures = context
+                .durable_persistent_agent_ids
+                .iter()
+                .map(move |agent_id| async move {
+                    let user_clone = context.user.clone();
+                    invoke_and_await_agent(
+                        &user_clone,
+                        &context.component,
+                        agent_id,
+                        "oplog_heavy",
+                        data_value!(length, true, false),
+                    )
+                    .await
+                })
+                .collect::<Vec<_>>();
+            let results = result_futures.join().await;
+            for (idx, result) in results.iter().enumerate() {
+                result.record(&recorder, "durable-persistent-", idx.to_string().as_str());
+            }
         }
+        .instrument(tracing::info_span!("measure_durable_persistent"))
+        .await;
 
-        let result_futures3 = context
-            .ephemeral_agent_ids
-            .iter()
-            .map(move |agent_id| async move {
-                let user_clone = context.user.clone();
-                invoke_and_await_agent(
-                    &user_clone,
-                    &context.component,
-                    agent_id,
-                    "oplog_heavy",
-                    data_value!(length, false, false),
-                )
-                .await
-            })
-            .collect::<Vec<_>>();
-        let results3 = result_futures3.join().await;
-        for (idx, result) in results3.iter().enumerate() {
-            result.record(&recorder, "ephemeral-", idx.to_string().as_str());
+        async {
+            let result_futures = context
+                .durable_nonpersistent_agent_ids
+                .iter()
+                .map(move |agent_id| async move {
+                    let user_clone = context.user.clone();
+                    invoke_and_await_agent(
+                        &user_clone,
+                        &context.component,
+                        agent_id,
+                        "oplog_heavy",
+                        data_value!(length, false, false),
+                    )
+                    .await
+                })
+                .collect::<Vec<_>>();
+            let results = result_futures.join().await;
+            for (idx, result) in results.iter().enumerate() {
+                result.record(
+                    &recorder,
+                    "durable-non-persistent-",
+                    idx.to_string().as_str(),
+                );
+            }
         }
+        .instrument(tracing::info_span!("measure_durable_nonpersistent"))
+        .await;
 
-        let result_futures4 = context
-            .durable_persistent_commit_agent_ids
-            .iter()
-            .map(move |agent_id| async move {
-                let user_clone = context.user.clone();
-                invoke_and_await_agent(
-                    &user_clone,
-                    &context.component,
-                    agent_id,
-                    "oplog_heavy",
-                    data_value!(length, true, true),
-                )
-                .await
-            })
-            .collect::<Vec<_>>();
-        let results4 = result_futures4.join().await;
-        for (idx, result) in results4.iter().enumerate() {
-            result.record(
-                &recorder,
-                "durable-persistent-commit-",
-                idx.to_string().as_str(),
-            );
+        async {
+            let result_futures = context
+                .ephemeral_agent_ids
+                .iter()
+                .map(move |agent_id| async move {
+                    let user_clone = context.user.clone();
+                    invoke_and_await_agent(
+                        &user_clone,
+                        &context.component,
+                        agent_id,
+                        "oplog_heavy",
+                        data_value!(length, false, false),
+                    )
+                    .await
+                })
+                .collect::<Vec<_>>();
+            let results = result_futures.join().await;
+            for (idx, result) in results.iter().enumerate() {
+                result.record(&recorder, "ephemeral-", idx.to_string().as_str());
+            }
         }
+        .instrument(tracing::info_span!("measure_ephemeral"))
+        .await;
+
+        async {
+            let result_futures = context
+                .durable_persistent_commit_agent_ids
+                .iter()
+                .map(move |agent_id| async move {
+                    let user_clone = context.user.clone();
+                    invoke_and_await_agent(
+                        &user_clone,
+                        &context.component,
+                        agent_id,
+                        "oplog_heavy",
+                        data_value!(length, true, true),
+                    )
+                    .await
+                })
+                .collect::<Vec<_>>();
+            let results = result_futures.join().await;
+            for (idx, result) in results.iter().enumerate() {
+                result.record(
+                    &recorder,
+                    "durable-persistent-commit-",
+                    idx.to_string().as_str(),
+                );
+            }
+        }
+        .instrument(tracing::info_span!("measure_durable_persistent_commit"))
+        .await;
     }
 
     async fn cleanup_iteration(

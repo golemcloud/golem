@@ -769,9 +769,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let worker = self.get_or_create_pending(request).await?;
-        Worker::start_if_needed(worker.clone()).await?;
-        Ok(worker)
+        async {
+            let worker = self.get_or_create_pending(request).await?;
+            Worker::start_if_needed(worker.clone()).await?;
+            Ok(worker)
+        }
+        .instrument(info_span!("get_or_create_worker"))
+        .await
     }
 
     async fn get_or_create_pending<Req: CanStartWorker>(

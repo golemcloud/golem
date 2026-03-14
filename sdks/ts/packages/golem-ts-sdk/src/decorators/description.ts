@@ -37,7 +37,8 @@ export function description(description: string) {
   return function (
     target: Object | Function,
     propertyKey?: string | symbol,
-    descriptor?: PropertyDescriptor,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _descriptor?: PropertyDescriptor,
   ) {
     if (propertyKey === undefined) {
       const className = (target as Function).name;

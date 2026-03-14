@@ -57,10 +57,13 @@ impl GolemClients {
         auth_config: &AuthenticationConfigWithSource,
         config_dir: &Path,
     ) -> anyhow::Result<Self> {
-        let healthcheck_http_client = new_reqwest_client(&config.health_check_http_client_config)?;
+        let healthcheck_http_client: reqwest_middleware::ClientWithMiddleware =
+            new_reqwest_client(&config.health_check_http_client_config)?.into();
 
-        let service_http_client = new_reqwest_client(&config.service_http_client_config)?;
-        let invoke_http_client = new_reqwest_client(&config.invoke_http_client_config)?;
+        let service_http_client: reqwest_middleware::ClientWithMiddleware =
+            new_reqwest_client(&config.service_http_client_config)?.into();
+        let invoke_http_client: reqwest_middleware::ClientWithMiddleware =
+            new_reqwest_client(&config.invoke_http_client_config)?.into();
 
         let auth = Auth::new(LoginClientLive {
             context: ClientContext {

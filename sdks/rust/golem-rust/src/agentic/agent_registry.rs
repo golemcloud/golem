@@ -183,28 +183,11 @@ pub fn get_constructor_parameter_type(
     agent_type_name: &AgentTypeName,
     parameter_index: usize,
 ) -> Option<EnrichedElementSchema> {
-    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
+    let state = get_state();
+    let agent_types = state.agent_types.borrow();
+    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
 
-    let constructor = &agent_type.constructor;
-
-    match &constructor.input_schema {
-        ExtendedDataSchema::Tuple(items) => {
-            if parameter_index < items.len() {
-                let element_schema = &items[parameter_index].1;
-                Some(element_schema.clone())
-            } else {
-                None
-            }
-        }
-        ExtendedDataSchema::Multimodal(items) => {
-            if parameter_index < items.len() {
-                let element_schema = &items[parameter_index].1;
-                Some(EnrichedElementSchema::ElementSchema(element_schema.clone()))
-            } else {
-                None
-            }
-        }
-    }
+    extract_parameter_schema(&agent_type.constructor.input_schema, parameter_index)
 }
 
 pub fn get_method_parameter_type(
@@ -212,26 +195,49 @@ pub fn get_method_parameter_type(
     method_name: &str,
     parameter_index: usize,
 ) -> Option<EnrichedElementSchema> {
-    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
+    let state = get_state();
+    let agent_types = state.agent_types.borrow();
+    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
 
     let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
 
-    match &method.input_schema {
-        ExtendedDataSchema::Tuple(items) => {
-            if parameter_index < items.len() {
-                let element_schema = &items[parameter_index].1;
-                Some(element_schema.clone())
-            } else {
-                None
-            }
-        }
+    extract_parameter_schema(&method.input_schema, parameter_index)
+}
+
+pub fn get_method_parameter_types_by_index(
+    agent_type_name: &AgentTypeName,
+    method_index: usize,
+) -> Option<Vec<EnrichedElementSchema>> {
+    let state = get_state();
+    let agent_types = state.agent_types.borrow();
+    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+    let method = agent_type.methods.get(method_index)?;
+
+    Some(extract_all_parameter_schemas(&method.input_schema))
+}
+
+fn extract_all_parameter_schemas(schema: &ExtendedDataSchema) -> Vec<EnrichedElementSchema> {
+    match schema {
+        ExtendedDataSchema::Tuple(items) => items.iter().map(|(_, s)| s.clone()).collect(),
+        ExtendedDataSchema::Multimodal(items) => items
+            .iter()
+            .map(|(_, s)| EnrichedElementSchema::ElementSchema(s.clone()))
+            .collect(),
+    }
+}
+
+fn extract_parameter_schema(
+    schema: &ExtendedDataSchema,
+    parameter_index: usize,
+) -> Option<EnrichedElementSchema> {
+    match schema {
+        ExtendedDataSchema::Tuple(items) => items
+            .get(parameter_index)
+            .map(|(_, element_schema)| element_schema.clone()),
         ExtendedDataSchema::Multimodal(items) => {
-            if parameter_index < items.len() {
-                let element_schema = &items[parameter_index].1;
-                Some(EnrichedElementSchema::ElementSchema(element_schema.clone()))
-            } else {
-                None
-            }
+            items.get(parameter_index).map(|(_, element_schema)| {
+                EnrichedElementSchema::ElementSchema(element_schema.clone())
+            })
         }
     }
 }
@@ -261,3 +267,9 @@ where
 
 #[derive(Eq, Hash, PartialEq)]
 pub struct AgentTypeName(pub String);
+
+impl std::borrow::Borrow<str> for AgentTypeName {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
