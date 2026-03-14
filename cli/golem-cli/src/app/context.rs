@@ -260,32 +260,41 @@ impl ApplicationContext {
         log_action("Selecting", "components");
         let _indent = LogIndent::new();
 
-        let current_dir = std::env::current_dir()?.canonicalize()?;
+        let current_dir = fs::canonicalize_path(&std::env::current_dir()?)?;
 
         let selected_component_names: ValidatedResult<BTreeSet<ComponentName>> =
             match component_select_mode {
                 ApplicationComponentSelectMode::CurrentDir => {
-                    let called_from_project_root = self.calling_working_dir == current_dir;
-                    if called_from_project_root {
+                    let all_components = || {
                         ValidatedResult::Ok(
                             self.application
                                 .component_names()
                                 .map(|cn| cn.to_owned())
                                 .collect(),
                         )
+                    };
+
+                    let called_from_project_root = self.calling_working_dir == current_dir;
+                    if called_from_project_root {
+                        all_components()
                     } else {
-                        ValidatedResult::Ok(
-                            self.application
-                                .component_names()
-                                .filter(|component_name| {
-                                    self.application
-                                        .component(component_name)
-                                        .source_dir()
-                                        .starts_with(self.calling_working_dir.as_path())
-                                })
-                                .cloned()
-                                .collect(),
-                        )
+                        let components_by_dir = self
+                            .application
+                            .component_names()
+                            .filter(|component_name| {
+                                self.application
+                                    .component(component_name)
+                                    .source_dir()
+                                    .starts_with(self.calling_working_dir.as_path())
+                            })
+                            .cloned()
+                            .collect::<BTreeSet<_>>();
+
+                        if components_by_dir.is_empty() {
+                            all_components()
+                        } else {
+                            ValidatedResult::Ok(components_by_dir)
+                        }
                     }
                 }
                 ApplicationComponentSelectMode::All => ValidatedResult::Ok(
