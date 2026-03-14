@@ -1,0 +1,81 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package golem:rdbms@1.5.0;
+
+interface ignite2 {
+  // ── Error ──────────────────────────────────────────────────────────────────
+  variant error {
+    connection-failure(string),
+    query-parameter-failure(string),
+    query-execution-failure(string),
+    query-response-failure(string),
+    other(string),
+  }
+
+  // ── Value types (maps 1-to-1 onto ignite_client::IgniteValue) ─────────────
+  variant db-value {
+    db-null,
+    db-boolean(bool),
+    db-byte(s8),
+    db-short(s16),
+    db-int(s32),
+    db-long(s64),
+    db-float(f32),
+    db-double(f64),
+    /// 16-bit Unicode code unit (Java char).
+    db-char(u16),
+    db-string(string),
+    db-uuid(tuple<u64, u64>),
+    /// Milliseconds since Unix epoch (UTC).
+    db-date(s64),
+    /// (milliseconds since epoch, sub-millisecond nanoseconds 0..999_999).
+    db-timestamp(tuple<s64, s32>),
+    /// Nanoseconds since midnight.
+    db-time(s64),
+    db-decimal(string),
+    db-byte-array(list<u8>),
+  }
+
+  // ── Metadata ───────────────────────────────────────────────────────────────
+  record db-column { ordinal: u64, name: string, db-type-name: string }
+  record db-row    { values: list<db-value> }
+  record db-result { columns: list<db-column>, rows: list<db-row> }
+
+  // ── Resources ──────────────────────────────────────────────────────────────
+  resource db-result-stream {
+    get-columns: func() -> result<list<db-column>, error>;
+    get-next:    func() -> result<option<list<db-row>>, error>;
+  }
+
+  resource db-transaction {
+    query:        func(statement: string, params: list<db-value>) -> result<db-result, error>;
+    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
+    execute:      func(statement: string, params: list<db-value>) -> result<s64, error>;
+    commit:       func() -> result<_, error>;
+    rollback:     func() -> result<_, error>;
+  }
+
+  resource db-connection {
+    /// Open a connection to an Apache Ignite 2.x node.
+    ///
+    /// Address format: `ignite://[user:pass@]host:port[?pool_size=N&tls=true]`
+    /// Default port: 10800.
+    open:              static func(address: string) -> result<db-connection, error>;
+    query:             func(statement: string, params: list<db-value>) -> result<db-result, error>;
+    query-stream:      func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
+    execute:           func(statement: string, params: list<db-value>) -> result<s64, error>;
+    begin-transaction: func() -> result<db-transaction, error>;
+  }
+}

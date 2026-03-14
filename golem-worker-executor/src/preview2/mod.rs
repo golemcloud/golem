@@ -47,6 +47,9 @@ wasmtime::component::bindgen!({
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
         "wasi:io/poll": wasmtime_wasi::p2::bindings::io::poll,
         "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,
+        "golem:rdbms/ignite2/db-connection": super::durable_host::rdbms::ignite::Ignite2DbConnection,
+        "golem:rdbms/ignite2/db-result-stream": super::durable_host::rdbms::ignite::DbResultStreamEntry,
+        "golem:rdbms/ignite2/db-transaction": super::durable_host::rdbms::ignite::DbTransactionEntry,
         "golem:rdbms/mysql.db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
         "golem:rdbms/mysql.db-result-stream": super::durable_host::rdbms::mysql::DbResultStreamEntry,
         "golem:rdbms/mysql.db-transaction": super::durable_host::rdbms::mysql::DbTransactionEntry,
