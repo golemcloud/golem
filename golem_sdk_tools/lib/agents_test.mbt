@@ -162,11 +162,12 @@ test "generate_agent_registration for simple agent" {
       #|    agent_type: {
       #|      type_name: "Counter",
       #|      description: "A counter agent",
+      #|      source_language: "moonbit",
       #|      constructor_: {
       #|        name: Some("new"),
       #|        description: "Creates a new counter",
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "name",
       #|            @schema.schema_of_tag(
@@ -178,6 +179,9 @@ test "generate_agent_registration for simple agent" {
       #|      methods: [],
       #|      dependencies: [],
       #|      mode: @common.AgentMode::DURABLE,
+      #|      http_mount: None,
+      #|      snapshotting: @common.Snapshotting::Disabled,
+      #|      config: [],
       #|    },
       #|    construct: fn(input) {
       #|      try {
@@ -259,11 +263,12 @@ test "generate_agent_registration with methods" {
       #|    agent_type: {
       #|      type_name: "Counter",
       #|      description: "A counter agent",
+      #|      source_language: "moonbit",
       #|      constructor_: {
       #|        name: Some("new"),
       #|        description: "Creates a new counter",
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "name",
       #|            @schema.schema_of_tag(
@@ -276,15 +281,17 @@ test "generate_agent_registration with methods" {
       #|        {
       #|          name: "increment",
       #|          description: "Increments the counter",
+      #|          http_endpoint: [],
       #|          prompt_hint: None,
-      #|          input_schema: @common.DataSchema::Tuple([]),
-      #|          output_schema: @common.DataSchema::Tuple([]),
+      #|          input_schema: @rpcTypes.DataSchema::Tuple([]),
+      #|          output_schema: @rpcTypes.DataSchema::Tuple([]),
       #|        },
       #|        {
       #|          name: "add",
       #|          description: "Adds a value",
+      #|          http_endpoint: [],
       #|          prompt_hint: None,
-      #|          input_schema: @common.DataSchema::Tuple([
+      #|          input_schema: @rpcTypes.DataSchema::Tuple([
       #|            (
       #|              "value",
       #|              @schema.schema_of_tag(
@@ -292,7 +299,7 @@ test "generate_agent_registration with methods" {
       #|              ),
       #|            ),
       #|          ]),
-      #|          output_schema: @common.DataSchema::Tuple([
+      #|          output_schema: @rpcTypes.DataSchema::Tuple([
       #|            (
       #|              "result",
       #|              @schema.schema_of_tag(
@@ -304,6 +311,9 @@ test "generate_agent_registration with methods" {
       #|      ],
       #|      dependencies: [],
       #|      mode: @common.AgentMode::DURABLE,
+      #|      http_mount: None,
+      #|      snapshotting: @common.Snapshotting::Disabled,
+      #|      config: [],
       #|    },
       #|    construct: fn(input) {
       #|      try {
@@ -337,7 +347,7 @@ test "generate_agent_registration with methods" {
       #|          )
       #|        }
       #|        self.increment()
-      #|        Ok(@common.DataValue::Tuple([]))
+      #|        Ok(@rpcTypes.DataValue::Tuple([]))
       #|      }
       #|      "add" => {
       #|        let elements = @extractor.extract_tuple(input)
@@ -348,7 +358,7 @@ test "generate_agent_registration with methods" {
       #|        }
       #|        let value :UInt64 = @schema.from_element_value_as(elements[0])
       #|        let result = self.add(value)
-      #|        Ok(@common.DataValue::Tuple([@schema.to_element_value_as(result)]))
+      #|        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))
       #|      }
       #|      other => Err(@common.AgentError::InvalidMethod(other))
       #|    }
@@ -437,11 +447,12 @@ test "generate_agent_registration with prompt_hints" {
       #|    agent_type: {
       #|      type_name: "Counter",
       #|      description: "A counter agent",
+      #|      source_language: "moonbit",
       #|      constructor_: {
       #|        name: Some("new"),
       #|        description: "Creates a new counter",
       #|        prompt_hint: Some("Provide a unique name"),
-      #|        input_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "name",
       #|            @schema.schema_of_tag(
@@ -454,13 +465,17 @@ test "generate_agent_registration with prompt_hints" {
       #|        {
       #|          name: "increment",
       #|          description: "Increments the counter",
+      #|          http_endpoint: [],
       #|          prompt_hint: Some("Call to increase"),
-      #|          input_schema: @common.DataSchema::Tuple([]),
-      #|          output_schema: @common.DataSchema::Tuple([]),
+      #|          input_schema: @rpcTypes.DataSchema::Tuple([]),
+      #|          output_schema: @rpcTypes.DataSchema::Tuple([]),
       #|        },
       #|      ],
       #|      dependencies: [],
       #|      mode: @common.AgentMode::DURABLE,
+      #|      http_mount: None,
+      #|      snapshotting: @common.Snapshotting::Disabled,
+      #|      config: [],
       #|    },
       #|    construct: fn(input) {
       #|      try {
@@ -494,7 +509,7 @@ test "generate_agent_registration with prompt_hints" {
       #|          )
       #|        }
       #|        self.increment()
-      #|        Ok(@common.DataValue::Tuple([]))
+      #|        Ok(@rpcTypes.DataValue::Tuple([]))
       #|      }
       #|      other => Err(@common.AgentError::InvalidMethod(other))
       #|    }
@@ -557,11 +572,12 @@ test "end-to-end: simple counter agent type" {
       #|  {
       #|    type_name: "Counter",
       #|    description: "A counter agent",
+      #|    source_language: "moonbit",
       #|    constructor_: {
       #|      name: Some("new"),
       #|      description: "Creates a new counter",
       #|      prompt_hint: None,
-      #|      input_schema: @common.DataSchema::Tuple([
+      #|      input_schema: @rpcTypes.DataSchema::Tuple([
       #|        (
       #|          "name",
       #|          @schema.schema_of_tag(
@@ -573,6 +589,9 @@ test "end-to-end: simple counter agent type" {
       #|    methods: [],
       #|    dependencies: [],
       #|    mode: @common.AgentMode::DURABLE,
+      #|    http_mount: None,
+      #|    snapshotting: @common.Snapshotting::Disabled,
+      #|    config: [],
       #|  }
       #|}
       #|
@@ -614,11 +633,12 @@ test "end-to-end: agent with methods" {
       #|  {
       #|    type_name: "Counter",
       #|    description: "A counter agent",
+      #|    source_language: "moonbit",
       #|    constructor_: {
       #|      name: Some("new"),
       #|      description: "Creates a new counter",
       #|      prompt_hint: None,
-      #|      input_schema: @common.DataSchema::Tuple([
+      #|      input_schema: @rpcTypes.DataSchema::Tuple([
       #|        (
       #|          "name",
       #|          @schema.schema_of_tag(
@@ -631,15 +651,17 @@ test "end-to-end: agent with methods" {
       #|      {
       #|        name: "increment",
       #|        description: "Increments the counter by one",
+      #|        http_endpoint: [],
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([]),
-      #|        output_schema: @common.DataSchema::Tuple([]),
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
+      #|        output_schema: @rpcTypes.DataSchema::Tuple([]),
       #|      },
       #|      {
       #|        name: "add",
       #|        description: "Adds a value to the counter",
+      #|        http_endpoint: [],
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "value",
       #|            @schema.schema_of_tag(
@@ -647,7 +669,7 @@ test "end-to-end: agent with methods" {
       #|            ),
       #|          ),
       #|        ]),
-      #|        output_schema: @common.DataSchema::Tuple([
+      #|        output_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "result",
       #|            @schema.schema_of_tag(
@@ -659,6 +681,9 @@ test "end-to-end: agent with methods" {
       #|    ],
       #|    dependencies: [],
       #|    mode: @common.AgentMode::DURABLE,
+      #|    http_mount: None,
+      #|    snapshotting: @common.Snapshotting::Disabled,
+      #|    config: [],
       #|  }
       #|}
       #|
@@ -695,11 +720,12 @@ test "end-to-end: agent with prompt hints" {
       #|  {
       #|    type_name: "SmartAgent",
       #|    description: "A smart agent",
+      #|    source_language: "moonbit",
       #|    constructor_: {
       #|      name: Some("new"),
       #|      description: "Creates a smart agent",
       #|      prompt_hint: Some("Provide a JSON config string"),
-      #|      input_schema: @common.DataSchema::Tuple([
+      #|      input_schema: @rpcTypes.DataSchema::Tuple([
       #|        (
       #|          "config",
       #|          @schema.schema_of_tag(
@@ -712,8 +738,9 @@ test "end-to-end: agent with prompt hints" {
       #|      {
       #|        name: "process",
       #|        description: "Processes input text",
+      #|        http_endpoint: [],
       #|        prompt_hint: Some("Pass natural language text"),
-      #|        input_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "text",
       #|            @schema.schema_of_tag(
@@ -721,7 +748,7 @@ test "end-to-end: agent with prompt hints" {
       #|            ),
       #|          ),
       #|        ]),
-      #|        output_schema: @common.DataSchema::Tuple([
+      #|        output_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "result",
       #|            @schema.schema_of_tag(
@@ -733,6 +760,9 @@ test "end-to-end: agent with prompt hints" {
       #|    ],
       #|    dependencies: [],
       #|    mode: @common.AgentMode::DURABLE,
+      #|    http_mount: None,
+      #|    snapshotting: @common.Snapshotting::Disabled,
+      #|    config: [],
       #|  }
       #|}
       #|
@@ -766,11 +796,12 @@ test "end-to-end: agent with complex param types" {
       #|  {
       #|    type_name: "Processor",
       #|    description: "A data processor",
+      #|    source_language: "moonbit",
       #|    constructor_: {
       #|      name: Some("new"),
       #|      description: "Creates a new Processor",
       #|      prompt_hint: None,
-      #|      input_schema: @common.DataSchema::Tuple([
+      #|      input_schema: @rpcTypes.DataSchema::Tuple([
       #|        (
       #|          "name",
       #|          @schema.schema_of_tag(
@@ -783,8 +814,9 @@ test "end-to-end: agent with complex param types" {
       #|      {
       #|        name: "batch",
       #|        description: "Processes a batch of items",
+      #|        http_endpoint: [],
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "items",
       #|            @schema.schema_of_tag(
@@ -798,7 +830,7 @@ test "end-to-end: agent with complex param types" {
       #|            ),
       #|          ),
       #|        ]),
-      #|        output_schema: @common.DataSchema::Tuple([
+      #|        output_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "result",
       #|            @schema.schema_of_tag(
@@ -810,6 +842,9 @@ test "end-to-end: agent with complex param types" {
       #|    ],
       #|    dependencies: [],
       #|    mode: @common.AgentMode::DURABLE,
+      #|    http_mount: None,
+      #|    snapshotting: @common.Snapshotting::Disabled,
+      #|    config: [],
       #|  }
       #|}
       #|
@@ -845,19 +880,21 @@ test "end-to-end: agent with no constructor params" {
       #|  {
       #|    type_name: "Worker",
       #|    description: "A simple worker",
+      #|    source_language: "moonbit",
       #|    constructor_: {
       #|      name: Some("new"),
       #|      description: "Creates a default worker",
       #|      prompt_hint: None,
-      #|      input_schema: @common.DataSchema::Tuple([]),
+      #|      input_schema: @rpcTypes.DataSchema::Tuple([]),
       #|    },
       #|    methods: [
       #|      {
       #|        name: "run",
       #|        description: "Does work",
+      #|        http_endpoint: [],
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([]),
-      #|        output_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
+      #|        output_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "result",
       #|            @schema.schema_of_tag(
@@ -869,6 +906,9 @@ test "end-to-end: agent with no constructor params" {
       #|    ],
       #|    dependencies: [],
       #|    mode: @common.AgentMode::DURABLE,
+      #|    http_mount: None,
+      #|    snapshotting: @common.Snapshotting::Disabled,
+      #|    config: [],
       #|  }
       #|}
       #|
@@ -905,11 +945,12 @@ test "end-to-end: agent split across multiple files" {
       #|  {
       #|    type_name: "MultiAgent",
       #|    description: "A multi-file agent",
+      #|    source_language: "moonbit",
       #|    constructor_: {
       #|      name: Some("new"),
       #|      description: "Creates a new MultiAgent",
       #|      prompt_hint: None,
-      #|      input_schema: @common.DataSchema::Tuple([
+      #|      input_schema: @rpcTypes.DataSchema::Tuple([
       #|        (
       #|          "id",
       #|          @schema.schema_of_tag(
@@ -922,9 +963,10 @@ test "end-to-end: agent split across multiple files" {
       #|      {
       #|        name: "get_id",
       #|        description: "Gets the ID",
+      #|        http_endpoint: [],
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([]),
-      #|        output_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
+      #|        output_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "result",
       #|            @schema.schema_of_tag(
@@ -936,6 +978,9 @@ test "end-to-end: agent split across multiple files" {
       #|    ],
       #|    dependencies: [],
       #|    mode: @common.AgentMode::DURABLE,
+      #|    http_mount: None,
+      #|    snapshotting: @common.Snapshotting::Disabled,
+      #|    config: [],
       #|  }
       #|}
       #|
@@ -1000,7 +1045,7 @@ test "build_raw_agent_impl for counter-like agent" {
       #|          )
       #|        }
       #|        self.increment()
-      #|        Ok(@common.DataValue::Tuple([]))
+      #|        Ok(@rpcTypes.DataValue::Tuple([]))
       #|      }
       #|      "get_value" => {
       #|        let elements = @extractor.extract_tuple(input)
@@ -1010,7 +1055,7 @@ test "build_raw_agent_impl for counter-like agent" {
       #|          )
       #|        }
       #|        let result = self.get_value()
-      #|        Ok(@common.DataValue::Tuple([@schema.to_element_value_as(result)]))
+      #|        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))
       #|      }
       #|      "add" => {
       #|        let elements = @extractor.extract_tuple(input)
@@ -1021,7 +1066,7 @@ test "build_raw_agent_impl for counter-like agent" {
       #|        }
       #|        let value :UInt64 = @schema.from_element_value_as(elements[0])
       #|        let result = self.add(value)
-      #|        Ok(@common.DataValue::Tuple([@schema.to_element_value_as(result)]))
+      #|        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))
       #|      }
       #|      other => Err(@common.AgentError::InvalidMethod(other))
       #|    }
@@ -1224,11 +1269,12 @@ test "generate_agent_registration with cross-package types" {
       #|    agent_type: {
       #|      type_name: "OrderAgent",
       #|      description: "An order agent",
+      #|      source_language: "moonbit",
       #|      constructor_: {
       #|        name: Some("new"),
       #|        description: "Creates an order agent",
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([
       #|          (
       #|            "config",
       #|            @schema.schema_of_tag(
@@ -1241,8 +1287,9 @@ test "generate_agent_registration with cross-package types" {
       #|        {
       #|          name: "process",
       #|          description: "Processes an order",
+      #|          http_endpoint: [],
       #|          prompt_hint: None,
-      #|          input_schema: @common.DataSchema::Tuple([
+      #|          input_schema: @rpcTypes.DataSchema::Tuple([
       #|            (
       #|              "order",
       #|              @schema.schema_of_tag(
@@ -1250,7 +1297,7 @@ test "generate_agent_registration with cross-package types" {
       #|              ),
       #|            ),
       #|          ]),
-      #|          output_schema: @common.DataSchema::Tuple([
+      #|          output_schema: @rpcTypes.DataSchema::Tuple([
       #|            (
       #|              "result",
       #|              @schema.schema_of_tag(
@@ -1262,6 +1309,9 @@ test "generate_agent_registration with cross-package types" {
       #|      ],
       #|      dependencies: [],
       #|      mode: @common.AgentMode::DURABLE,
+      #|      http_mount: None,
+      #|      snapshotting: @common.Snapshotting::Disabled,
+      #|      config: [],
       #|    },
       #|    construct: fn(input) {
       #|      try {
@@ -1296,7 +1346,7 @@ test "generate_agent_registration with cross-package types" {
       #|        }
       #|        let order :@types.Order = @schema.from_element_value_as(elements[0])
       #|        let result = self.process(order)
-      #|        Ok(@common.DataValue::Tuple([@schema.to_element_value_as(result)]))
+      #|        Ok(@rpcTypes.DataValue::Tuple([@schema.to_element_value_as(result)]))
       #|      }
       #|      other => Err(@common.AgentError::InvalidMethod(other))
       #|    }
@@ -1449,15 +1499,19 @@ test "generate_agent_registration with ephemeral mode" {
       #|    agent_type: {
       #|      type_name: "Worker",
       #|      description: "An ephemeral worker",
+      #|      source_language: "moonbit",
       #|      constructor_: {
       #|        name: Some("new"),
       #|        description: "Creates a worker",
       #|        prompt_hint: None,
-      #|        input_schema: @common.DataSchema::Tuple([]),
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
       #|      },
       #|      methods: [],
       #|      dependencies: [],
       #|      mode: @common.AgentMode::EPHEMERAL,
+      #|      http_mount: None,
+      #|      snapshotting: @common.Snapshotting::Disabled,
+      #|      config: [],
       #|    },
       #|    construct: fn(input) {
       #|      try {

@@ -17,7 +17,6 @@ pub using @raw {
   type AgentAnyFilter,
   type ForkResult,
   type ForkDetails,
-  type AccountId,
   type EnvironmentId,
 }
 

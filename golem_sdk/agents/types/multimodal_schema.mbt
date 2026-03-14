@@ -3,11 +3,11 @@
 /// Each variant maps to a named ElementSchema/ElementValue pair.
 pub(open) trait MultimodalModality {
   /// Returns (name, ElementSchema) for each variant
-  multimodal_schema() -> Array[(String, @common.ElementSchema)]
+  multimodal_schema() -> Array[(String, @rpcTypes.ElementSchema)]
   /// Serializes to (name, ElementValue)
-  to_named_element(Self) -> (String, @common.ElementValue) raise @common.AgentError
+  to_named_element(Self) -> (String, @rpcTypes.ElementValue) raise @common.AgentError
   /// Deserializes from (name, ElementValue)
-  from_named_element(String, @common.ElementValue) -> Self raise @common.AgentError
+  from_named_element(String, @rpcTypes.ElementValue) -> Self raise @common.AgentError
 }
 
 ///|
@@ -75,9 +75,9 @@ pub impl[
 ///|
 /// Deserialize a Multimodal from a DataValue::Multimodal
 pub fn[T : MultimodalModality] Multimodal::from_data_value(
-  data : @common.DataValue,
+  data : @rpcTypes.DataValue,
 ) -> Multimodal[T] raise @common.AgentError {
-  guard data is @common.DataValue::Multimodal(elements) else {
+  guard data is @rpcTypes.DataValue::Multimodal(elements) else {
     raise @common.AgentError::InvalidInput("Expected Multimodal DataValue")
   }
   let items : Array[T] = []
@@ -92,7 +92,7 @@ pub fn[T : MultimodalModality] Multimodal::from_data_value(
 /// Helper for codegen: returns the multimodal schema for a modality type via TypeTag dispatch.
 pub fn[T : MultimodalModality] multimodal_schema_of_tag(
   _ : @schema.TypeTag[T],
-) -> Array[(String, @common.ElementSchema)] {
+) -> Array[(String, @rpcTypes.ElementSchema)] {
   T::multimodal_schema()
 }
 
@@ -100,10 +100,10 @@ pub fn[T : MultimodalModality] multimodal_schema_of_tag(
 /// Serialize a Multimodal to a DataValue::Multimodal
 pub fn[T : MultimodalModality] Multimodal::to_data_value(
   self : Multimodal[T],
-) -> @common.DataValue raise @common.AgentError {
-  let elements : Array[(String, @common.ElementValue)] = []
+) -> @rpcTypes.DataValue raise @common.AgentError {
+  let elements : Array[(String, @rpcTypes.ElementValue)] = []
   for item in self.items {
     elements.push(T::to_named_element(item))
   }
-  @common.DataValue::Multimodal(elements)
+  @rpcTypes.DataValue::Multimodal(elements)
 }

@@ -1,5 +1,5 @@
 import {
-  "golemcloud/golem_sdk/interface/golem/rpc/types" @types,
+  "golemcloud/golem_sdk/interface/golem/core/types" @types,
   "golemcloud/golem_sdk/interface/wasi/io/poll" @poll,
 }
 

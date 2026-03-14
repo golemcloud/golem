@@ -110,7 +110,7 @@ test "option_unstructured_text_deserialization_rejected" {
   let wit_value = @builder.Builder::new().option_some(builder => {
     builder.string("hello")
   })
-  let element = @common.ElementValue::ComponentModel(wit_value)
+  let element = @rpcTypes.ElementValue::ComponentModel(wit_value)
   let result : Result[UnstructuredText?, _] = try? @schema.from_element_value_as(
     element,
   )
@@ -124,7 +124,7 @@ test "option_unstructured_text_deserialization_rejected" {
 test "array_unstructured_binary_deserialization_rejected" {
   // Build a valid List([u8]) WitValue, then try to deserialize as Array[UnstructuredBinary]
   let wit_value = @builder.Builder::new().list(builder => builder.u8(0))
-  let element = @common.ElementValue::ComponentModel(wit_value)
+  let element = @rpcTypes.ElementValue::ComponentModel(wit_value)
   let result : Result[Array[UnstructuredBinary], _] = try? @schema.from_element_value_as(
     element,
   )
@@ -202,7 +202,7 @@ test "schema_of_tag_rejects_mime_types_on_unstructured_text" {
 
 ///|
 test "unstructured_text_from_wrong_element_value" {
-  let element = @common.ElementValue::ComponentModel({ nodes: [] })
+  let element = @rpcTypes.ElementValue::ComponentModel({ nodes: [] })
   let result : Result[UnstructuredText, _] = try? @schema.from_element_value_as(
     element,
   )
@@ -214,7 +214,7 @@ test "unstructured_text_from_wrong_element_value" {
 
 ///|
 test "unstructured_binary_from_wrong_element_value" {
-  let element = @common.ElementValue::ComponentModel({ nodes: [] })
+  let element = @rpcTypes.ElementValue::ComponentModel({ nodes: [] })
   let result : Result[UnstructuredBinary, _] = try? @schema.from_element_value_as(
     element,
   )
@@ -257,7 +257,7 @@ test "multimodal_custom_modality_string_roundtrip" {
 
 ///|
 test "multimodal_from_tuple_data_value_raises_error" {
-  let data = @common.DataValue::Tuple([])
+  let data = @rpcTypes.DataValue::Tuple([])
   let result : Result[Multimodal[TextOrBinary], _] = try? Multimodal::from_data_value(
     data,
   )

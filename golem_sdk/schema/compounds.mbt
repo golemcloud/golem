@@ -1,10 +1,10 @@
 ///|
 pub impl[T : HasElementSchema] HasElementSchema for T? with element_schema() {
   let inner = T::element_schema()
-  guard inner is @common.ElementSchema::ComponentModel(inner_wit_type) else {
+  guard inner is @types.ElementSchema::ComponentModel(inner_wit_type) else {
     inner
   }
-  @common.ElementSchema::ComponentModel(
+  @types.ElementSchema::ComponentModel(
     @builder.TypeBuilder::new().option_type(inner_wit_type),
   )
 }
@@ -27,12 +27,10 @@ pub impl[T : FromExtractor] FromElementValue for T? with from_element_value(v) {
 pub impl[T : ToElementValue] ToElementValue for T? with to_element_value(self) {
   match self {
     None =>
-      @common.ElementValue::ComponentModel(
-        @builder.Builder::new().option_none(),
-      )
+      @types.ElementValue::ComponentModel(@builder.Builder::new().option_none())
     Some(v) => {
       let inner = T::to_element_value(v)
-      guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
+      guard inner is @types.ElementValue::ComponentModel(inner_wit) else {
         raise @common.AgentError::InvalidInput(
           "Expected ComponentModel for Option inner value",
         )
@@ -43,7 +41,7 @@ pub impl[T : ToElementValue] ToElementValue for T? with to_element_value(self) {
         @builder.BuilderError(msg) =>
           raise @common.AgentError::InvalidInput(msg)
       }
-      @common.ElementValue::ComponentModel(wit_value)
+      @types.ElementValue::ComponentModel(wit_value)
     }
   }
 }
@@ -51,10 +49,10 @@ pub impl[T : ToElementValue] ToElementValue for T? with to_element_value(self) {
 ///|
 pub impl[T : HasElementSchema] HasElementSchema for Array[T] with element_schema() {
   let inner = T::element_schema()
-  guard inner is @common.ElementSchema::ComponentModel(inner_wit_type) else {
+  guard inner is @types.ElementSchema::ComponentModel(inner_wit_type) else {
     inner
   }
-  @common.ElementSchema::ComponentModel(
+  @types.ElementSchema::ComponentModel(
     @builder.TypeBuilder::new().list_type(inner_wit_type),
   )
 }
@@ -85,7 +83,7 @@ pub impl[T : ToElementValue] ToElementValue for Array[T] with to_element_value(
   let inner_values : Array[@types.WitValue] = []
   for item in self {
     let inner = T::to_element_value(item)
-    guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
+    guard inner is @types.ElementValue::ComponentModel(inner_wit) else {
       raise @common.AgentError::InvalidInput(
         "Expected ComponentModel for Array element",
       )
@@ -99,7 +97,7 @@ pub impl[T : ToElementValue] ToElementValue for Array[T] with to_element_value(
   }) catch {
     @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
   }
-  @common.ElementValue::ComponentModel(wit_value)
+  @types.ElementValue::ComponentModel(wit_value)
 }
 
 ///|
@@ -109,13 +107,13 @@ pub impl[T : HasElementSchema, E : HasElementSchema] HasElementSchema for Result
 ] with element_schema() {
   let ok_schema = T::element_schema()
   let err_schema = E::element_schema()
-  guard ok_schema is @common.ElementSchema::ComponentModel(ok_wit_type) else {
+  guard ok_schema is @types.ElementSchema::ComponentModel(ok_wit_type) else {
     ok_schema
   }
-  guard err_schema is @common.ElementSchema::ComponentModel(err_wit_type) else {
+  guard err_schema is @types.ElementSchema::ComponentModel(err_wit_type) else {
     err_schema
   }
-  @common.ElementSchema::ComponentModel(
+  @types.ElementSchema::ComponentModel(
     @builder.TypeBuilder::new().result_type(ok_wit_type, err_wit_type),
   )
 }
@@ -151,7 +149,7 @@ pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E]
   match self {
     Ok(v) => {
       let inner = T::to_element_value(v)
-      guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
+      guard inner is @types.ElementValue::ComponentModel(inner_wit) else {
         raise @common.AgentError::InvalidInput(
           "Expected ComponentModel for Result Ok value",
         )
@@ -162,11 +160,11 @@ pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E]
         @builder.BuilderError(msg) =>
           raise @common.AgentError::InvalidInput(msg)
       }
-      @common.ElementValue::ComponentModel(wit_value)
+      @types.ElementValue::ComponentModel(wit_value)
     }
     Err(e) => {
       let inner = E::to_element_value(e)
-      guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
+      guard inner is @types.ElementValue::ComponentModel(inner_wit) else {
         raise @common.AgentError::InvalidInput(
           "Expected ComponentModel for Result Err value",
         )
@@ -177,7 +175,7 @@ pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E]
         @builder.BuilderError(msg) =>
           raise @common.AgentError::InvalidInput(msg)
       }
-      @common.ElementValue::ComponentModel(wit_value)
+      @types.ElementValue::ComponentModel(wit_value)
     }
   }
 }

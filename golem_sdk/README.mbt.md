@@ -44,23 +44,27 @@ After these changes, run `moon install` to download dependencies, then `golem bu
 
 Annotate a struct with `#derive.agent`, provide a `::new` constructor, and add public methods:
 
-```moonbit
+```moonbit nocheck
+///|
 #derive.agent
 struct Counter {
   name : String
   mut value : UInt64
 }
 
+///|
 /// Creates a new counter with the given name
 fn Counter::new(name : String) -> Counter {
   { name, value: 0 }
 }
 
+///|
 /// Increments the counter
 pub fn Counter::increment(self : Self) -> Unit {
   self.value += 1
 }
 
+///|
 /// Returns the current value
 pub fn Counter::get_value(self : Self) -> UInt64 {
   self.value
@@ -71,7 +75,8 @@ pub fn Counter::get_value(self : Self) -> UInt64 {
 
 Annotate structs and enums with `#derive.golem_schema` to make them usable as method parameters and return types:
 
-```moonbit
+```moonbit nocheck
+///|
 #derive.golem_schema
 pub(all) enum Priority {
   Low
@@ -79,6 +84,7 @@ pub(all) enum Priority {
   High
 } derive(Eq)
 
+///|
 #derive.golem_schema
 pub(all) struct TaskInfo {
   title : String

@@ -8,9 +8,8 @@
   "description": "",
   "preferred-target": "wasm",
   "deps": {
-    "golemcloud/golem_sdk": "0.4.0"
-  },
-  "bin-deps": {
-    "golemcloud/golem_sdk_tools": "0.4.0"
+    "golemcloud/golem_sdk": {
+      "path": "../golem_sdk"
+    }
   }
 }

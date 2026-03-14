@@ -35,7 +35,7 @@ test "array_int_schema" {
 ///|
 test "string_from_element_value" {
   let wit_value = @builder.Builder::new().string("hello")
-  let element = @common.ElementValue::ComponentModel(wit_value)
+  let element = @types.ElementValue::ComponentModel(wit_value)
   let result : String = from_element_value_as(element)
   inspect(result, content="hello")
 }
@@ -43,7 +43,7 @@ test "string_from_element_value" {
 ///|
 test "uint64_from_element_value" {
   let wit_value = @builder.Builder::new().u64(42)
-  let element = @common.ElementValue::ComponentModel(wit_value)
+  let element = @types.ElementValue::ComponentModel(wit_value)
   let result : UInt64 = from_element_value_as(element)
   inspect(result, content="42")
 }
@@ -51,7 +51,7 @@ test "uint64_from_element_value" {
 ///|
 test "option_some_from_element_value" {
   let wit_value = @builder.Builder::new().option_some(builder => builder.s32(99))
-  let element = @common.ElementValue::ComponentModel(wit_value)
+  let element = @types.ElementValue::ComponentModel(wit_value)
   let result : Int? = from_element_value_as(element)
   inspect(result, content="Some(99)")
 }
@@ -59,7 +59,7 @@ test "option_some_from_element_value" {
 ///|
 test "option_none_from_element_value" {
   let wit_value = @builder.Builder::new().option_none()
-  let element = @common.ElementValue::ComponentModel(wit_value)
+  let element = @types.ElementValue::ComponentModel(wit_value)
   let result : Int? = from_element_value_as(element)
   inspect(result, content="None")
 }
@@ -71,7 +71,7 @@ test "array_from_element_value" {
     builder.s32(2)
     builder.s32(3)
   })
-  let element = @common.ElementValue::ComponentModel(wit_value)
+  let element = @types.ElementValue::ComponentModel(wit_value)
   let result : Array[Int] = from_element_value_as(element)
   inspect(result, content="[1, 2, 3]")
 }

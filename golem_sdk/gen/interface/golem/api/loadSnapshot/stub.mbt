@@ -7,11 +7,11 @@
 /// (snapshot-based update on a fresh component instance), this currently returns
 /// an error — full support requires WASI environment variable bindings to read
 /// `GOLEM_AGENT_ID` and reconstruct the agent.
-pub fn load(bytes : FixedArray[Byte]) -> Result[Unit, String] {
-  if bytes.length() == 0 {
+pub fn load(snapshot : @host.Snapshot) -> Result[Unit, String] {
+  if snapshot.data.length() == 0 {
     return Ok(())
   }
-  let user_bytes = Bytes::from_array(bytes[:])
+  let user_bytes = Bytes::from_array(snapshot.data[:])
   match @agents.get_agent_instance() {
     Some(instance) =>
       match instance.snapshottable {

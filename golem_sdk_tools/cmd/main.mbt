@@ -102,7 +102,7 @@ fn run_agents(package_dir : String) -> Unit raise {
     pkg_content, "golemcloud/golem_sdk/rpc", "@rpc",
   )
   pkg_content = @lib.ensure_pkg_import(
-    pkg_content, "golemcloud/golem_sdk/interface/golem/rpc/types", "@rpcTypes",
+    pkg_content, "golemcloud/golem_sdk/interface/golem/core/types", "@rpcTypes",
   )
   pkg_content = @lib.ensure_pkg_import(
     pkg_content, "golemcloud/golem_sdk/interface/wasi/clocks/wallClock", "@wallClock",

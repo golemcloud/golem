@@ -2,12 +2,16 @@
 
 ///|
 pub fn wasmExportSave() -> Int {
-  let result : FixedArray[Byte] = @saveSnapshot.save()
+  let result : @host.Snapshot = @saveSnapshot.save()
 
-  let ptr = mbt_ffi_bytes2ptr(result)
+  let ptr = mbt_ffi_bytes2ptr(result.data)
 
-  mbt_ffi_store32(return_area + 4, result.length())
+  mbt_ffi_store32(return_area + 4, result.data.length())
   mbt_ffi_store32(return_area + 0, ptr)
+
+  let ptr0 = mbt_ffi_str2ptr(result.mime_type)
+  mbt_ffi_store32(return_area + 12, result.mime_type.length())
+  mbt_ffi_store32(return_area + 8, ptr0)
   let ret = return_area
   return ret
 }
@@ -15,4 +19,5 @@ pub fn wasmExportSave() -> Int {
 ///|
 pub fn wasmExportSavePostReturn(p0 : Int) -> Unit {
   mbt_ffi_free(mbt_ffi_load32(p0 + 0))
+  mbt_ffi_free(mbt_ffi_load32(p0 + 8))
 }

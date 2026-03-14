@@ -1,3 +1,4 @@
 import {
   "golemcloud/golem_sdk/agents" @agents,
+  "golemcloud/golem_sdk/interface/golem/api/host" @host,
 }

@@ -24,57 +24,136 @@ pub fn AgentMode::from(self : Int) -> AgentMode {
 }
 
 ///|
-pub(all) struct TextType {
-  language_code : String
+pub(all) struct CorsOptions {
+  allowed_patterns : Array[String]
 } derive(Show, Eq)
 
 ///|
-pub(all) struct TextSource {
-  data : String
-  text_type : TextType?
+pub(all) enum HttpMethod {
+  Get
+  Head
+  Post
+  Put
+  Delete
+  Connect
+  Options
+  Trace
+  Patch
+  Custom(String)
 } derive(Show, Eq)
 
 ///|
-pub(all) enum TextReference {
-  Url(String)
-  Inline(TextSource)
+pub(all) enum SystemVariable {
+  AGENT_TYPE
+  AGENT_VERSION
 } derive(Show, Eq)
 
 ///|
-pub(all) struct TextDescriptor {
-  restrictions : Array[TextType]?
+pub fn SystemVariable::ordinal(self : SystemVariable) -> Int {
+  match self {
+    AGENT_TYPE => 0
+    AGENT_VERSION => 1
+  }
+}
+
+///|
+pub fn SystemVariable::from(self : Int) -> SystemVariable {
+  match self {
+    0 => AGENT_TYPE
+    1 => AGENT_VERSION
+    _ => panic()
+  }
+}
+
+///|
+pub(all) struct PathVariable {
+  variable_name : String
 } derive(Show, Eq)
 
 ///|
-pub(all) struct BinaryType {
-  mime_type : String
+pub(all) enum PathSegment {
+  Literal(String)
+  SystemVariable(SystemVariable)
+  PathVariable(PathVariable)
+  RemainingPathVariable(PathVariable)
 } derive(Show, Eq)
 
 ///|
-pub(all) struct BinaryDescriptor {
-  restrictions : Array[BinaryType]?
+pub(all) struct HeaderVariable {
+  header_name : String
+  variable_name : String
 } derive(Show, Eq)
 
 ///|
-pub(all) enum ElementSchema {
-  ComponentModel(@types.WitType)
-  UnstructuredText(TextDescriptor)
-  UnstructuredBinary(BinaryDescriptor)
+pub(all) struct QueryVariable {
+  query_param_name : String
+  variable_name : String
 } derive(Show, Eq)
 
 ///|
-pub(all) enum DataSchema {
-  Tuple(Array[(String, ElementSchema)])
-  Multimodal(Array[(String, ElementSchema)])
+pub(all) struct AuthDetails {
+  required : Bool
+} derive(Show, Eq)
+
+///|
+pub(all) struct HttpMountDetails {
+  path_prefix : Array[PathSegment]
+  auth_details : AuthDetails?
+  phantom_agent : Bool
+  cors_options : CorsOptions
+  webhook_suffix : Array[PathSegment]
+} derive(Show, Eq)
+
+///|
+pub(all) struct HttpEndpointDetails {
+  http_method : HttpMethod
+  path_suffix : Array[PathSegment]
+  header_vars : Array[HeaderVariable]
+  query_vars : Array[QueryVariable]
+  auth_details : AuthDetails?
+  cors_options : CorsOptions
 } derive(Show, Eq)
 
 ///|
 pub(all) struct AgentMethod {
   name : String
   description : String
+  http_endpoint : Array[HttpEndpointDetails]
   prompt_hint : String?
-  input_schema : DataSchema
-  output_schema : DataSchema
+  input_schema : @types.DataSchema
+  output_schema : @types.DataSchema
+} derive(Show, Eq)
+
+///|
+pub(all) struct OidcPrincipal {
+  sub : String
+  issuer : String
+  email : String?
+  name : String?
+  email_verified : Bool?
+  given_name : String?
+  family_name : String?
+  picture : String?
+  preferred_username : String?
+  claims : String
+} derive(Show, Eq)
+
+///|
+pub(all) struct AgentPrincipal {
+  agent_id : @types.AgentId
+} derive(Show, Eq)
+
+///|
+pub(all) struct GolemUserPrincipal {
+  account_id : @types.AccountId
+} derive(Show, Eq)
+
+///|
+pub(all) enum Principal {
+  Oidc(OidcPrincipal)
+  Agent(AgentPrincipal)
+  GolemUser(GolemUserPrincipal)
+  Anonymous
 } derive(Show, Eq)
 
 ///|
@@ -82,7 +161,7 @@ pub(all) struct AgentConstructor {
   name : String?
   description : String
   prompt_hint : String?
-  input_schema : DataSchema
+  input_schema : @types.DataSchema
 } derive(Show, Eq)
 
 ///|
@@ -94,45 +173,57 @@ pub(all) struct AgentDependency {
 } derive(Show, Eq)
 
 ///|
-pub(all) struct AgentType {
-  type_name : String
-  description : String
-  constructor_ : AgentConstructor
-  methods : Array[AgentMethod]
-  dependencies : Array[AgentDependency]
-  mode : AgentMode
-} derive(Show, Eq)
-
-///|
-pub(all) struct BinarySource {
-  data : FixedArray[Byte]
-  binary_type : BinaryType
-} derive(Show, Eq)
-
-///|
-pub(all) enum BinaryReference {
-  Url(String)
-  Inline(BinarySource)
-} derive(Show, Eq)
-
-///|
-pub(all) enum ElementValue {
-  ComponentModel(@types.WitValue)
-  UnstructuredText(TextReference)
-  UnstructuredBinary(BinaryReference)
-} derive(Show, Eq)
-
-///|
-pub(all) enum DataValue {
-  Tuple(Array[ElementValue])
-  Multimodal(Array[(String, ElementValue)])
-} derive(Show, Eq)
-
-///|
+/// Agent-level failures
 pub(all) suberror AgentError {
   InvalidInput(String)
   InvalidMethod(String)
   InvalidType(String)
   InvalidAgentId(String)
   CustomError(@types.ValueAndType)
+} derive(Show, Eq)
+
+///|
+pub(all) enum SnapshottingConfig {
+  Default
+  Periodic(UInt64)
+  EveryNInvocation(UInt)
+} derive(Show, Eq)
+
+///|
+pub(all) enum Snapshotting {
+  Disabled
+  Enabled(SnapshottingConfig)
+} derive(Show, Eq)
+
+///|
+pub(all) enum ConfigValueType {
+  Local(@types.WitType)
+  Shared(@types.WitType)
+} derive(Show, Eq)
+
+///|
+pub(all) struct ConfigKeyValueType {
+  key : Array[String]
+  value : ConfigValueType
+} derive(Show, Eq)
+
+///|
+pub(all) struct AgentType {
+  type_name : String
+  description : String
+  source_language : String
+  constructor_ : AgentConstructor
+  methods : Array[AgentMethod]
+  dependencies : Array[AgentDependency]
+  mode : AgentMode
+  http_mount : HttpMountDetails?
+  snapshotting : Snapshotting
+  config : Array[ConfigKeyValueType]
+} derive(Show, Eq)
+
+///|
+/// Associates an agent type with a component that implements it
+pub(all) struct RegisteredAgentType {
+  agent_type : AgentType
+  implemented_by : @types.ComponentId
 } derive(Show, Eq)

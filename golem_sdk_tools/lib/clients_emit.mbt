@@ -29,9 +29,7 @@ pub fn generate_client_code(
 ) -> @list.List[@syntax.Impl] {
   let impls : Array[@syntax.Impl] = []
   for agent in agents {
-    // Skip agents with RPC-incompatible constructors — Multimodal and
-    // UnstructuredText/UnstructuredBinary types can't be serialized to WitValue
-    // for RPC transport
+    // Skip agents with RPC-incompatible constructors
     if has_rpc_incompatible_constructor(agent) {
       continue
     }
@@ -84,7 +82,7 @@ fn build_constructor_data_expr(agent : AgentInfo) -> @syntax.Expr {
         make_ident_expr(param.0),
       ])
     })
-    make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+    make_apply(make_qualified_constr("rpcTypes", "DataValue", "Tuple"), [
       make_array(elements),
     ])
   }
@@ -203,7 +201,7 @@ fn build_client_get_agent_id(client_name : String) -> @syntax.Impl {
     "get_agent_id",
     [make_self_param(client_name)],
     Some(make_type("String")),
-    false,
+    true,
     body,
   )
 }
@@ -225,7 +223,7 @@ fn build_client_phantom_id(client_name : String) -> @syntax.Impl {
         make_qualified_parameterized_type("rpcTypes", "Uuid", []),
       ),
     ),
-    true,
+    false,
     body,
   )
 }
@@ -371,32 +369,28 @@ fn build_client_scoped_get_phantom(
 }
 
 ///|
-/// Generates the expression that serializes a single method parameter to a `WitValue` for RPC.
+/// Generates the expression that serializes a single method parameter to an `ElementValue` for RPC.
 fn build_rpc_param_expr(param : (String, ParamType)) -> @syntax.Expr {
-  let (name, pt) = param
-  if is_multimodal_type(pt) {
-    make_apply(make_qualified_expr("rpc", "multimodal_to_wit_value"), [
-      make_ident_expr(name),
-    ])
-  } else if is_unstructured_text_type(pt) {
-    make_apply(make_qualified_expr("rpc", "unstructured_text_to_wit_value"), [
-      make_ident_expr(name),
-    ])
-  } else if is_unstructured_binary_type(pt) {
-    make_apply(make_qualified_expr("rpc", "unstructured_binary_to_wit_value"), [
-      make_ident_expr(name),
-    ])
-  } else {
-    make_apply(make_qualified_expr("rpc", "to_wit_value"), [
-      make_ident_expr(name),
-    ])
-  }
+  let (name, _pt) = param
+  make_apply(make_qualified_expr("schema", "to_element_value_as"), [
+    make_ident_expr(name),
+  ])
 }
 
 ///|
-/// Generates the array expression containing all serialized method parameters for RPC.
+/// Generates the `DataValue` expression containing all serialized method parameters for RPC.
 fn build_rpc_params_expr(meth : MethodInfo) -> @syntax.Expr {
-  make_array(meth.params.map(build_rpc_param_expr))
+  // Check if the method has a single multimodal parameter
+  let has_multimodal = meth.params.length() == 1 &&
+    is_multimodal_type(meth.params[0].1)
+  if has_multimodal {
+    let param_name = meth.params[0].0
+    make_dot_apply(make_ident_expr(param_name), "to_data_value", [])
+  } else {
+    make_apply(make_qualified_constr("rpcTypes", "DataValue", "Tuple"), [
+      make_array(meth.params.map(build_rpc_param_expr)),
+    ])
+  }
 }
 
 ///|
@@ -408,7 +402,8 @@ fn build_client_method_invoke(
 ) -> @syntax.Impl {
   let rpc_name = rpc_function_name(agent.name, meth.name)
   let has_return = meth.return_type is Some(_)
-  let has_params = meth.params.length() > 0
+  let has_multimodal_input = meth.params.length() == 1 &&
+    is_multimodal_type(meth.params[0].1)
   let params : Array[@syntax.Parameter] = [make_self_param(client_name)]
   for p in meth.params {
     params.push(make_typed_param(p.0, param_type_to_ast_type(p.1)))
@@ -420,30 +415,25 @@ fn build_client_method_invoke(
     [make_string_expr(rpc_name), rpc_params],
   )
   let body = if has_return {
-    let unwrapped = make_apply(make_qualified_expr("rpc", "unwrap_wit_tuple"), [
-      make_ident_expr("result"),
-    ])
-    let decode_expr = match meth.return_type {
-      Some(rt) =>
-        if is_multimodal_type(rt) {
-          make_apply(make_qualified_expr("rpc", "wit_value_to_multimodal"), [
-            unwrapped,
-          ])
-        } else if is_unstructured_text_type(rt) {
-          make_apply(
-            make_qualified_expr("rpc", "wit_value_to_unstructured_text"),
-            [unwrapped],
-          )
-        } else if is_unstructured_binary_type(rt) {
-          make_apply(
-            make_qualified_expr("rpc", "wit_value_to_unstructured_binary"),
-            [unwrapped],
-          )
-        } else {
-          make_apply(make_qualified_expr("rpc", "from_wit_value"), [unwrapped])
-        }
-      None =>
-        make_apply(make_qualified_expr("rpc", "from_wit_value"), [unwrapped])
+    let is_multimodal_output = match meth.return_type {
+      Some(rt) => is_multimodal_type(rt)
+      None => false
+    }
+    let decode_expr = if is_multimodal_output {
+      make_apply(
+        make_qualified_method_ref("types", "Multimodal", "from_data_value"),
+        [make_ident_expr("result")],
+      )
+    } else {
+      make_let(
+        "elements",
+        make_apply(make_qualified_expr("extractor", "extract_tuple"), [
+          make_ident_expr("result"),
+        ]),
+        make_apply(make_qualified_expr("schema", "from_element_value_as"), [
+          make_array_get(make_ident_expr("elements"), make_int_expr(0)),
+        ]),
+      )
     }
     make_let("result", invoke_expr, decode_expr)
   } else {
@@ -458,7 +448,7 @@ fn build_client_method_invoke(
     meth.name,
     params,
     return_type,
-    has_return || has_params,
+    has_return || has_multimodal_input,
     body,
   )
 }

@@ -257,7 +257,7 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
   let is_multimodal_input = info.params.length() == 1 &&
     is_multimodal_type(info.params[0].1)
   let input_schema = if is_multimodal_input {
-    make_apply(make_qualified_constr("common", "DataSchema", "Multimodal"), [
+    make_apply(make_qualified_constr("rpcTypes", "DataSchema", "Multimodal"), [
       build_multimodal_schema_expr(info.params[0].1),
     ])
   } else {
@@ -269,7 +269,7 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
         param_type_to_schema_expr(pt, options=opts),
       ])
     })
-    make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+    make_apply(make_qualified_constr("rpcTypes", "DataSchema", "Tuple"), [
       make_array(input_elems),
     ])
   }
@@ -278,13 +278,13 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
     None => false
   }
   let output_schema = if is_multimodal_output {
-    make_apply(make_qualified_constr("common", "DataSchema", "Multimodal"), [
+    make_apply(make_qualified_constr("rpcTypes", "DataSchema", "Multimodal"), [
       build_multimodal_schema_expr(info.return_type.unwrap()),
     ])
   } else {
     match info.return_type {
       Some(pt) =>
-        make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+        make_apply(make_qualified_constr("rpcTypes", "DataSchema", "Tuple"), [
           make_array([
             make_tuple([
               make_string_expr("result"),
@@ -293,7 +293,7 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
           ]),
         ])
       None =>
-        make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+        make_apply(make_qualified_constr("rpcTypes", "DataSchema", "Tuple"), [
           make_array([]),
         ])
     }
@@ -305,6 +305,7 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
   make_record([
     make_field("name", make_string_expr(info.name)),
     make_field("description", make_string_expr(info.description)),
+    make_field("http_endpoint", make_array([])),
     make_field("prompt_hint", hint_expr),
     make_field("input_schema", input_schema),
     make_field("output_schema", output_schema),
@@ -316,7 +317,7 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
   let is_multimodal_ctor = agent.constructor_params.length() == 1 &&
     is_multimodal_type(agent.constructor_params[0].1)
   let input_schema = if is_multimodal_ctor {
-    make_apply(make_qualified_constr("common", "DataSchema", "Multimodal"), [
+    make_apply(make_qualified_constr("rpcTypes", "DataSchema", "Multimodal"), [
       build_multimodal_schema_expr(agent.constructor_params[0].1),
     ])
   } else {
@@ -328,7 +329,7 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
         param_type_to_schema_expr(pt, options=opts),
       ])
     })
-    make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+    make_apply(make_qualified_constr("rpcTypes", "DataSchema", "Tuple"), [
       make_array(schema_elems),
     ])
   }
@@ -349,6 +350,7 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
   make_record([
     make_field("type_name", make_string_expr(agent.name)),
     make_field("description", make_string_expr(agent.description)),
+    make_field("source_language", make_string_expr("moonbit")),
     make_field("constructor_", constructor_record),
     make_field("methods", make_array(method_records)),
     make_field("dependencies", make_array([])),
@@ -363,6 +365,12 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
         },
       ),
     ),
+    make_field("http_mount", make_constr_no_args("None")),
+    make_field(
+      "snapshotting",
+      make_qualified_constr("common", "Snapshotting", "Disabled"),
+    ),
+    make_field("config", make_array([])),
   ])
 }
 
@@ -411,7 +419,7 @@ fn build_tuple_method_arm_body(info : MethodInfo) -> @syntax.Expr {
       "result",
       call,
       make_apply(make_constr_no_args("Ok"), [
-        make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+        make_apply(make_qualified_constr("rpcTypes", "DataValue", "Tuple"), [
           make_array([
             make_apply(make_qualified_expr("schema", "to_element_value_as"), [
               make_ident_expr("result"),
@@ -424,7 +432,7 @@ fn build_tuple_method_arm_body(info : MethodInfo) -> @syntax.Expr {
     make_sequence([
       call,
       make_apply(make_constr_no_args("Ok"), [
-        make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+        make_apply(make_qualified_constr("rpcTypes", "DataValue", "Tuple"), [
           make_array([]),
         ]),
       ]),
@@ -505,7 +513,7 @@ fn build_multimodal_method_arm_body(
       "result",
       call,
       make_apply(make_constr_no_args("Ok"), [
-        make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+        make_apply(make_qualified_constr("rpcTypes", "DataValue", "Tuple"), [
           make_array([
             make_apply(make_qualified_expr("schema", "to_element_value_as"), [
               make_ident_expr("result"),
@@ -520,7 +528,7 @@ fn build_multimodal_method_arm_body(
     make_sequence([
       call,
       make_apply(make_constr_no_args("Ok"), [
-        make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+        make_apply(make_qualified_constr("rpcTypes", "DataValue", "Tuple"), [
           make_array([]),
         ]),
       ]),

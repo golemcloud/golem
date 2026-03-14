@@ -106,6 +106,13 @@ pub(all) struct Enumeration {
 } derive(Show, Eq)
 
 ///|
+pub(all) struct SparseVec {
+  dim : Int
+  indices : FixedArray[Int]
+  values : FixedArray[Float]
+} derive(Show, Eq)
+
+///|
 pub(all) struct LazyDbValue(Int) derive(Show, Eq)
 
 ///|
@@ -190,6 +197,9 @@ pub(all) enum DbValue {
   Array(Array[LazyDbValue])
   Range(Range)
   Null
+  Vector(FixedArray[Float])
+  Halfvec(FixedArray[Float])
+  Sparsevec(SparseVec)
 } derive(Show, Eq)
 
 ///|
@@ -263,6 +273,9 @@ pub(all) enum DbColumnType {
   Domain(DomainType)
   Array(LazyDbColumnType)
   Range(RangeType)
+  Vector
+  Halfvec
+  Sparsevec
 } derive(Show, Eq)
 
 ///|
@@ -1216,6 +1229,46 @@ pub fn LazyDbValue::lazy_db_value(value : DbValue) -> LazyDbValue {
 
       ()
     }
+    Vector(payload116) => {
+      mbt_ffi_store8(return_area + 0, 42)
+
+      let ptr117 = mbt_ffi_float_array2ptr(payload116)
+
+      mbt_ffi_store32(return_area + 12, payload116.length())
+      mbt_ffi_store32(return_area + 8, ptr117)
+      cleanup_list.push(ptr117)
+
+      ()
+    }
+    Halfvec(payload118) => {
+      mbt_ffi_store8(return_area + 0, 43)
+
+      let ptr119 = mbt_ffi_float_array2ptr(payload118)
+
+      mbt_ffi_store32(return_area + 12, payload118.length())
+      mbt_ffi_store32(return_area + 8, ptr119)
+      cleanup_list.push(ptr119)
+
+      ()
+    }
+    Sparsevec(payload120) => {
+      mbt_ffi_store8(return_area + 0, 44)
+      mbt_ffi_store32(return_area + 8, payload120.dim)
+
+      let ptr121 = mbt_ffi_int_array2ptr(payload120.indices)
+
+      mbt_ffi_store32(return_area + 16, payload120.indices.length())
+      mbt_ffi_store32(return_area + 12, ptr121)
+
+      let ptr122 = mbt_ffi_float_array2ptr(payload120.values)
+
+      mbt_ffi_store32(return_area + 24, payload120.values.length())
+      mbt_ffi_store32(return_area + 20, ptr122)
+      cleanup_list.push(ptr121)
+      cleanup_list.push(ptr122)
+
+      ()
+    }
   }
   let result : Int = wasmImportConstructorLazyDbValue(return_area)
   let ret = LazyDbValue::LazyDbValue(result)
@@ -1230,7 +1283,7 @@ pub fn LazyDbValue::get(self : LazyDbValue) -> DbValue {
   let return_area = mbt_ffi_malloc(56)
   wasmImportMethodLazyDbValueGet(handle, return_area)
 
-  let lifted38 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted42 = match mbt_ffi_load8_u(return_area + 0) {
     0 => DbValue::Character(mbt_ffi_load8(return_area + 8) - 0x100)
     1 => DbValue::Int2(mbt_ffi_load16(return_area + 8) - 0x10000)
     2 => DbValue::Int4(mbt_ffi_load32(return_area + 8))
@@ -1861,9 +1914,42 @@ pub fn LazyDbValue::get(self : LazyDbValue) -> DbValue {
       })
     }
     41 => DbValue::Null
+    42 => {
+      let result38 = mbt_ffi_ptr2float_array(
+        mbt_ffi_load32(return_area + 8),
+        mbt_ffi_load32(return_area + 12),
+      )
+
+      DbValue::Vector(result38)
+    }
+    43 => {
+      let result39 = mbt_ffi_ptr2float_array(
+        mbt_ffi_load32(return_area + 8),
+        mbt_ffi_load32(return_area + 12),
+      )
+
+      DbValue::Halfvec(result39)
+    }
+    44 => {
+      let result40 = mbt_ffi_ptr2int_array(
+        mbt_ffi_load32(return_area + 12),
+        mbt_ffi_load32(return_area + 16),
+      )
+
+      let result41 = mbt_ffi_ptr2float_array(
+        mbt_ffi_load32(return_area + 20),
+        mbt_ffi_load32(return_area + 24),
+      )
+
+      DbValue::Sparsevec(SparseVec::{
+        dim: mbt_ffi_load32(return_area + 8),
+        indices: result40,
+        values: result41,
+      })
+    }
     _ => panic()
   }
-  let ret = lifted38
+  let ret = lifted42
   mbt_ffi_free(return_area)
   return ret
 }
@@ -1874,7 +1960,7 @@ pub fn LazyDbColumnType::lazy_db_column_type(
 ) -> LazyDbColumnType {
   let cleanup_list : Array[Int] = []
 
-  let (lowered, lowered47, lowered48, lowered49, lowered50) = match value {
+  let (lowered, lowered50, lowered51, lowered52, lowered53) = match value {
     Character => (0, 0, 0, 0, 0)
     Int2 => (1, 0, 0, 0, 0)
     Int4 => (2, 0, 0, 0, 0)
@@ -1965,9 +2051,12 @@ pub fn LazyDbColumnType::lazy_db_column_type(
 
       (40, ptr45, payload44.name.length(), handle46, 0)
     }
+    Vector => (41, 0, 0, 0, 0)
+    Halfvec => (42, 0, 0, 0, 0)
+    Sparsevec => (43, 0, 0, 0, 0)
   }
   let result : Int = wasmImportConstructorLazyDbColumnType(
-    lowered, lowered47, lowered48, lowered49, lowered50,
+    lowered, lowered50, lowered51, lowered52, lowered53,
   )
   let ret = LazyDbColumnType::LazyDbColumnType(result)
   cleanup_list.each(mbt_ffi_free)
@@ -2084,6 +2173,9 @@ pub fn LazyDbColumnType::get(self : LazyDbColumnType) -> DbColumnType {
         ),
       })
     }
+    41 => DbColumnType::Vector
+    42 => DbColumnType::Halfvec
+    43 => DbColumnType::Sparsevec
     _ => panic()
   }
   let ret = lifted
@@ -2210,6 +2302,9 @@ pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn] {
           ),
         })
       }
+      41 => DbColumnType::Vector
+      42 => DbColumnType::Halfvec
+      43 => DbColumnType::Sparsevec
       _ => panic()
     }
 
@@ -2237,22 +2332,22 @@ pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]? {
   let return_area = mbt_ffi_malloc(12)
   wasmImportMethodDbResultStreamGetNext(handle, return_area)
 
-  let lifted43 : Array[DbRow]? = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted47 : Array[DbRow]? = match mbt_ffi_load8_u(return_area + 0) {
     0 => Option::None
     1 => {
-      let array41 : Array[DbRow] = []
-      for index42 = 0
-          index42 < mbt_ffi_load32(return_area + 8)
-          index42 = index42 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 4) + index42 * 8
+      let array45 : Array[DbRow] = []
+      for index46 = 0
+          index46 < mbt_ffi_load32(return_area + 8)
+          index46 = index46 + 1 {
+        let iter_base = mbt_ffi_load32(return_area + 4) + index46 * 8
 
-        let array39 : Array[DbValue] = []
-        for index40 = 0
-            index40 < mbt_ffi_load32(iter_base + 4)
-            index40 = index40 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 0) + index40 * 56
+        let array43 : Array[DbValue] = []
+        for index44 = 0
+            index44 < mbt_ffi_load32(iter_base + 4)
+            index44 = index44 + 1 {
+          let iter_base = mbt_ffi_load32(iter_base + 0) + index44 * 56
 
-          let lifted38 = match mbt_ffi_load8_u(iter_base + 0) {
+          let lifted42 = match mbt_ffi_load8_u(iter_base + 0) {
             0 => DbValue::Character(mbt_ffi_load8(iter_base + 8) - 0x100)
             1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8) - 0x10000)
             2 => DbValue::Int4(mbt_ffi_load32(iter_base + 8))
@@ -2893,22 +2988,55 @@ pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]? {
               })
             }
             41 => DbValue::Null
+            42 => {
+              let result38 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 8),
+                mbt_ffi_load32(iter_base + 12),
+              )
+
+              DbValue::Vector(result38)
+            }
+            43 => {
+              let result39 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 8),
+                mbt_ffi_load32(iter_base + 12),
+              )
+
+              DbValue::Halfvec(result39)
+            }
+            44 => {
+              let result40 = mbt_ffi_ptr2int_array(
+                mbt_ffi_load32(iter_base + 12),
+                mbt_ffi_load32(iter_base + 16),
+              )
+
+              let result41 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 20),
+                mbt_ffi_load32(iter_base + 24),
+              )
+
+              DbValue::Sparsevec(SparseVec::{
+                dim: mbt_ffi_load32(iter_base + 8),
+                indices: result40,
+                values: result41,
+              })
+            }
             _ => panic()
           }
 
-          array39.push(lifted38)
+          array43.push(lifted42)
         }
         mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
-        array41.push(DbRow::{ values: array39 })
+        array45.push(DbRow::{ values: array43 })
       }
       mbt_ffi_free(mbt_ffi_load32(return_area + 4))
 
-      Option::Some(array41)
+      Option::Some(array45)
     }
     _ => panic()
   }
-  let ret = lifted43
+  let ret = lifted47
   mbt_ffi_free(return_area)
   return ret
 }
@@ -2988,10 +3116,10 @@ pub fn DbConnection::query(
 
   let ptr = mbt_ffi_str2ptr(statement)
 
-  let address118 = mbt_ffi_malloc(params.length() * 56)
-  for index119 = 0; index119 < params.length(); index119 = index119 + 1 {
-    let iter_elem : DbValue = params[index119]
-    let iter_base = address118 + index119 * 56
+  let address125 = mbt_ffi_malloc(params.length() * 56)
+  for index126 = 0; index126 < params.length(); index126 = index126 + 1 {
+    let iter_elem : DbValue = params[index126]
+    let iter_base = address125 + index126 * 56
 
     match iter_elem {
       Character(payload) => {
@@ -3889,6 +4017,46 @@ pub fn DbConnection::query(
 
         ()
       }
+      Vector(payload118) => {
+        mbt_ffi_store8(iter_base + 0, 42)
+
+        let ptr119 = mbt_ffi_float_array2ptr(payload118)
+
+        mbt_ffi_store32(iter_base + 12, payload118.length())
+        mbt_ffi_store32(iter_base + 8, ptr119)
+        cleanup_list.push(ptr119)
+
+        ()
+      }
+      Halfvec(payload120) => {
+        mbt_ffi_store8(iter_base + 0, 43)
+
+        let ptr121 = mbt_ffi_float_array2ptr(payload120)
+
+        mbt_ffi_store32(iter_base + 12, payload120.length())
+        mbt_ffi_store32(iter_base + 8, ptr121)
+        cleanup_list.push(ptr121)
+
+        ()
+      }
+      Sparsevec(payload122) => {
+        mbt_ffi_store8(iter_base + 0, 44)
+        mbt_ffi_store32(iter_base + 8, payload122.dim)
+
+        let ptr123 = mbt_ffi_int_array2ptr(payload122.indices)
+
+        mbt_ffi_store32(iter_base + 16, payload122.indices.length())
+        mbt_ffi_store32(iter_base + 12, ptr123)
+
+        let ptr124 = mbt_ffi_float_array2ptr(payload122.values)
+
+        mbt_ffi_store32(iter_base + 24, payload122.values.length())
+        mbt_ffi_store32(iter_base + 20, ptr124)
+        cleanup_list.push(ptr123)
+        cleanup_list.push(ptr124)
+
+        ()
+      }
     }
   }
   let return_area = mbt_ffi_malloc(20)
@@ -3896,18 +4064,18 @@ pub fn DbConnection::query(
     handle,
     ptr,
     statement.length(),
-    address118,
+    address125,
     params.length(),
     return_area,
   )
 
-  let lifted182 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted193 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
-      let array127 : Array[DbColumn] = []
-      for index128 = 0
-          index128 < mbt_ffi_load32(return_area + 8)
-          index128 = index128 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 4) + index128 * 48
+      let array134 : Array[DbColumn] = []
+      for index135 = 0
+          index135 < mbt_ffi_load32(return_area + 8)
+          index135 = index135 + 1 {
+        let iter_base = mbt_ffi_load32(return_area + 4) + index135 * 48
 
         let result = mbt_ffi_ptr2str(
           mbt_ffi_load32(iter_base + 8),
@@ -3952,33 +4120,33 @@ pub fn DbConnection::query(
           34 => DbColumnType::Money
           35 => DbColumnType::Oid
           36 => {
-            let result120 = mbt_ffi_ptr2str(
+            let result127 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
             )
 
-            DbColumnType::Enumeration(EnumerationType::{ name: result120 })
+            DbColumnType::Enumeration(EnumerationType::{ name: result127 })
           }
           37 => {
-            let result121 = mbt_ffi_ptr2str(
+            let result128 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
             )
 
             let array : Array[(String, LazyDbColumnType)] = []
-            for index123 = 0
-                index123 < mbt_ffi_load32(iter_base + 32)
-                index123 = index123 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 28) + index123 * 12
+            for index130 = 0
+                index130 < mbt_ffi_load32(iter_base + 32)
+                index130 = index130 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 28) + index130 * 12
 
-              let result122 = mbt_ffi_ptr2str(
+              let result129 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 0),
                 mbt_ffi_load32(iter_base + 4),
               )
 
               array.push(
                 (
-                  result122,
+                  result129,
                   LazyDbColumnType::LazyDbColumnType(
                     mbt_ffi_load32(iter_base + 8),
                   ),
@@ -3988,18 +4156,18 @@ pub fn DbConnection::query(
             mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
             DbColumnType::Composite(CompositeType::{
-              name: result121,
+              name: result128,
               attributes: array,
             })
           }
           38 => {
-            let result124 = mbt_ffi_ptr2str(
+            let result131 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
             )
 
             DbColumnType::Domain(DomainType::{
-              name: result124,
+              name: result131,
               base_type: LazyDbColumnType::LazyDbColumnType(
                 mbt_ffi_load32(iter_base + 28),
               ),
@@ -4010,48 +4178,51 @@ pub fn DbConnection::query(
               LazyDbColumnType::LazyDbColumnType(mbt_ffi_load32(iter_base + 20)),
             )
           40 => {
-            let result125 = mbt_ffi_ptr2str(
+            let result132 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
             )
 
             DbColumnType::Range(RangeType::{
-              name: result125,
+              name: result132,
               base_type: LazyDbColumnType::LazyDbColumnType(
                 mbt_ffi_load32(iter_base + 28),
               ),
             })
           }
+          41 => DbColumnType::Vector
+          42 => DbColumnType::Halfvec
+          43 => DbColumnType::Sparsevec
           _ => panic()
         }
 
-        let result126 = mbt_ffi_ptr2str(
+        let result133 = mbt_ffi_ptr2str(
           mbt_ffi_load32(iter_base + 36),
           mbt_ffi_load32(iter_base + 40),
         )
 
-        array127.push(DbColumn::{
+        array134.push(DbColumn::{
           ordinal: mbt_ffi_load64(iter_base + 0).reinterpret_as_uint64(),
           name: result,
           db_type: lifted,
-          db_type_name: result126,
+          db_type_name: result133,
         })
       }
       mbt_ffi_free(mbt_ffi_load32(return_area + 4))
 
-      let array174 : Array[DbRow] = []
-      for index175 = 0
-          index175 < mbt_ffi_load32(return_area + 16)
-          index175 = index175 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 12) + index175 * 8
+      let array185 : Array[DbRow] = []
+      for index186 = 0
+          index186 < mbt_ffi_load32(return_area + 16)
+          index186 = index186 + 1 {
+        let iter_base = mbt_ffi_load32(return_area + 12) + index186 * 8
 
-        let array172 : Array[DbValue] = []
-        for index173 = 0
-            index173 < mbt_ffi_load32(iter_base + 4)
-            index173 = index173 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 0) + index173 * 56
+        let array183 : Array[DbValue] = []
+        for index184 = 0
+            index184 < mbt_ffi_load32(iter_base + 4)
+            index184 = index184 + 1 {
+          let iter_base = mbt_ffi_load32(iter_base + 0) + index184 * 56
 
-          let lifted171 = match mbt_ffi_load8_u(iter_base + 0) {
+          let lifted182 = match mbt_ffi_load8_u(iter_base + 0) {
             0 => DbValue::Character(mbt_ffi_load8(iter_base + 8) - 0x100)
             1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8) - 0x10000)
             2 => DbValue::Int4(mbt_ffi_load32(iter_base + 8))
@@ -4059,37 +4230,37 @@ pub fn DbConnection::query(
             4 => DbValue::Float4(mbt_ffi_loadf32(iter_base + 8))
             5 => DbValue::Float8(mbt_ffi_loadf64(iter_base + 8))
             6 => {
-              let result129 = mbt_ffi_ptr2str(
+              let result136 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Numeric(result129)
+              DbValue::Numeric(result136)
             }
             7 => DbValue::Boolean(mbt_ffi_load8_u(iter_base + 8) != 0)
             8 => {
-              let result130 = mbt_ffi_ptr2str(
+              let result137 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Text(result130)
+              DbValue::Text(result137)
             }
             9 => {
-              let result131 = mbt_ffi_ptr2str(
+              let result138 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Varchar(result131)
+              DbValue::Varchar(result138)
             }
             10 => {
-              let result132 = mbt_ffi_ptr2str(
+              let result139 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Bpchar(result132)
+              DbValue::Bpchar(result139)
             }
             11 =>
               DbValue::Timestamp(@types.Timestamp::{
@@ -4152,44 +4323,44 @@ pub fn DbConnection::query(
                 microseconds: mbt_ffi_load64(iter_base + 16),
               })
             17 => {
-              let result133 = mbt_ffi_ptr2bytes(
+              let result140 = mbt_ffi_ptr2bytes(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Bytea(result133)
+              DbValue::Bytea(result140)
             }
             18 => {
-              let result134 = mbt_ffi_ptr2str(
+              let result141 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Json(result134)
+              DbValue::Json(result141)
             }
             19 => {
-              let result135 = mbt_ffi_ptr2str(
+              let result142 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Jsonb(result135)
+              DbValue::Jsonb(result142)
             }
             20 => {
-              let result136 = mbt_ffi_ptr2str(
+              let result143 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Jsonpath(result136)
+              DbValue::Jsonpath(result143)
             }
             21 => {
-              let result137 = mbt_ffi_ptr2str(
+              let result144 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Xml(result137)
+              DbValue::Xml(result144)
             }
             22 =>
               DbValue::Uuid(@types.Uuid::{
@@ -4197,7 +4368,7 @@ pub fn DbConnection::query(
                 low_bits: mbt_ffi_load64(iter_base + 16).reinterpret_as_uint64(),
               })
             23 => {
-              let lifted138 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted145 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   @types.IpAddress::Ipv4(
                     (
@@ -4239,10 +4410,10 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              DbValue::Inet(lifted138)
+              DbValue::Inet(lifted145)
             }
             24 => {
-              let lifted139 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted146 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   @types.IpAddress::Ipv4(
                     (
@@ -4284,7 +4455,7 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              DbValue::Cidr(lifted139)
+              DbValue::Cidr(lifted146)
             }
             25 =>
               DbValue::Macaddr(@types.MacAddress::{
@@ -4298,112 +4469,112 @@ pub fn DbConnection::query(
                 ),
               })
             26 => {
-              let array140 : Array[Bool] = []
-              for index141 = 0
-                  index141 < mbt_ffi_load32(iter_base + 12)
-                  index141 = index141 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index141 * 1
+              let array147 : Array[Bool] = []
+              for index148 = 0
+                  index148 < mbt_ffi_load32(iter_base + 12)
+                  index148 = index148 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index148 * 1
 
-                array140.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                array147.push(mbt_ffi_load8_u(iter_base + 0) != 0)
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-              DbValue::Bit(array140)
+              DbValue::Bit(array147)
             }
             27 => {
-              let array142 : Array[Bool] = []
-              for index143 = 0
-                  index143 < mbt_ffi_load32(iter_base + 12)
-                  index143 = index143 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index143 * 1
+              let array149 : Array[Bool] = []
+              for index150 = 0
+                  index150 < mbt_ffi_load32(iter_base + 12)
+                  index150 = index150 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index150 * 1
 
-                array142.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                array149.push(mbt_ffi_load8_u(iter_base + 0) != 0)
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-              DbValue::Varbit(array142)
+              DbValue::Varbit(array149)
             }
             28 => {
-              let lifted144 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted151 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 => Int4bound::Included(mbt_ffi_load32(iter_base + 12))
                 1 => Int4bound::Excluded(mbt_ffi_load32(iter_base + 12))
                 2 => Int4bound::Unbounded
                 _ => panic()
               }
 
-              let lifted145 = match mbt_ffi_load8_u(iter_base + 16) {
+              let lifted152 = match mbt_ffi_load8_u(iter_base + 16) {
                 0 => Int4bound::Included(mbt_ffi_load32(iter_base + 20))
                 1 => Int4bound::Excluded(mbt_ffi_load32(iter_base + 20))
                 2 => Int4bound::Unbounded
                 _ => panic()
               }
 
-              DbValue::Int4range(Int4range::{ start: lifted144, end: lifted145 })
+              DbValue::Int4range(Int4range::{ start: lifted151, end: lifted152 })
             }
             29 => {
-              let lifted146 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted153 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 => Int8bound::Included(mbt_ffi_load64(iter_base + 16))
                 1 => Int8bound::Excluded(mbt_ffi_load64(iter_base + 16))
                 2 => Int8bound::Unbounded
                 _ => panic()
               }
 
-              let lifted147 = match mbt_ffi_load8_u(iter_base + 24) {
+              let lifted154 = match mbt_ffi_load8_u(iter_base + 24) {
                 0 => Int8bound::Included(mbt_ffi_load64(iter_base + 32))
                 1 => Int8bound::Excluded(mbt_ffi_load64(iter_base + 32))
                 2 => Int8bound::Unbounded
                 _ => panic()
               }
 
-              DbValue::Int8range(Int8range::{ start: lifted146, end: lifted147 })
+              DbValue::Int8range(Int8range::{ start: lifted153, end: lifted154 })
             }
             30 => {
-              let lifted150 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted157 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 => {
-                  let result148 = mbt_ffi_ptr2str(
+                  let result155 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 12),
                     mbt_ffi_load32(iter_base + 16),
                   )
 
-                  Numbound::Included(result148)
+                  Numbound::Included(result155)
                 }
                 1 => {
-                  let result149 = mbt_ffi_ptr2str(
+                  let result156 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 12),
                     mbt_ffi_load32(iter_base + 16),
                   )
 
-                  Numbound::Excluded(result149)
+                  Numbound::Excluded(result156)
                 }
                 2 => Numbound::Unbounded
                 _ => panic()
               }
 
-              let lifted153 = match mbt_ffi_load8_u(iter_base + 20) {
+              let lifted160 = match mbt_ffi_load8_u(iter_base + 20) {
                 0 => {
-                  let result151 = mbt_ffi_ptr2str(
+                  let result158 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 24),
                     mbt_ffi_load32(iter_base + 28),
                   )
 
-                  Numbound::Included(result151)
+                  Numbound::Included(result158)
                 }
                 1 => {
-                  let result152 = mbt_ffi_ptr2str(
+                  let result159 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 24),
                     mbt_ffi_load32(iter_base + 28),
                   )
 
-                  Numbound::Excluded(result152)
+                  Numbound::Excluded(result159)
                 }
                 2 => Numbound::Unbounded
                 _ => panic()
               }
 
-              DbValue::Numrange(Numrange::{ start: lifted150, end: lifted153 })
+              DbValue::Numrange(Numrange::{ start: lifted157, end: lifted160 })
             }
             31 => {
-              let lifted154 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted161 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   Tsbound::Included(@types.Timestamp::{
                     date: @types.Date::{
@@ -4436,7 +4607,7 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              let lifted155 = match mbt_ffi_load8_u(iter_base + 28) {
+              let lifted162 = match mbt_ffi_load8_u(iter_base + 28) {
                 0 =>
                   Tsbound::Included(@types.Timestamp::{
                     date: @types.Date::{
@@ -4469,10 +4640,10 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              DbValue::Tsrange(Tsrange::{ start: lifted154, end: lifted155 })
+              DbValue::Tsrange(Tsrange::{ start: lifted161, end: lifted162 })
             }
             32 => {
-              let lifted156 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted163 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   Tstzbound::Included(@types.Timestamptz::{
                     timestamp: @types.Timestamp::{
@@ -4511,7 +4682,7 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              let lifted157 = match mbt_ffi_load8_u(iter_base + 32) {
+              let lifted164 = match mbt_ffi_load8_u(iter_base + 32) {
                 0 =>
                   Tstzbound::Included(@types.Timestamptz::{
                     timestamp: @types.Timestamp::{
@@ -4550,10 +4721,10 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              DbValue::Tstzrange(Tstzrange::{ start: lifted156, end: lifted157 })
+              DbValue::Tstzrange(Tstzrange::{ start: lifted163, end: lifted164 })
             }
             33 => {
-              let lifted158 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted165 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   Datebound::Included(@types.Date::{
                     year: mbt_ffi_load32(iter_base + 12),
@@ -4570,7 +4741,7 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              let lifted159 = match mbt_ffi_load8_u(iter_base + 20) {
+              let lifted166 = match mbt_ffi_load8_u(iter_base + 20) {
                 0 =>
                   Datebound::Included(@types.Date::{
                     year: mbt_ffi_load32(iter_base + 24),
@@ -4587,83 +4758,83 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              DbValue::Daterange(Daterange::{ start: lifted158, end: lifted159 })
+              DbValue::Daterange(Daterange::{ start: lifted165, end: lifted166 })
             }
             34 => DbValue::Money(mbt_ffi_load64(iter_base + 8))
             35 =>
               DbValue::Oid(mbt_ffi_load32(iter_base + 8).reinterpret_as_uint())
             36 => {
-              let result160 = mbt_ffi_ptr2str(
+              let result167 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              let result161 = mbt_ffi_ptr2str(
+              let result168 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 16),
                 mbt_ffi_load32(iter_base + 20),
               )
 
               DbValue::Enumeration(Enumeration::{
-                name: result160,
-                value: result161,
+                name: result167,
+                value: result168,
               })
             }
             37 => {
-              let result162 = mbt_ffi_ptr2str(
+              let result169 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              let array163 : Array[LazyDbValue] = []
-              for index164 = 0
-                  index164 < mbt_ffi_load32(iter_base + 20)
-                  index164 = index164 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 16) + index164 * 4
+              let array170 : Array[LazyDbValue] = []
+              for index171 = 0
+                  index171 < mbt_ffi_load32(iter_base + 20)
+                  index171 = index171 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 16) + index171 * 4
 
-                array163.push(
+                array170.push(
                   LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 0)),
                 )
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
               DbValue::Composite(Composite::{
-                name: result162,
-                values: array163,
+                name: result169,
+                values: array170,
               })
             }
             38 => {
-              let result165 = mbt_ffi_ptr2str(
+              let result172 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
               DbValue::Domain(Domain::{
-                name: result165,
+                name: result172,
                 value: LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 16)),
               })
             }
             39 => {
-              let array166 : Array[LazyDbValue] = []
-              for index167 = 0
-                  index167 < mbt_ffi_load32(iter_base + 12)
-                  index167 = index167 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index167 * 4
+              let array173 : Array[LazyDbValue] = []
+              for index174 = 0
+                  index174 < mbt_ffi_load32(iter_base + 12)
+                  index174 = index174 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index174 * 4
 
-                array166.push(
+                array173.push(
                   LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 0)),
                 )
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-              DbValue::Array(array166)
+              DbValue::Array(array173)
             }
             40 => {
-              let result168 = mbt_ffi_ptr2str(
+              let result175 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              let lifted169 = match mbt_ffi_load8_u(iter_base + 16) {
+              let lifted176 = match mbt_ffi_load8_u(iter_base + 16) {
                 0 =>
                   ValueBound::Included(
                     LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 20)),
@@ -4676,7 +4847,7 @@ pub fn DbConnection::query(
                 _ => panic()
               }
 
-              let lifted170 = match mbt_ffi_load8_u(iter_base + 24) {
+              let lifted177 = match mbt_ffi_load8_u(iter_base + 24) {
                 0 =>
                   ValueBound::Included(
                     LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 28)),
@@ -4690,76 +4861,109 @@ pub fn DbConnection::query(
               }
 
               DbValue::Range(Range::{
-                name: result168,
-                value: ValuesRange::{ start: lifted169, end: lifted170 },
+                name: result175,
+                value: ValuesRange::{ start: lifted176, end: lifted177 },
               })
             }
             41 => DbValue::Null
+            42 => {
+              let result178 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 8),
+                mbt_ffi_load32(iter_base + 12),
+              )
+
+              DbValue::Vector(result178)
+            }
+            43 => {
+              let result179 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 8),
+                mbt_ffi_load32(iter_base + 12),
+              )
+
+              DbValue::Halfvec(result179)
+            }
+            44 => {
+              let result180 = mbt_ffi_ptr2int_array(
+                mbt_ffi_load32(iter_base + 12),
+                mbt_ffi_load32(iter_base + 16),
+              )
+
+              let result181 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 20),
+                mbt_ffi_load32(iter_base + 24),
+              )
+
+              DbValue::Sparsevec(SparseVec::{
+                dim: mbt_ffi_load32(iter_base + 8),
+                indices: result180,
+                values: result181,
+              })
+            }
             _ => panic()
           }
 
-          array172.push(lifted171)
+          array183.push(lifted182)
         }
         mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
-        array174.push(DbRow::{ values: array172 })
+        array185.push(DbRow::{ values: array183 })
       }
       mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
-      Result::Ok(DbResult::{ columns: array127, rows: array174 })
+      Result::Ok(DbResult::{ columns: array134, rows: array185 })
     }
     1 => {
-      let lifted181 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted192 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
-          let result176 = mbt_ffi_ptr2str(
+          let result187 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::ConnectionFailure(result176)
+          Error_::ConnectionFailure(result187)
         }
         1 => {
-          let result177 = mbt_ffi_ptr2str(
+          let result188 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryParameterFailure(result177)
+          Error_::QueryParameterFailure(result188)
         }
         2 => {
-          let result178 = mbt_ffi_ptr2str(
+          let result189 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryExecutionFailure(result178)
+          Error_::QueryExecutionFailure(result189)
         }
         3 => {
-          let result179 = mbt_ffi_ptr2str(
+          let result190 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryResponseFailure(result179)
+          Error_::QueryResponseFailure(result190)
         }
         4 => {
-          let result180 = mbt_ffi_ptr2str(
+          let result191 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::Other(result180)
+          Error_::Other(result191)
         }
         _ => panic()
       }
 
-      Result::Err(lifted181)
+      Result::Err(lifted192)
     }
     _ => panic()
   }
-  let ret = lifted182
+  let ret = lifted193
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address118)
+  mbt_ffi_free(address125)
   mbt_ffi_free(return_area)
   cleanup_list.each(mbt_ffi_free)
   return ret
@@ -4777,10 +4981,10 @@ pub fn DbConnection::query_stream(
 
   let ptr = mbt_ffi_str2ptr(statement)
 
-  let address118 = mbt_ffi_malloc(params.length() * 56)
-  for index119 = 0; index119 < params.length(); index119 = index119 + 1 {
-    let iter_elem : DbValue = params[index119]
-    let iter_base = address118 + index119 * 56
+  let address125 = mbt_ffi_malloc(params.length() * 56)
+  for index126 = 0; index126 < params.length(); index126 = index126 + 1 {
+    let iter_elem : DbValue = params[index126]
+    let iter_base = address125 + index126 * 56
 
     match iter_elem {
       Character(payload) => {
@@ -5678,6 +5882,46 @@ pub fn DbConnection::query_stream(
 
         ()
       }
+      Vector(payload118) => {
+        mbt_ffi_store8(iter_base + 0, 42)
+
+        let ptr119 = mbt_ffi_float_array2ptr(payload118)
+
+        mbt_ffi_store32(iter_base + 12, payload118.length())
+        mbt_ffi_store32(iter_base + 8, ptr119)
+        cleanup_list.push(ptr119)
+
+        ()
+      }
+      Halfvec(payload120) => {
+        mbt_ffi_store8(iter_base + 0, 43)
+
+        let ptr121 = mbt_ffi_float_array2ptr(payload120)
+
+        mbt_ffi_store32(iter_base + 12, payload120.length())
+        mbt_ffi_store32(iter_base + 8, ptr121)
+        cleanup_list.push(ptr121)
+
+        ()
+      }
+      Sparsevec(payload122) => {
+        mbt_ffi_store8(iter_base + 0, 44)
+        mbt_ffi_store32(iter_base + 8, payload122.dim)
+
+        let ptr123 = mbt_ffi_int_array2ptr(payload122.indices)
+
+        mbt_ffi_store32(iter_base + 16, payload122.indices.length())
+        mbt_ffi_store32(iter_base + 12, ptr123)
+
+        let ptr124 = mbt_ffi_float_array2ptr(payload122.values)
+
+        mbt_ffi_store32(iter_base + 24, payload122.values.length())
+        mbt_ffi_store32(iter_base + 20, ptr124)
+        cleanup_list.push(ptr123)
+        cleanup_list.push(ptr124)
+
+        ()
+      }
     }
   }
   let return_area = mbt_ffi_malloc(16)
@@ -5685,12 +5929,12 @@ pub fn DbConnection::query_stream(
     handle,
     ptr,
     statement.length(),
-    address118,
+    address125,
     params.length(),
     return_area,
   )
 
-  let lifted124 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted131 = match mbt_ffi_load8_u(return_area + 0) {
     0 =>
       Result::Ok(
         DbResultStream::DbResultStream(mbt_ffi_load32(return_area + 4)),
@@ -5706,36 +5950,36 @@ pub fn DbConnection::query_stream(
           Error_::ConnectionFailure(result)
         }
         1 => {
-          let result120 = mbt_ffi_ptr2str(
+          let result127 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryParameterFailure(result120)
+          Error_::QueryParameterFailure(result127)
         }
         2 => {
-          let result121 = mbt_ffi_ptr2str(
+          let result128 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryExecutionFailure(result121)
+          Error_::QueryExecutionFailure(result128)
         }
         3 => {
-          let result122 = mbt_ffi_ptr2str(
+          let result129 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryResponseFailure(result122)
+          Error_::QueryResponseFailure(result129)
         }
         4 => {
-          let result123 = mbt_ffi_ptr2str(
+          let result130 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::Other(result123)
+          Error_::Other(result130)
         }
         _ => panic()
       }
@@ -5744,9 +5988,9 @@ pub fn DbConnection::query_stream(
     }
     _ => panic()
   }
-  let ret = lifted124
+  let ret = lifted131
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address118)
+  mbt_ffi_free(address125)
   mbt_ffi_free(return_area)
   cleanup_list.each(mbt_ffi_free)
   return ret
@@ -5764,10 +6008,10 @@ pub fn DbConnection::execute(
 
   let ptr = mbt_ffi_str2ptr(statement)
 
-  let address118 = mbt_ffi_malloc(params.length() * 56)
-  for index119 = 0; index119 < params.length(); index119 = index119 + 1 {
-    let iter_elem : DbValue = params[index119]
-    let iter_base = address118 + index119 * 56
+  let address125 = mbt_ffi_malloc(params.length() * 56)
+  for index126 = 0; index126 < params.length(); index126 = index126 + 1 {
+    let iter_elem : DbValue = params[index126]
+    let iter_base = address125 + index126 * 56
 
     match iter_elem {
       Character(payload) => {
@@ -6665,6 +6909,46 @@ pub fn DbConnection::execute(
 
         ()
       }
+      Vector(payload118) => {
+        mbt_ffi_store8(iter_base + 0, 42)
+
+        let ptr119 = mbt_ffi_float_array2ptr(payload118)
+
+        mbt_ffi_store32(iter_base + 12, payload118.length())
+        mbt_ffi_store32(iter_base + 8, ptr119)
+        cleanup_list.push(ptr119)
+
+        ()
+      }
+      Halfvec(payload120) => {
+        mbt_ffi_store8(iter_base + 0, 43)
+
+        let ptr121 = mbt_ffi_float_array2ptr(payload120)
+
+        mbt_ffi_store32(iter_base + 12, payload120.length())
+        mbt_ffi_store32(iter_base + 8, ptr121)
+        cleanup_list.push(ptr121)
+
+        ()
+      }
+      Sparsevec(payload122) => {
+        mbt_ffi_store8(iter_base + 0, 44)
+        mbt_ffi_store32(iter_base + 8, payload122.dim)
+
+        let ptr123 = mbt_ffi_int_array2ptr(payload122.indices)
+
+        mbt_ffi_store32(iter_base + 16, payload122.indices.length())
+        mbt_ffi_store32(iter_base + 12, ptr123)
+
+        let ptr124 = mbt_ffi_float_array2ptr(payload122.values)
+
+        mbt_ffi_store32(iter_base + 24, payload122.values.length())
+        mbt_ffi_store32(iter_base + 20, ptr124)
+        cleanup_list.push(ptr123)
+        cleanup_list.push(ptr124)
+
+        ()
+      }
     }
   }
   let return_area = mbt_ffi_malloc(24)
@@ -6672,12 +6956,12 @@ pub fn DbConnection::execute(
     handle,
     ptr,
     statement.length(),
-    address118,
+    address125,
     params.length(),
     return_area,
   )
 
-  let lifted124 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted131 = match mbt_ffi_load8_u(return_area + 0) {
     0 => Result::Ok(mbt_ffi_load64(return_area + 8).reinterpret_as_uint64())
     1 => {
       let lifted = match mbt_ffi_load8_u(return_area + 8) {
@@ -6690,36 +6974,36 @@ pub fn DbConnection::execute(
           Error_::ConnectionFailure(result)
         }
         1 => {
-          let result120 = mbt_ffi_ptr2str(
+          let result127 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
             mbt_ffi_load32(return_area + 16),
           )
 
-          Error_::QueryParameterFailure(result120)
+          Error_::QueryParameterFailure(result127)
         }
         2 => {
-          let result121 = mbt_ffi_ptr2str(
+          let result128 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
             mbt_ffi_load32(return_area + 16),
           )
 
-          Error_::QueryExecutionFailure(result121)
+          Error_::QueryExecutionFailure(result128)
         }
         3 => {
-          let result122 = mbt_ffi_ptr2str(
+          let result129 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
             mbt_ffi_load32(return_area + 16),
           )
 
-          Error_::QueryResponseFailure(result122)
+          Error_::QueryResponseFailure(result129)
         }
         4 => {
-          let result123 = mbt_ffi_ptr2str(
+          let result130 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
             mbt_ffi_load32(return_area + 16),
           )
 
-          Error_::Other(result123)
+          Error_::Other(result130)
         }
         _ => panic()
       }
@@ -6728,9 +7012,9 @@ pub fn DbConnection::execute(
     }
     _ => panic()
   }
-  let ret = lifted124
+  let ret = lifted131
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address118)
+  mbt_ffi_free(address125)
   mbt_ffi_free(return_area)
   cleanup_list.each(mbt_ffi_free)
   return ret
@@ -6813,10 +7097,10 @@ pub fn DbTransaction::query(
 
   let ptr = mbt_ffi_str2ptr(statement)
 
-  let address118 = mbt_ffi_malloc(params.length() * 56)
-  for index119 = 0; index119 < params.length(); index119 = index119 + 1 {
-    let iter_elem : DbValue = params[index119]
-    let iter_base = address118 + index119 * 56
+  let address125 = mbt_ffi_malloc(params.length() * 56)
+  for index126 = 0; index126 < params.length(); index126 = index126 + 1 {
+    let iter_elem : DbValue = params[index126]
+    let iter_base = address125 + index126 * 56
 
     match iter_elem {
       Character(payload) => {
@@ -7714,6 +7998,46 @@ pub fn DbTransaction::query(
 
         ()
       }
+      Vector(payload118) => {
+        mbt_ffi_store8(iter_base + 0, 42)
+
+        let ptr119 = mbt_ffi_float_array2ptr(payload118)
+
+        mbt_ffi_store32(iter_base + 12, payload118.length())
+        mbt_ffi_store32(iter_base + 8, ptr119)
+        cleanup_list.push(ptr119)
+
+        ()
+      }
+      Halfvec(payload120) => {
+        mbt_ffi_store8(iter_base + 0, 43)
+
+        let ptr121 = mbt_ffi_float_array2ptr(payload120)
+
+        mbt_ffi_store32(iter_base + 12, payload120.length())
+        mbt_ffi_store32(iter_base + 8, ptr121)
+        cleanup_list.push(ptr121)
+
+        ()
+      }
+      Sparsevec(payload122) => {
+        mbt_ffi_store8(iter_base + 0, 44)
+        mbt_ffi_store32(iter_base + 8, payload122.dim)
+
+        let ptr123 = mbt_ffi_int_array2ptr(payload122.indices)
+
+        mbt_ffi_store32(iter_base + 16, payload122.indices.length())
+        mbt_ffi_store32(iter_base + 12, ptr123)
+
+        let ptr124 = mbt_ffi_float_array2ptr(payload122.values)
+
+        mbt_ffi_store32(iter_base + 24, payload122.values.length())
+        mbt_ffi_store32(iter_base + 20, ptr124)
+        cleanup_list.push(ptr123)
+        cleanup_list.push(ptr124)
+
+        ()
+      }
     }
   }
   let return_area = mbt_ffi_malloc(20)
@@ -7721,18 +8045,18 @@ pub fn DbTransaction::query(
     handle,
     ptr,
     statement.length(),
-    address118,
+    address125,
     params.length(),
     return_area,
   )
 
-  let lifted182 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted193 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
-      let array127 : Array[DbColumn] = []
-      for index128 = 0
-          index128 < mbt_ffi_load32(return_area + 8)
-          index128 = index128 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 4) + index128 * 48
+      let array134 : Array[DbColumn] = []
+      for index135 = 0
+          index135 < mbt_ffi_load32(return_area + 8)
+          index135 = index135 + 1 {
+        let iter_base = mbt_ffi_load32(return_area + 4) + index135 * 48
 
         let result = mbt_ffi_ptr2str(
           mbt_ffi_load32(iter_base + 8),
@@ -7777,33 +8101,33 @@ pub fn DbTransaction::query(
           34 => DbColumnType::Money
           35 => DbColumnType::Oid
           36 => {
-            let result120 = mbt_ffi_ptr2str(
+            let result127 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
             )
 
-            DbColumnType::Enumeration(EnumerationType::{ name: result120 })
+            DbColumnType::Enumeration(EnumerationType::{ name: result127 })
           }
           37 => {
-            let result121 = mbt_ffi_ptr2str(
+            let result128 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
             )
 
             let array : Array[(String, LazyDbColumnType)] = []
-            for index123 = 0
-                index123 < mbt_ffi_load32(iter_base + 32)
-                index123 = index123 + 1 {
-              let iter_base = mbt_ffi_load32(iter_base + 28) + index123 * 12
+            for index130 = 0
+                index130 < mbt_ffi_load32(iter_base + 32)
+                index130 = index130 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 28) + index130 * 12
 
-              let result122 = mbt_ffi_ptr2str(
+              let result129 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 0),
                 mbt_ffi_load32(iter_base + 4),
               )
 
               array.push(
                 (
-                  result122,
+                  result129,
                   LazyDbColumnType::LazyDbColumnType(
                     mbt_ffi_load32(iter_base + 8),
                   ),
@@ -7813,18 +8137,18 @@ pub fn DbTransaction::query(
             mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
             DbColumnType::Composite(CompositeType::{
-              name: result121,
+              name: result128,
               attributes: array,
             })
           }
           38 => {
-            let result124 = mbt_ffi_ptr2str(
+            let result131 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
             )
 
             DbColumnType::Domain(DomainType::{
-              name: result124,
+              name: result131,
               base_type: LazyDbColumnType::LazyDbColumnType(
                 mbt_ffi_load32(iter_base + 28),
               ),
@@ -7835,48 +8159,51 @@ pub fn DbTransaction::query(
               LazyDbColumnType::LazyDbColumnType(mbt_ffi_load32(iter_base + 20)),
             )
           40 => {
-            let result125 = mbt_ffi_ptr2str(
+            let result132 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 20),
               mbt_ffi_load32(iter_base + 24),
             )
 
             DbColumnType::Range(RangeType::{
-              name: result125,
+              name: result132,
               base_type: LazyDbColumnType::LazyDbColumnType(
                 mbt_ffi_load32(iter_base + 28),
               ),
             })
           }
+          41 => DbColumnType::Vector
+          42 => DbColumnType::Halfvec
+          43 => DbColumnType::Sparsevec
           _ => panic()
         }
 
-        let result126 = mbt_ffi_ptr2str(
+        let result133 = mbt_ffi_ptr2str(
           mbt_ffi_load32(iter_base + 36),
           mbt_ffi_load32(iter_base + 40),
         )
 
-        array127.push(DbColumn::{
+        array134.push(DbColumn::{
           ordinal: mbt_ffi_load64(iter_base + 0).reinterpret_as_uint64(),
           name: result,
           db_type: lifted,
-          db_type_name: result126,
+          db_type_name: result133,
         })
       }
       mbt_ffi_free(mbt_ffi_load32(return_area + 4))
 
-      let array174 : Array[DbRow] = []
-      for index175 = 0
-          index175 < mbt_ffi_load32(return_area + 16)
-          index175 = index175 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 12) + index175 * 8
+      let array185 : Array[DbRow] = []
+      for index186 = 0
+          index186 < mbt_ffi_load32(return_area + 16)
+          index186 = index186 + 1 {
+        let iter_base = mbt_ffi_load32(return_area + 12) + index186 * 8
 
-        let array172 : Array[DbValue] = []
-        for index173 = 0
-            index173 < mbt_ffi_load32(iter_base + 4)
-            index173 = index173 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 0) + index173 * 56
+        let array183 : Array[DbValue] = []
+        for index184 = 0
+            index184 < mbt_ffi_load32(iter_base + 4)
+            index184 = index184 + 1 {
+          let iter_base = mbt_ffi_load32(iter_base + 0) + index184 * 56
 
-          let lifted171 = match mbt_ffi_load8_u(iter_base + 0) {
+          let lifted182 = match mbt_ffi_load8_u(iter_base + 0) {
             0 => DbValue::Character(mbt_ffi_load8(iter_base + 8) - 0x100)
             1 => DbValue::Int2(mbt_ffi_load16(iter_base + 8) - 0x10000)
             2 => DbValue::Int4(mbt_ffi_load32(iter_base + 8))
@@ -7884,37 +8211,37 @@ pub fn DbTransaction::query(
             4 => DbValue::Float4(mbt_ffi_loadf32(iter_base + 8))
             5 => DbValue::Float8(mbt_ffi_loadf64(iter_base + 8))
             6 => {
-              let result129 = mbt_ffi_ptr2str(
+              let result136 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Numeric(result129)
+              DbValue::Numeric(result136)
             }
             7 => DbValue::Boolean(mbt_ffi_load8_u(iter_base + 8) != 0)
             8 => {
-              let result130 = mbt_ffi_ptr2str(
+              let result137 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Text(result130)
+              DbValue::Text(result137)
             }
             9 => {
-              let result131 = mbt_ffi_ptr2str(
+              let result138 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Varchar(result131)
+              DbValue::Varchar(result138)
             }
             10 => {
-              let result132 = mbt_ffi_ptr2str(
+              let result139 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Bpchar(result132)
+              DbValue::Bpchar(result139)
             }
             11 =>
               DbValue::Timestamp(@types.Timestamp::{
@@ -7977,44 +8304,44 @@ pub fn DbTransaction::query(
                 microseconds: mbt_ffi_load64(iter_base + 16),
               })
             17 => {
-              let result133 = mbt_ffi_ptr2bytes(
+              let result140 = mbt_ffi_ptr2bytes(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Bytea(result133)
+              DbValue::Bytea(result140)
             }
             18 => {
-              let result134 = mbt_ffi_ptr2str(
+              let result141 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Json(result134)
+              DbValue::Json(result141)
             }
             19 => {
-              let result135 = mbt_ffi_ptr2str(
+              let result142 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Jsonb(result135)
+              DbValue::Jsonb(result142)
             }
             20 => {
-              let result136 = mbt_ffi_ptr2str(
+              let result143 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Jsonpath(result136)
+              DbValue::Jsonpath(result143)
             }
             21 => {
-              let result137 = mbt_ffi_ptr2str(
+              let result144 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              DbValue::Xml(result137)
+              DbValue::Xml(result144)
             }
             22 =>
               DbValue::Uuid(@types.Uuid::{
@@ -8022,7 +8349,7 @@ pub fn DbTransaction::query(
                 low_bits: mbt_ffi_load64(iter_base + 16).reinterpret_as_uint64(),
               })
             23 => {
-              let lifted138 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted145 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   @types.IpAddress::Ipv4(
                     (
@@ -8064,10 +8391,10 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              DbValue::Inet(lifted138)
+              DbValue::Inet(lifted145)
             }
             24 => {
-              let lifted139 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted146 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   @types.IpAddress::Ipv4(
                     (
@@ -8109,7 +8436,7 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              DbValue::Cidr(lifted139)
+              DbValue::Cidr(lifted146)
             }
             25 =>
               DbValue::Macaddr(@types.MacAddress::{
@@ -8123,112 +8450,112 @@ pub fn DbTransaction::query(
                 ),
               })
             26 => {
-              let array140 : Array[Bool] = []
-              for index141 = 0
-                  index141 < mbt_ffi_load32(iter_base + 12)
-                  index141 = index141 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index141 * 1
+              let array147 : Array[Bool] = []
+              for index148 = 0
+                  index148 < mbt_ffi_load32(iter_base + 12)
+                  index148 = index148 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index148 * 1
 
-                array140.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                array147.push(mbt_ffi_load8_u(iter_base + 0) != 0)
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-              DbValue::Bit(array140)
+              DbValue::Bit(array147)
             }
             27 => {
-              let array142 : Array[Bool] = []
-              for index143 = 0
-                  index143 < mbt_ffi_load32(iter_base + 12)
-                  index143 = index143 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index143 * 1
+              let array149 : Array[Bool] = []
+              for index150 = 0
+                  index150 < mbt_ffi_load32(iter_base + 12)
+                  index150 = index150 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index150 * 1
 
-                array142.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                array149.push(mbt_ffi_load8_u(iter_base + 0) != 0)
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-              DbValue::Varbit(array142)
+              DbValue::Varbit(array149)
             }
             28 => {
-              let lifted144 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted151 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 => Int4bound::Included(mbt_ffi_load32(iter_base + 12))
                 1 => Int4bound::Excluded(mbt_ffi_load32(iter_base + 12))
                 2 => Int4bound::Unbounded
                 _ => panic()
               }
 
-              let lifted145 = match mbt_ffi_load8_u(iter_base + 16) {
+              let lifted152 = match mbt_ffi_load8_u(iter_base + 16) {
                 0 => Int4bound::Included(mbt_ffi_load32(iter_base + 20))
                 1 => Int4bound::Excluded(mbt_ffi_load32(iter_base + 20))
                 2 => Int4bound::Unbounded
                 _ => panic()
               }
 
-              DbValue::Int4range(Int4range::{ start: lifted144, end: lifted145 })
+              DbValue::Int4range(Int4range::{ start: lifted151, end: lifted152 })
             }
             29 => {
-              let lifted146 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted153 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 => Int8bound::Included(mbt_ffi_load64(iter_base + 16))
                 1 => Int8bound::Excluded(mbt_ffi_load64(iter_base + 16))
                 2 => Int8bound::Unbounded
                 _ => panic()
               }
 
-              let lifted147 = match mbt_ffi_load8_u(iter_base + 24) {
+              let lifted154 = match mbt_ffi_load8_u(iter_base + 24) {
                 0 => Int8bound::Included(mbt_ffi_load64(iter_base + 32))
                 1 => Int8bound::Excluded(mbt_ffi_load64(iter_base + 32))
                 2 => Int8bound::Unbounded
                 _ => panic()
               }
 
-              DbValue::Int8range(Int8range::{ start: lifted146, end: lifted147 })
+              DbValue::Int8range(Int8range::{ start: lifted153, end: lifted154 })
             }
             30 => {
-              let lifted150 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted157 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 => {
-                  let result148 = mbt_ffi_ptr2str(
+                  let result155 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 12),
                     mbt_ffi_load32(iter_base + 16),
                   )
 
-                  Numbound::Included(result148)
+                  Numbound::Included(result155)
                 }
                 1 => {
-                  let result149 = mbt_ffi_ptr2str(
+                  let result156 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 12),
                     mbt_ffi_load32(iter_base + 16),
                   )
 
-                  Numbound::Excluded(result149)
+                  Numbound::Excluded(result156)
                 }
                 2 => Numbound::Unbounded
                 _ => panic()
               }
 
-              let lifted153 = match mbt_ffi_load8_u(iter_base + 20) {
+              let lifted160 = match mbt_ffi_load8_u(iter_base + 20) {
                 0 => {
-                  let result151 = mbt_ffi_ptr2str(
+                  let result158 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 24),
                     mbt_ffi_load32(iter_base + 28),
                   )
 
-                  Numbound::Included(result151)
+                  Numbound::Included(result158)
                 }
                 1 => {
-                  let result152 = mbt_ffi_ptr2str(
+                  let result159 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 24),
                     mbt_ffi_load32(iter_base + 28),
                   )
 
-                  Numbound::Excluded(result152)
+                  Numbound::Excluded(result159)
                 }
                 2 => Numbound::Unbounded
                 _ => panic()
               }
 
-              DbValue::Numrange(Numrange::{ start: lifted150, end: lifted153 })
+              DbValue::Numrange(Numrange::{ start: lifted157, end: lifted160 })
             }
             31 => {
-              let lifted154 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted161 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   Tsbound::Included(@types.Timestamp::{
                     date: @types.Date::{
@@ -8261,7 +8588,7 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              let lifted155 = match mbt_ffi_load8_u(iter_base + 28) {
+              let lifted162 = match mbt_ffi_load8_u(iter_base + 28) {
                 0 =>
                   Tsbound::Included(@types.Timestamp::{
                     date: @types.Date::{
@@ -8294,10 +8621,10 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              DbValue::Tsrange(Tsrange::{ start: lifted154, end: lifted155 })
+              DbValue::Tsrange(Tsrange::{ start: lifted161, end: lifted162 })
             }
             32 => {
-              let lifted156 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted163 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   Tstzbound::Included(@types.Timestamptz::{
                     timestamp: @types.Timestamp::{
@@ -8336,7 +8663,7 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              let lifted157 = match mbt_ffi_load8_u(iter_base + 32) {
+              let lifted164 = match mbt_ffi_load8_u(iter_base + 32) {
                 0 =>
                   Tstzbound::Included(@types.Timestamptz::{
                     timestamp: @types.Timestamp::{
@@ -8375,10 +8702,10 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              DbValue::Tstzrange(Tstzrange::{ start: lifted156, end: lifted157 })
+              DbValue::Tstzrange(Tstzrange::{ start: lifted163, end: lifted164 })
             }
             33 => {
-              let lifted158 = match mbt_ffi_load8_u(iter_base + 8) {
+              let lifted165 = match mbt_ffi_load8_u(iter_base + 8) {
                 0 =>
                   Datebound::Included(@types.Date::{
                     year: mbt_ffi_load32(iter_base + 12),
@@ -8395,7 +8722,7 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              let lifted159 = match mbt_ffi_load8_u(iter_base + 20) {
+              let lifted166 = match mbt_ffi_load8_u(iter_base + 20) {
                 0 =>
                   Datebound::Included(@types.Date::{
                     year: mbt_ffi_load32(iter_base + 24),
@@ -8412,83 +8739,83 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              DbValue::Daterange(Daterange::{ start: lifted158, end: lifted159 })
+              DbValue::Daterange(Daterange::{ start: lifted165, end: lifted166 })
             }
             34 => DbValue::Money(mbt_ffi_load64(iter_base + 8))
             35 =>
               DbValue::Oid(mbt_ffi_load32(iter_base + 8).reinterpret_as_uint())
             36 => {
-              let result160 = mbt_ffi_ptr2str(
+              let result167 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              let result161 = mbt_ffi_ptr2str(
+              let result168 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 16),
                 mbt_ffi_load32(iter_base + 20),
               )
 
               DbValue::Enumeration(Enumeration::{
-                name: result160,
-                value: result161,
+                name: result167,
+                value: result168,
               })
             }
             37 => {
-              let result162 = mbt_ffi_ptr2str(
+              let result169 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              let array163 : Array[LazyDbValue] = []
-              for index164 = 0
-                  index164 < mbt_ffi_load32(iter_base + 20)
-                  index164 = index164 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 16) + index164 * 4
+              let array170 : Array[LazyDbValue] = []
+              for index171 = 0
+                  index171 < mbt_ffi_load32(iter_base + 20)
+                  index171 = index171 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 16) + index171 * 4
 
-                array163.push(
+                array170.push(
                   LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 0)),
                 )
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
               DbValue::Composite(Composite::{
-                name: result162,
-                values: array163,
+                name: result169,
+                values: array170,
               })
             }
             38 => {
-              let result165 = mbt_ffi_ptr2str(
+              let result172 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
               DbValue::Domain(Domain::{
-                name: result165,
+                name: result172,
                 value: LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 16)),
               })
             }
             39 => {
-              let array166 : Array[LazyDbValue] = []
-              for index167 = 0
-                  index167 < mbt_ffi_load32(iter_base + 12)
-                  index167 = index167 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index167 * 4
+              let array173 : Array[LazyDbValue] = []
+              for index174 = 0
+                  index174 < mbt_ffi_load32(iter_base + 12)
+                  index174 = index174 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 8) + index174 * 4
 
-                array166.push(
+                array173.push(
                   LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 0)),
                 )
               }
               mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-              DbValue::Array(array166)
+              DbValue::Array(array173)
             }
             40 => {
-              let result168 = mbt_ffi_ptr2str(
+              let result175 = mbt_ffi_ptr2str(
                 mbt_ffi_load32(iter_base + 8),
                 mbt_ffi_load32(iter_base + 12),
               )
 
-              let lifted169 = match mbt_ffi_load8_u(iter_base + 16) {
+              let lifted176 = match mbt_ffi_load8_u(iter_base + 16) {
                 0 =>
                   ValueBound::Included(
                     LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 20)),
@@ -8501,7 +8828,7 @@ pub fn DbTransaction::query(
                 _ => panic()
               }
 
-              let lifted170 = match mbt_ffi_load8_u(iter_base + 24) {
+              let lifted177 = match mbt_ffi_load8_u(iter_base + 24) {
                 0 =>
                   ValueBound::Included(
                     LazyDbValue::LazyDbValue(mbt_ffi_load32(iter_base + 28)),
@@ -8515,76 +8842,109 @@ pub fn DbTransaction::query(
               }
 
               DbValue::Range(Range::{
-                name: result168,
-                value: ValuesRange::{ start: lifted169, end: lifted170 },
+                name: result175,
+                value: ValuesRange::{ start: lifted176, end: lifted177 },
               })
             }
             41 => DbValue::Null
+            42 => {
+              let result178 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 8),
+                mbt_ffi_load32(iter_base + 12),
+              )
+
+              DbValue::Vector(result178)
+            }
+            43 => {
+              let result179 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 8),
+                mbt_ffi_load32(iter_base + 12),
+              )
+
+              DbValue::Halfvec(result179)
+            }
+            44 => {
+              let result180 = mbt_ffi_ptr2int_array(
+                mbt_ffi_load32(iter_base + 12),
+                mbt_ffi_load32(iter_base + 16),
+              )
+
+              let result181 = mbt_ffi_ptr2float_array(
+                mbt_ffi_load32(iter_base + 20),
+                mbt_ffi_load32(iter_base + 24),
+              )
+
+              DbValue::Sparsevec(SparseVec::{
+                dim: mbt_ffi_load32(iter_base + 8),
+                indices: result180,
+                values: result181,
+              })
+            }
             _ => panic()
           }
 
-          array172.push(lifted171)
+          array183.push(lifted182)
         }
         mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
 
-        array174.push(DbRow::{ values: array172 })
+        array185.push(DbRow::{ values: array183 })
       }
       mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
-      Result::Ok(DbResult::{ columns: array127, rows: array174 })
+      Result::Ok(DbResult::{ columns: array134, rows: array185 })
     }
     1 => {
-      let lifted181 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted192 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
-          let result176 = mbt_ffi_ptr2str(
+          let result187 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::ConnectionFailure(result176)
+          Error_::ConnectionFailure(result187)
         }
         1 => {
-          let result177 = mbt_ffi_ptr2str(
+          let result188 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryParameterFailure(result177)
+          Error_::QueryParameterFailure(result188)
         }
         2 => {
-          let result178 = mbt_ffi_ptr2str(
+          let result189 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryExecutionFailure(result178)
+          Error_::QueryExecutionFailure(result189)
         }
         3 => {
-          let result179 = mbt_ffi_ptr2str(
+          let result190 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryResponseFailure(result179)
+          Error_::QueryResponseFailure(result190)
         }
         4 => {
-          let result180 = mbt_ffi_ptr2str(
+          let result191 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::Other(result180)
+          Error_::Other(result191)
         }
         _ => panic()
       }
 
-      Result::Err(lifted181)
+      Result::Err(lifted192)
     }
     _ => panic()
   }
-  let ret = lifted182
+  let ret = lifted193
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address118)
+  mbt_ffi_free(address125)
   mbt_ffi_free(return_area)
   cleanup_list.each(mbt_ffi_free)
   return ret
@@ -8602,10 +8962,10 @@ pub fn DbTransaction::query_stream(
 
   let ptr = mbt_ffi_str2ptr(statement)
 
-  let address118 = mbt_ffi_malloc(params.length() * 56)
-  for index119 = 0; index119 < params.length(); index119 = index119 + 1 {
-    let iter_elem : DbValue = params[index119]
-    let iter_base = address118 + index119 * 56
+  let address125 = mbt_ffi_malloc(params.length() * 56)
+  for index126 = 0; index126 < params.length(); index126 = index126 + 1 {
+    let iter_elem : DbValue = params[index126]
+    let iter_base = address125 + index126 * 56
 
     match iter_elem {
       Character(payload) => {
@@ -9503,6 +9863,46 @@ pub fn DbTransaction::query_stream(
 
         ()
       }
+      Vector(payload118) => {
+        mbt_ffi_store8(iter_base + 0, 42)
+
+        let ptr119 = mbt_ffi_float_array2ptr(payload118)
+
+        mbt_ffi_store32(iter_base + 12, payload118.length())
+        mbt_ffi_store32(iter_base + 8, ptr119)
+        cleanup_list.push(ptr119)
+
+        ()
+      }
+      Halfvec(payload120) => {
+        mbt_ffi_store8(iter_base + 0, 43)
+
+        let ptr121 = mbt_ffi_float_array2ptr(payload120)
+
+        mbt_ffi_store32(iter_base + 12, payload120.length())
+        mbt_ffi_store32(iter_base + 8, ptr121)
+        cleanup_list.push(ptr121)
+
+        ()
+      }
+      Sparsevec(payload122) => {
+        mbt_ffi_store8(iter_base + 0, 44)
+        mbt_ffi_store32(iter_base + 8, payload122.dim)
+
+        let ptr123 = mbt_ffi_int_array2ptr(payload122.indices)
+
+        mbt_ffi_store32(iter_base + 16, payload122.indices.length())
+        mbt_ffi_store32(iter_base + 12, ptr123)
+
+        let ptr124 = mbt_ffi_float_array2ptr(payload122.values)
+
+        mbt_ffi_store32(iter_base + 24, payload122.values.length())
+        mbt_ffi_store32(iter_base + 20, ptr124)
+        cleanup_list.push(ptr123)
+        cleanup_list.push(ptr124)
+
+        ()
+      }
     }
   }
   let return_area = mbt_ffi_malloc(16)
@@ -9510,12 +9910,12 @@ pub fn DbTransaction::query_stream(
     handle,
     ptr,
     statement.length(),
-    address118,
+    address125,
     params.length(),
     return_area,
   )
 
-  let lifted124 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted131 = match mbt_ffi_load8_u(return_area + 0) {
     0 =>
       Result::Ok(
         DbResultStream::DbResultStream(mbt_ffi_load32(return_area + 4)),
@@ -9531,36 +9931,36 @@ pub fn DbTransaction::query_stream(
           Error_::ConnectionFailure(result)
         }
         1 => {
-          let result120 = mbt_ffi_ptr2str(
+          let result127 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryParameterFailure(result120)
+          Error_::QueryParameterFailure(result127)
         }
         2 => {
-          let result121 = mbt_ffi_ptr2str(
+          let result128 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryExecutionFailure(result121)
+          Error_::QueryExecutionFailure(result128)
         }
         3 => {
-          let result122 = mbt_ffi_ptr2str(
+          let result129 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::QueryResponseFailure(result122)
+          Error_::QueryResponseFailure(result129)
         }
         4 => {
-          let result123 = mbt_ffi_ptr2str(
+          let result130 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          Error_::Other(result123)
+          Error_::Other(result130)
         }
         _ => panic()
       }
@@ -9569,9 +9969,9 @@ pub fn DbTransaction::query_stream(
     }
     _ => panic()
   }
-  let ret = lifted124
+  let ret = lifted131
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address118)
+  mbt_ffi_free(address125)
   mbt_ffi_free(return_area)
   cleanup_list.each(mbt_ffi_free)
   return ret
@@ -9589,10 +9989,10 @@ pub fn DbTransaction::execute(
 
   let ptr = mbt_ffi_str2ptr(statement)
 
-  let address118 = mbt_ffi_malloc(params.length() * 56)
-  for index119 = 0; index119 < params.length(); index119 = index119 + 1 {
-    let iter_elem : DbValue = params[index119]
-    let iter_base = address118 + index119 * 56
+  let address125 = mbt_ffi_malloc(params.length() * 56)
+  for index126 = 0; index126 < params.length(); index126 = index126 + 1 {
+    let iter_elem : DbValue = params[index126]
+    let iter_base = address125 + index126 * 56
 
     match iter_elem {
       Character(payload) => {
@@ -10490,6 +10890,46 @@ pub fn DbTransaction::execute(
 
         ()
       }
+      Vector(payload118) => {
+        mbt_ffi_store8(iter_base + 0, 42)
+
+        let ptr119 = mbt_ffi_float_array2ptr(payload118)
+
+        mbt_ffi_store32(iter_base + 12, payload118.length())
+        mbt_ffi_store32(iter_base + 8, ptr119)
+        cleanup_list.push(ptr119)
+
+        ()
+      }
+      Halfvec(payload120) => {
+        mbt_ffi_store8(iter_base + 0, 43)
+
+        let ptr121 = mbt_ffi_float_array2ptr(payload120)
+
+        mbt_ffi_store32(iter_base + 12, payload120.length())
+        mbt_ffi_store32(iter_base + 8, ptr121)
+        cleanup_list.push(ptr121)
+
+        ()
+      }
+      Sparsevec(payload122) => {
+        mbt_ffi_store8(iter_base + 0, 44)
+        mbt_ffi_store32(iter_base + 8, payload122.dim)
+
+        let ptr123 = mbt_ffi_int_array2ptr(payload122.indices)
+
+        mbt_ffi_store32(iter_base + 16, payload122.indices.length())
+        mbt_ffi_store32(iter_base + 12, ptr123)
+
+        let ptr124 = mbt_ffi_float_array2ptr(payload122.values)
+
+        mbt_ffi_store32(iter_base + 24, payload122.values.length())
+        mbt_ffi_store32(iter_base + 20, ptr124)
+        cleanup_list.push(ptr123)
+        cleanup_list.push(ptr124)
+
+        ()
+      }
     }
   }
   let return_area = mbt_ffi_malloc(24)
@@ -10497,12 +10937,12 @@ pub fn DbTransaction::execute(
     handle,
     ptr,
     statement.length(),
-    address118,
+    address125,
     params.length(),
     return_area,
   )
 
-  let lifted124 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted131 = match mbt_ffi_load8_u(return_area + 0) {
     0 => Result::Ok(mbt_ffi_load64(return_area + 8).reinterpret_as_uint64())
     1 => {
       let lifted = match mbt_ffi_load8_u(return_area + 8) {
@@ -10515,36 +10955,36 @@ pub fn DbTransaction::execute(
           Error_::ConnectionFailure(result)
         }
         1 => {
-          let result120 = mbt_ffi_ptr2str(
+          let result127 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
             mbt_ffi_load32(return_area + 16),
           )
 
-          Error_::QueryParameterFailure(result120)
+          Error_::QueryParameterFailure(result127)
         }
         2 => {
-          let result121 = mbt_ffi_ptr2str(
+          let result128 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
             mbt_ffi_load32(return_area + 16),
           )
 
-          Error_::QueryExecutionFailure(result121)
+          Error_::QueryExecutionFailure(result128)
         }
         3 => {
-          let result122 = mbt_ffi_ptr2str(
+          let result129 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
             mbt_ffi_load32(return_area + 16),
           )
 
-          Error_::QueryResponseFailure(result122)
+          Error_::QueryResponseFailure(result129)
         }
         4 => {
-          let result123 = mbt_ffi_ptr2str(
+          let result130 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
             mbt_ffi_load32(return_area + 16),
           )
 
-          Error_::Other(result123)
+          Error_::Other(result130)
         }
         _ => panic()
       }
@@ -10553,9 +10993,9 @@ pub fn DbTransaction::execute(
     }
     _ => panic()
   }
-  let ret = lifted124
+  let ret = lifted131
   mbt_ffi_free(ptr)
-  mbt_ffi_free(address118)
+  mbt_ffi_free(address125)
   mbt_ffi_free(return_area)
   cleanup_list.each(mbt_ffi_free)
   return ret

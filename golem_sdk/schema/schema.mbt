@@ -1,7 +1,7 @@
 ///|
 /// Returns the `ElementSchema` (type description) for a MoonBit type. Used by the SDK to generate agent type definitions.
 pub(open) trait HasElementSchema {
-  element_schema() -> @common.ElementSchema
+  element_schema() -> @types.ElementSchema
 }
 
 ///|
@@ -13,12 +13,12 @@ pub(open) trait FromExtractor {
 ///|
 /// Deserializes a value from an `ElementValue`. Typically delegates to `FromExtractor`.
 pub(open) trait FromElementValue {
-  from_element_value(@common.ElementValue) -> Self raise @common.AgentError
+  from_element_value(@types.ElementValue) -> Self raise @common.AgentError
 }
 
 ///|
 /// Infers and returns the `ElementSchema` for a value via its `HasElementSchema` implementation.
-pub fn[T : HasElementSchema] schema_of(_v : T) -> @common.ElementSchema {
+pub fn[T : HasElementSchema] schema_of(_v : T) -> @types.ElementSchema {
   T::element_schema()
 }
 
@@ -37,7 +37,7 @@ pub(all) struct SchemaOptions {
 /// Returns the `ElementSchema` for a type given its `TypeTag`, without needing a value instance.
 pub fn[T : HasElementSchema] schema_of_tag(
   _ : TypeTag[T],
-) -> @common.ElementSchema {
+) -> @types.ElementSchema {
   T::element_schema()
 }
 
@@ -46,7 +46,7 @@ pub fn[T : HasElementSchema] schema_of_tag(
 pub fn[T : HasElementSchema] schema_of_tag_with_options(
   _ : TypeTag[T],
   options : SchemaOptions,
-) -> @common.ElementSchema raise @common.AgentError {
+) -> @types.ElementSchema raise @common.AgentError {
   let base = T::element_schema()
   apply_schema_options(base, options)
 }
@@ -54,18 +54,18 @@ pub fn[T : HasElementSchema] schema_of_tag_with_options(
 ///|
 /// Applies text language and binary MIME type restrictions to an `ElementSchema`. Raises if the schema kind is incompatible with the options.
 fn apply_schema_options(
-  schema : @common.ElementSchema,
+  schema : @types.ElementSchema,
   options : SchemaOptions,
-) -> @common.ElementSchema raise @common.AgentError {
+) -> @types.ElementSchema raise @common.AgentError {
   let mut result = schema
   if options.text_languages.length() > 0 {
     match schema {
-      @common.ElementSchema::UnstructuredText(desc) =>
-        result = @common.ElementSchema::UnstructuredText(@common.TextDescriptor::{
+      @types.ElementSchema::UnstructuredText(desc) =>
+        result = @types.ElementSchema::UnstructuredText(@types.TextDescriptor::{
           ..desc,
           restrictions: Some(
             options.text_languages.map(fn(code) {
-              @common.TextType::{ language_code: code }
+              @types.TextType::{ language_code: code }
             }),
           ),
         })
@@ -77,12 +77,12 @@ fn apply_schema_options(
   }
   if options.binary_mime_types.length() > 0 {
     match result {
-      @common.ElementSchema::UnstructuredBinary(desc) =>
-        result = @common.ElementSchema::UnstructuredBinary(@common.BinaryDescriptor::{
+      @types.ElementSchema::UnstructuredBinary(desc) =>
+        result = @types.ElementSchema::UnstructuredBinary(@types.BinaryDescriptor::{
           ..desc,
           restrictions: Some(
             options.binary_mime_types.map(fn(mime) {
-              @common.BinaryType::{ mime_type: mime }
+              @types.BinaryType::{ mime_type: mime }
             }),
           ),
         })
@@ -98,7 +98,7 @@ fn apply_schema_options(
 ///|
 /// Typed convenience function to deserialize a value from an `ElementValue`.
 pub fn[T : FromElementValue] from_element_value_as(
-  v : @common.ElementValue,
+  v : @types.ElementValue,
 ) -> T raise @common.AgentError {
   T::from_element_value(v)
 }
@@ -106,14 +106,14 @@ pub fn[T : FromElementValue] from_element_value_as(
 ///|
 /// Serializes a value to an `ElementValue`. Implement this for custom types.
 pub(open) trait ToElementValue {
-  to_element_value(Self) -> @common.ElementValue raise @common.AgentError
+  to_element_value(Self) -> @types.ElementValue raise @common.AgentError
 }
 
 ///|
 /// Typed convenience function to serialize a value to an `ElementValue`.
 pub fn[T : ToElementValue] to_element_value_as(
   v : T,
-) -> @common.ElementValue raise @common.AgentError {
+) -> @types.ElementValue raise @common.AgentError {
   T::to_element_value(v)
 }
 

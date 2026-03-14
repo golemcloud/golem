@@ -3,7 +3,8 @@
 /// If called a second time, it fails.
 pub fn initialize(
   agent_type : String,
-  input : @common.DataValue,
+  input : @types.DataValue,
+  _principal : @common.Principal,
 ) -> Result[Unit, @common.AgentError] {
   if not(@agents.get_agent_instance().is_empty()) {
     @agents.panic_with_message(
@@ -39,8 +40,9 @@ pub fn initialize(
 /// Invokes an agent. If create was not called before, it fails
 pub fn invoke(
   method_name : String,
-  input : @common.DataValue,
-) -> Result[@common.DataValue, @common.AgentError] {
+  input : @types.DataValue,
+  _principal : @common.Principal,
+) -> Result[@types.DataValue, @common.AgentError] {
   match @agents.get_agent_instance() {
     None =>
       @agents.panic_with_message(

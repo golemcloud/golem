@@ -1,8 +1,8 @@
 ///|
 /// Extracts the element array from a `DataValue::Tuple`. Panics if the value is not a tuple.
-pub fn extract_tuple(value : @common.DataValue) -> Array[@common.ElementValue] {
+pub fn extract_tuple(value : @types.DataValue) -> Array[@types.ElementValue] {
   match value {
-    @common.DataValue::Tuple(elements) => elements
+    @types.DataValue::Tuple(elements) => elements
     _ => panic()
   }
 }
@@ -10,10 +10,10 @@ pub fn extract_tuple(value : @common.DataValue) -> Array[@common.ElementValue] {
 ///|
 /// Extracts the named element array from a `DataValue::Multimodal`. Panics if the value is not multimodal.
 pub fn extract_multimodal(
-  value : @common.DataValue,
-) -> Array[(String, @common.ElementValue)] {
+  value : @types.DataValue,
+) -> Array[(String, @types.ElementValue)] {
   match value {
-    @common.DataValue::Multimodal(elements) => elements
+    @types.DataValue::Multimodal(elements) => elements
     _ => panic()
   }
 }
@@ -21,8 +21,8 @@ pub fn extract_multimodal(
 ///|
 /// Asserts that the array has exactly one element and returns it. Panics otherwise.
 pub fn expect_single_element(
-  values : Array[@common.ElementValue],
-) -> @common.ElementValue {
+  values : Array[@types.ElementValue],
+) -> @types.ElementValue {
   if values.length() != 1 {
     panic()
   }
@@ -32,9 +32,9 @@ pub fn expect_single_element(
 ///|
 /// Unwraps a `ComponentModel` element value and creates an `Extractor` for it.
 pub fn extract_component_model_value(
-  element : @common.ElementValue,
+  element : @types.ElementValue,
 ) -> &Extractor raise @common.AgentError {
-  guard element is @common.ElementValue::ComponentModel(model) else {
+  guard element is @types.ElementValue::ComponentModel(model) else {
     raise @common.AgentError::InvalidInput(
       "Expected ComponentModel ElementValue",
     )
@@ -45,10 +45,10 @@ pub fn extract_component_model_value(
 ///|
 /// Extracts a `TextReference` from an `UnstructuredText` element value. Panics on type mismatch.
 pub fn extract_unstructured_text(
-  element : @common.ElementValue,
-) -> @common.TextReference {
+  element : @types.ElementValue,
+) -> @types.TextReference {
   match element {
-    @common.ElementValue::UnstructuredText(text) => text
+    @types.ElementValue::UnstructuredText(text) => text
     _ => panic()
   }
 }
@@ -56,10 +56,10 @@ pub fn extract_unstructured_text(
 ///|
 /// Extracts a `BinaryReference` from an `UnstructuredBinary` element value. Panics on type mismatch.
 pub fn extract_unstructured_binary(
-  element : @common.ElementValue,
-) -> @common.BinaryReference {
+  element : @types.ElementValue,
+) -> @types.BinaryReference {
   match element {
-    @common.ElementValue::UnstructuredBinary(data) => data
+    @types.ElementValue::UnstructuredBinary(data) => data
     _ => panic()
   }
 }

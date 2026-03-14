@@ -43,7 +43,7 @@ pub fn[T : @schema.ToElementValue] to_wit_value(
   v : T,
 ) -> @types.WitValue raise @common.AgentError {
   let element = T::to_element_value(v)
-  guard element is @common.ElementValue::ComponentModel(wv) else {
+  guard element is @types.ElementValue::ComponentModel(wv) else {
     raise @common.AgentError::InvalidInput(
       "RPC transport only supports ComponentModel values, not UnstructuredText/UnstructuredBinary. Use ComponentModel types for RPC parameters.",
     )
@@ -55,7 +55,7 @@ pub fn[T : @schema.ToElementValue] to_wit_value(
 pub fn[T : @schema.FromElementValue] from_wit_value(
   wv : @types.WitValue,
 ) -> T raise @common.AgentError {
-  T::from_element_value(@common.ElementValue::ComponentModel(wv))
+  T::from_element_value(@types.ElementValue::ComponentModel(wv))
 }
 
 ///|
@@ -137,7 +137,7 @@ pub fn[T : @agentTypes.MultimodalModality] wit_value_to_multimodal(
 
 ///|
 fn find_modality_case_index(
-  schema : Array[(String, @common.ElementSchema)],
+  schema : Array[(String, @types.ElementSchema)],
   name : String,
 ) -> UInt raise @common.AgentError {
   for i = 0; i < schema.length(); i = i + 1 {
@@ -150,15 +150,15 @@ fn find_modality_case_index(
 
 ///|
 fn element_value_to_wit_value(
-  ev : @common.ElementValue,
+  ev : @types.ElementValue,
 ) -> @types.WitValue raise @common.AgentError {
   match ev {
-    @common.ElementValue::ComponentModel(wv) => wv
-    @common.ElementValue::UnstructuredText(text_ref) =>
+    @types.ElementValue::ComponentModel(wv) => wv
+    @types.ElementValue::UnstructuredText(text_ref) =>
       unstructured_text_to_wit_value(
         text_reference_to_unstructured_text(text_ref),
       )
-    @common.ElementValue::UnstructuredBinary(bin_ref) =>
+    @types.ElementValue::UnstructuredBinary(bin_ref) =>
       unstructured_binary_to_wit_value(
         binary_reference_to_unstructured_binary(bin_ref),
       )
@@ -168,16 +168,16 @@ fn element_value_to_wit_value(
 ///|
 fn wit_value_to_element_value(
   wv : @types.WitValue,
-  element_schema : @common.ElementSchema,
-) -> @common.ElementValue raise @common.AgentError {
+  element_schema : @types.ElementSchema,
+) -> @types.ElementValue raise @common.AgentError {
   match element_schema {
-    @common.ElementSchema::ComponentModel(_) =>
-      @common.ElementValue::ComponentModel(wv)
-    @common.ElementSchema::UnstructuredText(_) => {
+    @types.ElementSchema::ComponentModel(_) =>
+      @types.ElementValue::ComponentModel(wv)
+    @types.ElementSchema::UnstructuredText(_) => {
       let ut = wit_value_to_unstructured_text(wv)
       @schema.to_element_value_as(ut)
     }
-    @common.ElementSchema::UnstructuredBinary(_) => {
+    @types.ElementSchema::UnstructuredBinary(_) => {
       let ub = wit_value_to_unstructured_binary(wv)
       @schema.to_element_value_as(ub)
     }
@@ -200,11 +200,11 @@ fn extract_sub_tree(
 
 ///|
 fn text_reference_to_unstructured_text(
-  ref_ : @common.TextReference,
+  ref_ : @types.TextReference,
 ) -> @agentTypes.UnstructuredText {
   match ref_ {
-    @common.TextReference::Url(url) => @agentTypes.UnstructuredText::Url(url)
-    @common.TextReference::Inline(source) =>
+    @types.TextReference::Url(url) => @agentTypes.UnstructuredText::Url(url)
+    @types.TextReference::Inline(source) =>
       @agentTypes.UnstructuredText::Inline(
         text=source.data,
         language_code=source.text_type.map(fn(t) { t.language_code }),
@@ -214,12 +214,11 @@ fn text_reference_to_unstructured_text(
 
 ///|
 fn binary_reference_to_unstructured_binary(
-  ref_ : @common.BinaryReference,
+  ref_ : @types.BinaryReference,
 ) -> @agentTypes.UnstructuredBinary {
   match ref_ {
-    @common.BinaryReference::Url(url) =>
-      @agentTypes.UnstructuredBinary::Url(url)
-    @common.BinaryReference::Inline(source) =>
+    @types.BinaryReference::Url(url) => @agentTypes.UnstructuredBinary::Url(url)
+    @types.BinaryReference::Inline(source) =>
       @agentTypes.UnstructuredBinary::Inline(
         data=Bytes::from_array(source.data[:]),
         mime_type=source.binary_type.mime_type,

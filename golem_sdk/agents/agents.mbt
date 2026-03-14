@@ -68,7 +68,7 @@ pub(all) struct ConstructedAgent {
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@common.DataValue) -> Result[
+  construct : (@rpcTypes.DataValue) -> Result[
     ConstructedAgent,
     @common.AgentError,
   ]
@@ -94,8 +94,8 @@ pub fn[T] panic_with_message(context : String, message : String) -> T {
 /// Low-level trait that every agent must implement. Generated code provides
 /// `invoke` dispatch by method name.
 pub(open) trait RawAgent {
-  invoke(Self, method_name : String, input : @common.DataValue) -> Result[
-    @common.DataValue,
+  invoke(Self, method_name : String, input : @rpcTypes.DataValue) -> Result[
+    @rpcTypes.DataValue,
     @common.AgentError,
   ]
 }

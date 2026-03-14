@@ -8,28 +8,16 @@ let mod_json_path = "\{example_dir}/moon.mod.json"
 let golem_yaml_path = "\{example_dir}/golem.yaml"
 
 ///|
-let build_sh_path = "\{example_dir}/build.sh"
-
-///|
 let sdk_mooncakes_path = ".mooncakes/golemcloud/golem_sdk"
 
 ///|
-let tools_mooncakes_run = "moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd"
+let tools_mooncakes_path = ".mooncakes/golemcloud/golem_sdk_tools"
 
 ///|
-let dev_reexports_prefix = "command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/"
+let dev_tools_path = "../golem_sdk_tools"
 
 ///|
-let dev_agents_prefix = "command: moon run cmd -- agents ../golem_sdk_example1/"
-
-///|
-let dev_dir_line = "            dir: ../golem_sdk_tools"
-
-///|
-let dev_build_sh_reexports = "(cd ../golem_sdk_tools && moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/golem_moonbit_examples)"
-
-///|
-let dev_build_sh_agents = "(cd ../golem_sdk_tools && moon run cmd -- agents ../golem_sdk_example1/golem_moonbit_examples)"
+let dev_sdk_path = "../golem_sdk"
 
 ///|
 fn main {
@@ -69,10 +57,6 @@ fn prepare_release(sdk_version : String, tools_version : String) -> Unit raise {
   println(
     "==> Preparing template release with golem_sdk \{sdk_version}, golem_sdk_tools \{tools_version}...",
   )
-  let rel_reexports = "command: \{tools_mooncakes_run} -- reexports \{sdk_mooncakes_path} "
-  let rel_agents = "command: \{tools_mooncakes_run} -- agents "
-  let rel_build_reexports = "\{tools_mooncakes_run} -- reexports \{sdk_mooncakes_path} golem_moonbit_examples"
-  let rel_build_agents = "\{tools_mooncakes_run} -- agents golem_moonbit_examples"
   // 1. moon.mod.json — compute new content
   let mod_json = @fs.read_file_to_string(mod_json_path)
   let mut m = replace_sdk_dep(
@@ -81,22 +65,16 @@ fn prepare_release(sdk_version : String, tools_version : String) -> Unit raise {
   )
   m = remove_bin_deps(m)
   m = insert_bin_deps(m, "\"golemcloud/golem_sdk_tools\": \"\{tools_version}\"")
-  // 2. golem.yaml — compute new content
+  // 2. golem.yaml — swap dev paths to mooncakes paths
   let yaml = @fs.read_file_to_string(golem_yaml_path)
-  let mut y = remove_lines_containing(yaml, "dir: ../golem_sdk_tools")
-  y = y.replace_all(old=dev_reexports_prefix, new=rel_reexports)
-  y = y.replace_all(old=dev_agents_prefix, new=rel_agents)
-  // 3. build.sh — compute new content
-  let build = @fs.read_file_to_string(build_sh_path)
-  let mut b = build.replace_all(
-    old=dev_build_sh_reexports,
-    new=rel_build_reexports,
+  let mut y = yaml.replace_all(
+    old="-C \{dev_tools_path}",
+    new="-C \{tools_mooncakes_path}",
   )
-  b = b.replace_all(old=dev_build_sh_agents, new=rel_build_agents)
+  y = y.replace_all(old=" \{dev_sdk_path} ", new=" \{sdk_mooncakes_path} ")
   // Write all files only after all transforms succeed
   @fs.write_string_to_file(mod_json_path, m)
   @fs.write_string_to_file(golem_yaml_path, y)
-  @fs.write_string_to_file(build_sh_path, b)
   println("")
   println("Done. Files modified:")
   println(
@@ -104,9 +82,6 @@ fn prepare_release(sdk_version : String, tools_version : String) -> Unit raise {
   )
   println(
     "  \{golem_yaml_path} — build commands use mooncakes-installed tools",
-  )
-  println(
-    "  \{build_sh_path}   — build commands use mooncakes-installed tools",
   )
   println("")
   println("Review the changes, then copy \{example_dir}/ as your template.")
@@ -116,32 +91,21 @@ fn prepare_release(sdk_version : String, tools_version : String) -> Unit raise {
 ///|
 fn revert_to_dev() -> Unit raise {
   println("==> Reverting to development mode...")
-  let rel_reexports = "command: \{tools_mooncakes_run} -- reexports \{sdk_mooncakes_path} "
-  let rel_agents = "command: \{tools_mooncakes_run} -- agents "
-  let rel_build_reexports = "\{tools_mooncakes_run} -- reexports \{sdk_mooncakes_path} golem_moonbit_examples"
-  let rel_build_agents = "\{tools_mooncakes_run} -- agents golem_moonbit_examples"
   let path_dep = "\"golemcloud/golem_sdk\": {\n      \"path\": \"../golem_sdk\"\n    }"
   // 1. moon.mod.json — compute new content
   let mod_json = @fs.read_file_to_string(mod_json_path)
   let mut m = replace_sdk_dep(mod_json, path_dep)
   m = remove_bin_deps(m)
-  // 2. golem.yaml — compute new content
+  // 2. golem.yaml — swap mooncakes paths back to dev paths
   let yaml = @fs.read_file_to_string(golem_yaml_path)
-  let mut y = yaml.replace_all(old=rel_reexports, new=dev_reexports_prefix)
-  y = y.replace_all(old=rel_agents, new=dev_agents_prefix)
-  y = insert_dir_after_command(y, "moon run cmd -- reexports")
-  y = insert_dir_after_command(y, "moon run cmd -- agents")
-  // 3. build.sh — compute new content
-  let build = @fs.read_file_to_string(build_sh_path)
-  let mut b = build.replace_all(
-    old=rel_build_reexports,
-    new=dev_build_sh_reexports,
+  let mut y = yaml.replace_all(
+    old="-C \{tools_mooncakes_path}",
+    new="-C \{dev_tools_path}",
   )
-  b = b.replace_all(old=rel_build_agents, new=dev_build_sh_agents)
+  y = y.replace_all(old=" \{sdk_mooncakes_path} ", new=" \{dev_sdk_path} ")
   // Write all files only after all transforms succeed
   @fs.write_string_to_file(mod_json_path, m)
   @fs.write_string_to_file(golem_yaml_path, y)
-  @fs.write_string_to_file(build_sh_path, b)
   println("Done. Now in development mode (local path deps).")
 }
 
@@ -150,39 +114,6 @@ fn revert_to_dev() -> Unit raise {
 ///|
 fn split_lines(s : String) -> Array[String] {
   s.split("\n").collect().map(fn(v) { v.to_string() })
-}
-
-///|
-fn remove_lines_containing(s : String, needle : String) -> String {
-  let lines = split_lines(s)
-  let kept : Array[String] = []
-  for line in lines {
-    if not(line.contains(needle)) {
-      kept.push(line)
-    }
-  }
-  kept.join("\n")
-}
-
-///|
-/// Inserts a `dir:` line after YAML command lines containing `needle`.
-/// Idempotent: skips insertion if the next line is already the dir line.
-fn insert_dir_after_command(s : String, needle : String) -> String {
-  let lines = split_lines(s)
-  let result : Array[String] = []
-  for i, line in lines {
-    result.push(line)
-    if line.trim_start().to_string().has_prefix("- command:") &&
-      line.contains(needle) {
-      // Check if next line is already the dir line
-      let next_is_dir = i + 1 < lines.length() &&
-        lines[i + 1].trim_start().to_string() == "dir: ../golem_sdk_tools"
-      if not(next_is_dir) {
-        result.push(dev_dir_line)
-      }
-    }
-  }
-  result.join("\n")
 }
 
 ///|

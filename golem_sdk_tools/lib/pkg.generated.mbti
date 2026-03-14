@@ -53,8 +53,6 @@ pub fn rpc_function_name(String, String) -> String
 
 pub fn syntax_type_to_param_type(@syntax.Type) -> ParamType raise AgentParseError
 
-pub fn to_kebab_case(String) -> String
-
 pub fn transform_exports(Array[String]) -> Array[String]
 
 pub fn update_pkg_link(String, Array[String]) -> String

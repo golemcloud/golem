@@ -42,7 +42,7 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|///|
       #|pub fn CounterClient::get(name : String) -> CounterClient raise @common.AgentError {
       #|  let constructor_data = 
-      #|    @common.DataValue::Tuple([@schema.to_element_value_as(name)])
+      #|    @rpcTypes.DataValue::Tuple([@schema.to_element_value_as(name)])
       #|  let client = @rpc.AgentClient::get("Counter", constructor_data)
       #|  { client, }
       #|}
@@ -50,7 +50,7 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|///|
       #|pub fn CounterClient::new_phantom(name : String) -> CounterClient raise @common.AgentError {
       #|  let constructor_data = 
-      #|    @common.DataValue::Tuple([@schema.to_element_value_as(name)])
+      #|    @rpcTypes.DataValue::Tuple([@schema.to_element_value_as(name)])
       #|  let client = @rpc.AgentClient::new_phantom("Counter", constructor_data)
       #|  { client, }
       #|}
@@ -58,19 +58,19 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|///|
       #|pub fn CounterClient::get_phantom(name : String, phantom_id : @rpcTypes.Uuid) -> CounterClient raise @common.AgentError {
       #|  let constructor_data = 
-      #|    @common.DataValue::Tuple([@schema.to_element_value_as(name)])
+      #|    @rpcTypes.DataValue::Tuple([@schema.to_element_value_as(name)])
       #|  let client = 
       #|    @rpc.AgentClient::get_phantom("Counter", constructor_data, phantom_id)
       #|  { client, }
       #|}
       #|
       #|///|
-      #|pub fn CounterClient::get_agent_id(self : CounterClient) -> String {
+      #|pub fn CounterClient::get_agent_id(self : CounterClient) -> String raise @common.AgentError {
       #|  self.client.get_agent_id()
       #|}
       #|
       #|///|
-      #|pub fn CounterClient::phantom_id(self : CounterClient) -> @rpcTypes.Uuid? raise @common.AgentError {
+      #|pub fn CounterClient::phantom_id(self : CounterClient) -> @rpcTypes.Uuid? {
       #|  self.client.phantom_id()
       #|}
       #|
@@ -112,13 +112,14 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|
       #|///|
       #|pub fn CounterClient::increment(self : CounterClient) -> Unit {
-      #|  let _ = self.client.invoke_and_await("counter.{increment}", [])
+      #|  let _ = 
+      #|    self.client.invoke_and_await("increment", @rpcTypes.DataValue::Tuple([]))
       #|  ()
       #|}
       #|
       #|///|
       #|pub fn CounterClient::trigger_increment(self : CounterClient) -> Unit {
-      #|  self.client.invoke("counter.{increment}", [])
+      #|  self.client.invoke("increment", @rpcTypes.DataValue::Tuple([]))
       #|}
       #|
       #|///|
@@ -126,18 +127,26 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|  self : CounterClient,
       #|  scheduled_at : @wallClock.Datetime,
       #|) -> Unit {
-      #|  self.client.schedule_invocation(scheduled_at, "counter.{increment}", [])
+      #|  self
+      #|    .client
+      #|    .schedule_invocation(
+      #|      scheduled_at,
+      #|      "increment",
+      #|      @rpcTypes.DataValue::Tuple([]),
+      #|    )
       #|}
       #|
       #|///|
       #|pub fn CounterClient::get_value(self : CounterClient) -> UInt64 raise @common.AgentError {
-      #|  let result = self.client.invoke_and_await("counter.{get-value}", [])
-      #|  @rpc.from_wit_value(@rpc.unwrap_wit_tuple(result))
+      #|  let result = 
+      #|    self.client.invoke_and_await("get_value", @rpcTypes.DataValue::Tuple([]))
+      #|  let elements = @extractor.extract_tuple(result)
+      #|  @schema.from_element_value_as(elements[0])
       #|}
       #|
       #|///|
       #|pub fn CounterClient::trigger_get_value(self : CounterClient) -> Unit {
-      #|  self.client.invoke("counter.{get-value}", [])
+      #|  self.client.invoke("get_value", @rpcTypes.DataValue::Tuple([]))
       #|}
       #|
       #|///|
@@ -145,7 +154,13 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|  self : CounterClient,
       #|  scheduled_at : @wallClock.Datetime,
       #|) -> Unit {
-      #|  self.client.schedule_invocation(scheduled_at, "counter.{get-value}", [])
+      #|  self
+      #|    .client
+      #|    .schedule_invocation(
+      #|      scheduled_at,
+      #|      "get_value",
+      #|      @rpcTypes.DataValue::Tuple([]),
+      #|    )
       #|}
       #|
       #|
@@ -186,13 +201,13 @@ test "generate_client_code - agent with unstructured text param and return" {
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
-  // Verify the generated code uses the type-specific conversion functions
-  assert_true(output.contains("rpc.unstructured_text_to_wit_value"))
-  assert_true(output.contains("rpc.wit_value_to_unstructured_text"))
-  assert_true(output.contains("rpc.unstructured_binary_to_wit_value"))
-  // Should NOT use generic to_wit_value for unstructured types
-  assert_false(output.contains("rpc.to_wit_value(input)"))
-  assert_false(output.contains("rpc.to_wit_value(data)"))
+  // Verify the generated code uses schema-based conversion for unstructured types
+  assert_true(output.contains("schema.to_element_value_as(input)"))
+  assert_true(output.contains("schema.from_element_value_as"))
+  assert_true(output.contains("schema.to_element_value_as(data)"))
+  // Should NOT use old rpc.to_wit_value for unstructured types
+  assert_false(output.contains("rpc.to_wit_value"))
+  assert_false(output.contains("rpc.unstructured_text_to_wit_value"))
 }
 
 ///|
@@ -238,11 +253,11 @@ test "generate_client_code - agent with multimodal param" {
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
   // Verify multimodal encoding is used for params
-  assert_true(output.contains("rpc.multimodal_to_wit_value"))
+  assert_true(output.contains("input.to_data_value()"))
   // Verify multimodal decoding is used for return
-  assert_true(output.contains("rpc.wit_value_to_multimodal"))
-  // Should NOT use generic to_wit_value for multimodal types
-  assert_false(output.contains("rpc.to_wit_value(input)"))
+  assert_true(output.contains("Multimodal::from_data_value"))
+  // Should NOT use old rpc conversion for multimodal types
+  assert_false(output.contains("rpc.multimodal_to_wit_value"))
 }
 
 ///|
@@ -307,33 +322,33 @@ test "generate_client_code - agent with params" {
       #|
       #|///|
       #|pub fn TaskManagerClient::get() -> TaskManagerClient raise @common.AgentError {
-      #|  let constructor_data = @common.DataValue::Tuple([])
+      #|  let constructor_data = @rpcTypes.DataValue::Tuple([])
       #|  let client = @rpc.AgentClient::get("TaskManager", constructor_data)
       #|  { client, }
       #|}
       #|
       #|///|
       #|pub fn TaskManagerClient::new_phantom() -> TaskManagerClient raise @common.AgentError {
-      #|  let constructor_data = @common.DataValue::Tuple([])
+      #|  let constructor_data = @rpcTypes.DataValue::Tuple([])
       #|  let client = @rpc.AgentClient::new_phantom("TaskManager", constructor_data)
       #|  { client, }
       #|}
       #|
       #|///|
       #|pub fn TaskManagerClient::get_phantom(phantom_id : @rpcTypes.Uuid) -> TaskManagerClient raise @common.AgentError {
-      #|  let constructor_data = @common.DataValue::Tuple([])
+      #|  let constructor_data = @rpcTypes.DataValue::Tuple([])
       #|  let client = 
       #|    @rpc.AgentClient::get_phantom("TaskManager", constructor_data, phantom_id)
       #|  { client, }
       #|}
       #|
       #|///|
-      #|pub fn TaskManagerClient::get_agent_id(self : TaskManagerClient) -> String {
+      #|pub fn TaskManagerClient::get_agent_id(self : TaskManagerClient) -> String raise @common.AgentError {
       #|  self.client.get_agent_id()
       #|}
       #|
       #|///|
-      #|pub fn TaskManagerClient::phantom_id(self : TaskManagerClient) -> @rpcTypes.Uuid? raise @common.AgentError {
+      #|pub fn TaskManagerClient::phantom_id(self : TaskManagerClient) -> @rpcTypes.Uuid? {
       #|  self.client.phantom_id()
       #|}
       #|
@@ -374,8 +389,12 @@ test "generate_client_code - agent with params" {
       #|pub fn TaskManagerClient::add_task(self : TaskManagerClient, task : TaskInfo) -> UInt64 raise @common.AgentError {
       #|  let result = self
       #|    .client
-      #|    .invoke_and_await("task-manager.{add-task}", [@rpc.to_wit_value(task)])
-      #|  @rpc.from_wit_value(@rpc.unwrap_wit_tuple(result))
+      #|    .invoke_and_await(
+      #|      "add_task",
+      #|      @rpcTypes.DataValue::Tuple([@schema.to_element_value_as(task)]),
+      #|    )
+      #|  let elements = @extractor.extract_tuple(result)
+      #|  @schema.from_element_value_as(elements[0])
       #|}
       #|
       #|///|
@@ -383,7 +402,12 @@ test "generate_client_code - agent with params" {
       #|  self : TaskManagerClient,
       #|  task : TaskInfo,
       #|) -> Unit raise @common.AgentError {
-      #|  self.client.invoke("task-manager.{add-task}", [@rpc.to_wit_value(task)])
+      #|  self
+      #|    .client
+      #|    .invoke(
+      #|      "add_task",
+      #|      @rpcTypes.DataValue::Tuple([@schema.to_element_value_as(task)]),
+      #|    )
       #|}
       #|
       #|///|
@@ -394,9 +418,11 @@ test "generate_client_code - agent with params" {
       #|) -> Unit raise @common.AgentError {
       #|  self
       #|    .client
-      #|    .schedule_invocation(scheduled_at, "task-manager.{add-task}", [
-      #|      @rpc.to_wit_value(task),
-      #|    ])
+      #|    .schedule_invocation(
+      #|      scheduled_at,
+      #|      "add_task",
+      #|      @rpcTypes.DataValue::Tuple([@schema.to_element_value_as(task)]),
+      #|    )
       #|}
       #|
       #|

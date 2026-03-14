@@ -40,7 +40,7 @@ golem-temp/                       # Build artifacts (gitignored)
 ## Prerequisites
 
 - MoonBit toolchain (`moon`): https://docs.moonbitlang.com
-- Golem CLI (`golem`) version 1.4.x: https://github.com/golemcloud/golem/releases
+- Golem CLI (`golem`) version 1.5.x: https://github.com/golemcloud/golem/releases
 - `wasm-tools`: https://github.com/bytecodealliance/wasm-tools
 
 ## Building
@@ -70,58 +70,61 @@ After starting the server, components must be deployed with `golem deploy` befor
 
 The `-Y` flag auto-confirms prompts. The `-L` flag selects the `local` environment defined in `golem.yaml`.
 
-## Name Mapping (Kebab-Case Convention)
+## Name Mapping
 
-All MoonBit identifiers are converted to **kebab-case** when used externally (in CLI commands, Rib scripts, REPL, agent IDs, and WAVE values). This applies to:
+All MoonBit identifiers are used **as-is** (matching the source code) when used externally in CLI commands, Rib scripts, REPL, and agent IDs:
 
-- **Agent type names**: `Counter` → `counter`, `TaskManager` → `task-manager`
-- **Method names**: `get_value` → `get-value`, `add_task` → `add-task`
-- **Record field names**: `field_name` → `field-name`
-- **Enum/variant case names**: `High` → `high`, `Low` → `low`
-
-This conversion is automatic and consistent across all external interfaces.
+- **Agent type names**: `Counter` → `Counter`, `TaskManager` → `TaskManager` (PascalCase)
+- **Method names**: `get_value` → `get_value`, `add_task` → `add_task` (snake_case)
+- **Record field names**: `field_name` → `field_name`
+- **Enum/variant case names**: `High` → `High`, `Low` → `Low` (PascalCase)
 
 ## Testing Agents
 
 ### Using `golem agent invoke`
 
-Invoke agent methods directly from the CLI. The method name must be fully qualified:
+Invoke agent methods directly from the CLI. Use `golem component get -L <component>` to see available agent types and their method signatures with expected parameter types.
 
 ```shell
-# Method name format: <component-name>/<agent-type>.{method-name}
-# All names in kebab-case
+# View component's agent types and methods:
+golem component get -L 'golem:moonbit-examples'
+
+# Method name format: golem:agent-guest/<AgentType>.{method_name}
+# Agent type names are PascalCase, method names are snake_case
 
 # Counter agent — increment, then get value:
-golem agent invoke -L 'counter("my-counter")' \
-  'golem:agent-guest/counter.{increment}'
-golem agent invoke -L 'counter("my-counter")' \
-  'golem:agent-guest/counter.{get-value}'
+golem agent invoke -L 'Counter("my-counter")' \
+  'golem:agent-guest/Counter.{increment}'
+golem agent invoke -L 'Counter("my-counter")' \
+  'golem:agent-guest/Counter.{get_value}'
 
 # Counter — decrement:
-golem agent invoke -L 'counter("my-counter")' \
-  'golem:agent-guest/counter.{decrement}'
+golem agent invoke -L 'Counter("my-counter")' \
+  'golem:agent-guest/Counter.{decrement}'
 
-# TaskManager — add a task (record argument):
-golem agent invoke -L 'task-manager()' \
-  'golem:agent-guest/task-manager.{add-task}' \
-  '{title: "my task", priority: high, description: some("a description")}'
+# TaskManager — add a task (record argument, positional fields):
+golem agent invoke -L 'TaskManager()' \
+  'golem:agent-guest/TaskManager.{add_task}' \
+  '("my task",v2,s("a description"))'
 
 # TaskManager — get all tasks:
-golem agent invoke -L 'task-manager()' \
-  'golem:agent-guest/task-manager.{get-tasks}'
+golem agent invoke -L 'TaskManager()' \
+  'golem:agent-guest/TaskManager.{get_tasks}'
 
 # TaskManager — filter by priority (enum argument):
-golem agent invoke -L 'task-manager()' \
-  'golem:agent-guest/task-manager.{get-by-priority}' 'high'
+golem agent invoke -L 'TaskManager()' \
+  'golem:agent-guest/TaskManager.{get_by_priority}' 'v2'
 
 # Fire-and-forget (enqueue without waiting for result):
-golem agent invoke -L --enqueue 'counter("my-counter")' \
-  'golem:agent-guest/counter.{increment}'
+golem agent invoke -L --enqueue 'Counter("my-counter")' \
+  'golem:agent-guest/Counter.{increment}'
 
 # With idempotency key:
 golem agent invoke -L --idempotency-key 'unique-key-123' \
-  'counter("my-counter")' 'golem:agent-guest/counter.{increment}'
+  'Counter("my-counter")' 'golem:agent-guest/Counter.{increment}'
 ```
+
+**Note**: Methods returning `Unit` (void) will show `error: Agent result is not a single return value` — this is a cosmetic CLI display issue; the invocation itself succeeds.
 
 ### Using the REPL
 
@@ -129,83 +132,36 @@ golem agent invoke -L --idempotency-key 'unique-key-123' \
 golem repl -L                    # Interactive Rib scripting REPL
 ```
 
-In the REPL, use kebab-case names and WAVE-encoded values:
+In the REPL, use source-code names:
 ```rib
-let agent = counter("my-counter")
+let agent = Counter("my-counter")
 agent.increment()
-agent.get-value()
+agent.get_value()
 ```
 
-## WAVE Value Encoding
+## Value Encoding for CLI Arguments
 
-All argument values passed to `golem agent invoke` and used in Rib scripts follow the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format.
+Arguments passed to `golem agent invoke` use a **compact positional encoding**. Use `golem component get -L <component>` to see the TypeScript-like type signatures and then encode values as follows:
 
-### MoonBit Type to WAVE Mapping
+### Encoding Rules
 
-| MoonBit Type | WIT Type | WAVE Example |
+| Type | Encoding | Example |
 |---|---|---|
-| `String` | `string` | `"hello world"` |
-| `Bool` | `bool` | `true`, `false` |
-| `Byte` | `u8` | `42` |
-| `UInt` | `u32` | `100` |
-| `Int` | `s32` | `-7` |
-| `UInt64` | `u64` | `42` |
-| `Int64` | `s64` | `-100` |
-| `Float` | `f32` | `3.14` |
-| `Double` | `f64` | `3.14`, `nan`, `inf`, `-inf` |
-| `Char` | `char` | `'x'` |
-| `Array[T]` | `list<T>` | `[1, 2, 3]` |
-| `Option[T]` (`Some`) | `option<T>` | `some("value")` |
-| `Option[T]` (`None`) | `option<T>` | `none` |
-| `Result[T, E]` | `result<T, E>` | `ok("value")`, `err("msg")` |
-| Struct (with `#derive.golem_schema`) | `record { ... }` | `{field-name: "value", count: 42}` |
-| Enum (unit variants) | `enum { ... }` | `my-variant` |
-| Enum (with data) | `variant { ... }` | `my-case("data")` |
+| `string` | Double-quoted | `"hello world"` |
+| `bool` | `true` / `false` | `true` |
+| Numbers (`u8`, `u32`, `s32`, etc.) | Literal | `42`, `-7` |
+| `list<T>` (`Array[T]`) | Square brackets | `[1, 2, 3]` |
+| `option<T>` (Some) | `s(value)` | `s("hello")`, `s(42)` |
+| `option<T>` (None) | `n` | `n` |
+| `enum` (unit variants) | `v<index>` (0-based) | `v0`, `v1`, `v2` |
+| `record` (struct) | `(field1,field2,...)` positional | `("my task",v2,s("desc"))` |
+| `variant` (enum with data) | TBD | |
 
-### WAVE Encoding Rules
+**Enum index mapping**: Enum cases are indexed in declaration order starting from 0. For `enum Priority { Low, Medium, High }`: `v0` = Low, `v1` = Medium, `v2` = High.
 
-**Strings**: double-quoted with escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`, `\u{...}`)
-```
-"hello \"world\""
-```
+**Records are positional**: Fields are encoded in declaration order without names. For `struct TaskInfo { title: String, priority: Priority, description: String? }`: `("my task",v2,s("description"))`.
 
-**Records**: field names in kebab-case, optional fields (`Option[T]`) can be omitted (defaults to `none`)
-```
-{required-field: "value", optional-field: some(42)}
-{required-field: "value"}
-```
-
-**Variants/Enums**: case name in kebab-case, with optional payload in parentheses
-```
-my-case
-my-case("payload")
-```
-
-**Options**: can use shorthand (bare value = `some`)
-```
-some(42)    // explicit
-42          // shorthand for some(42), only for non-option/non-result inner types
-none
-```
-
-**Results**: can use shorthand (bare value = `ok`)
-```
-ok("value")   // explicit ok
-err("oops")   // explicit err
-"value"       // shorthand for ok("value")
-```
-
-**Flags**: set of labels in curly braces
-```
-{read, write}
-{}
-```
-
-**Keywords as identifiers**: prefix with `%` if a name conflicts with `true`, `false`, `some`, `none`, `ok`, `err`, `inf`, `nan`
-```
-%true
-%none
-```
+**Output format**: Results are displayed in TypeScript-like syntax (e.g., `{ title: "my task", priority: "High", description: "a description" }` for records, `undefined` for None).
 
 ## Defining Agents
 
@@ -420,9 +376,8 @@ Both presets run the same build pipeline but differ in `moon build` optimization
 
 The root `golem.yaml` defines:
 - `app`: application name
-- `witDeps`: path to WIT dependency definitions
 - `environments`: server and preset mappings for local/cloud
-- `componentTemplates`: build pipeline templates (codegen → moon build → wasm-tools → agent wrapper)
+- `componentTemplates`: build pipeline templates (codegen → moon build → wasm-tools)
 - `components`: maps component names to templates
 
 The build pipeline for each component:
@@ -431,7 +386,8 @@ The build pipeline for each component:
 3. `moon build --target wasm`
 4. `wasm-tools component embed` (adds WIT type info, with `--encoding utf16`)
 5. `wasm-tools component new` (creates Component Model WASM)
-6. Generate and compose the agent wrapper
+
+The agent wrapper generation and composition is handled automatically by the Golem CLI.
 
 ## Debugging
 
@@ -473,4 +429,3 @@ golem agent invoke -L '<agent-id>' 'method' args   # Invoke method directly
 - Golem docs: https://learn.golem.cloud
 - MoonBit docs: https://docs.moonbitlang.com
 - App manifest reference: https://learn.golem.cloud/app-manifest
-- WAVE encoding: https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave

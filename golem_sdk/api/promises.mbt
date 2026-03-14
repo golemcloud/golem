@@ -1,5 +1,5 @@
 ///|
-pub using @raw {type PromiseId}
+pub using @types {type PromiseId}
 
 ///|
 pub using @poll {type Pollable}

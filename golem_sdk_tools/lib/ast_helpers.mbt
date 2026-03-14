@@ -557,7 +557,10 @@ fn make_struct_def(
     tycon: name,
     tycon_loc: dummy_loc,
     params: to_list([]),
-    components: @syntax.TypeDesc::Record(fields=to_list(field_decls), constr_decl=None),
+    components: @syntax.TypeDesc::Record(
+      fields=to_list(field_decls),
+      constr_decl=None,
+    ),
     attrs: to_list([]),
     doc: @syntax.DocString::empty(),
     type_vis: @syntax.Visibility::Pub(attr=Some("all"), loc=dummy_loc),

@@ -1,17 +1,17 @@
 package golem:moonbit-examples;
 
 world moonbit-examples {
-  import golem:api/host@1.3.0;
-  import golem:rpc/types@0.2.2;
-  import golem:agent/host;
+  import golem:api/host@1.5.0;
+  import golem:core/types@1.5.0;
+  import golem:agent/host@1.5.0;
 
-  import golem:rdbms/postgres@0.0.1;
-  import golem:rdbms/mysql@0.0.1;
-  import golem:rdbms/types@0.0.1;
+  import golem:rdbms/postgres@1.5.0;
+  import golem:rdbms/mysql@1.5.0;
+  import golem:rdbms/types@1.5.0;
 
-  import golem:api/context@1.3.0;
-  import golem:api/oplog@1.3.0;
-  import golem:durability/durability@1.3.0;
+  import golem:api/context@1.5.0;
+  import golem:api/oplog@1.5.0;
+  import golem:durability/durability@1.5.0;
 
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;
@@ -19,15 +19,17 @@ world moonbit-examples {
 
   import wasi:logging/logging;
 
+  import wasi:keyvalue/atomic@0.1.0;
   import wasi:keyvalue/eventual@0.1.0;
   import wasi:keyvalue/eventual-batch@0.1.0;
+  import wasi:keyvalue/cache@0.1.0;
   import wasi:keyvalue/types@0.1.0;
   import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
 
   import wasi:config/store@0.2.0-draft;
 
-  include golem:agent/agent-guest;
+  include golem:agent/agent-guest@1.5.0;
 
-  export golem:api/save-snapshot@1.3.0;
-  export golem:api/load-snapshot@1.3.0;
+  export golem:api/save-snapshot@1.5.0;
+  export golem:api/load-snapshot@1.5.0;
 }
