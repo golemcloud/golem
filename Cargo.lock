@@ -4647,6 +4647,7 @@ dependencies = [
  "anyhow",
  "assert2",
  "async-trait",
+ "base64 0.22.1",
  "bigdecimal",
  "bytes 1.11.0",
  "chrono",

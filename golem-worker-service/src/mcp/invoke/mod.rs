@@ -12,14 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::schema::mcp_schema::McpSchema;
-use golem_common::base_model::agent::DataSchema;
-
-pub fn get_mcp_schema(data_schema: &DataSchema) -> McpSchema {
-    match data_schema {
-        DataSchema::Tuple(schemas) => McpSchema::from_named_element_schemas(&schemas.elements),
-        DataSchema::Multimodal(_) => {
-            todo!("Multimodal schema is not supported in this example")
-        }
-    }
-}
+mod agent_method_input;
+mod constructor_param_extraction;
+mod multimodal_params_extraction;
+pub mod resource;
+pub mod tool;
