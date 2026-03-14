@@ -132,6 +132,8 @@ pub fn lib_gen(self_name: &str, modules: &[ModuleDef], disable_clippy: bool) -> 
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use indoc::indoc;
 
     use crate::rust::lib_gen::{lib_gen, ModuleDef, ModuleName};

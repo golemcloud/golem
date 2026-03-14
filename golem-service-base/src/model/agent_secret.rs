@@ -45,3 +45,38 @@ impl From<AgentSecret> for golem_common::model::agent_secret::AgentSecretDto {
         }
     }
 }
+
+impl From<AgentSecret> for golem_api_grpc::proto::golem::registry::AgentSecret {
+    fn from(value: AgentSecret) -> Self {
+        Self {
+            agent_secret_id: Some(value.id.into()),
+            environment_id: Some(value.environment_id.into()),
+            path: value.path,
+            revision: value.revision.into(),
+            secret_type: Some((&value.secret_type).into()),
+            secret_value: value.secret_value.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecret> for AgentSecret {
+    type Error = String;
+    fn try_from(
+        value: golem_api_grpc::proto::golem::registry::AgentSecret,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value
+                .agent_secret_id
+                .ok_or("Missing agent_secret_id field")?
+                .try_into()?,
+            environment_id: value
+                .environment_id
+                .ok_or("Missing environment_id field")?
+                .try_into()?,
+            path: value.path,
+            revision: AgentSecretRevision::try_from(value.revision)?,
+            secret_type: (&value.secret_type.ok_or("Missing secret_type field")?).try_into()?,
+            secret_value: value.secret_value.map(TryInto::try_into).transpose()?,
+        })
+    }
+}

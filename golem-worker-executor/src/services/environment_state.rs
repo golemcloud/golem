@@ -18,33 +18,35 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::agent_secret::AgentSecret;
+use golem_service_base::model::environment::EnvironmentState;
 use golem_service_base::model::AgentDeploymentDetails;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 #[async_trait]
-pub trait AgentDeploymentsService: Send + Sync {
+pub trait EnvironmentStateService: Send + Sync {
     /// Get the current deployment of the agent.
     /// Will return None if there is no current deployment.
     async fn get_agent_deployment(
         &self,
-        environment: EnvironmentId,
+        environment_id: EnvironmentId,
         agent_type: &AgentTypeName,
     ) -> Result<Option<AgentDeploymentDetails>, WorkerExecutorError>;
+
+    async fn get_agent_secrets(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<HashMap<Vec<String>, AgentSecret>, WorkerExecutorError>;
 }
 
-pub struct GrpcAgentDeploymentService {
+pub struct GrpcEnvironmentStateService {
     client: Arc<dyn RegistryService>,
-    cached_environment_agent_deployments: Cache<
-        EnvironmentId,
-        (),
-        HashMap<AgentTypeName, AgentDeploymentDetails>,
-        WorkerExecutorError,
-    >,
+    cached_environment_state: Cache<EnvironmentId, (), Arc<EnvironmentState>, WorkerExecutorError>,
 }
 
-impl GrpcAgentDeploymentService {
+impl GrpcEnvironmentStateService {
     pub fn new(
         registry_service: Arc<dyn RegistryService>,
         cache_capacity: usize,
@@ -53,33 +55,36 @@ impl GrpcAgentDeploymentService {
     ) -> Self {
         Self {
             client: registry_service,
-            cached_environment_agent_deployments: Cache::new(
+            cached_environment_state: Cache::new(
                 Some(cache_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::OlderThan {
                     ttl: cache_ttl,
                     period: cache_eviction_interval,
                 },
-                "gprc_agent_deployed_domains_service",
+                "gprc_environment_statue_service_environments",
             ),
         }
     }
 
-    async fn get_environment_agent_deployments(
+    async fn get_environment_state(
         &self,
-        environment: EnvironmentId,
-    ) -> Result<HashMap<AgentTypeName, AgentDeploymentDetails>, WorkerExecutorError> {
-        self.cached_environment_agent_deployments
-            .get_or_insert_simple(&environment, || {
+        environment_id: EnvironmentId,
+    ) -> Result<Arc<EnvironmentState>, WorkerExecutorError> {
+        self.cached_environment_state
+            .get_or_insert_simple(&environment_id, || {
                 Box::pin(async move {
-                    self.client
-                        .get_agent_deployments(environment)
+                    let result = self
+                        .client
+                        .get_current_environment_state(environment_id)
                         .await
                         .map_err(|e| {
                             WorkerExecutorError::runtime(format!(
                                 "Failed to get domains for agent types: {e}"
                             ))
-                        })
+                        })?;
+
+                    Ok(Arc::new(result))
                 })
             })
             .await
@@ -87,14 +92,24 @@ impl GrpcAgentDeploymentService {
 }
 
 #[async_trait]
-impl AgentDeploymentsService for GrpcAgentDeploymentService {
+impl EnvironmentStateService for GrpcEnvironmentStateService {
     async fn get_agent_deployment(
         &self,
-        environment: EnvironmentId,
+        environment_id: EnvironmentId,
         agent_type: &AgentTypeName,
     ) -> Result<Option<AgentDeploymentDetails>, WorkerExecutorError> {
-        let environment_agent_deployments =
-            self.get_environment_agent_deployments(environment).await?;
-        Ok(environment_agent_deployments.get(agent_type).cloned())
+        let environment_state = self.get_environment_state(environment_id).await?;
+        Ok(environment_state
+            .agent_deployment_details
+            .get(agent_type)
+            .cloned())
+    }
+
+    async fn get_agent_secrets(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<HashMap<Vec<String>, AgentSecret>, WorkerExecutorError> {
+        let environment_state = self.get_environment_state(environment_id).await?;
+        Ok(environment_state.agent_secrets.clone())
     }
 }

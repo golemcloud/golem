@@ -478,7 +478,7 @@ async fn deploy_creates_missing_secret_from_default(
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: secret_path.clone(),
-                    secret_value: json!(false),
+                    secret_value: json!("foo"),
                 }],
             },
         )
@@ -494,8 +494,8 @@ async fn deploy_creates_missing_secret_from_default(
         .unwrap();
 
     assert_eq!(secret.path, secret_path);
-    assert_eq!(secret.secret_type, analysed_type::bool());
-    assert_eq!(secret.secret_value, Some(json!(false)));
+    assert_eq!(secret.secret_type, analysed_type::str());
+    assert_eq!(secret.secret_value, Some(json!("foo")));
 
     Ok(())
 }
@@ -516,8 +516,8 @@ async fn deploy_ignores_default_if_secret_already_exists(
             &env.id.0,
             &AgentSecretCreation {
                 path: secret_path.clone(),
-                secret_type: analysed_type::bool(),
-                secret_value: Some(json!(true)),
+                secret_type: analysed_type::str(),
+                secret_value: Some(json!("bar")),
             },
         )
         .await?;
@@ -538,7 +538,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: secret_path.clone(),
-                    secret_value: json!(false),
+                    secret_value: json!("foo"),
                 }],
             },
         )
@@ -554,10 +554,10 @@ async fn deploy_ignores_default_if_secret_already_exists(
         .unwrap();
 
     assert_eq!(secret.path, secret_path);
-    assert_eq!(secret.secret_type, analysed_type::bool());
+    assert_eq!(secret.secret_type, analysed_type::str());
 
     // Existing value must be preserved
-    assert_eq!(secret.secret_value, Some(json!(true)));
+    assert_eq!(secret.secret_value, Some(json!("bar")));
 
     Ok(())
 }
@@ -578,7 +578,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
             &env.id.0,
             &AgentSecretCreation {
                 path: secret_path.clone(),
-                secret_type: analysed_type::bool(),
+                secret_type: analysed_type::str(),
                 secret_value: None,
             },
         )
@@ -600,7 +600,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: secret_path.clone(),
-                    secret_value: json!(false),
+                    secret_value: json!("foo"),
                 }],
             },
         )
@@ -616,9 +616,9 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
         .unwrap();
 
     assert_eq!(secret.path, secret_path);
-    assert_eq!(secret.secret_type, analysed_type::bool());
+    assert_eq!(secret.secret_type, analysed_type::str());
 
-    assert_eq!(secret.secret_value, Some(json!(false)));
+    assert_eq!(secret.secret_value, Some(json!("foo")));
 
     Ok(())
 }
@@ -639,8 +639,8 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
             &env.id.0,
             &AgentSecretCreation {
                 path: secret_path.clone(),
-                secret_type: analysed_type::str(),
-                secret_value: Some(json!("abc")),
+                secret_type: analysed_type::bool(),
+                secret_value: Some(json!(false)),
             },
         )
         .await?;
@@ -661,7 +661,7 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: secret_path.clone(),
-                    secret_value: json!(false),
+                    secret_value: json!("abc"),
                 }],
             },
         )
@@ -704,7 +704,7 @@ async fn deploy_fails_if_secret_default_mismatches_component(
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: secret_path.clone(),
-                    secret_value: json!("foo"),
+                    secret_value: json!(false),
                 }],
             },
         )
