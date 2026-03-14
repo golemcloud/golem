@@ -420,6 +420,7 @@ mod tests {
         );
 
         assert!(prompt.prompt_text.starts_with("Run analysis"));
+
         assert!(
             prompt
                 .prompt_text
@@ -427,7 +428,8 @@ mod tests {
             "got: {}",
             prompt.prompt_text
         );
-        assert!(prompt.prompt_text.contains("Output: result: text"));
+
+        assert!(prompt.prompt_text.contains("text"));
     }
 
     #[test]

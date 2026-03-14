@@ -366,9 +366,10 @@ mod tests {
             },
         )]);
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
-        let structured = result.structured_content.unwrap();
-        assert_eq!(structured["report"]["data"], "weather is sunny");
-        assert_eq!(structured["report"]["languageCode"], "en");
+
+        let raw_content = &result.content[0].raw;
+
+        assert_eq!(raw_content, &RawContent::text("weather is sunny"));
     }
 
     #[test]
@@ -379,6 +380,7 @@ mod tests {
                 schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None }),
             }],
         });
+
         let response = UntypedDataValue::Tuple(vec![UntypedElementValue::UnstructuredBinary(
             BinaryReferenceValue {
                 value: BinaryReference::Inline(BinarySource {
@@ -390,9 +392,13 @@ mod tests {
             },
         )]);
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
-        let structured = result.structured_content.unwrap();
-        assert_eq!(structured["image"]["data"], "AQID");
-        assert_eq!(structured["image"]["mimeType"], "image/png");
+
+        let raw_content = &result.content[0].raw;
+
+        assert_eq!(
+            raw_content,
+            &RawContent::image("AQID", "image/png".to_string())
+        );
     }
 
     #[test]
@@ -434,13 +440,15 @@ mod tests {
             },
         ]);
         let result = map_agent_response_to_tool_result(response, &schema).unwrap();
-        let structured = result.structured_content.unwrap();
-        let parts = structured["parts"].as_array().unwrap();
-        assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0]["name"], "desc");
-        assert_eq!(parts[0]["value"]["data"], "a photo");
-        assert_eq!(parts[1]["name"], "photo");
-        assert_eq!(parts[1]["value"]["data"], "AQID");
+        let contents = &result.content;
+
+        assert_eq!(contents.len(), 2);
+
+        assert_eq!(&contents[0].raw, &RawContent::text("a photo"));
+        assert_eq!(
+            &contents[1].raw,
+            &RawContent::image("AQID", "image/png".to_string())
+        );
     }
 
     #[test]
