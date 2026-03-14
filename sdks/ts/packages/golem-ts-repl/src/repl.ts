@@ -261,7 +261,7 @@ export class Repl {
     });
 
     this.defineFlagCommand(replServer, {
-      name: 'streamLogs',
+      name: 'stream-logs',
       help: 'Show or set agent stream logging (on/off)',
       get: () => this.replCliFlags.streamLogs,
       set: (value) => {
@@ -270,7 +270,7 @@ export class Repl {
     });
 
     this.defineFlagCommand(replServer, {
-      name: 'showTypeInfo',
+      name: 'show-type-info',
       help: 'Show or set type info logging before execution (on/off)',
       get: () => this.replCliFlags.showTypeInfo,
       set: (value) => {
