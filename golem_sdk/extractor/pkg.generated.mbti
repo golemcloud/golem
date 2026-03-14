@@ -3,23 +3,23 @@ package "golemcloud/golem_sdk/extractor"
 
 import {
   "golemcloud/golem_sdk/interface/golem/agent/common",
-  "golemcloud/golem_sdk/interface/golem/rpc/types",
+  "golemcloud/golem_sdk/interface/golem/core/types",
 }
 
 // Values
-pub fn expect_single_element(Array[@common.ElementValue]) -> @common.ElementValue
+pub fn expect_single_element(Array[@types.ElementValue]) -> @types.ElementValue
 
 pub fn extract(@types.WitValue) -> &Extractor
 
-pub fn extract_component_model_value(@common.ElementValue) -> &Extractor raise @common.AgentError
+pub fn extract_component_model_value(@types.ElementValue) -> &Extractor raise @common.AgentError
 
-pub fn extract_multimodal(@common.DataValue) -> Array[(String, @common.ElementValue)]
+pub fn extract_multimodal(@types.DataValue) -> Array[(String, @types.ElementValue)]
 
-pub fn extract_tuple(@common.DataValue) -> Array[@common.ElementValue]
+pub fn extract_tuple(@types.DataValue) -> Array[@types.ElementValue]
 
-pub fn extract_unstructured_binary(@common.ElementValue) -> @common.BinaryReference
+pub fn extract_unstructured_binary(@types.ElementValue) -> @types.BinaryReference
 
-pub fn extract_unstructured_text(@common.ElementValue) -> @common.TextReference
+pub fn extract_unstructured_text(@types.ElementValue) -> @types.TextReference
 
 // Errors
 

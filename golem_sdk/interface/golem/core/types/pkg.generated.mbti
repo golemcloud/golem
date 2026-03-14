@@ -1,0 +1,226 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/core/types"
+
+// Values
+pub fn parse_uuid(String) -> Result[Uuid, String]
+
+pub fn uuid_to_string(Uuid) -> String
+
+// Errors
+
+// Types and methods
+pub(all) struct AccountId {
+  uuid : Uuid
+}
+pub impl Eq for AccountId
+pub impl Show for AccountId
+
+pub(all) struct AgentId {
+  component_id : ComponentId
+  agent_id : String
+}
+pub impl Eq for AgentId
+pub impl Show for AgentId
+
+pub(all) struct BinaryDescriptor {
+  restrictions : Array[BinaryType]?
+}
+pub impl Eq for BinaryDescriptor
+pub impl Show for BinaryDescriptor
+
+pub(all) enum BinaryReference {
+  Url(String)
+  Inline(BinarySource)
+}
+pub impl Eq for BinaryReference
+pub impl Show for BinaryReference
+
+pub(all) struct BinarySource {
+  data : FixedArray[Byte]
+  binary_type : BinaryType
+}
+pub impl Eq for BinarySource
+pub impl Show for BinarySource
+
+pub(all) struct BinaryType {
+  mime_type : String
+}
+pub impl Eq for BinaryType
+pub impl Show for BinaryType
+
+pub(all) struct ComponentId {
+  uuid : Uuid
+}
+pub impl Eq for ComponentId
+pub impl Show for ComponentId
+
+pub(all) enum DataSchema {
+  Tuple(Array[(String, ElementSchema)])
+  Multimodal(Array[(String, ElementSchema)])
+}
+pub impl Eq for DataSchema
+pub impl Show for DataSchema
+
+pub(all) enum DataValue {
+  Tuple(Array[ElementValue])
+  Multimodal(Array[(String, ElementValue)])
+}
+pub impl Eq for DataValue
+pub impl Show for DataValue
+
+pub(all) enum ElementSchema {
+  ComponentModel(WitType)
+  UnstructuredText(TextDescriptor)
+  UnstructuredBinary(BinaryDescriptor)
+}
+pub impl Eq for ElementSchema
+pub impl Show for ElementSchema
+
+pub(all) enum ElementValue {
+  ComponentModel(WitValue)
+  UnstructuredText(TextReference)
+  UnstructuredBinary(BinaryReference)
+}
+pub impl Eq for ElementValue
+pub impl Show for ElementValue
+
+pub(all) struct NamedWitTypeNode {
+  name : String?
+  owner : String?
+  type_ : WitTypeNode
+}
+pub impl Eq for NamedWitTypeNode
+pub impl Show for NamedWitTypeNode
+
+pub(all) struct PromiseId {
+  agent_id : AgentId
+  oplog_idx : UInt64
+}
+pub impl Eq for PromiseId
+pub impl Show for PromiseId
+
+pub(all) enum ResourceMode {
+  OWNED
+  BORROWED
+}
+pub fn ResourceMode::from(Int) -> Self
+pub fn ResourceMode::ordinal(Self) -> Int
+pub impl Eq for ResourceMode
+pub impl Show for ResourceMode
+
+pub(all) struct TextDescriptor {
+  restrictions : Array[TextType]?
+}
+pub impl Eq for TextDescriptor
+pub impl Show for TextDescriptor
+
+pub(all) enum TextReference {
+  Url(String)
+  Inline(TextSource)
+}
+pub impl Eq for TextReference
+pub impl Show for TextReference
+
+pub(all) struct TextSource {
+  data : String
+  text_type : TextType?
+}
+pub impl Eq for TextSource
+pub impl Show for TextSource
+
+pub(all) struct TextType {
+  language_code : String
+}
+pub impl Eq for TextType
+pub impl Show for TextType
+
+pub(all) struct Uri {
+  value : String
+}
+pub impl Eq for Uri
+pub impl Show for Uri
+
+pub(all) struct Uuid {
+  high_bits : UInt64
+  low_bits : UInt64
+}
+pub impl Eq for Uuid
+pub impl Show for Uuid
+
+pub(all) struct ValueAndType {
+  value : WitValue
+  typ : WitType
+}
+pub impl Eq for ValueAndType
+pub impl Show for ValueAndType
+
+pub(all) enum WitNode {
+  RecordValue(Array[Int])
+  VariantValue((UInt, Int?))
+  EnumValue(UInt)
+  FlagsValue(Array[Bool])
+  TupleValue(Array[Int])
+  ListValue(Array[Int])
+  OptionValue(Int?)
+  ResultValue(Result[Int?, Int?])
+  PrimU8(Byte)
+  PrimU16(UInt)
+  PrimU32(UInt)
+  PrimU64(UInt64)
+  PrimS8(Int)
+  PrimS16(Int)
+  PrimS32(Int)
+  PrimS64(Int64)
+  PrimFloat32(Float)
+  PrimFloat64(Double)
+  PrimChar(Char)
+  PrimBool(Bool)
+  PrimString(String)
+  Handle((Uri, UInt64))
+}
+pub impl Eq for WitNode
+pub impl Show for WitNode
+
+pub(all) struct WitType {
+  nodes : Array[NamedWitTypeNode]
+}
+pub impl Eq for WitType
+pub impl Show for WitType
+
+pub(all) enum WitTypeNode {
+  RecordType(Array[(String, Int)])
+  VariantType(Array[(String, Int?)])
+  EnumType(Array[String])
+  FlagsType(Array[String])
+  TupleType(Array[Int])
+  ListType(Int)
+  OptionType(Int)
+  ResultType((Int?, Int?))
+  PrimU8Type
+  PrimU16Type
+  PrimU32Type
+  PrimU64Type
+  PrimS8Type
+  PrimS16Type
+  PrimS32Type
+  PrimS64Type
+  PrimF32Type
+  PrimF64Type
+  PrimCharType
+  PrimBoolType
+  PrimStringType
+  HandleType((UInt64, ResourceMode))
+}
+pub impl Eq for WitTypeNode
+pub impl Show for WitTypeNode
+
+pub(all) struct WitValue {
+  nodes : Array[WitNode]
+}
+pub impl Eq for WitValue
+pub impl Show for WitValue
+
+// Type aliases
+
+// Traits
+

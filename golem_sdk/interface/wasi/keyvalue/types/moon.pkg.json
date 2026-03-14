@@ -1,0 +1,1 @@
+{ "import": [{ "path" : "golemcloud/golem_sdk/interface/wasi/io/streams", "alias" : "streams" }, { "path" : "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError", "alias" : "wasiKeyvalueError" }], "warn-list": "-44" }

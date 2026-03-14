@@ -1,0 +1,261 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/api/host"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
+}
+
+// Values
+pub fn complete_promise(@types.PromiseId, FixedArray[Byte]) -> Bool
+
+pub fn create_promise() -> @types.PromiseId
+
+pub fn fork() -> ForkResult
+
+pub fn fork_agent(@types.AgentId, @types.AgentId, UInt64) -> Unit
+
+pub fn generate_idempotency_key() -> @types.Uuid
+
+pub fn get_agent_metadata(@types.AgentId) -> AgentMetadata?
+
+pub fn get_idempotence_mode() -> Bool
+
+pub fn get_oplog_index() -> UInt64
+
+pub fn get_oplog_persistence_level() -> PersistenceLevel
+
+pub fn get_promise(@types.PromiseId) -> GetPromiseResult
+
+pub fn get_retry_policy() -> RetryPolicy
+
+pub fn get_self_metadata() -> AgentMetadata
+
+pub fn mark_begin_operation() -> UInt64
+
+pub fn mark_end_operation(UInt64) -> Unit
+
+pub fn oplog_commit(Byte) -> Unit
+
+pub fn resolve_agent_id(String, String) -> @types.AgentId?
+
+pub fn resolve_agent_id_strict(String, String) -> @types.AgentId?
+
+pub fn resolve_component_id(String) -> @types.ComponentId?
+
+pub fn revert_agent(@types.AgentId, RevertAgentTarget) -> Unit
+
+pub fn set_idempotence_mode(Bool) -> Unit
+
+pub fn set_oplog_index(UInt64) -> Unit
+
+pub fn set_oplog_persistence_level(PersistenceLevel) -> Unit
+
+pub fn set_retry_policy(RetryPolicy) -> Unit
+
+pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Unit
+
+// Errors
+
+// Types and methods
+pub(all) struct AgentAllFilter {
+  filters : Array[AgentPropertyFilter]
+}
+pub impl Eq for AgentAllFilter
+pub impl Show for AgentAllFilter
+
+pub(all) struct AgentAnyFilter {
+  filters : Array[AgentAllFilter]
+}
+pub impl Eq for AgentAnyFilter
+pub impl Show for AgentAnyFilter
+
+pub(all) struct AgentConfigVarsFilter {
+  name : String
+  comparator : StringFilterComparator
+  value : String
+}
+pub impl Eq for AgentConfigVarsFilter
+pub impl Show for AgentConfigVarsFilter
+
+pub(all) struct AgentCreatedAtFilter {
+  comparator : FilterComparator
+  value : UInt64
+}
+pub impl Eq for AgentCreatedAtFilter
+pub impl Show for AgentCreatedAtFilter
+
+pub(all) struct AgentEnvFilter {
+  name : String
+  comparator : StringFilterComparator
+  value : String
+}
+pub impl Eq for AgentEnvFilter
+pub impl Show for AgentEnvFilter
+
+pub(all) struct AgentMetadata {
+  agent_id : @types.AgentId
+  args : Array[String]
+  env : Array[(String, String)]
+  config_vars : Array[(String, String)]
+  status : AgentStatus
+  component_revision : UInt64
+  retry_count : UInt64
+  environment_id : EnvironmentId
+}
+pub impl Eq for AgentMetadata
+pub impl Show for AgentMetadata
+
+pub(all) struct AgentNameFilter {
+  comparator : StringFilterComparator
+  value : String
+}
+pub impl Eq for AgentNameFilter
+pub impl Show for AgentNameFilter
+
+pub(all) enum AgentPropertyFilter {
+  Name(AgentNameFilter)
+  Status(AgentStatusFilter)
+  Version(AgentVersionFilter)
+  CreatedAt(AgentCreatedAtFilter)
+  Env(AgentEnvFilter)
+  WasiConfigVars(AgentConfigVarsFilter)
+}
+pub impl Eq for AgentPropertyFilter
+pub impl Show for AgentPropertyFilter
+
+pub(all) enum AgentStatus {
+  RUNNING
+  IDLE
+  SUSPENDED
+  INTERRUPTED
+  RETRYING
+  FAILED
+  EXITED
+}
+pub fn AgentStatus::from(Int) -> Self
+pub fn AgentStatus::ordinal(Self) -> Int
+pub impl Eq for AgentStatus
+pub impl Show for AgentStatus
+
+pub(all) struct AgentStatusFilter {
+  comparator : FilterComparator
+  value : AgentStatus
+}
+pub impl Eq for AgentStatusFilter
+pub impl Show for AgentStatusFilter
+
+pub(all) struct AgentVersionFilter {
+  comparator : FilterComparator
+  value : UInt64
+}
+pub impl Eq for AgentVersionFilter
+pub impl Show for AgentVersionFilter
+
+pub(all) struct EnvironmentId {
+  uuid : @types.Uuid
+}
+pub impl Eq for EnvironmentId
+pub impl Show for EnvironmentId
+
+pub(all) enum FilterComparator {
+  EQUAL
+  NOT_EQUAL
+  GREATER_EQUAL
+  GREATER
+  LESS_EQUAL
+  LESS
+}
+pub fn FilterComparator::from(Int) -> Self
+pub fn FilterComparator::ordinal(Self) -> Int
+pub impl Eq for FilterComparator
+pub impl Show for FilterComparator
+
+pub(all) struct ForkDetails {
+  forked_phantom_id : @types.Uuid
+}
+pub impl Eq for ForkDetails
+pub impl Show for ForkDetails
+
+pub(all) enum ForkResult {
+  Original(ForkDetails)
+  Forked(ForkDetails)
+}
+pub impl Eq for ForkResult
+pub impl Show for ForkResult
+
+pub(all) struct GetAgents(Int)
+pub fn GetAgents::drop(Self) -> Unit
+pub fn GetAgents::get_agents(@types.ComponentId, AgentAnyFilter?, Bool) -> Self
+pub fn GetAgents::get_next(Self) -> Array[AgentMetadata]?
+#deprecated
+pub fn GetAgents::inner(Self) -> Int
+pub impl Eq for GetAgents
+pub impl Show for GetAgents
+
+pub(all) struct GetPromiseResult(Int)
+pub fn GetPromiseResult::drop(Self) -> Unit
+pub fn GetPromiseResult::get(Self) -> FixedArray[Byte]?
+#deprecated
+pub fn GetPromiseResult::inner(Self) -> Int
+pub fn GetPromiseResult::subscribe(Self) -> @poll.Pollable
+pub impl Eq for GetPromiseResult
+pub impl Show for GetPromiseResult
+
+pub(all) enum PersistenceLevel {
+  PersistNothing
+  PersistRemoteSideEffects
+  Smart
+}
+pub impl Eq for PersistenceLevel
+pub impl Show for PersistenceLevel
+
+pub(all) struct RetryPolicy {
+  max_attempts : UInt
+  min_delay : UInt64
+  max_delay : UInt64
+  multiplier : Double
+  max_jitter_factor : Double?
+}
+pub impl Eq for RetryPolicy
+pub impl Show for RetryPolicy
+
+pub(all) enum RevertAgentTarget {
+  RevertToOplogIndex(UInt64)
+  RevertLastInvocations(UInt64)
+}
+pub impl Eq for RevertAgentTarget
+pub impl Show for RevertAgentTarget
+
+pub(all) struct Snapshot {
+  data : FixedArray[Byte]
+  mime_type : String
+}
+pub impl Eq for Snapshot
+pub impl Show for Snapshot
+
+pub(all) enum StringFilterComparator {
+  EQUAL
+  NOT_EQUAL
+  LIKE
+  NOT_LIKE
+  STARTS_WITH
+}
+pub fn StringFilterComparator::from(Int) -> Self
+pub fn StringFilterComparator::ordinal(Self) -> Int
+pub impl Eq for StringFilterComparator
+pub impl Show for StringFilterComparator
+
+pub(all) enum UpdateMode {
+  AUTOMATIC
+  SNAPSHOT_BASED
+}
+pub fn UpdateMode::from(Int) -> Self
+pub fn UpdateMode::ordinal(Self) -> Int
+pub impl Eq for UpdateMode
+pub impl Show for UpdateMode
+
+// Type aliases
+
+// Traits
+

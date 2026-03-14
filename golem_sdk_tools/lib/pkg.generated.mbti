@@ -41,6 +41,8 @@ pub fn param_type_to_type_string(ParamType) -> String
 
 pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentParseError
 
+pub fn parse_duration_seconds(String) -> UInt64 raise AgentParseError
+
 pub fn parse_mbt_source(String) -> Array[FnSignature]
 
 pub fn parse_multimodal_enums(Array[(String, String)]) -> Array[MultimodalEnumInfo] raise AgentParseError
@@ -68,6 +70,7 @@ pub(all) struct AgentInfo {
   name : String
   description : String
   mode : AgentMode
+  snapshotting : AgentSnapshotting
   constructor_params : Array[(String, ParamType)]
   constructor_description : String
   constructor_prompt_hint : String?
@@ -75,6 +78,8 @@ pub(all) struct AgentInfo {
   has_init : Bool
   constructor_schema_options : Map[String, SchemaOptions]
   has_snapshottable : Bool
+  has_json_derives : Bool
+  fields : Array[(String, Bool)]
 }
 pub impl Show for AgentInfo
 
@@ -84,6 +89,15 @@ pub(all) enum AgentMode {
 }
 pub impl Eq for AgentMode
 pub impl Show for AgentMode
+
+pub(all) enum AgentSnapshotting {
+  Disabled
+  Default
+  Periodic(UInt64)
+  EveryNInvocation(UInt)
+}
+pub impl Eq for AgentSnapshotting
+pub impl Show for AgentSnapshotting
 
 pub(all) struct FnSignature {
   gen_name : String

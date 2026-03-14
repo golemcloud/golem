@@ -3,11 +3,11 @@ let logger : @logging.Logger = @logging.with_name("counter")
 
 ///|
 /// Counter agent in MoonBit
-#derive.agent
+#derive.agent(snapshotting="every_n(1)")
 struct Counter {
   name : String
   mut value : UInt64
-}
+} derive(ToJson, @json.FromJson)
 
 ///|
 /// Creates a new counter with the given name

@@ -1,0 +1,1 @@
+{ "import": [{ "path" : "golemcloud/golem_sdk/interface/wasi/clocks/wallClock", "alias" : "wallClock" }], "warn-list": "-44" }

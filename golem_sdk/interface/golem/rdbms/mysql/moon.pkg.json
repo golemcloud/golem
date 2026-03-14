@@ -1,0 +1,1 @@
+{ "import": [{ "path" : "golemcloud/golem_sdk/interface/golem/rdbms/types", "alias" : "types" }], "warn-list": "-44" }

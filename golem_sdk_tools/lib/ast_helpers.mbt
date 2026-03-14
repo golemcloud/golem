@@ -101,6 +101,15 @@ fn make_int_expr(n : Int) -> @syntax.Expr {
 }
 
 ///|
+/// Creates a UInt64 literal expression.
+fn make_uint64_expr(n : UInt64) -> @syntax.Expr {
+  @syntax.Expr::Constant(
+    c=@syntax.Constant::UInt64(n.to_string()),
+    loc=dummy_loc,
+  )
+}
+
+///|
 /// Creates a field access expression (`record.field`).
 fn make_field_access(
   record : @syntax.Expr,
@@ -298,6 +307,24 @@ fn make_record_with_type(
   @syntax.Expr::Record(
     type_name=Some(@syntax.TypeName::{
       name: @syntax.LongIdent::Dot(pkg~, id=type_name),
+      is_object: false,
+      loc: dummy_loc,
+    }),
+    fields=to_list(fields),
+    trailing=@syntax.TrailingMark::Comma,
+    loc=dummy_loc,
+  )
+}
+
+///|
+/// Creates a typed record literal expression with a local type (`Type::{ ... }`).
+fn make_record_with_local_type(
+  type_name : String,
+  fields : Array[@syntax.FieldDef],
+) -> @syntax.Expr {
+  @syntax.Expr::Record(
+    type_name=Some(@syntax.TypeName::{
+      name: @syntax.LongIdent::Ident(name=type_name),
       is_object: false,
       loc: dummy_loc,
     }),

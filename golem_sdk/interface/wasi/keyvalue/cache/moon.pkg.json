@@ -1,0 +1,1 @@
+{ "import": [{ "path" : "golemcloud/golem_sdk/interface/wasi/io/poll", "alias" : "poll" }, { "path" : "golemcloud/golem_sdk/interface/wasi/keyvalue/types", "alias" : "types" }, { "path" : "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError", "alias" : "wasiKeyvalueError" }], "warn-list": "-44" }

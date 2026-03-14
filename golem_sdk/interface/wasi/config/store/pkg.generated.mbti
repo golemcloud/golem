@@ -1,0 +1,22 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/config/store"
+
+// Values
+pub fn get(String) -> Result[String?, Error_]
+
+pub fn get_all() -> Result[Array[(String, String)], Error_]
+
+// Errors
+pub(all) suberror Error_ {
+  Upstream(String)
+  Io(String)
+}
+pub impl Eq for Error_
+pub impl Show for Error_
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

@@ -56,11 +56,19 @@ pub(open) trait Snapshottable {
 }
 
 ///|
+/// Indicates the serialization format used for snapshots.
+pub(all) enum SnapshotFormat {
+  Json
+  Binary
+} derive(Show, Eq)
+
+///|
 /// Result of constructing an agent, containing the raw dispatch interface
 /// and optionally the snapshot interface.
 pub(all) struct ConstructedAgent {
   raw : &RawAgent
   snapshottable : &Snapshottable?
+  snapshot_format : SnapshotFormat?
 }
 
 ///|
@@ -75,12 +83,49 @@ pub(all) struct RegisteredAgent {
 }
 
 ///|
-/// A live agent instance with its name, type definition, and dispatch interface.
+/// A live agent instance with its name, type definition, dispatch interface,
+/// snapshot support, and the principal that initialized it.
 pub(all) struct AgentInstance {
   name : String
   agent_type : @common.AgentType
+  principal : @common.Principal
   interface : &RawAgent
   snapshottable : &Snapshottable?
+  snapshot_format : SnapshotFormat?
+}
+
+///|
+/// Constructs an agent and sets it as the current instance.
+/// Shared logic used by both `initialize` and snapshot-based `load`.
+pub fn construct_and_set_instance(
+  agent_type : String,
+  input : @rpcTypes.DataValue,
+  principal : @common.Principal,
+) -> Result[Unit, @common.AgentError] {
+  match get_registered_agent(agent_type) {
+    None =>
+      panic_with_message(
+        "construct_and_set_instance",
+        "Agent type not found: \{agent_type}",
+      )
+    Some(registered_agent) => {
+      let constructed = (registered_agent.construct)(input)
+      match constructed {
+        Ok(constructed) => {
+          set_agent_instance({
+            name: registered_agent.name,
+            agent_type: registered_agent.agent_type,
+            principal,
+            interface: constructed.raw,
+            snapshottable: constructed.snapshottable,
+            snapshot_format: constructed.snapshot_format,
+          })
+          Ok(())
+        }
+        Err(e) => Err(e)
+      }
+    }
+  }
 }
 
 ///|

@@ -3,45 +3,48 @@ package "golemcloud/golem_sdk/rpc"
 
 import {
   "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/agent/host",
   "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
   "golemcloud/golem_sdk/schema",
 }
 
 // Values
-pub fn[T : @schema.FromElementValue] from_wit_value(@golemcloud/golem_sdk/interface/golem/rpc/types.WitValue) -> T raise @common.AgentError
+pub fn[T : @schema.FromElementValue] from_wit_value(@golemcloud/golem_sdk/interface/golem/core/types.WitValue) -> T raise @common.AgentError
 
-pub fn[T : @golemcloud/golem_sdk/agents/types.MultimodalModality] multimodal_to_wit_value(@golemcloud/golem_sdk/agents/types.Multimodal[T]) -> @golemcloud/golem_sdk/interface/golem/rpc/types.WitValue raise @common.AgentError
+pub fn[T : @golemcloud/golem_sdk/agents/types.MultimodalModality] multimodal_to_wit_value(@golemcloud/golem_sdk/agents/types.Multimodal[T]) -> @golemcloud/golem_sdk/interface/golem/core/types.WitValue raise @common.AgentError
 
-pub fn[T : @schema.ToElementValue] to_wit_value(T) -> @golemcloud/golem_sdk/interface/golem/rpc/types.WitValue raise @common.AgentError
+pub fn[T : @schema.ToElementValue] to_wit_value(T) -> @golemcloud/golem_sdk/interface/golem/core/types.WitValue raise @common.AgentError
 
-pub fn unstructured_binary_to_wit_value(@golemcloud/golem_sdk/agents/types.UnstructuredBinary) -> @golemcloud/golem_sdk/interface/golem/rpc/types.WitValue raise @common.AgentError
+pub fn unstructured_binary_to_wit_value(@golemcloud/golem_sdk/agents/types.UnstructuredBinary) -> @golemcloud/golem_sdk/interface/golem/core/types.WitValue raise @common.AgentError
 
-pub fn unstructured_text_to_wit_value(@golemcloud/golem_sdk/agents/types.UnstructuredText) -> @golemcloud/golem_sdk/interface/golem/rpc/types.WitValue raise @common.AgentError
+pub fn unstructured_text_to_wit_value(@golemcloud/golem_sdk/agents/types.UnstructuredText) -> @golemcloud/golem_sdk/interface/golem/core/types.WitValue raise @common.AgentError
 
-pub fn unwrap_wit_tuple(@golemcloud/golem_sdk/interface/golem/rpc/types.WitValue) -> @golemcloud/golem_sdk/interface/golem/rpc/types.WitValue
+pub fn unwrap_wit_tuple(@golemcloud/golem_sdk/interface/golem/core/types.WitValue) -> @golemcloud/golem_sdk/interface/golem/core/types.WitValue
 
-pub fn[T : @golemcloud/golem_sdk/agents/types.MultimodalModality] wit_value_to_multimodal(@golemcloud/golem_sdk/interface/golem/rpc/types.WitValue) -> @golemcloud/golem_sdk/agents/types.Multimodal[T] raise @common.AgentError
+pub fn[T : @golemcloud/golem_sdk/agents/types.MultimodalModality] wit_value_to_multimodal(@golemcloud/golem_sdk/interface/golem/core/types.WitValue) -> @golemcloud/golem_sdk/agents/types.Multimodal[T] raise @common.AgentError
 
-pub fn wit_value_to_unstructured_binary(@golemcloud/golem_sdk/interface/golem/rpc/types.WitValue) -> @golemcloud/golem_sdk/agents/types.UnstructuredBinary raise @common.AgentError
+pub fn wit_value_to_unstructured_binary(@golemcloud/golem_sdk/interface/golem/core/types.WitValue) -> @golemcloud/golem_sdk/agents/types.UnstructuredBinary raise @common.AgentError
 
-pub fn wit_value_to_unstructured_text(@golemcloud/golem_sdk/interface/golem/rpc/types.WitValue) -> @golemcloud/golem_sdk/agents/types.UnstructuredText raise @common.AgentError
+pub fn wit_value_to_unstructured_text(@golemcloud/golem_sdk/interface/golem/core/types.WitValue) -> @golemcloud/golem_sdk/agents/types.UnstructuredText raise @common.AgentError
 
 // Errors
 
 // Types and methods
 pub(all) struct AgentClient {
-  agent_id : @golemcloud/golem_sdk/interface/golem/rpc/types.AgentId
-  rpc : @golemcloud/golem_sdk/interface/golem/rpc/types.WasmRpc
+  agent_type_name : String
+  constructor_data_value : @golemcloud/golem_sdk/interface/golem/core/types.DataValue
+  phantom_id : @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+  rpc : @host.WasmRpc
 }
 pub fn AgentClient::drop(Self) -> Unit
-pub fn AgentClient::get(String, @common.DataValue) -> Self raise @common.AgentError
-pub fn AgentClient::get_agent_id(Self) -> String
-pub fn AgentClient::get_phantom(String, @common.DataValue, @golemcloud/golem_sdk/interface/golem/rpc/types.Uuid) -> Self raise @common.AgentError
-pub fn AgentClient::invoke(Self, String, Array[@golemcloud/golem_sdk/interface/golem/rpc/types.WitValue]) -> Unit
-pub fn AgentClient::invoke_and_await(Self, String, Array[@golemcloud/golem_sdk/interface/golem/rpc/types.WitValue]) -> @golemcloud/golem_sdk/interface/golem/rpc/types.WitValue
-pub fn AgentClient::new_phantom(String, @common.DataValue) -> Self raise @common.AgentError
-pub fn AgentClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/rpc/types.Uuid? raise @common.AgentError
-pub fn AgentClient::schedule_invocation(Self, @wallClock.Datetime, String, Array[@golemcloud/golem_sdk/interface/golem/rpc/types.WitValue]) -> Unit
+pub fn AgentClient::get(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Self raise @common.AgentError
+pub fn AgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn AgentClient::get_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue, @golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn AgentClient::invoke(Self, String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Unit
+pub fn AgentClient::invoke_and_await(Self, String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> @golemcloud/golem_sdk/interface/golem/core/types.DataValue
+pub fn AgentClient::new_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Self raise @common.AgentError
+pub fn AgentClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
+pub fn AgentClient::schedule_invocation(Self, @wallClock.Datetime, String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Unit
 
 // Type aliases
 

@@ -13,8 +13,14 @@ fn wasmImportMethodPollableBlock(p0 : Int) = "wasi:io/poll@0.2.3" "[method]polla
 fn wasmImportPoll(p0 : Int, p1 : Int, p2 : Int) = "wasi:io/poll@0.2.3" "poll"
 
 ///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
+extern "wasm" fn mbt_ffi_ptr2uint_array(
+  ptr : Int,
+  len : Int,
+) -> FixedArray[UInt] =
+  #|(func (param i32) (param i32) (result i32) (local i32)
+  #| local.get 0 i32.const 8 i32.sub local.tee 2
+  #| local.get 1 call $moonbit.init_array32
+  #| local.get 2)
 
 ///|
 extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
@@ -32,11 +38,5 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 1 i32.const 8 i32.add)
 
 ///|
-extern "wasm" fn mbt_ffi_ptr2uint_array(
-  ptr : Int,
-  len : Int,
-) -> FixedArray[UInt] =
-  #|(func (param i32) (param i32) (result i32) (local i32)
-  #| local.get 0 i32.const 8 i32.sub local.tee 2
-  #| local.get 1 call $moonbit.init_array32
-  #| local.get 2)
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)

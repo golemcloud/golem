@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/schema"
 import {
   "golemcloud/golem_sdk/extractor",
   "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/core/types",
 }
 
 // Values
@@ -15,33 +16,33 @@ pub fn[T : FromExtractor] extract_tuple_element(&@extractor.Extractor, Int) -> T
 
 pub fn extract_variant(&@extractor.Extractor) -> (UInt, &@extractor.Extractor?) raise @common.AgentError
 
-pub fn[T : FromElementValue] from_element_value_as(@common.ElementValue) -> T raise @common.AgentError
+pub fn[T : FromElementValue] from_element_value_as(@types.ElementValue) -> T raise @common.AgentError
 
 pub fn[T : FromExtractor] from_extractor_as(&@extractor.Extractor) -> T raise @common.AgentError
 
-pub fn make_enum_schema(Array[String]) -> @common.ElementSchema
+pub fn make_enum_schema(Array[String]) -> @types.ElementSchema
 
-pub fn make_enum_value(UInt) -> @common.ElementValue
+pub fn make_enum_value(UInt) -> @types.ElementValue
 
-pub fn make_record_schema(Array[(String, @common.ElementSchema)]) -> @common.ElementSchema
+pub fn make_record_schema(Array[(String, @types.ElementSchema)]) -> @types.ElementSchema
 
-pub fn make_record_value(Array[@common.ElementValue]) -> @common.ElementValue raise @common.AgentError
+pub fn make_record_value(Array[@types.ElementValue]) -> @types.ElementValue raise @common.AgentError
 
-pub fn make_tuple_schema(Array[@common.ElementSchema]) -> @common.ElementSchema
+pub fn make_tuple_schema(Array[@types.ElementSchema]) -> @types.ElementSchema
 
-pub fn make_tuple_value(Array[@common.ElementValue]) -> @common.ElementValue raise @common.AgentError
+pub fn make_tuple_value(Array[@types.ElementValue]) -> @types.ElementValue raise @common.AgentError
 
-pub fn make_variant_schema(Array[(String, @common.ElementSchema?)]) -> @common.ElementSchema
+pub fn make_variant_schema(Array[(String, @types.ElementSchema?)]) -> @types.ElementSchema
 
-pub fn make_variant_value(UInt, @common.ElementValue?) -> @common.ElementValue raise @common.AgentError
+pub fn make_variant_value(UInt, @types.ElementValue?) -> @types.ElementValue raise @common.AgentError
 
-pub fn[T : HasElementSchema] schema_of(T) -> @common.ElementSchema
+pub fn[T : HasElementSchema] schema_of(T) -> @types.ElementSchema
 
-pub fn[T : HasElementSchema] schema_of_tag(TypeTag[T]) -> @common.ElementSchema
+pub fn[T : HasElementSchema] schema_of_tag(TypeTag[T]) -> @types.ElementSchema
 
-pub fn[T : HasElementSchema] schema_of_tag_with_options(TypeTag[T], SchemaOptions) -> @common.ElementSchema raise @common.AgentError
+pub fn[T : HasElementSchema] schema_of_tag_with_options(TypeTag[T], SchemaOptions) -> @types.ElementSchema raise @common.AgentError
 
-pub fn[T : ToElementValue] to_element_value_as(T) -> @common.ElementValue raise @common.AgentError
+pub fn[T : ToElementValue] to_element_value_as(T) -> @types.ElementValue raise @common.AgentError
 
 // Errors
 
@@ -60,7 +61,7 @@ pub(all) struct TypeTag[T] {
 
 // Traits
 pub(open) trait FromElementValue {
-  from_element_value(@common.ElementValue) -> Self raise @common.AgentError
+  from_element_value(@types.ElementValue) -> Self raise @common.AgentError
 }
 pub impl FromElementValue for Bool
 pub impl FromElementValue for Byte
@@ -126,7 +127,7 @@ pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromEx
 pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor, T3 : FromExtractor, T4 : FromExtractor, T5 : FromExtractor, T6 : FromExtractor, T7 : FromExtractor, T8 : FromExtractor, T9 : FromExtractor, T10 : FromExtractor, T11 : FromExtractor, T12 : FromExtractor, T13 : FromExtractor, T14 : FromExtractor, T15 : FromExtractor] FromExtractor for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
 
 pub(open) trait HasElementSchema {
-  element_schema() -> @common.ElementSchema
+  element_schema() -> @types.ElementSchema
 }
 pub impl HasElementSchema for Bool
 pub impl HasElementSchema for Byte
@@ -159,7 +160,7 @@ pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3
 pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema, T3 : HasElementSchema, T4 : HasElementSchema, T5 : HasElementSchema, T6 : HasElementSchema, T7 : HasElementSchema, T8 : HasElementSchema, T9 : HasElementSchema, T10 : HasElementSchema, T11 : HasElementSchema, T12 : HasElementSchema, T13 : HasElementSchema, T14 : HasElementSchema, T15 : HasElementSchema] HasElementSchema for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
 
 pub(open) trait ToElementValue {
-  to_element_value(Self) -> @common.ElementValue raise @common.AgentError
+  to_element_value(Self) -> @types.ElementValue raise @common.AgentError
 }
 pub impl ToElementValue for Bool
 pub impl ToElementValue for Byte

@@ -149,6 +149,9 @@ test "generate_agent_registration for simple agent" {
       has_init: false,
       constructor_schema_options: {},
       has_snapshottable: false,
+      has_json_derives: false,
+      snapshotting: Disabled,
+      fields: [],
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -193,8 +196,11 @@ test "generate_agent_registration for simple agent" {
       #|        }
       #|        let name :String = @schema.from_element_value_as(elements[0])
       #|        let agent = Counter::new(name)
-      #|        let constructed = 
-      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        let constructed = @agents.ConstructedAgent::{
+      #|          raw: agent,
+      #|          snapshottable: None,
+      #|          snapshot_format: None,
+      #|        }
       #|        Ok(constructed)
       #|      } catch{
       #|        e => Err(e)
@@ -250,6 +256,9 @@ test "generate_agent_registration with methods" {
       has_init: false,
       constructor_schema_options: {},
       has_snapshottable: false,
+      has_json_derives: false,
+      snapshotting: Disabled,
+      fields: [],
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -325,8 +334,11 @@ test "generate_agent_registration with methods" {
       #|        }
       #|        let name :String = @schema.from_element_value_as(elements[0])
       #|        let agent = Counter::new(name)
-      #|        let constructed = 
-      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        let constructed = @agents.ConstructedAgent::{
+      #|          raw: agent,
+      #|          snapshottable: None,
+      #|          snapshot_format: None,
+      #|        }
       #|        Ok(constructed)
       #|      } catch{
       #|        e => Err(e)
@@ -434,6 +446,9 @@ test "generate_agent_registration with prompt_hints" {
       has_init: false,
       constructor_schema_options: {},
       has_snapshottable: false,
+      has_json_derives: false,
+      snapshotting: Disabled,
+      fields: [],
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -487,8 +502,11 @@ test "generate_agent_registration with prompt_hints" {
       #|        }
       #|        let name :String = @schema.from_element_value_as(elements[0])
       #|        let agent = Counter::new(name)
-      #|        let constructed = 
-      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        let constructed = @agents.ConstructedAgent::{
+      #|          raw: agent,
+      #|          snapshottable: None,
+      #|          snapshot_format: None,
+      #|        }
       #|        Ok(constructed)
       #|      } catch{
       #|        e => Err(e)
@@ -1027,6 +1045,9 @@ test "build_raw_agent_impl for counter-like agent" {
     has_init: false,
     constructor_schema_options: {},
     has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
   }
   let impl_ = build_raw_agent_impl(agent)
   let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
@@ -1256,6 +1277,9 @@ test "generate_agent_registration with cross-package types" {
       has_init: false,
       constructor_schema_options: {},
       has_snapshottable: false,
+      has_json_derives: false,
+      snapshotting: Disabled,
+      fields: [],
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1323,8 +1347,11 @@ test "generate_agent_registration with cross-package types" {
       #|        }
       #|        let config :@types.Config = @schema.from_element_value_as(elements[0])
       #|        let agent = OrderAgent::new(config)
-      #|        let constructed = 
-      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        let constructed = @agents.ConstructedAgent::{
+      #|          raw: agent,
+      #|          snapshottable: None,
+      #|          snapshot_format: None,
+      #|        }
       #|        Ok(constructed)
       #|      } catch{
       #|        e => Err(e)
@@ -1486,6 +1513,9 @@ test "generate_agent_registration with ephemeral mode" {
       has_init: false,
       constructor_schema_options: {},
       has_snapshottable: false,
+      has_json_derives: false,
+      snapshotting: Disabled,
+      fields: [],
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1522,8 +1552,11 @@ test "generate_agent_registration with ephemeral mode" {
       #|          )
       #|        }
       #|        let agent = Worker::new()
-      #|        let constructed = 
-      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        let constructed = @agents.ConstructedAgent::{
+      #|          raw: agent,
+      #|          snapshottable: None,
+      #|          snapshot_format: None,
+      #|        }
       #|        Ok(constructed)
       #|      } catch{
       #|        e => Err(e)
@@ -1604,6 +1637,9 @@ test "generate_agent_registration with multimodal return uses to_data_value" {
       has_init: false,
       constructor_schema_options: {},
       has_snapshottable: false,
+      has_json_derives: false,
+      snapshotting: Disabled,
+      fields: [],
     },
   ]
   let impl_ = build_raw_agent_impl(agents[0])
@@ -1750,4 +1786,500 @@ test "parse_agents detects Snapshottable across files regardless of order" {
   ])
   inspect(agents.length(), content="1")
   inspect(agents[0].has_snapshottable, content="true")
+}
+
+///|
+test "parse_agents with snapshotting disabled" {
+  let content =
+    #|#derive.agent(snapshotting="disabled")
+    #|pub(all) struct MyAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn MyAgent::new() -> MyAgent {
+    #|  { value: "" }
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].snapshotting, content="Disabled")
+}
+
+///|
+test "parse_agents with snapshotting default" {
+  let content =
+    #|#derive.agent(snapshotting="default")
+    #|pub(all) struct MyAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn MyAgent::new() -> MyAgent {
+    #|  { value: "" }
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].snapshotting, content="Default")
+}
+
+///|
+test "parse_agents with snapshotting periodic" {
+  let content =
+    #|#derive.agent(snapshotting="periodic(100)")
+    #|pub(all) struct MyAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn MyAgent::new() -> MyAgent {
+    #|  { value: "" }
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].snapshotting, content="Periodic(100)")
+}
+
+///|
+test "parse_agents with snapshotting every_n" {
+  let content =
+    #|#derive.agent(snapshotting="every_n(5)")
+    #|pub(all) struct MyAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn MyAgent::new() -> MyAgent {
+    #|  { value: "" }
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].snapshotting, content="EveryNInvocation(5)")
+}
+
+///|
+test "parse_agents with ephemeral and snapshotting" {
+  let content =
+    #|#derive.agent("ephemeral", snapshotting="periodic(50)")
+    #|pub(all) struct MyAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn MyAgent::new() -> MyAgent {
+    #|  { value: "" }
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].mode, content="Ephemeral")
+  inspect(agents[0].snapshotting, content="Periodic(50)")
+}
+
+///|
+test "parse_agents with snapshotting periodic human-readable" {
+  let content =
+    #|#derive.agent(snapshotting="periodic(10 minutes)")
+    #|pub(all) struct MyAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn MyAgent::new() -> MyAgent {
+    #|  { value: "" }
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].snapshotting, content="Periodic(600)")
+}
+
+///|
+test "parse_agents with snapshotting periodic compound duration" {
+  let content =
+    #|#derive.agent(snapshotting="periodic(1 hour 30 minutes)")
+    #|pub(all) struct MyAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn MyAgent::new() -> MyAgent {
+    #|  { value: "" }
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].snapshotting, content="Periodic(5400)")
+}
+
+///|
+test "generate_agent_registration with snapshotting periodic" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "Worker",
+      description: "A worker",
+      mode: Durable,
+      snapshotting: Periodic(100),
+      constructor_params: [],
+      constructor_description: "Creates a worker",
+      constructor_prompt_hint: None,
+      methods: [],
+      has_init: false,
+      constructor_schema_options: {},
+      has_snapshottable: false,
+      has_json_derives: false,
+      fields: [],
+    },
+  ]
+  let impls = generate_agent_registration(agents)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  @agents.register_agent({
+      #|    name: "Worker",
+      #|    agent_type: {
+      #|      type_name: "Worker",
+      #|      description: "A worker",
+      #|      source_language: "moonbit",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a worker",
+      #|        prompt_hint: None,
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
+      #|      },
+      #|      methods: [],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
+      #|      http_mount: None,
+      #|      snapshotting: @common.Snapshotting::Enabled(
+      #|        @common.SnapshottingConfig::Periodic(100UL),
+      #|      ),
+      #|      config: [],
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let agent = Worker::new()
+      #|        let constructed = @agents.ConstructedAgent::{
+      #|          raw: agent,
+      #|          snapshottable: None,
+      #|          snapshot_format: None,
+      #|        }
+      #|        Ok(constructed)
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
+      #|}
+      #|
+      #|///|
+      #|impl @agents.RawAgent for Worker with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "generate_agent_registration with snapshotting default" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "Worker",
+      description: "A worker",
+      mode: Durable,
+      snapshotting: Default,
+      constructor_params: [],
+      constructor_description: "Creates a worker",
+      constructor_prompt_hint: None,
+      methods: [],
+      has_init: false,
+      constructor_schema_options: {},
+      has_snapshottable: false,
+      has_json_derives: false,
+      fields: [],
+    },
+  ]
+  let impls = generate_agent_registration(agents)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  @agents.register_agent({
+      #|    name: "Worker",
+      #|    agent_type: {
+      #|      type_name: "Worker",
+      #|      description: "A worker",
+      #|      source_language: "moonbit",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a worker",
+      #|        prompt_hint: None,
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
+      #|      },
+      #|      methods: [],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
+      #|      http_mount: None,
+      #|      snapshotting: @common.Snapshotting::Enabled(
+      #|        @common.SnapshottingConfig::Default,
+      #|      ),
+      #|      config: [],
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let agent = Worker::new()
+      #|        let constructed = @agents.ConstructedAgent::{
+      #|          raw: agent,
+      #|          snapshottable: None,
+      #|          snapshot_format: None,
+      #|        }
+      #|        Ok(constructed)
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
+      #|}
+      #|
+      #|///|
+      #|impl @agents.RawAgent for Worker with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "generate_agent_registration with snapshotting every_n" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "Worker",
+      description: "A worker",
+      mode: Durable,
+      snapshotting: EveryNInvocation(5),
+      constructor_params: [],
+      constructor_description: "Creates a worker",
+      constructor_prompt_hint: None,
+      methods: [],
+      has_init: false,
+      constructor_schema_options: {},
+      has_snapshottable: false,
+      has_json_derives: false,
+      fields: [],
+    },
+  ]
+  let impls = generate_agent_registration(agents)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  @agents.register_agent({
+      #|    name: "Worker",
+      #|    agent_type: {
+      #|      type_name: "Worker",
+      #|      description: "A worker",
+      #|      source_language: "moonbit",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a worker",
+      #|        prompt_hint: None,
+      #|        input_schema: @rpcTypes.DataSchema::Tuple([]),
+      #|      },
+      #|      methods: [],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
+      #|      http_mount: None,
+      #|      snapshotting: @common.Snapshotting::Enabled(
+      #|        @common.SnapshottingConfig::EveryNInvocation(5U),
+      #|      ),
+      #|      config: [],
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let agent = Worker::new()
+      #|        let constructed = @agents.ConstructedAgent::{
+      #|          raw: agent,
+      #|          snapshottable: None,
+      #|          snapshot_format: None,
+      #|        }
+      #|        Ok(constructed)
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
+      #|}
+      #|
+      #|///|
+      #|impl @agents.RawAgent for Worker with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "parse_duration_seconds plain number" {
+  inspect(parse_duration_seconds("100"), content="100")
+}
+
+///|
+test "parse_duration_seconds seconds" {
+  inspect(parse_duration_seconds("30 seconds"), content="30")
+  inspect(parse_duration_seconds("1 second"), content="1")
+  inspect(parse_duration_seconds("5 secs"), content="5")
+  inspect(parse_duration_seconds("10 sec"), content="10")
+  inspect(parse_duration_seconds("2 s"), content="2")
+}
+
+///|
+test "parse_duration_seconds minutes" {
+  inspect(parse_duration_seconds("10 minutes"), content="600")
+  inspect(parse_duration_seconds("1 minute"), content="60")
+  inspect(parse_duration_seconds("5 mins"), content="300")
+  inspect(parse_duration_seconds("3 min"), content="180")
+  inspect(parse_duration_seconds("2 m"), content="120")
+}
+
+///|
+test "parse_duration_seconds hours" {
+  inspect(parse_duration_seconds("2 hours"), content="7200")
+  inspect(parse_duration_seconds("1 hour"), content="3600")
+  inspect(parse_duration_seconds("3 hrs"), content="10800")
+  inspect(parse_duration_seconds("1 hr"), content="3600")
+  inspect(parse_duration_seconds("1 h"), content="3600")
+}
+
+///|
+test "parse_duration_seconds days" {
+  inspect(parse_duration_seconds("1 day"), content="86400")
+  inspect(parse_duration_seconds("2 days"), content="172800")
+  inspect(parse_duration_seconds("1 d"), content="86400")
+}
+
+///|
+test "parse_agents detects derive(ToJson, FromJson)" {
+  let content =
+    #|///| A counter agent
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  name : String
+    #|  mut value : UInt64
+    #|} derive(ToJson, FromJson)
+    #|
+    #|///| Creates a new counter
+    #|pub fn Counter::new(name : String) -> Counter {
+    #|  { name, value: 0 }
+    #|}
+  let agents = parse_agents([("counter.mbt", content)])
+  inspect(agents.length(), content="1")
+  inspect(agents[0].has_json_derives, content="true")
+  inspect(agents[0].has_snapshottable, content="false")
+}
+
+///|
+test "parse_agents detects derive(ToJson, @json.FromJson)" {
+  let content =
+    #|///| A counter agent
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  name : String
+    #|  mut value : UInt64
+    #|} derive(ToJson, @json.FromJson)
+    #|
+    #|///| Creates a new counter
+    #|pub fn Counter::new(name : String) -> Counter {
+    #|  { name, value: 0 }
+    #|}
+  let agents = parse_agents([("counter.mbt", content)])
+  inspect(agents.length(), content="1")
+  inspect(agents[0].has_json_derives, content="true")
+}
+
+///|
+test "parse_agents no json derives without derive annotation" {
+  let content =
+    #|///| A counter agent
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  name : String
+    #|  mut value : UInt64
+    #|}
+    #|
+    #|///| Creates a new counter
+    #|pub fn Counter::new(name : String) -> Counter {
+    #|  { name, value: 0 }
+    #|}
+  let agents = parse_agents([("counter.mbt", content)])
+  inspect(agents.length(), content="1")
+  inspect(agents[0].has_json_derives, content="false")
+}
+
+///|
+test "generate_agent_registration with json derives generates direct Snapshottable" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "Counter",
+      description: "A counter agent",
+      mode: Durable,
+      constructor_params: [("name", Simple("String"))],
+      constructor_description: "Creates a new counter",
+      constructor_prompt_hint: None,
+      methods: [],
+      has_init: false,
+      constructor_schema_options: {},
+      has_snapshottable: false,
+      has_json_derives: true,
+      snapshotting: Disabled,
+      fields: [("name", false), ("value", true)],
+    },
+  ]
+  let impls = generate_agent_registration(agents)
+  let output = @formatter.impls_to_string(impls)
+  // Check that the output contains direct Snapshottable impl (not SnapshotCell)
+  inspect(output.contains("SnapshotCell"), content="false")
+  inspect(output.contains("Snapshottable for Counter"), content="true")
+  inspect(output.contains("snapshot_format"), content="true")
+  inspect(output.contains("Json"), content="true")
+  // Only mut fields are assigned in load_snapshot
+  inspect(output.contains("self.name = new_val.name"), content="false")
+  inspect(output.contains("self.value = new_val.value"), content="true")
+}
+
+///|
+test "parse_duration_seconds compound" {
+  inspect(parse_duration_seconds("1 hour 30 minutes"), content="5400")
+  inspect(
+    parse_duration_seconds("1 day 2 hours 30 minutes 15 seconds"),
+    content="95415",
+  )
+  inspect(parse_duration_seconds("2 hours 0 seconds"), content="7200")
 }

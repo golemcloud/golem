@@ -1,0 +1,67 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/api/context"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+}
+
+// Values
+pub fn allow_forwarding_trace_context_headers(Bool) -> Bool
+
+pub fn current_context() -> InvocationContext
+
+pub fn start_span(String) -> Span
+
+// Errors
+
+// Types and methods
+pub(all) struct Attribute {
+  key : String
+  value : AttributeValue
+}
+pub impl Eq for Attribute
+pub impl Show for Attribute
+
+pub(all) struct AttributeChain {
+  key : String
+  values : Array[AttributeValue]
+}
+pub impl Eq for AttributeChain
+pub impl Show for AttributeChain
+
+pub(all) enum AttributeValue {
+  String(String)
+}
+pub impl Eq for AttributeValue
+pub impl Show for AttributeValue
+
+pub(all) struct InvocationContext(Int)
+pub fn InvocationContext::drop(Self) -> Unit
+pub fn InvocationContext::get_attribute(Self, String, Bool) -> AttributeValue?
+pub fn InvocationContext::get_attribute_chain(Self, String) -> Array[AttributeValue]
+pub fn InvocationContext::get_attribute_chains(Self) -> Array[AttributeChain]
+pub fn InvocationContext::get_attributes(Self, Bool) -> Array[Attribute]
+#deprecated
+pub fn InvocationContext::inner(Self) -> Int
+pub fn InvocationContext::parent(Self) -> Self?
+pub fn InvocationContext::span_id(Self) -> String
+pub fn InvocationContext::trace_context_headers(Self) -> Array[(String, String)]
+pub fn InvocationContext::trace_id(Self) -> String
+pub impl Eq for InvocationContext
+pub impl Show for InvocationContext
+
+pub(all) struct Span(Int)
+pub fn Span::drop(Self) -> Unit
+pub fn Span::finish(Self) -> Unit
+#deprecated
+pub fn Span::inner(Self) -> Int
+pub fn Span::set_attribute(Self, String, AttributeValue) -> Unit
+pub fn Span::set_attributes(Self, Array[Attribute]) -> Unit
+pub fn Span::started_at(Self) -> @wallClock.Datetime
+pub impl Eq for Span
+pub impl Show for Span
+
+// Type aliases
+
+// Traits
+

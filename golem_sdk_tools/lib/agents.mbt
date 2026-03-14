@@ -64,11 +64,21 @@ pub(all) enum AgentMode {
 } derive(Show, Eq)
 
 ///|
+/// Snapshotting configuration parsed from `#derive.agent` attributes.
+pub(all) enum AgentSnapshotting {
+  Disabled
+  Default
+  Periodic(UInt64)
+  EveryNInvocation(UInt)
+} derive(Show, Eq)
+
+///|
 /// Complete parsed information about an agent, including its constructor, methods, and mode.
 pub(all) struct AgentInfo {
   name : String
   description : String
   mode : AgentMode
+  snapshotting : AgentSnapshotting
   constructor_params : Array[(String, ParamType)]
   constructor_description : String
   constructor_prompt_hint : String?
@@ -76,6 +86,8 @@ pub(all) struct AgentInfo {
   has_init : Bool
   constructor_schema_options : Map[String, SchemaOptions]
   has_snapshottable : Bool
+  has_json_derives : Bool
+  fields : Array[(String, Bool)]
 } derive(Show)
 
 ///|
@@ -206,6 +218,208 @@ fn extract_agent_mode(
     }
   })
   result
+}
+
+///|
+/// Extracts the snapshotting configuration from `#derive.agent` attributes.
+/// Recognized labeled prop: `snapshotting="disabled"`, `snapshotting="default"`,
+/// `snapshotting="periodic(N)"`, `snapshotting="every_n(N)"`.
+fn extract_agent_snapshotting(
+  attrs : @list.List[@attribute.Attribute],
+) -> AgentSnapshotting raise AgentParseError {
+  let mut result = Disabled
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "agent" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Labeled("snapshotting", String(s)) => {
+              let parsed = parse_snapshotting_value(s) catch {
+                e => abort(e.to_string())
+              }
+              result = parsed
+            }
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
+/// Parses a snapshotting value string like "disabled", "default",
+/// "periodic(100)", "periodic(10 minutes)", "every_n(5)".
+fn parse_snapshotting_value(
+  s : String,
+) -> AgentSnapshotting raise AgentParseError {
+  if s == "disabled" {
+    Disabled
+  } else if s == "default" {
+    Default
+  } else if s.has_prefix("periodic(") && s.has_suffix(")") {
+    let inner = s.unsafe_substring(
+      start="periodic(".length(),
+      end=s.length() - 1,
+    )
+    let seconds = parse_duration_seconds(inner) catch {
+      e => raise AgentParseError(e.to_string())
+    }
+    Periodic(seconds)
+  } else if s.has_prefix("every_n(") && s.has_suffix(")") {
+    let num_str = s.unsafe_substring(
+      start="every_n(".length(),
+      end=s.length() - 1,
+    )
+    match parse_uint(num_str) {
+      Some(n) => EveryNInvocation(n)
+      None =>
+        raise AgentParseError(
+          "Invalid every_n snapshotting value: '\{num_str}' is not a valid unsigned integer",
+        )
+    }
+  } else {
+    raise AgentParseError(
+      "Unknown snapshotting value '\{s}'. Expected: disabled, default, periodic(<duration>), or every_n(N)",
+    )
+  }
+}
+
+///|
+/// Parses a human-readable duration string into seconds (UInt64).
+///
+/// Supported formats:
+/// - Plain number: `"100"` → 100 seconds
+/// - Single unit: `"10 minutes"` → 600 seconds
+/// - Multiple units: `"1 hour 30 minutes"` → 5400 seconds
+///
+/// Supported units (singular and plural):
+/// `s`, `sec`, `secs`, `second`, `seconds`,
+/// `m`, `min`, `mins`, `minute`, `minutes`,
+/// `h`, `hr`, `hrs`, `hour`, `hours`,
+/// `d`, `day`, `days`.
+pub fn parse_duration_seconds(s : String) -> UInt64 raise AgentParseError {
+  let trimmed = s.trim().to_string()
+  // Try plain number first
+  match parse_uint64(trimmed) {
+    Some(n) => return n
+    None => ()
+  }
+  // Parse as "<number> <unit> [<number> <unit> ...]"
+  let tokens = split_whitespace(trimmed)
+  if tokens.length() == 0 {
+    raise AgentParseError("Empty duration string")
+  }
+  if tokens.length() % 2 != 0 {
+    raise AgentParseError(
+      "Invalid duration '\{trimmed}': expected '<number> <unit>' pairs (e.g. '10 minutes', '1 hour 30 seconds')",
+    )
+  }
+  let mut total : UInt64 = 0
+  let mut i = 0
+  while i < tokens.length() {
+    let num_str = tokens[i]
+    let unit_str = tokens[i + 1]
+    let num = match parse_uint64(num_str) {
+      Some(n) => n
+      None =>
+        raise AgentParseError(
+          "Invalid duration: '\{num_str}' is not a valid number",
+        )
+    }
+    let multiplier = duration_unit_to_seconds(unit_str) catch {
+      e => raise AgentParseError(e.to_string())
+    }
+    total = total + num * multiplier
+    i = i + 2
+  }
+  total
+}
+
+///|
+/// Returns the number of seconds for a given time unit string.
+fn duration_unit_to_seconds(unit : String) -> UInt64 raise AgentParseError {
+  if unit == "s" ||
+    unit == "sec" ||
+    unit == "secs" ||
+    unit == "second" ||
+    unit == "seconds" {
+    1UL
+  } else if unit == "m" ||
+    unit == "min" ||
+    unit == "mins" ||
+    unit == "minute" ||
+    unit == "minutes" {
+    60UL
+  } else if unit == "h" ||
+    unit == "hr" ||
+    unit == "hrs" ||
+    unit == "hour" ||
+    unit == "hours" {
+    3600UL
+  } else if unit == "d" || unit == "day" || unit == "days" {
+    86400UL
+  } else {
+    raise AgentParseError(
+      "Unknown duration unit '\{unit}'. Expected: s/sec/second(s), m/min/minute(s), h/hr/hour(s), d/day(s)",
+    )
+  }
+}
+
+///|
+/// Splits a string by whitespace into non-empty tokens.
+fn split_whitespace(s : String) -> Array[String] {
+  let tokens : Array[String] = []
+  let buf = StringBuilder::new()
+  for ch in s {
+    if ch == ' ' || ch == '\t' {
+      if buf.to_string().length() > 0 {
+        tokens.push(buf.to_string())
+        buf.reset()
+      }
+    } else {
+      buf.write_char(ch)
+    }
+  }
+  if buf.to_string().length() > 0 {
+    tokens.push(buf.to_string())
+  }
+  tokens
+}
+
+///|
+/// Parses a decimal string as a UInt64. Returns None if the string is empty or contains non-digits.
+fn parse_uint64(s : String) -> UInt64? {
+  if s.length() == 0 {
+    return None
+  }
+  let mut result : UInt64 = 0
+  for ch in s {
+    if ch >= '0' && ch <= '9' {
+      result = result * 10 + (ch.to_int() - '0'.to_int()).to_uint64()
+    } else {
+      return None
+    }
+  }
+  Some(result)
+}
+
+///|
+/// Parses a decimal string as a UInt. Returns None if the string is empty or contains non-digits.
+fn parse_uint(s : String) -> UInt? {
+  if s.length() == 0 {
+    return None
+  }
+  let mut result : UInt = 0
+  for ch in s {
+    if ch >= '0' && ch <= '9' {
+      result = result * 10 + (ch.to_int() - '0'.to_int()).reinterpret_as_uint()
+    } else {
+      return None
+    }
+  }
+  Some(result)
 }
 
 ///|
@@ -440,12 +654,15 @@ pub fn parse_agents(
 ) -> Array[AgentInfo] raise AgentParseError {
   let agent_names : Map[String, String] = {}
   let agent_modes : Map[String, AgentMode] = {}
+  let agent_snapshotting : Map[String, AgentSnapshotting] = {}
   let agent_constructors : Map[
     String,
     (Array[(String, ParamType)], String, String?, Map[String, SchemaOptions]),
   ] = {}
   let agent_methods : Map[String, Array[MethodInfo]] = {}
   let agent_snapshottable : Map[String, Bool] = {}
+  let agent_json_derives : Map[String, Bool] = {}
+  let agent_fields : Map[String, Array[(String, Bool)]] = {}
   let mut has_init = false
   // Parse all files first, then run passes over all AST nodes
   // to avoid file-ordering dependencies
@@ -471,9 +688,43 @@ pub fn parse_agents(
           let description = extract_doc_string(type_decl.doc)
           let desc = if description == "" { name } else { description }
           let mode = extract_agent_mode(type_decl.attrs) catch { _ => Durable }
+          let snapshotting = extract_agent_snapshotting(type_decl.attrs) catch {
+            _ => Disabled
+          }
           agent_names[name] = desc
           agent_modes[name] = mode
+          agent_snapshotting[name] = snapshotting
           agent_methods[name] = []
+          // Check for derive(ToJson) and derive(FromJson)
+          let mut has_to_json = false
+          let mut has_from_json = false
+          type_decl.deriving.each(fn(d) {
+            match d.type_name.name {
+              Ident(name~) =>
+                if name == "ToJson" {
+                  has_to_json = true
+                } else if name == "FromJson" {
+                  has_from_json = true
+                }
+              Dot(id~, ..) =>
+                if id == "FromJson" {
+                  has_from_json = true
+                } else if id == "ToJson" {
+                  has_to_json = true
+                }
+            }
+          })
+          agent_json_derives[name] = has_to_json && has_from_json
+          // Extract struct field names and mutability
+          let field_info : Array[(String, Bool)] = []
+          match type_decl.components {
+            Record(fields~, ..) =>
+              fields.each(fn(field) {
+                field_info.push((field.name.label, field.mut_))
+              })
+            _ => ()
+          }
+          agent_fields[name] = field_info
         }
       }
       _ => ()
@@ -596,6 +847,7 @@ pub fn parse_agents(
           name,
           description,
           mode: agent_modes.get(name).unwrap_or(Durable),
+          snapshotting: agent_snapshotting.get(name).unwrap_or(Disabled),
           constructor_params: params,
           constructor_description: ctor_desc,
           constructor_prompt_hint: ctor_hint,
@@ -603,6 +855,8 @@ pub fn parse_agents(
           has_init,
           constructor_schema_options: ctor_restrictions,
           has_snapshottable: agent_snapshottable.get(name).unwrap_or(false),
+          has_json_derives: agent_json_derives.get(name).unwrap_or(false),
+          fields: agent_fields.get(name).unwrap_or([]),
         })
       None => raise AgentParseError("Agent '\{name}' has no ::new constructor")
     }

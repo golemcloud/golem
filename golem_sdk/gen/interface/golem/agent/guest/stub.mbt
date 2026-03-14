@@ -4,35 +4,14 @@
 pub fn initialize(
   agent_type : String,
   input : @types.DataValue,
-  _principal : @common.Principal,
+  principal : @common.Principal,
 ) -> Result[Unit, @common.AgentError] {
-  if not(@agents.get_agent_instance().is_empty()) {
+  if @agents.get_agent_instance() is Some(_) {
     @agents.panic_with_message(
       "initialize", "Agent instance is already initialized",
     )
   } else {
-    match @agents.get_registered_agent(agent_type) {
-      None =>
-        @agents.panic_with_message(
-          "initialize",
-          "Agent type not found: \{agent_type}",
-        )
-      Some(registered_agent) => {
-        let constructed = (registered_agent.construct)(input)
-        match constructed {
-          Ok(constructed) => {
-            @agents.set_agent_instance({
-              name: registered_agent.name,
-              agent_type: registered_agent.agent_type,
-              interface: constructed.raw,
-              snapshottable: constructed.snapshottable,
-            })
-            Ok(())
-          }
-          Err(e) => Err(e)
-        }
-      }
-    }
+    @agents.construct_and_set_instance(agent_type, input, principal)
   }
 }
 

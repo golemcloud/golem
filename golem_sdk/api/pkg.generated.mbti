@@ -3,14 +3,14 @@ package "golemcloud/golem_sdk/api"
 
 import {
   "golemcloud/golem_sdk/interface/golem/api/host",
-  "golemcloud/golem_sdk/interface/golem/rpc/types",
+  "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/io/poll",
 }
 
 // Values
-pub fn complete_promise(@host.PromiseId, Bytes) -> Bool
+pub fn complete_promise(@types.PromiseId, Bytes) -> Bool
 
-pub fn create_promise() -> @host.PromiseId
+pub fn create_promise() -> @types.PromiseId
 
 pub fn fork() -> @host.ForkResult
 
@@ -30,7 +30,7 @@ pub fn get_oplog_index() -> UInt64
 
 pub fn get_oplog_persistence_level() -> @host.PersistenceLevel
 
-pub fn get_promise(@host.PromiseId) -> PromiseResult
+pub fn get_promise(@types.PromiseId) -> PromiseResult
 
 pub fn get_retry_policy() -> @host.RetryPolicy
 
@@ -86,8 +86,6 @@ pub fn PromiseResult::get(Self) -> Bytes?
 pub fn PromiseResult::subscribe(Self) -> @poll.Pollable
 
 // Type aliases
-pub using @host {type AccountId}
-
 pub using @host {type AgentAllFilter}
 
 pub using @host {type AgentAnyFilter}
@@ -122,7 +120,7 @@ pub using @host {type PersistenceLevel}
 
 pub using @poll {type Pollable}
 
-pub using @host {type PromiseId}
+pub using @types {type PromiseId}
 
 pub using @host {type RetryPolicy}
 

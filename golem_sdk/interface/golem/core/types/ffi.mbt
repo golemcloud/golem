@@ -7,8 +7,17 @@ fn wasmImportParseUuid(p0 : Int, p1 : Int, p2 : Int) = "golem:core/types@1.5.0" 
 fn wasmImportUuidToString(p0 : Int64, p1 : Int64, p2 : Int) = "golem:core/types@1.5.0" "uuid-to-string"
 
 ///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
+///|
+extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
+  #|(func (param i32) (result i64) local.get 0 i64.load)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
@@ -22,11 +31,6 @@ extern "wasm" fn mbt_ffi_free(position : Int) =
   #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
 
 ///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
-
-///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
@@ -34,9 +38,5 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 1 i32.const 8 i32.add)
 
 ///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
-extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
-  #|(func (param i32) (result i64) local.get 0 i64.load)
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)

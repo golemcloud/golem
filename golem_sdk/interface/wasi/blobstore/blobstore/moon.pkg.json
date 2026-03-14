@@ -1,0 +1,1 @@
+{ "import": [{ "path" : "golemcloud/golem_sdk/interface/wasi/blobstore/container", "alias" : "container" }, { "path" : "golemcloud/golem_sdk/interface/wasi/blobstore/types", "alias" : "types" }], "warn-list": "-44" }

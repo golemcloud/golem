@@ -8,7 +8,7 @@ import {
 }
 
 // Values
-pub fn[T : MultimodalModality] multimodal_schema_of_tag(@schema.TypeTag[T]) -> Array[(String, @common.ElementSchema)]
+pub fn[T : MultimodalModality] multimodal_schema_of_tag(@schema.TypeTag[T]) -> Array[(String, @golemcloud/golem_sdk/interface/golem/core/types.ElementSchema)]
 
 // Errors
 
@@ -18,16 +18,16 @@ pub(all) enum CustomModality[T] {
   Binary(UnstructuredBinary)
   Structured(T)
 }
+pub impl[T : @schema.HasElementSchema + @schema.ToElementValue + @schema.FromElementValue] MultimodalModality for CustomModality[T]
 pub impl[T : Eq] Eq for CustomModality[T]
 pub impl[T : Show] Show for CustomModality[T]
-pub impl[T : @schema.HasElementSchema + @schema.ToElementValue + @schema.FromElementValue] MultimodalModality for CustomModality[T]
 
 pub(all) struct Multimodal[T] {
   items : Array[T]
 }
-pub fn[T : MultimodalModality] Multimodal::from_data_value(@common.DataValue) -> Self[T] raise @common.AgentError
+pub fn[T : MultimodalModality] Multimodal::from_data_value(@golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Self[T] raise @common.AgentError
 pub fn[T] Multimodal::new(Array[T]) -> Self[T]
-pub fn[T : MultimodalModality] Multimodal::to_data_value(Self[T]) -> @common.DataValue raise @common.AgentError
+pub fn[T : MultimodalModality] Multimodal::to_data_value(Self[T]) -> @golemcloud/golem_sdk/interface/golem/core/types.DataValue raise @common.AgentError
 pub impl[T : Eq] Eq for Multimodal[T]
 pub impl[T : Show] Show for Multimodal[T]
 
@@ -35,9 +35,9 @@ pub(all) enum TextOrBinary {
   Text(UnstructuredText)
   Binary(UnstructuredBinary)
 }
+pub impl MultimodalModality for TextOrBinary
 pub impl Eq for TextOrBinary
 pub impl Show for TextOrBinary
-pub impl MultimodalModality for TextOrBinary
 
 pub(all) enum UnstructuredBinary {
   Url(String)
@@ -45,12 +45,12 @@ pub(all) enum UnstructuredBinary {
 }
 pub fn UnstructuredBinary::from_inline(Bytes, mime_type~ : String) -> Self
 pub fn UnstructuredBinary::from_url(String) -> Self
-pub impl Eq for UnstructuredBinary
-pub impl Show for UnstructuredBinary
 pub impl @schema.FromElementValue for UnstructuredBinary
 pub impl @schema.FromExtractor for UnstructuredBinary
 pub impl @schema.HasElementSchema for UnstructuredBinary
 pub impl @schema.ToElementValue for UnstructuredBinary
+pub impl Eq for UnstructuredBinary
+pub impl Show for UnstructuredBinary
 
 pub(all) enum UnstructuredText {
   Url(String)
@@ -58,19 +58,19 @@ pub(all) enum UnstructuredText {
 }
 pub fn UnstructuredText::from_inline(String, language_code? : String?) -> Self
 pub fn UnstructuredText::from_url(String) -> Self
-pub impl Eq for UnstructuredText
-pub impl Show for UnstructuredText
 pub impl @schema.FromElementValue for UnstructuredText
 pub impl @schema.FromExtractor for UnstructuredText
 pub impl @schema.HasElementSchema for UnstructuredText
 pub impl @schema.ToElementValue for UnstructuredText
+pub impl Eq for UnstructuredText
+pub impl Show for UnstructuredText
 
 // Type aliases
 
 // Traits
 pub(open) trait MultimodalModality {
-  multimodal_schema() -> Array[(String, @common.ElementSchema)]
-  to_named_element(Self) -> (String, @common.ElementValue) raise @common.AgentError
-  from_named_element(String, @common.ElementValue) -> Self raise @common.AgentError
+  multimodal_schema() -> Array[(String, @golemcloud/golem_sdk/interface/golem/core/types.ElementSchema)]
+  to_named_element(Self) -> (String, @golemcloud/golem_sdk/interface/golem/core/types.ElementValue) raise @common.AgentError
+  from_named_element(String, @golemcloud/golem_sdk/interface/golem/core/types.ElementValue) -> Self raise @common.AgentError
 }
 

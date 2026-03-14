@@ -28,6 +28,9 @@ test "generate_client_code - counter agent with no-arg methods" {
     has_init: false,
     constructor_schema_options: {},
     has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
@@ -198,6 +201,9 @@ test "generate_client_code - agent with unstructured text param and return" {
     has_init: false,
     constructor_schema_options: {},
     has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
@@ -249,6 +255,9 @@ test "generate_client_code - agent with multimodal param" {
     has_init: false,
     constructor_schema_options: {},
     has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
@@ -278,6 +287,9 @@ test "generate_client_code - agent with multimodal constructor" {
     has_init: false,
     constructor_schema_options: {},
     has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
@@ -309,6 +321,9 @@ test "generate_client_code - agent with params" {
     has_init: false,
     constructor_schema_options: {},
     has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)

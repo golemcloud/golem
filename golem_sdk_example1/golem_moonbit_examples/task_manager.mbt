@@ -5,7 +5,7 @@ pub(all) enum Priority {
   Low
   Medium
   High
-} derive(Eq)
+} derive(Eq, ToJson, @json.FromJson)
 
 ///|
 /// Information about a task
@@ -14,7 +14,7 @@ pub(all) struct TaskInfo {
   title : String
   priority : Priority
   description : String?
-}
+} derive(ToJson, @json.FromJson)
 
 ///|
 fn priority_to_string(p : Priority) -> String {
@@ -29,8 +29,8 @@ fn priority_to_string(p : Priority) -> String {
 /// A task management agent
 #derive.agent
 struct TaskManager {
-  tasks : Array[TaskInfo]
-}
+  mut tasks : Array[TaskInfo]
+} derive(ToJson, @json.FromJson)
 
 ///|
 let task_logger : @logging.Logger = @logging.with_name("task-manager")

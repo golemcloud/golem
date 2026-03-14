@@ -1,0 +1,67 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/durability/durability"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/api/host",
+  "golemcloud/golem_sdk/interface/golem/api/oplog",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
+}
+
+// Values
+pub fn begin_durable_function(@oplog.WrappedFunctionType) -> UInt64
+
+pub fn current_durable_execution_state() -> DurableExecutionState
+
+pub fn end_durable_function(@oplog.WrappedFunctionType, UInt64, Bool) -> Unit
+
+pub fn observe_function_call(String, String) -> Unit
+
+pub fn persist_durable_function_invocation(String, @types.ValueAndType, @types.ValueAndType, @oplog.WrappedFunctionType) -> Unit
+
+pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionInvocation
+
+// Errors
+
+// Types and methods
+pub(all) struct DurableExecutionState {
+  is_live : Bool
+  persistence_level : @host.PersistenceLevel
+}
+pub impl Eq for DurableExecutionState
+pub impl Show for DurableExecutionState
+
+pub(all) struct LazyInitializedPollable(Int)
+pub fn LazyInitializedPollable::drop(Self) -> Unit
+#deprecated
+pub fn LazyInitializedPollable::inner(Self) -> Int
+pub fn LazyInitializedPollable::lazy_initialized_pollable() -> Self
+pub fn LazyInitializedPollable::set(Self, @poll.Pollable) -> Unit
+pub fn LazyInitializedPollable::subscribe(Self) -> @poll.Pollable
+pub impl Eq for LazyInitializedPollable
+pub impl Show for LazyInitializedPollable
+
+pub(all) enum OplogEntryVersion {
+  V1
+  V2
+}
+pub fn OplogEntryVersion::from(Int) -> Self
+pub fn OplogEntryVersion::ordinal(Self) -> Int
+pub impl Eq for OplogEntryVersion
+pub impl Show for OplogEntryVersion
+
+pub(all) struct PersistedDurableFunctionInvocation {
+  timestamp : @wallClock.Datetime
+  function_name : String
+  response : @types.ValueAndType
+  function_type : @oplog.WrappedFunctionType
+  entry_version : OplogEntryVersion
+}
+pub impl Eq for PersistedDurableFunctionInvocation
+pub impl Show for PersistedDurableFunctionInvocation
+
+// Type aliases
+
+// Traits
+

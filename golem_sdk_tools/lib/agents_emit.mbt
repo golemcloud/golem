@@ -150,24 +150,32 @@ fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
     make_ident_expr(param.0)
   })
   let new_call = make_apply(make_method_ref(agent.name, "new"), new_args)
-  let snapshottable_expr = if agent.has_snapshottable {
-    make_apply(make_constr_no_args("Some"), [make_ident_expr("agent")])
+  let use_auto_json = agent.has_json_derives && not(agent.has_snapshottable)
+  let (snapshottable_expr, snapshot_format_expr) = if agent.has_snapshottable ||
+    use_auto_json {
+    // Both manual Snapshottable and auto-JSON: agent itself implements Snapshottable
+    let format = if agent.has_snapshottable { "Binary" } else { "Json" }
+    (
+      make_apply(make_constr_no_args("Some"), [make_ident_expr("agent")]),
+      make_apply(make_constr_no_args("Some"), [
+        make_qualified_constr("agents", "SnapshotFormat", format),
+      ]),
+    )
   } else {
-    make_constr_no_args("None")
+    // No snapshot support
+    (make_constr_no_args("None"), make_constr_no_args("None"))
   }
   let constructed = make_record_with_type("agents", "ConstructedAgent", [
     make_field("raw", make_ident_expr("agent")),
     make_field("snapshottable", snapshottable_expr),
+    make_field("snapshot_format", snapshot_format_expr),
   ])
-  let ok_call = make_let(
-    "agent",
-    new_call,
-    make_let(
-      "constructed",
-      constructed,
-      make_apply(make_constr_no_args("Ok"), [make_ident_expr("constructed")]),
-    ),
+  let constructed_ok = make_let(
+    "constructed",
+    constructed,
+    make_apply(make_constr_no_args("Ok"), [make_ident_expr("constructed")]),
   )
+  let ok_call = make_let("agent", new_call, constructed_ok)
   // Build let bindings for each parameter (from last to first)
   let mut body = ok_call
   for idx in 0..<param_count {
@@ -221,24 +229,30 @@ fn build_multimodal_construct_body(agent : AgentInfo) -> @syntax.Expr {
   let new_call = make_apply(make_method_ref(agent.name, "new"), [
     make_ident_expr(param_name),
   ])
-  let snapshottable_expr = if agent.has_snapshottable {
-    make_apply(make_constr_no_args("Some"), [make_ident_expr("agent")])
+  let use_auto_json = agent.has_json_derives && not(agent.has_snapshottable)
+  let (snapshottable_expr, snapshot_format_expr) = if agent.has_snapshottable ||
+    use_auto_json {
+    let format = if agent.has_snapshottable { "Binary" } else { "Json" }
+    (
+      make_apply(make_constr_no_args("Some"), [make_ident_expr("agent")]),
+      make_apply(make_constr_no_args("Some"), [
+        make_qualified_constr("agents", "SnapshotFormat", format),
+      ]),
+    )
   } else {
-    make_constr_no_args("None")
+    (make_constr_no_args("None"), make_constr_no_args("None"))
   }
   let constructed = make_record_with_type("agents", "ConstructedAgent", [
     make_field("raw", make_ident_expr("agent")),
     make_field("snapshottable", snapshottable_expr),
+    make_field("snapshot_format", snapshot_format_expr),
   ])
-  let ok_call = make_let(
-    "agent",
-    new_call,
-    make_let(
-      "constructed",
-      constructed,
-      make_apply(make_constr_no_args("Ok"), [make_ident_expr("constructed")]),
-    ),
+  let constructed_ok = make_let(
+    "constructed",
+    constructed,
+    make_apply(make_constr_no_args("Ok"), [make_ident_expr("constructed")]),
   )
+  let ok_call = make_let("agent", new_call, constructed_ok)
   // let param_name : Type = @types.Multimodal::from_data_value(input)
   make_let_typed(
     param_name,
@@ -313,6 +327,34 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates an AST expression for the `Snapshotting` enum value.
+fn build_snapshotting_expr(snapshotting : AgentSnapshotting) -> @syntax.Expr {
+  match snapshotting {
+    Disabled => make_qualified_constr("common", "Snapshotting", "Disabled")
+    Default =>
+      make_apply(make_qualified_constr("common", "Snapshotting", "Enabled"), [
+        make_qualified_constr("common", "SnapshottingConfig", "Default"),
+      ])
+    Periodic(n) =>
+      make_apply(make_qualified_constr("common", "Snapshotting", "Enabled"), [
+        make_apply(
+          make_qualified_constr("common", "SnapshottingConfig", "Periodic"),
+          [make_uint64_expr(n)],
+        ),
+      ])
+    EveryNInvocation(n) =>
+      make_apply(make_qualified_constr("common", "Snapshotting", "Enabled"), [
+        make_apply(
+          make_qualified_constr(
+            "common", "SnapshottingConfig", "EveryNInvocation",
+          ),
+          [make_uint_expr(n.reinterpret_as_int())],
+        ),
+      ])
+  }
+}
+
+///|
 pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
   let is_multimodal_ctor = agent.constructor_params.length() == 1 &&
     is_multimodal_type(agent.constructor_params[0].1)
@@ -366,10 +408,7 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
       ),
     ),
     make_field("http_mount", make_constr_no_args("None")),
-    make_field(
-      "snapshotting",
-      make_qualified_constr("common", "Snapshotting", "Disabled"),
-    ),
+    make_field("snapshotting", build_snapshotting_expr(agent.snapshotting)),
     make_field("config", make_array([])),
   ])
 }
@@ -635,6 +674,49 @@ pub fn build_raw_agent_impl(agent : AgentInfo) -> @syntax.Impl {
 }
 
 ///|
+/// Generates direct `impl Snapshottable for AgentName` impls for each agent
+/// with JSON derives (ToJson + FromJson). The save_snapshot serializes to JSON,
+/// and load_snapshot deserializes and assigns each field individually.
+fn build_snapshottable_impls(
+  agents : Array[AgentInfo],
+) -> @list.List[@syntax.Impl] {
+  let needs_impls = agents
+    .iter()
+    .any(fn(a) { a.has_json_derives && not(a.has_snapshottable) })
+  if not(needs_impls) {
+    return @list.List::from_array([])
+  }
+  let buf = StringBuilder::new()
+  for agent in agents {
+    if agent.has_json_derives && not(agent.has_snapshottable) {
+      let name = agent.name
+      buf.write_string(
+        "///|\nimpl @agents.Snapshottable for \{name} with save_snapshot(self) -> Bytes {\n  let json_str = self.to_json().stringify()\n  Bytes::from_array(json_str.to_array().map(fn(c) { c.to_int().to_byte() }))\n}\n\n",
+      )
+      buf.write_string(
+        "///|\nimpl @agents.Snapshottable for \{name} with load_snapshot(self, bytes) -> Result[Unit, String] {\n" +
+        "  let chars : Array[Char] = []\n" +
+        "  for i in 0..<bytes.length() {\n" +
+        "    chars.push(Char::from_int(bytes[i].to_int()))\n" +
+        "  }\n" +
+        "  let json_str = String::from_array(chars)\n" +
+        "  let json = try { @json.parse!(json_str) } catch { e => return Err(\"Failed to parse snapshot JSON: \" + e.to_string()) }\n" +
+        "  let new_val : \{name} = try { @json.from_json!(json) } catch { e => return Err(\"Failed to deserialize snapshot: \" + e.to_string()) }\n",
+      )
+      for field in agent.fields {
+        let (field_name, is_mut) = field
+        if is_mut {
+          buf.write_string("  self.\{field_name} = new_val.\{field_name}\n")
+        }
+      }
+      buf.write_string("  Ok(())\n}\n\n")
+    }
+  }
+  let (parsed, _) = @parser.parse_string(buf.to_string())
+  parsed
+}
+
+///|
 /// Generates all agent registration code: the `init` block calling
 /// `register_agent` and all `RawAgent` impls.
 pub fn generate_agent_registration(
@@ -677,5 +759,8 @@ pub fn generate_agent_registration(
   for impl_ in impls {
     all.push(impl_)
   }
+  // Append Snapshottable impls for agents with JSON derives
+  let snapshottable_impls = build_snapshottable_impls(agents)
+  snapshottable_impls.each(fn(impl_) { all.push(impl_) })
   to_list(all)
 }
