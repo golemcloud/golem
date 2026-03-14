@@ -138,6 +138,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> = Arc::new(TestAuthService::new(
@@ -200,6 +201,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
+            http_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -235,6 +237,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             shutdown_token.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -268,6 +271,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             oplog_processor_plugin.clone(),
             resource_limits,
             shutdown_token,
+            http_connection_pool,
             additional_deps,
             leak_sentinel,
         ))

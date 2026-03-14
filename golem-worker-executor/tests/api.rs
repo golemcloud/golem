@@ -1921,6 +1921,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
         }),
         None,
         None,
+        None,
     )
     .await?;
 

@@ -134,9 +134,10 @@ use wasmtime_wasi::{
 };
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
-    default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
+    default_send_request_with_pool, BodyCompletionReceiver, HostFutureIncomingResponse,
+    OutgoingRequestConfig,
 };
-use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
+use wasmtime_wasi_http::{HttpConnectionPool, HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -178,6 +179,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -243,7 +245,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             config.suspend.suspend_after,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
-        let wasi_http = WasiHttpCtx::new();
+        let mut wasi_http = WasiHttpCtx::new();
+        wasi_http.connection_pool = http_connection_pool;
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
@@ -1173,6 +1176,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             OplogEntry::Snapshot {
                 data, mime_type, ..
             } => (data, mime_type),
+            OplogEntry::PendingUpdate {
+                description:
+                    UpdateDescription::SnapshotBased {
+                        payload, mime_type, ..
+                    },
+                ..
+            } => (payload, mime_type),
             _ => {
                 warn!(
                     "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
@@ -2325,11 +2335,25 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         UpdateDescription::Automatic {
                             target_revision, ..
                         } => {
-                            // snapshot update will be succeeded as part of the replay.
-                            let result = Self::resume_replay(store, instance, false).await;
-                            record_resume_worker(start.elapsed());
+                            let replay_result = async {
+                                if let SnapshotRecoveryResult::Failed =
+                                    Self::try_load_snapshot(store, instance).await
+                                {
+                                    return Err(WorkerExecutorError::failed_to_resume_worker(
+                                        agent_id.clone(),
+                                        WorkerExecutorError::runtime("loading snapshot failed"),
+                                    ));
+                                };
+                                // automatic update will be succeeded as part of the replay.
+                                let result = Self::resume_replay(store, instance, false).await?;
 
-                            match result {
+                                record_resume_worker(start.elapsed());
+
+                                Ok(result)
+                            }
+                            .await;
+
+                            match replay_result {
                                 Err(error) => {
                                     // replay failed. There are two cases here:
                                     // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
@@ -2367,18 +2391,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         _ => Err(error),
                                     }
                                 }
-                                _ => result,
+                                _ => replay_result,
                             }
                         }
                     }
                 }
                 None => match Self::try_load_snapshot(store, instance).await {
-                    SnapshotRecoveryResult::Success => {
-                        let result = Self::resume_replay(store, instance, false).await;
-                        record_resume_worker(start.elapsed());
-                        result
-                    }
-                    SnapshotRecoveryResult::NotAttempted => {
+                    SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                         let result = Self::resume_replay(store, instance, false).await;
                         record_resume_worker(start.elapsed());
                         result
@@ -2825,6 +2844,20 @@ struct HttpRequestState {
     /// this records the IncomingBody handle so that on stream close we can transfer
     /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
     pub body_handle: Option<u32>,
+    /// The outgoing body resource handle associated with this request, set when
+    /// outgoing_handler::handle() resolves the pending body mapping.
+    pub outgoing_body_rep: Option<u32>,
+    /// The outgoing body output stream resource handle, set when outgoing_body::write()
+    /// creates the stream from the outgoing body.
+    pub output_stream_rep: Option<u32>,
+}
+
+/// Extracted view of the begin_index and request from an HttpRequestState,
+/// used when processing outgoing body output stream operations.
+#[derive(Debug, Clone)]
+pub(crate) struct HttpOutputStreamState {
+    pub begin_index: OplogIndex,
+    pub request: HostRequestHttpRequest,
 }
 
 struct PrivateDurableWorkerState {
@@ -2857,6 +2890,10 @@ struct PrivateDurableWorkerState {
 
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
+
+    /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
+    /// before outgoing_handler::handle() is called and the HttpRequestState is created.
+    pending_http_outgoing_request_body: HashMap<u32, u32>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -2992,6 +3029,7 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
+            pending_http_outgoing_request_body: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,
             total_linear_memory_size,
@@ -3018,6 +3056,22 @@ impl PrivateDurableWorkerState {
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
         }
+    }
+
+    /// Find the open_http_requests entry key for a given outgoing body rep.
+    fn find_request_handle_by_outgoing_body(&self, body_rep: u32) -> Option<u32> {
+        self.open_http_requests
+            .iter()
+            .find(|(_, state)| state.outgoing_body_rep == Some(body_rep))
+            .map(|(&handle, _)| handle)
+    }
+
+    /// Find the open_http_requests entry key for a given output stream rep.
+    fn find_request_handle_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
+        self.open_http_requests
+            .iter()
+            .find(|(_, state)| state.output_stream_rep == Some(stream_rep))
+            .map(|(&handle, _)| handle)
     }
 
     /// In live mode it returns the last oplog index (index of the entry last added).
@@ -3283,10 +3337,15 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
             .expect("ResourceTable mutex must never fail")
     }
 
+    fn connection_pool(&self) -> Option<&HttpConnectionPool> {
+        self.0.wasi_http.connection_pool.as_ref()
+    }
+
     fn send_request(
         &mut self,
         request: hyper::Request<HyperOutgoingBody>,
         config: OutgoingRequestConfig,
+        body_completion: Option<BodyCompletionReceiver>,
     ) -> HttpResult<HostFutureIncomingResponse>
     where
         Self: Sized,
@@ -3296,9 +3355,22 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
             // FutureIncomingResponse because it is possible that there wasn't any response recorded in the oplog.
             // If that is the case, the request has to be sent as soon as we get into live mode and trying to await
             // or poll the response future.
-            Ok(HostFutureIncomingResponse::deferred(request, config))
+            let connection_pool = self.0.wasi_http.connection_pool.clone();
+            Ok(HostFutureIncomingResponse::deferred(Box::new(move || {
+                Ok(default_send_request_with_pool(
+                    request,
+                    config,
+                    body_completion,
+                    connection_pool,
+                ))
+            })))
         } else {
-            Ok(default_send_request(request, config))
+            Ok(default_send_request_with_pool(
+                request,
+                config,
+                body_completion,
+                self.0.wasi_http.connection_pool.clone(),
+            ))
         }
     }
 }
@@ -3557,6 +3629,7 @@ macro_rules! get_oplog_entry {
                     break Ok((oplog_index, oplog_entry));
                 })+
                 _ => {
+                    tracing::error!("Unexpected oplog entry - expected {}, got {:?}", stringify!($($cases |)+), oplog_entry);
                     break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
                         stringify!($($cases |)+),
                         format!("{:?}", oplog_entry),

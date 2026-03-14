@@ -1990,6 +1990,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baaaa0ecca5b51987b9423ccdc971514dd8b0bb7b4060b983d3664dad3f1f89f"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4203,16 +4212,14 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c785e553a020bed4efa518268635b34f8f75e7fe5905195e931e628164135e7e"
+version = "0.0.0"
 dependencies = [
  "clap",
- "convert_case",
+ "convert_case 0.8.0",
  "fmt",
  "indexmap 2.12.0",
  "indoc",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "openapiv3",
  "serde",
  "serde_yaml",
@@ -5346,7 +5353,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea561fea97e1734bd1572acfc8e5baf19ca3d3934e7de2932fc7a1c4e3b909f6"
 dependencies = [
- "convert_case",
+ "convert_case 0.6.0",
  "proc-macro2",
  "quote",
  "syn 2.0.110",
