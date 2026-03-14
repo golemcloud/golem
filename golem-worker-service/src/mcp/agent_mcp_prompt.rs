@@ -151,7 +151,7 @@ fn describe_input(
 
 fn describe_output_element(element: &NamedElementSchema) -> String {
     match &element.schema {
-        ElementSchema::ComponentModel(_) => "json result".to_string(),
+        ElementSchema::ComponentModel(_) => "JSON".to_string(),
 
         ElementSchema::UnstructuredText(text_desc) => {
             if let Some(desc) = &text_desc.restrictions {

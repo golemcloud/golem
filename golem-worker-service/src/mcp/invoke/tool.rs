@@ -150,6 +150,7 @@ pub fn map_agent_response_to_tool_result(
                             None => json_value,
                         };
 
+                        // Both contents and structured fields are populated here (apparently)
                         Ok(CallToolResult::structured(structured))
                     }
                     ToolResult::Content(content) => {
