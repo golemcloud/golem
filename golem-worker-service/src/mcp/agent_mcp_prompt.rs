@@ -150,9 +150,9 @@ fn describe_input(
 }
 
 fn describe_output_element(element: &NamedElementSchema) -> String {
-    let type_label = match &element.schema {
+    match &element.schema {
         ElementSchema::ComponentModel(_) => {
-            "json result".to_string() // there is no need to repeat the output
+            "json result".to_string()
         }
 
         ElementSchema::UnstructuredText(text_desc) => {
@@ -164,7 +164,7 @@ fn describe_output_element(element: &NamedElementSchema) -> String {
                 return format!("text with with one of the following language codes: {}", desc.iter().map(|x| x.language_code.clone()).collect::<Vec<_>>().join(", "))
             }
 
-            return "text".to_string();
+            "text".to_string()
         },
         ElementSchema::UnstructuredBinary(binary) => {
             if let Some(restrictions) = &binary.restrictions {
@@ -177,9 +177,7 @@ fn describe_output_element(element: &NamedElementSchema) -> String {
 
             "binary".to_string()
         }
-    };
-
-    format!("{}: {}", element.name, type_label)
+    }
 }
 
 
