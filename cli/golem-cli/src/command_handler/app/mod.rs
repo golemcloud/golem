@@ -209,11 +209,11 @@ impl AppCommandHandler {
             .map(AppTemplateName::from)
             .collect();
 
-        let template_to_component: HashMap<AppTemplateName, ComponentName> = {
+        let template_to_component: HashMap<&AppTemplateName, ComponentName> = {
             let mut template_to_component = HashMap::new();
             let mut validation = ValidationBuilder::new();
 
-            for template_name in template_names {
+            for template_name in &template_names {
                 match component_name.as_ref() {
                     Some(component_name) => {
                         if let Some(component_language) = component_languages.get(component_name) {
@@ -254,8 +254,9 @@ impl AppCommandHandler {
                                 .map_err(|err| anyhow!(err))?;
                                 template_to_component.insert(template_name, component_name);
                             }
-                            [&component_name] => {
-                                template_to_component.insert(template_name, component_name.clone());
+                            [component_name] => {
+                                template_to_component
+                                    .insert(template_name, (*component_name).clone());
                             }
                             _ => {
                                 // TODO: FCL: interactive selection
@@ -277,9 +278,9 @@ impl AppCommandHandler {
 
         let app_template_repo = self.ctx.app_template_repo()?;
         let (common_templates, component_templates, agent_templates): (
-            BTreeMap<AppTemplateName, &AppTemplateCommon>,
-            BTreeMap<ComponentName, &AppTemplateComponent>,
-            BTreeMap<AppTemplateName, &AppTemplateAgent>,
+            BTreeMap<&AppTemplateName, &AppTemplateCommon>,
+            BTreeMap<&ComponentName, &AppTemplateComponent>,
+            BTreeMap<&AppTemplateName, &AppTemplateAgent>,
         ) = {
             let mut common_templates = BTreeMap::new();
             let mut component_templates = BTreeMap::new();
@@ -297,7 +298,7 @@ impl AppCommandHandler {
                     app_template_repo.common_template(template_name.language())?
                 {
                     if !common_templates.contains_key(&common_template.0.name) {
-                        common_templates.insert(template_name.clone(), common_template);
+                        common_templates.insert(template_name, common_template);
                     }
                 }
 
@@ -305,13 +306,13 @@ impl AppCommandHandler {
                     if let Some(component_template) =
                         app_template_repo.component_templates(template_name.language())?
                     {
-                        component_templates.insert(component_name.clone(), component_template);
+                        component_templates.insert(component_name, component_template);
                     }
                 }
 
                 match app_template_repo.agent_template(template_name) {
                     Ok(agent_template) => {
-                        agent_templates.push(agent_template);
+                        agent_templates.insert(template_name, agent_template);
                     }
                     Err(_) => {
                         logln("");
@@ -370,7 +371,7 @@ impl AppCommandHandler {
                         })?;
 
                 template_plan_builder.add(
-                    agent_template_name,
+                    agent_template_name.as_str(),
                     &agent_template.generate(
                         &application_name,
                         &component_name,
