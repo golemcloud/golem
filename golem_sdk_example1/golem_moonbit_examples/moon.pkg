@@ -10,6 +10,7 @@ import {
   "golemcloud/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
   "golemcloud/golem_sdk/logging" @logging,
   "golemcloud/golem_sdk/context" @context,
+  "golemcloud/golem_sdk/config" @config,
 }
 
 options(

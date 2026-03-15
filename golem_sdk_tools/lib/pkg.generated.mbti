@@ -17,6 +17,8 @@ pub fn encode_qualified(String, String) -> ParamType
 
 pub fn ensure_pkg_import(String, String, String) -> String
 
+pub fn find_config_param(Array[(String, ParamType)]) -> (String, String, Int)?
+
 pub fn find_principal_index(Array[(String, ParamType)]) -> Int?
 
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
@@ -29,11 +31,17 @@ pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl
 
 pub fn generate_value_type_impls(Array[ValueTypeInfo]) -> @list.List[@syntax.Impl]
 
+pub fn http_reorder_params(Array[(String, ParamType)], HttpEndpointInfo?) -> Array[(String, ParamType)]
+
+pub fn is_config_type(ParamType) -> Bool
+
 pub fn is_multimodal_type(ParamType) -> Bool
 
 pub fn is_principal_type(ParamType) -> Bool
 
 pub fn is_rpc_incompatible_type(ParamType) -> Bool
+
+pub fn is_secret_type(ParamType) -> Bool
 
 pub fn is_unstructured_binary_type(ParamType) -> Bool
 
@@ -44,6 +52,8 @@ pub fn param_type_to_schema_expr(ParamType, options? : SchemaOptions?) -> @synta
 pub fn param_type_to_type_string(ParamType) -> String
 
 pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentParseError
+
+pub fn parse_config_types(Array[(String, String)]) -> Array[ConfigTypeInfo] raise AgentParseError
 
 pub fn parse_duration_seconds(String) -> UInt64 raise AgentParseError
 
@@ -65,7 +75,13 @@ pub fn syntax_type_to_param_type(@syntax.Type) -> ParamType raise AgentParseErro
 
 pub fn transform_exports(Array[String]) -> Array[String]
 
+pub fn unwrap_config_type(ParamType) -> ParamType?
+
+pub fn unwrap_secret_type(ParamType) -> ParamType?
+
 pub fn update_pkg_link(String, Array[String]) -> String
+
+pub fn validate_config_types(Array[AgentInfo], Array[ConfigTypeInfo]) -> Unit raise AgentParseError
 
 pub fn validate_http_routes(Array[AgentInfo]) -> Unit raise AgentParseError
 
@@ -98,6 +114,7 @@ pub(all) struct AgentInfo {
   has_json_derives : Bool
   fields : Array[(String, Bool)]
   http_mount : HttpMountInfo?
+  config_type : String?
 }
 pub impl Show for AgentInfo
 
@@ -116,6 +133,13 @@ pub(all) enum AgentSnapshotting {
 }
 pub impl Eq for AgentSnapshotting
 pub impl Show for AgentSnapshotting
+
+pub(all) struct ConfigTypeInfo {
+  name : String
+  fields : Array[(String, ParamType)]
+}
+pub impl Eq for ConfigTypeInfo
+pub impl Show for ConfigTypeInfo
 
 pub(all) struct FnSignature {
   gen_name : String

@@ -245,6 +245,20 @@ fn make_apply(func : @syntax.Expr, args : Array[@syntax.Expr]) -> @syntax.Expr {
 }
 
 ///|
+/// Creates a function application expression with `!` error propagation suffix.
+fn make_apply_with_exclamation(
+  func : @syntax.Expr,
+  args : Array[@syntax.Expr],
+) -> @syntax.Expr {
+  @syntax.Expr::Apply(
+    func~,
+    args=to_list(args.map(make_positional_arg)),
+    attr=@syntax.ApplyAttr::Exclamation,
+    loc=dummy_loc,
+  )
+}
+
+///|
 /// Creates a function application expression with pre-built arguments.
 fn make_apply_with_args(
   func : @syntax.Expr,

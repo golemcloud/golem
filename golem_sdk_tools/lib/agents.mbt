@@ -110,6 +110,7 @@ pub(all) struct AgentInfo {
   has_json_derives : Bool
   fields : Array[(String, Bool)]
   http_mount : HttpMountInfo?
+  config_type : String?
 } derive(Show)
 
 ///|
@@ -509,11 +510,77 @@ pub fn is_principal_type(pt : ParamType) -> Bool {
 }
 
 ///|
-/// Filters out `Principal` parameters from a parameter list.
+/// Filters out `Principal` and `Config[T]` parameters from a parameter list.
 pub fn visible_params(
   params : Array[(String, ParamType)],
 ) -> Array[(String, ParamType)] {
-  params.filter(fn(p) { not(is_principal_type(p.1)) })
+  params.filter(fn(p) {
+    not(is_principal_type(p.1)) && not(is_config_type(p.1))
+  })
+}
+
+///|
+/// Returns true if the parameter type is `Config[T]` or `@config.Config[T]`.
+pub fn is_config_type(pt : ParamType) -> Bool {
+  match pt {
+    Parameterized(name, params) =>
+      (name == "Config" || name == "@config.Config") && params.length() == 1
+    _ => false
+  }
+}
+
+///|
+/// Extracts the inner type T from a `Config[T]` parameter type.
+pub fn unwrap_config_type(pt : ParamType) -> ParamType? {
+  match pt {
+    Parameterized(name, params) =>
+      if (name == "Config" || name == "@config.Config") && params.length() == 1 {
+        Some(params[0])
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Returns true if the parameter type is `Secret[T]` or `@config.Secret[T]`.
+pub fn is_secret_type(pt : ParamType) -> Bool {
+  match pt {
+    Parameterized(name, params) =>
+      (name == "Secret" || name == "@config.Secret") && params.length() == 1
+    _ => false
+  }
+}
+
+///|
+/// Extracts the inner type T from a `Secret[T]` parameter type.
+pub fn unwrap_secret_type(pt : ParamType) -> ParamType? {
+  match pt {
+    Parameterized(name, params) =>
+      if (name == "Secret" || name == "@config.Secret") && params.length() == 1 {
+        Some(params[0])
+      } else {
+        None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Finds the Config[T] parameter in a constructor's parameter list, if any.
+/// Returns the parameter name, the inner config type name, and its index.
+pub fn find_config_param(
+  params : Array[(String, ParamType)],
+) -> (String, String, Int)? {
+  for i, p in params {
+    match unwrap_config_type(p.1) {
+      Some(Simple(name)) => return Some((p.0, name, i))
+      Some(_) => ()
+      None => ()
+    }
+  }
+  None
 }
 
 ///|
@@ -1133,7 +1200,11 @@ pub fn parse_agents(
   let agents : Array[AgentInfo] = []
   for name, description in agent_names {
     match agent_constructors.get(name) {
-      Some((params, ctor_desc, ctor_hint, ctor_restrictions)) =>
+      Some((params, ctor_desc, ctor_hint, ctor_restrictions)) => {
+        let config_type = match find_config_param(params) {
+          Some((_, inner_name, _)) => Some(inner_name)
+          None => None
+        }
         agents.push({
           name,
           description,
@@ -1149,7 +1220,9 @@ pub fn parse_agents(
           has_json_derives: agent_json_derives.get(name).unwrap_or(false),
           fields: agent_fields.get(name).unwrap_or([]),
           http_mount: agent_mounts.get(name).unwrap_or(None),
+          config_type,
         })
+      }
       None => raise AgentParseError("Agent '\{name}' has no ::new constructor")
     }
   }
@@ -1208,6 +1281,14 @@ pub fn parse_agents(
           )
         }
       }
+      // Validate no Config params in methods
+      for p in meth.params {
+        if is_config_type(p.1) {
+          raise AgentParseError(
+            "Config[T] parameter '\{p.0}' in method '\{meth.name}' of agent '\{agent.name}' is not allowed — Config[T] is only supported in constructors",
+          )
+        }
+      }
       // Validate at most one Principal param per method
       let principal_count = meth.params
         .filter(fn(p) { is_principal_type(p.1) })
@@ -1226,6 +1307,26 @@ pub fn parse_agents(
       raise AgentParseError(
         "Constructor of agent '\{agent.name}' has \{ctor_principal_count} Principal parameters; at most one is allowed",
       )
+    }
+    // Validate at most one Config[T] param per constructor
+    let config_params = agent.constructor_params.filter(fn(p) {
+      is_config_type(p.1)
+    })
+    if config_params.length() > 1 {
+      raise AgentParseError(
+        "Constructor of agent '\{agent.name}' has \{config_params.length()} Config parameters; at most one is allowed",
+      )
+    }
+    // Validate Config[T] inner type must be a Simple name
+    for p in config_params {
+      match unwrap_config_type(p.1) {
+        Some(Simple(_)) => ()
+        Some(other) =>
+          raise AgentParseError(
+            "Config parameter '\{p.0}' of agent '\{agent.name}' must use a simple type name, got \{other}",
+          )
+        None => ()
+      }
     }
   }
   validate_http_routes(agents)

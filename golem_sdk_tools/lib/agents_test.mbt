@@ -153,6 +153,7 @@ test "generate_agent_registration for simple agent" {
       snapshotting: Disabled,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -268,6 +269,7 @@ test "generate_agent_registration with methods" {
       snapshotting: Disabled,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -465,6 +467,7 @@ test "generate_agent_registration with prompt_hints" {
       snapshotting: Disabled,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1073,6 +1076,7 @@ test "build_raw_agent_impl for counter-like agent" {
     snapshotting: Disabled,
     fields: [],
     http_mount: None,
+    config_type: None,
   }
   let impl_ = build_raw_agent_impl(agent)
   let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
@@ -1312,6 +1316,7 @@ test "generate_agent_registration with cross-package types" {
       snapshotting: Disabled,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1554,6 +1559,7 @@ test "generate_agent_registration with ephemeral mode" {
       snapshotting: Disabled,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1685,6 +1691,7 @@ test "generate_agent_registration with multimodal return uses to_data_value" {
       snapshotting: Disabled,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impl_ = build_raw_agent_impl(agents[0])
@@ -1962,6 +1969,7 @@ test "generate_agent_registration with snapshotting periodic" {
       has_json_derives: false,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -2052,6 +2060,7 @@ test "generate_agent_registration with snapshotting default" {
       has_json_derives: false,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -2142,6 +2151,7 @@ test "generate_agent_registration with snapshotting every_n" {
       has_json_derives: false,
       fields: [],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -2329,6 +2339,7 @@ test "generate_agent_registration with json derives generates direct Snapshottab
       snapshotting: Disabled,
       fields: [("name", false), ("value", true)],
       http_mount: None,
+      config_type: None,
     },
   ]
   let impls = generate_agent_registration(agents)

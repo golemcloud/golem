@@ -61,10 +61,14 @@ fn run_agents(package_dir : String) -> Unit raise {
   let output_path = "\{package_dir}/golem_agents.mbt"
   @fs.write_string_to_file(output_path, output)
   println("Generated \{output_path} with \{agents.length()} agent(s)")
-  // Generate golem_derive.mbt for value types and multimodal enums
+  // Generate golem_derive.mbt for value types, multimodal enums, and config types
   let value_types = @lib.parse_value_types(files)
   let multimodal_enums = @lib.parse_multimodal_enums(files)
-  if value_types.length() > 0 || multimodal_enums.length() > 0 {
+  let config_types = @lib.parse_config_types(files)
+  @lib.validate_config_types(agents, config_types)
+  if value_types.length() > 0 ||
+    multimodal_enums.length() > 0 ||
+    config_types.length() > 0 {
     let all_impls : Array[@syntax.Impl] = []
     if value_types.length() > 0 {
       @lib.generate_value_type_impls(value_types).each(fn(i) {
@@ -76,6 +80,11 @@ fn run_agents(package_dir : String) -> Unit raise {
         all_impls.push(i)
       })
     }
+    if config_types.length() > 0 {
+      @lib.generate_config_field_impls(config_types).each(fn(i) {
+        all_impls.push(i)
+      })
+    }
     let derive_formatted = @formatter.impls_to_string(
       @list.List::from_array(all_impls),
     )
@@ -84,7 +93,7 @@ fn run_agents(package_dir : String) -> Unit raise {
     let derive_path = "\{package_dir}/golem_derive.mbt"
     @fs.write_string_to_file(derive_path, derive_output)
     println(
-      "Generated golem_derive.mbt with \{value_types.length()} type(s) and \{multimodal_enums.length()} multimodal enum(s)",
+      "Generated golem_derive.mbt with \{value_types.length()} type(s), \{multimodal_enums.length()} multimodal enum(s), and \{config_types.length()} config type(s)",
     )
   }
   // Generate golem_clients.mbt for RPC client stubs
@@ -114,6 +123,17 @@ fn run_agents(package_dir : String) -> Unit raise {
       pkg_content, "golemcloud/golem_sdk/agents/types", "@types",
     )
     println("Ensured agents/types import in moon.pkg")
+  }
+  // Check if any agent uses config and auto-add imports
+  let uses_config = agents.iter().any(fn(a) { a.config_type is Some(_) })
+  if uses_config || config_types.length() > 0 {
+    pkg_content = @lib.ensure_pkg_import(
+      pkg_content, "golemcloud/golem_sdk/config", "@config",
+    )
+    pkg_content = @lib.ensure_pkg_import(
+      pkg_content, "golemcloud/golem_sdk/schema", "@schema",
+    )
+    println("Ensured config and schema imports in moon.pkg")
   }
   @fs.write_string_to_file(pkg_path, pkg_content)
 }

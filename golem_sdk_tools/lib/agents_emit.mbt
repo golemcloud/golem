@@ -152,6 +152,8 @@ fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
   let new_args = agent.constructor_params.map(fn(param) {
     if is_principal_type(param.1) {
       make_ident_expr("principal")
+    } else if is_config_type(param.1) {
+      make_ident_expr(param.0)
     } else {
       make_ident_expr(param.0)
     }
@@ -183,8 +185,30 @@ fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
     make_apply(make_constr_no_args("Ok"), [make_ident_expr("constructed")]),
   )
   let ok_call = make_let("agent", new_call, constructed_ok)
-  // Build let bindings for visible params only (from last to first)
+  // Add config param binding if present
   let mut body = ok_call
+  match find_config_param(agent.constructor_params) {
+    Some((param_name, config_type_name, _)) => {
+      let config_type = param_type_to_ast_type(Simple(config_type_name))
+      let wrapped_type = make_qualified_parameterized_type("config", "Config", [
+        config_type,
+      ])
+      let type_tag_ty = make_qualified_parameterized_type("schema", "TypeTag", [
+        config_type,
+      ])
+      let tag_expr = make_constraint_expr(
+        make_record_with_type("schema", "TypeTag", []),
+        type_tag_ty,
+      )
+      let load_expr = make_apply_with_exclamation(
+        make_qualified_expr("config", "load_config"),
+        [tag_expr],
+      )
+      body = make_let_typed(param_name, wrapped_type, load_expr, body)
+    }
+    None => ()
+  }
+  // Build let bindings for visible params only (from last to first)
   for idx in 0..<vis_count {
     let i = vis_count - 1 - idx
     let (name, pt) = vis[i]
@@ -234,10 +258,12 @@ fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
 fn build_multimodal_construct_body(agent : AgentInfo) -> @syntax.Expr {
   let vis = visible_params(agent.constructor_params)
   let (param_name, param_type) = vis[0]
-  // Build ::new() args in original order, injecting `principal` for Principal-typed params
+  // Build ::new() args in original order, injecting `principal`/`config` for special params
   let new_args = agent.constructor_params.map(fn(param) {
     if is_principal_type(param.1) {
       make_ident_expr("principal")
+    } else if is_config_type(param.1) {
+      make_ident_expr(param.0)
     } else {
       make_ident_expr(param.0)
     }
@@ -267,6 +293,29 @@ fn build_multimodal_construct_body(agent : AgentInfo) -> @syntax.Expr {
     make_apply(make_constr_no_args("Ok"), [make_ident_expr("constructed")]),
   )
   let ok_call = make_let("agent", new_call, constructed_ok)
+  // Add config param binding if present
+  let mut body = ok_call
+  match find_config_param(agent.constructor_params) {
+    Some((cfg_param_name, config_type_name, _)) => {
+      let config_type = param_type_to_ast_type(Simple(config_type_name))
+      let wrapped_type = make_qualified_parameterized_type("config", "Config", [
+        config_type,
+      ])
+      let type_tag_ty = make_qualified_parameterized_type("schema", "TypeTag", [
+        config_type,
+      ])
+      let tag_expr = make_constraint_expr(
+        make_record_with_type("schema", "TypeTag", []),
+        type_tag_ty,
+      )
+      let load_expr = make_apply_with_exclamation(
+        make_qualified_expr("config", "load_config"),
+        [tag_expr],
+      )
+      body = make_let_typed(cfg_param_name, wrapped_type, load_expr, body)
+    }
+    None => ()
+  }
   // let param_name : Type = @types.Multimodal::from_data_value(input)
   make_let_typed(
     param_name,
@@ -275,7 +324,7 @@ fn build_multimodal_construct_body(agent : AgentInfo) -> @syntax.Expr {
       make_qualified_method_ref("types", "Multimodal", "from_data_value"),
       [make_ident_expr("input")],
     ),
-    ok_call,
+    body,
   )
 }
 
@@ -427,8 +476,30 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
     ),
     make_field("http_mount", emit_http_mount_expr(agent.http_mount)),
     make_field("snapshotting", build_snapshotting_expr(agent.snapshotting)),
-    make_field("config", make_array([])),
+    make_field("config", build_config_entries_expr(agent)),
   ])
+}
+
+///|
+/// Generates the config entries expression for an agent's `AgentType.config` field.
+fn build_config_entries_expr(agent : AgentInfo) -> @syntax.Expr {
+  match agent.config_type {
+    Some(type_name) => {
+      let ty = param_type_to_ast_type(Simple(type_name))
+      let type_tag_ty = make_qualified_parameterized_type("schema", "TypeTag", [
+        ty,
+      ])
+      let tag_expr = make_constraint_expr(
+        make_record_with_type("schema", "TypeTag", []),
+        type_tag_ty,
+      )
+      make_apply(make_qualified_expr("config", "collect_entries_of"), [
+        tag_expr,
+        make_array([]),
+      ])
+    }
+    None => make_array([])
+  }
 }
 
 ///|
@@ -765,6 +836,7 @@ pub fn generate_agent_registration(
   let needs_try_catch = agents
     .iter()
     .any(fn(a) {
+      a.config_type is Some(_) ||
       a.constructor_schema_options
       .iter()
       .any(fn(kv) {

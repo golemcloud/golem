@@ -1,0 +1,52 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/config"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/schema",
+}
+
+// Values
+pub fn[T : ConfigField] load_config(@schema.TypeTag[T]) -> Config[T] raise @common.AgentError
+
+pub fn[T : @schema.HasElementSchema + @schema.FromExtractor] load_config_value(Array[String]) -> T raise @common.AgentError
+
+pub fn[T : @schema.HasElementSchema] wit_type_of(@schema.TypeTag[T]) -> @types.WitType raise @common.AgentError
+
+// Errors
+
+// Types and methods
+pub(all) struct Config[T] {
+  value : T
+}
+
+pub(all) struct Secret[T] {
+  key : Array[String]
+  expected_type : @types.WitType
+}
+pub fn[T : @schema.FromExtractor] Secret::get(Self[T]) -> T raise @common.AgentError
+pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for Secret[T]
+
+// Type aliases
+
+// Traits
+pub(open) trait ConfigField {
+  collect_entries(Array[String]) -> Array[@common.ConfigKeyValueType] raise @common.AgentError
+  load(Array[String]) -> Self raise @common.AgentError
+}
+pub impl ConfigField for Bool
+pub impl ConfigField for Byte
+pub impl ConfigField for Char
+pub impl ConfigField for Int
+pub impl ConfigField for Int64
+pub impl ConfigField for UInt
+pub impl ConfigField for UInt64
+pub impl ConfigField for Float
+pub impl ConfigField for Double
+pub impl ConfigField for String
+pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for T?
+pub impl[T : @schema.HasElementSchema + @schema.FromExtractor, E : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for Result[T, E]
+pub impl ConfigField for Bytes
+pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for Array[T]
+
