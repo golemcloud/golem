@@ -23,7 +23,7 @@ componentTemplates:
         build:
           - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/{{ component_name | to_snake_case }}
             dir: ../golem_sdk_tools
-          - command: moon run cmd -- agents ../golem_sdk_example1/{{ component_name | to_snake_case }}
+          - command: moon run cmd -- agents ../golem_sdk_example1
             dir: ../golem_sdk_tools
           - command: moon build --target wasm --release
           - command: mkdir -p _build/wasm/debug
@@ -37,7 +37,7 @@ componentTemplates:
         build:
           - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/{{ component_name | to_snake_case }}
             dir: ../golem_sdk_tools
-          - command: moon run cmd -- agents ../golem_sdk_example1/{{ component_name | to_snake_case }}
+          - command: moon run cmd -- agents ../golem_sdk_example1
             dir: ../golem_sdk_tools
           - command: moon build --target wasm --release
           - command: wasm-tools component embed wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm
