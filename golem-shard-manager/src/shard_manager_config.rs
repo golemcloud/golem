@@ -14,7 +14,9 @@
 
 use crate::model::Empty;
 use crate::shard_manager_config::HealthCheckMode::K8s;
-use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig};
+use golem_common::config::{
+    ConfigExample, ConfigLoader, DbPostgresConfig, HasConfigExamples, RedisConfig,
+};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
@@ -266,6 +268,7 @@ impl SafeDisplay for HealthCheckK8sConfig {
 #[serde(tag = "type", content = "config")]
 pub enum PersistenceConfig {
     Redis(RedisConfig),
+    Postgres(DbPostgresConfig),
     FileSystem(FileSystemPersistenceConfig),
 }
 
@@ -275,6 +278,10 @@ impl SafeDisplay for PersistenceConfig {
         match self {
             PersistenceConfig::Redis(inner) => {
                 let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            PersistenceConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             PersistenceConfig::FileSystem(inner) => {

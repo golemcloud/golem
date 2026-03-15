@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent_secrets::{
+    AgentSecretCreationRecord, AgentSecretRepoError, AgentSecretRevisionData,
+    AgentSecretRevisionRecord,
+};
+use super::audit::DeletableRevisionAuditFields;
+use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
 use crate::model::api_definition::{BoundCompiledRoute, UnboundCompiledRoute};
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -25,6 +31,7 @@ use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::{AgentType, RegisteredAgentTypeImplementer};
+use golem_common::model::agent_secret::AgentSecretId;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
@@ -50,11 +57,13 @@ pub enum DeployRepoError {
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
+    #[error("Secret for path {rendered_path} already exsists", rendered_path = path.join("."))]
+    AgentSecretConflict { path: Vec<String> },
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarding!(DeployRepoError, RepoError);
+error_forwarding!(DeployRepoError, RepoError, AgentSecretRepoError);
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct CurrentDeploymentRevisionRecord {
@@ -431,6 +440,11 @@ pub struct DeploymentRevisionCreationRecord {
     pub compiled_routes: Vec<DeploymentCompiledRouteRecord>,
     pub compiled_mcp: Vec<DeploymentCompiledMcpRecord>,
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
+
+    pub created_agent_secrets: Vec<AgentSecretCreationRecord>,
+    pub updated_agent_secrets: Vec<AgentSecretRevisionRecord>,
+
+    pub user_account_id: Uuid,
 }
 
 impl DeploymentRevisionCreationRecord {
@@ -445,8 +459,11 @@ impl DeploymentRevisionCreationRecord {
         compiled_routes: Vec<UnboundCompiledRoute>,
         compiled_mcp: Vec<CompiledMcp>,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
-    ) -> Self {
-        Self {
+        created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
+        updated_agent_secrets: Vec<DeploymentAgentSecretUpdate>,
+        actor: AccountId,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
             version: version.0,
@@ -506,7 +523,34 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
-        }
+            created_agent_secrets: created_agent_secrets
+                .into_iter()
+                .map(|r| {
+                    AgentSecretCreationRecord::new(
+                        AgentSecretId::new(),
+                        environment_id,
+                        r.path,
+                        r.secret_type,
+                        r.secret_value,
+                        actor,
+                    )
+                })
+                .collect(),
+            updated_agent_secrets: updated_agent_secrets
+                .into_iter()
+                .map(|r| {
+                    Ok::<_, anyhow::Error>(AgentSecretRevisionRecord {
+                        agent_secret_id: r.agent_secret_id.0,
+                        revision_id: r.current_revision.next()?.into(),
+                        agent_secret_revision_data: Blob::new(AgentSecretRevisionData {
+                            secret_value: Some(r.new_secret_value),
+                        }),
+                        audit: DeletableRevisionAuditFields::new(actor.0),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            user_account_id: actor.0,
+        })
     }
 }
 

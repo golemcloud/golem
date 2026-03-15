@@ -44,6 +44,12 @@ impl From<&str> for DeploymentVersion {
 }
 
 declare_structs! {
+    /// Default values of secrets registered as part of the current deployment
+    pub struct DeploymentAgentSecretDefault {
+        pub path: Vec<String>,
+        pub secret_value: serde_json::Value
+    }
+
     pub struct Deployment {
         pub environment_id: EnvironmentId,
         pub revision: DeploymentRevision,
@@ -63,7 +69,8 @@ declare_structs! {
     pub struct DeploymentCreation {
         pub current_revision: Option<CurrentDeploymentRevision>,
         pub expected_deployment_hash: Hash,
-        pub version: DeploymentVersion
+        pub version: DeploymentVersion,
+        pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>
     }
 
     pub struct DeploymentRollback {

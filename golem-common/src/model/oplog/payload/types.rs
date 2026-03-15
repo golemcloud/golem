@@ -712,16 +712,19 @@ pub enum SerializableHttpResponse {
 #[desert(evolution())]
 pub struct SerializableResponseHeaders {
     pub status: u16,
-    pub headers: HashMap<String, Vec<u8>>,
+    pub headers: HashMap<String, Vec<Vec<u8>>>,
 }
 
 impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
     type Error = anyhow::Error;
 
     fn try_from(response: &HostIncomingResponse) -> Result<Self, Self::Error> {
-        let mut headers = HashMap::new();
+        let mut headers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
         for (key, value) in response.headers.as_ref().iter() {
-            headers.insert(key.as_str().to_string(), value.as_bytes().to_vec());
+            headers
+                .entry(key.as_str().to_string())
+                .or_default()
+                .push(value.as_bytes().to_vec());
         }
 
         Ok(Self {
@@ -736,8 +739,11 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
 
     fn try_from(value: SerializableResponseHeaders) -> Result<Self, Self::Error> {
         let mut header_map = http::HeaderMap::new();
-        for (key, value) in value.headers {
-            header_map.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
+        for (key, values) in value.headers {
+            let name = HeaderName::from_str(&key)?;
+            for value in values {
+                header_map.append(name.clone(), HeaderValue::try_from(value)?);
+            }
         }
         let headers = FieldMap::new(header_map, DEFAULT_FIELD_SIZE_LIMIT);
 

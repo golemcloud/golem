@@ -17,7 +17,7 @@ pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
 
-use self::agent_deployments_service::DisabledAgentDeploymentsService;
+use self::agent_deployments_service::DisabledEnvironmentStateService;
 use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{anyhow, Error};
@@ -78,18 +78,18 @@ use golem_worker_executor::preview2::golem::agent::host::{
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::golem_api_1_x;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
-    EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, OplogConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
+    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
+    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    OplogConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -390,7 +390,7 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, None).await
+    start_customized(deps, context, None, None, None, None, None).await
 }
 
 pub async fn start_with_snapshot_policy(
@@ -398,7 +398,15 @@ pub async fn start_with_snapshot_policy(
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, Some(snapshot_policy), None).await
+    start_customized(deps, context, None, None, Some(snapshot_policy), None, None).await
+}
+
+pub async fn start_with_http_client_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    http_client: HttpClientConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_customized(deps, context, None, None, None, Some(http_client), None).await
 }
 
 pub async fn start_with_oplog_config(
@@ -406,7 +414,7 @@ pub async fn start_with_oplog_config(
     context: &TestContext,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, oplog_config_override).await
+    start_customized(deps, context, None, None, None, None, oplog_config_override).await
 }
 
 pub async fn start_customized(
@@ -415,6 +423,7 @@ pub async fn start_customized(
     system_memory_override: Option<u64>,
     retry_override: Option<RetryConfig>,
     snapshot_policy_override: Option<SnapshotPolicy>,
+    http_client_override: Option<HttpClientConfig>,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
@@ -461,6 +470,9 @@ pub async fn start_customized(
     }
     if let Some(snapshot_policy) = snapshot_policy_override {
         config.oplog.default_snapshotting = snapshot_policy;
+    }
+    if let Some(http_client) = http_client_override {
+        config.http_client = http_client;
     }
     if let Some(oplog_config) = oplog_config_override {
         config.oplog = oplog_config;
@@ -779,8 +791,10 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -813,8 +827,10 @@ impl WorkerCtx for TestWorkerCtx {
             file_loader,
             worker_fork,
             agent_types_service,
+            environment_state_service,
             agent_webhooks_service,
             shard_service,
+            http_connection_pool,
             pending_update,
             original_phantom_id,
         )
@@ -1096,12 +1112,12 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
-    fn create_agent_deployments_service(
+    fn create_environment_state_service(
         &self,
-        _config: &AgentDeploymentsServiceConfig,
+        _config: &EnvironmentStateServiceConfig,
         _registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn AgentDeploymentsService> {
-        Arc::new(DisabledAgentDeploymentsService)
+    ) -> Arc<dyn EnvironmentStateService> {
+        Arc::new(DisabledEnvironmentStateService)
     }
 
     fn create_component_service(
@@ -1143,9 +1159,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(
@@ -1186,9 +1204,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
+            http_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1222,8 +1242,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             shutdown_token.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1256,6 +1278,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin,
             resource_limits,
             shutdown_token,
+            http_connection_pool,
+            environment_state_service,
             extra_deps.clone(),
             leak_sentinel,
         ))

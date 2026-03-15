@@ -2029,6 +2029,8 @@ impl AppCommandHandler {
                     current_revision: deploy_diff.current_deployment_revision(),
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
                     version: DeploymentVersion("".to_string()), // TODO: atomic
+                    // FIXME: agent-config
+                    agent_secret_defaults: Vec::new(),
                 },
             )
             .await

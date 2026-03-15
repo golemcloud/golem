@@ -37,7 +37,9 @@ use golem_common::model::component::{
 };
 use golem_common::model::component::{LocalAgentConfigEntry, PluginPriority};
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision};
+use golem_common::model::deployment::{
+    CurrentDeployment, DeploymentAgentSecretDefault, DeploymentRevision,
+};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -659,6 +661,15 @@ pub trait TestDslExtended: TestDsl {
     async fn deploy_environment(
         &self,
         environment_id: EnvironmentId,
+    ) -> anyhow::Result<CurrentDeployment> {
+        self.deploy_environment_with(environment_id, Vec::new())
+            .await
+    }
+
+    async fn deploy_environment_with(
+        &self,
+        environment_id: EnvironmentId,
+        agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
     ) -> anyhow::Result<CurrentDeployment>;
 
     fn get_last_deployment_revision(

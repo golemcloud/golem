@@ -13,14 +13,17 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::config::RedisConfig;
+use golem_common::config::{DbPostgresConfig, RedisConfig};
 use golem_common::model::component::ComponentId;
 use golem_common::model::AgentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::redis::Redis;
+use golem_worker_executor::services::golem_config::IndexedStoragePostgresConfig;
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
+use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
@@ -33,6 +36,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
+use url::Url;
 use uuid::Uuid;
 
 #[async_trait]
@@ -174,6 +178,67 @@ async fn multi_sqlite_storage(
     Arc::new(MultiSqliteIndexedStorageWrapper::new())
 }
 
+struct PostgresIndexedStorageWrapper {
+    postgres: DockerPostgresRdb,
+}
+
+impl Debug for PostgresIndexedStorageWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PostgresIndexedStorageWrapper")
+    }
+}
+
+#[async_trait]
+impl GetIndexedStorage for PostgresIndexedStorageWrapper {
+    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+        let db_name = format!("idx_{}", Uuid::new_v4().simple());
+
+        let admin_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&self.postgres.public_connection_string())
+            .await
+            .expect("Cannot create postgres admin pool");
+
+        sqlx::query(&format!("CREATE DATABASE \"{db_name}\";"))
+            .execute(&admin_pool)
+            .await
+            .expect("Cannot create postgres test database");
+
+        let postgres = DbPostgresConfig {
+            host: "localhost".to_string(),
+            database: db_name,
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            port: Url::parse(&self.postgres.public_connection_string())
+                .expect("Invalid postgres connection string")
+                .port()
+                .expect("Postgres connection string missing port"),
+            max_connections: 10,
+            schema: None,
+        };
+
+        let config = IndexedStoragePostgresConfig {
+            postgres,
+            drop_prefix_delete_batch_size: 1024,
+        };
+
+        let storage = PostgresIndexedStorage::configured(&config)
+            .await
+            .expect("Cannot create postgres indexed storage");
+
+        Arc::new(storage)
+    }
+}
+
+#[test_dep(tagged_as = "postgres")]
+async fn postgres_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> Arc<dyn GetIndexedStorage + Send + Sync> {
+    let unique_network_id = Uuid::new_v4().to_string();
+    let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
+    Arc::new(PostgresIndexedStorageWrapper { postgres })
+}
+
 #[derive(Debug, Clone)]
 struct IndexedStorageNamespaces {
     ns: IndexedStorageNamespace,
@@ -223,7 +288,7 @@ fn ns2() -> IndexedStorageNamespaces {
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite");
+define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
 
 #[test]
 #[tracing::instrument]
