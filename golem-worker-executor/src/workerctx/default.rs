@@ -82,23 +82,39 @@ use wasmtime_wasi_http::WasiHttpView;
 /// Wasmtime fuel counts down from `u64::MAX`. Workers borrow a fixed amount of
 /// fuel from the shared [`AtomicResourceEntry`] each epoch tick, and return any
 /// unused portion at invocation end.
-pub(crate) struct FuelTracker {
-    /// The wasmtime gauge reading the last time consumption was measured.
+///
+/// The key invariant for correct billing:
+///
+///   unused = total_borrowed_since_last_return - total_consumed_since_last_return
+///
+/// `total_consumed` is derived directly from the wasmtime gauge:
+///   `gauge_at_last_return - current_gauge`
+///
+/// `total_borrowed` is accumulated explicitly across all borrows since the last
+/// `on_return` call. This ensures that when `unused_to_return` is called at
+/// invocation end, it refunds the full over-borrow across all epoch ticks — not
+/// just the tail of the most recent borrow.
+struct FuelTracker {
+    /// The wasmtime gauge reading the last time `on_return` was called.
     /// Starts at `u64::MAX` (the gauge's initial value set at store creation).
-    pub(crate) gauge_at_last_return: u64,
+    pub(self) gauge_at_last_return: u64,
     /// The gauge level down to which we have pre-paid via the account pool.
-    /// Execution below this floor requires a new borrow. Updated to
-    /// `current_gauge - fuel_to_borrow` after each successful borrow.
-    pub(crate) prepaid_gauge_floor: u64,
+    /// Updated to `current_gauge - amount` after each successful borrow.
+    /// Used only to determine the next `amount_to_borrow` — not for `unused_to_return`.
+    pub(self) prepaid_gauge_floor: u64,
+    /// Cumulative fuel borrowed from the account pool since the last `on_return`.
+    /// Reset to 0 on every `on_return` call.
+    pub(self) total_borrowed_since_last_return: u64,
     /// Minimum fuel units borrowed from the account pool per epoch tick.
-    pub(crate) fuel_to_borrow: u64,
+    pub(self) fuel_to_borrow: u64,
 }
 
 impl FuelTracker {
-    pub(crate) fn new(fuel_to_borrow: u64) -> Self {
+    pub(self) fn new(fuel_to_borrow: u64) -> Self {
         Self {
             gauge_at_last_return: u64::MAX,
             prepaid_gauge_floor: u64::MAX,
+            total_borrowed_since_last_return: 0,
             fuel_to_borrow,
         }
     }
@@ -108,33 +124,42 @@ impl FuelTracker {
     /// Always at least `fuel_to_borrow`. If the gauge has already dropped below
     /// `prepaid_gauge_floor` (the worker burned through the whole pre-paid amount
     /// in one epoch), the full deficit is topped up instead.
-    pub(crate) fn determine_amount_to_borrow(&self, current_gauge: u64) -> u64 {
+    pub(self) fn determine_amount_to_borrow(&self, current_gauge: u64) -> u64 {
         Ord::max(
             self.fuel_to_borrow,
             self.prepaid_gauge_floor.saturating_sub(current_gauge),
         )
     }
 
-    /// Called after a successful borrow to advance the pre-paid floor.
-    pub(crate) fn on_borrow_success(&mut self, current_gauge: u64, amount: u64) {
+    /// Called after a successful borrow to advance the pre-paid floor and
+    /// accumulate the total borrowed since the last return.
+    pub(self) fn on_borrow_success(&mut self, current_gauge: u64, amount: u64) {
         self.prepaid_gauge_floor = current_gauge.saturating_sub(amount);
+        self.total_borrowed_since_last_return =
+            self.total_borrowed_since_last_return.saturating_add(amount);
     }
 
     /// How much unused pre-paid fuel to return to the account pool at invocation end.
     ///
-    /// Positive when the invocation finished before the gauge reached the floor,
-    /// meaning part of the last batch was never consumed by wasmtime.
-    pub(crate) fn unused_to_return(&self, current_gauge: u64) -> u64 {
-        current_gauge.saturating_sub(self.prepaid_gauge_floor)
+    /// Returns the full over-borrow across all epoch ticks since the last `on_return`:
+    ///   unused = total_borrowed - total_consumed
+    ///          = total_borrowed - (gauge_at_last_return - current_gauge)
+    ///
+    /// This correctly refunds all pre-borrowed fuel that wasmtime did not actually
+    /// consume, regardless of how many epoch ticks or batch syncs occurred.
+    pub(self) fn unused_to_return(&self, current_gauge: u64) -> u64 {
+        let total_consumed = self.gauge_at_last_return.saturating_sub(current_gauge);
+        self.total_borrowed_since_last_return
+            .saturating_sub(total_consumed)
     }
 
-    /// Records the current gauge reading and returns wasmtime instructions burned
-    /// since the previous call.
+    /// Records the current gauge reading, resets the borrow accumulator, and
+    /// returns wasmtime instructions burned since the previous call.
     ///
     /// # Panics
     ///
     /// Panics if `current_gauge > gauge_at_last_return` (fuel can only decrease).
-    pub(crate) fn on_return(&mut self, current_gauge: u64) -> u64 {
+    pub(self) fn on_return(&mut self, current_gauge: u64) -> u64 {
         assert!(
             self.gauge_at_last_return >= current_gauge,
             "fuel gauge increased: previous={} current={}",
@@ -143,6 +168,7 @@ impl FuelTracker {
         );
         let consumed = self.gauge_at_last_return - current_gauge;
         self.gauge_at_last_return = current_gauge;
+        self.total_borrowed_since_last_return = 0;
         consumed
     }
 }
@@ -199,9 +225,6 @@ impl FuelManagement for Context {
         if unused > 0 {
             self.resource_limit_entry.return_fuel(unused);
             debug!("returned {} fuel", unused);
-            // advance the floor to reflect that the unused portion is no longer pre-paid
-            self.fuel_tracker.prepaid_gauge_floor =
-                self.fuel_tracker.prepaid_gauge_floor.saturating_add(unused);
         }
 
         let consumed = self.fuel_tracker.on_return(current_level);
@@ -918,41 +941,48 @@ mod tests {
         assert_eq!(ft.prepaid_gauge_floor, gauge2 - a2);
     }
 
-    // --- unused_to_return ---
-
     #[test]
-    fn unused_to_return_gives_back_gap_between_gauge_and_floor() {
-        // Borrow 10000 when gauge = INITIAL - 5000 → floor = INITIAL - 15000.
-        // Invocation ends with gauge = INITIAL - 11000:
-        //   unused = (INITIAL - 11000) - (INITIAL - 15000) = 4000
+    fn unused_to_return_gives_back_total_overborrow() {
+        // Tick 1: gauge = INITIAL - 5000 → borrow 10,000.
+        //         total_borrowed = 10,000
+        // Tick 2: gauge = INITIAL - 8000 → borrow 10,000.
+        //         total_borrowed = 20,000
+        // Invocation ends: gauge = INITIAL - 9000 (only 1000 more burned after tick 2).
+        //   total_consumed = INITIAL - (INITIAL - 9000) = 9,000
+        //   unused = total_borrowed - total_consumed = 20,000 - 9,000 = 11,000
         let mut ft = fuel_tracker();
-        let gauge = INITIAL - 5_000;
-        ft.on_borrow_success(gauge, ft.determine_amount_to_borrow(gauge));
 
-        let end_gauge = INITIAL - 11_000;
-        assert_eq!(ft.unused_to_return(end_gauge), 4_000);
+        let gauge1 = INITIAL - 5_000;
+        ft.on_borrow_success(gauge1, ft.determine_amount_to_borrow(gauge1));
+
+        let gauge2 = INITIAL - 8_000;
+        ft.on_borrow_success(gauge2, ft.determine_amount_to_borrow(gauge2));
+
+        let end_gauge = INITIAL - 9_000;
+        assert_eq!(ft.unused_to_return(end_gauge), 11_000);
     }
 
     #[test]
-    fn unused_to_return_is_zero_when_gauge_at_floor() {
+    fn unused_to_return_is_zero_when_all_borrowed_fuel_consumed() {
+        // One tick: borrow 10,000. Worker burns exactly 10,000 instructions.
+        // total_consumed = total_borrowed → unused = 0.
         let mut ft = fuel_tracker();
-        let gauge = INITIAL - 5_000;
+        let gauge = INITIAL; // borrow at the very start, before any instructions burned
         ft.on_borrow_success(gauge, ft.determine_amount_to_borrow(gauge));
-        // floor = INITIAL - 15000; gauge exactly at the floor
-        assert_eq!(ft.unused_to_return(INITIAL - 15_000), 0);
+        // 10,000 instructions burned since store start
+        assert_eq!(ft.unused_to_return(INITIAL - 10_000), 0);
     }
 
     #[test]
-    fn unused_to_return_saturates_to_zero_when_gauge_below_floor() {
-        // Gauge burned past the floor — unused cannot be negative
+    fn unused_to_return_saturates_to_zero_when_consumed_exceeds_borrowed() {
+        // Worker burned more instructions than were borrowed (pre-borrow happened
+        // after some instructions already ran). unused cannot be negative.
         let mut ft = fuel_tracker();
-        let gauge = INITIAL - 5_000;
+        let gauge = INITIAL - 5_000; // 5000 already burned before first borrow
         ft.on_borrow_success(gauge, ft.determine_amount_to_borrow(gauge));
-        // floor = INITIAL - 15000; gauge at INITIAL - 20000 (below floor)
-        assert_eq!(ft.unused_to_return(INITIAL - 20_000), 0);
+        // 12,000 total burned (5,000 before borrow + 7,000 after) > 10,000 borrowed
+        assert_eq!(ft.unused_to_return(INITIAL - 12_000), 0);
     }
-
-    // --- on_return ---
 
     #[test]
     fn on_return_reports_correct_consumption() {
@@ -973,8 +1003,6 @@ mod tests {
         let c2 = ft.on_return(INITIAL - 12_000);
         assert_eq!(c2, 7_000); // only the delta since last call
     }
-
-    // --- net charge over a full invocation ---
 
     #[test]
     fn net_delta_over_full_invocation_is_within_one_fuel_to_borrow_of_actual_consumption() {
@@ -1010,6 +1038,36 @@ mod tests {
         assert!(
             net_delta <= actual_consumed + FUEL_TO_BORROW as i64,
             "over-charged by more than fuel_to_borrow: net={net_delta} actual={actual_consumed}"
+        );
+    }
+
+    #[test]
+    fn net_charge_equals_actual_consumption_across_many_ticks() {
+        // 1000 ticks (10 seconds), 3000 instructions per tick (30% utilisation).
+        // Total consumed = 3,000,000. Total borrowed = 10,000,000.
+        // unused_to_return must refund 7,000,000 so net billed = 3,000,000 = actual.
+        let instructions_per_tick = 3_000u64;
+        let ticks = 1_000usize;
+
+        let mut ft = fuel_tracker();
+        let mut total_billed: i64 = 0;
+        let mut current_gauge = INITIAL;
+
+        for _ in 1..=ticks {
+            current_gauge -= instructions_per_tick;
+            let amount = ft.determine_amount_to_borrow(current_gauge);
+            ft.on_borrow_success(current_gauge, amount);
+            total_billed += amount as i64;
+        }
+
+        total_billed -= ft.unused_to_return(current_gauge) as i64;
+        let actual_consumed = (INITIAL - current_gauge) as i64;
+
+        assert_eq!(
+            total_billed,
+            actual_consumed,
+            "over-charged by {}: billed={total_billed} actual={actual_consumed}",
+            total_billed - actual_consumed
         );
     }
 }
