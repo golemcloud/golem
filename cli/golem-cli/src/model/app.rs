@@ -1022,18 +1022,14 @@ impl<'a> Component<'a> {
         self.layer_properties().applied_layers.as_slice()
     }
 
+    // The manifest component dir property
+    pub fn dir(&self) -> Option<&Path> {
+        self.properties().dir.as_deref()
+    }
+
+    // Fully resolved component dir
     pub fn component_dir(&self) -> &Path {
-        let parent = self.source().parent().unwrap_or_else(|| {
-            panic!(
-                "Failed to get parent for component, source: {}",
-                self.source().display()
-            )
-        });
-        if parent.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            parent
-        }
+        &self.properties.value.0.component_dir
     }
 
     pub fn properties(&self) -> &ComponentProperties {

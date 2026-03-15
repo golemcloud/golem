@@ -2,6 +2,7 @@
 
 components:
   componentname:
+    dir: "componentDir"
     templates: ts
 
     # golem-app-manifest-env-doc

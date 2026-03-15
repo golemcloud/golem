@@ -73,8 +73,9 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use heck::ToKebabCase;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -97,6 +98,7 @@ impl AppCommandHandler {
         }
     }
 
+    // TODO: FCL: break up into smaller parts, once stabilized
     pub async fn cmd_new(
         &self,
         application_path: Option<PathBuf>,
@@ -109,10 +111,17 @@ impl AppCommandHandler {
         let is_dot_application_path =
             application_path.as_ref().map(|p| p.as_path()) == Some(Path::new("."));
 
-        let (application_name_candidate, app_dir, component_languages): (
+        #[derive(Debug)]
+        struct ExistingComponent {
+            language: GuestLanguage,
+            dir: PathBuf, // relative path, defined in the manifest 'dir' property
+            component_dir: PathBuf, // canonical resolved dir
+            manifest_source_dir: PathBuf, // source of the manifest, where the component is defined
+        }
+        let (application_name_candidate, app_dir, existing_components): (
             String,
             PathBuf,
-            BTreeMap<ComponentName, GuestLanguage>,
+            BTreeMap<ComponentName, ExistingComponent>,
         ) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.opt()?;
@@ -146,14 +155,27 @@ impl AppCommandHandler {
                         app_ctx
                             .deployable_component_names()
                             .into_iter()
-                            .filter_map(|component_name| {
-                                app_ctx
-                                    .application()
-                                    .component(&component_name)
-                                    .guess_language()
-                                    .map(|language| (component_name, language))
+                            .map(|component_name| {
+                                let component = app_ctx.application().component(&component_name);
+                                let existing_component = ExistingComponent {
+                                    language: component.guess_language().ok_or_else(|| {
+                                        anyhow!(
+                                            "Failed to determine language for component {}",
+                                            component_name
+                                        )
+                                    })?,
+                                    dir: component
+                                        .dir()
+                                        .unwrap_or_else(|| Path::new(","))
+                                        .to_path_buf(),
+                                    component_dir: component.component_dir().to_path_buf(),
+                                    manifest_source_dir: fs::parent_or_err(&component.source())?
+                                        .to_path_buf(),
+                                };
+
+                                Ok::<_, anyhow::Error>((component_name, existing_component))
                             })
-                            .collect(),
+                            .collect::<Result<BTreeMap<_, _>, _>>()?,
                     )
                 }
                 None => {
@@ -216,14 +238,14 @@ impl AppCommandHandler {
             for template_name in &template_names {
                 match component_name.as_ref() {
                     Some(component_name) => {
-                        if let Some(component_language) = component_languages.get(component_name) {
-                            if template_name.language() != *component_language {
+                        if let Some(existing_component) = existing_components.get(component_name) {
+                            if template_name.language() != existing_component.language {
                                 validation.add_error(
                                     format!(
                                         "Cannot add {} template {} to existing {} component {}, language mismatch!",
                                         template_name.language().name().log_color_highlight(),
                                         template_name.as_str().log_color_error_highlight(),
-                                        component_language.name().log_color_highlight(),
+                                        existing_component.language.name().log_color_highlight(),
                                         component_name.as_str().log_color_highlight(),
                                     ));
                                 continue;
@@ -233,10 +255,10 @@ impl AppCommandHandler {
                         template_to_component.insert(template_name, component_name.clone());
                     }
                     None => {
-                        let matching_components = component_languages
+                        let matching_components = existing_components
                             .iter()
-                            .filter_map(|(component_name, component_language)| {
-                                (*component_language == template_name.language())
+                            .filter_map(|(component_name, component)| {
+                                (component.language == template_name.language())
                                     .then_some(component_name)
                             })
                             .collect::<Vec<_>>();
@@ -275,6 +297,8 @@ impl AppCommandHandler {
 
             template_to_component
         };
+
+        debug!("template to component map: {:#?}", template_to_component);
 
         let app_template_repo = self.ctx.app_template_repo()?;
         let (common_templates, component_templates, agent_templates): (
@@ -330,8 +354,129 @@ impl AppCommandHandler {
             (common_templates, component_templates, agent_templates)
         };
 
-        // TODO: FCL check and handle single to multi component switch
-        // TODO: FCL handle multi component layouts (as calculate component dirs)
+        let existing_component_names = existing_components.keys().collect::<BTreeSet<_>>();
+        let component_names_to_add_or_update =
+            component_templates.keys().copied().collect::<BTreeSet<_>>();
+        let all_component_names = component_names_to_add_or_update
+            .union(&existing_component_names)
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        let all_component_directories: BTreeMap<&ComponentName, PathBuf> = {
+            if all_component_names.len() == 1 {
+                let mut all_component_directories = BTreeMap::new();
+
+                for &component_name in &all_component_names {
+                    match existing_components.get(component_name) {
+                        Some(component) => {
+                            all_component_directories.insert(component_name, component.dir.clone());
+                        }
+                        None => {
+                            all_component_directories.insert(component_name, PathBuf::from("."));
+                        }
+                    }
+                }
+
+                all_component_directories
+            } else {
+                let app_prefix = format!("{}:", application_name.0);
+                let mut all_component_directories = BTreeMap::new();
+
+                // Promoting root single components to multi component layout
+                for &component_name in &all_component_names {
+                    let new_component_dir = || {
+                        let new_component_dir =
+                            match component_name.as_ref().strip_prefix(&app_prefix) {
+                                Some(suffix) => suffix.to_string(),
+                                None => component_name.as_str().to_kebab_case(),
+                            };
+
+                        let full_new_component_dir = app_dir.join(&new_component_dir);
+                        if full_new_component_dir.exists() {
+                            bail!(
+                                "Failed to apply template(s): cannot promote application component {} to multi-component layout: directory {} already exists!",
+                                component_name.as_str().log_color_highlight(),
+                                full_new_component_dir.log_color_error_highlight(),
+                            );
+                        }
+
+                        Ok(PathBuf::from(new_component_dir))
+                    };
+
+                    match existing_components.get(component_name) {
+                        Some(component) => {
+                            if component.component_dir != app_dir {
+                                all_component_directories
+                                    .insert(component_name, component.dir.clone());
+                                continue;
+                            }
+
+                            if component.manifest_source_dir != component.component_dir {
+                                bail!("Cannot add template(s), the current application uses a custom layout.")
+                            }
+
+                            let new_component_dir = new_component_dir()?;
+
+                            // TODO: with declarative plan, log and approve, and based on the component template
+                            match component.language {
+                                GuestLanguage::TypeScript => {
+                                    log_action(
+                                        "Promoting",
+                                        format!(
+                                            "component {} to multi-component layout",
+                                            component_name.as_str().log_color_highlight()
+                                        ),
+                                    );
+                                    let source = &app_dir;
+                                    let target = app_dir.join(&new_component_dir);
+
+                                    std::fs::create_dir_all(&target)?;
+
+                                    std::fs::rename(source.join("src"), target.join("src"))?;
+                                    std::fs::rename(
+                                        source.join("tsconfig.json"),
+                                        target.join("tsconfig.json"),
+                                    )?;
+                                }
+                                GuestLanguage::Rust => {
+                                    // TODO: FCL
+                                    todo!("implement rust multi-component promotion")
+                                }
+                            }
+
+                            all_component_directories.insert(component_name, new_component_dir);
+                        }
+                        None => {
+                            all_component_directories.insert(component_name, new_component_dir()?);
+                        }
+                    }
+                }
+
+                all_component_directories
+            }
+        };
+
+        debug!(
+            "all component directories: {:#?}",
+            all_component_directories
+        );
+
+        // We extend the component templates again to include promoted existing components
+        let component_templates = {
+            let mut component_templates = component_templates;
+
+            for &component_name in all_component_directories.keys() {
+                if let Some(component) = existing_components.get(component_name) {
+                    if let Some(component_template) =
+                        app_template_repo.component_template(component.language)?
+                    {
+                        component_templates.insert(component_name, component_template);
+                    }
+                }
+            }
+
+            component_templates
+        };
 
         let template_plan_builder = {
             let mut template_plan_builder = TemplatePlanBuilder::new();
@@ -348,12 +493,23 @@ impl AppCommandHandler {
             }
 
             for (component_name, component_template) in &component_templates {
+                let component_dir =
+                    all_component_directories
+                        .get(component_name)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "Illegal state: missing component directory for: {}",
+                                component_name
+                            )
+                        })?;
+
                 template_plan_builder.add(
                     component_template.0.name.as_str(),
                     &component_template.generate(
                         &application_name,
-                        &component_name,
                         &app_dir,
+                        &component_name,
+                        component_dir,
                         self.ctx.sdk_overrides(),
                     )?,
                 );
@@ -370,12 +526,23 @@ impl AppCommandHandler {
                             )
                         })?;
 
+                let component_dir =
+                    all_component_directories
+                        .get(component_name)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "Illegal state: missing component directory for: {}",
+                                component_name
+                            )
+                        })?;
+
                 template_plan_builder.add(
                     agent_template_name.as_str(),
                     &agent_template.generate(
                         &application_name,
-                        &component_name,
                         &app_dir,
+                        &component_name,
+                        component_dir,
                         self.ctx.sdk_overrides(),
                     )?,
                 );

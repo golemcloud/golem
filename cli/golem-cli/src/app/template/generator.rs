@@ -89,6 +89,7 @@ impl TemplateGeneratorTargetFs for InMemoryFs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Transform {
+    ComponentDir,
     ComponentName,
     ManifestHints,
     TsSdk,
@@ -100,7 +101,9 @@ enum Transform {
 struct GeneratorContext<'a> {
     template: &'a AppTemplate,
     application_name: Option<&'a ApplicationName>,
+    application_dir: &'a Path,
     component_name: Option<&'a ComponentName>,
+    component_dir: Option<&'a Path>,
     target_path: &'a Path,
     sdk_overrides: &'a SdkOverrides,
 }
@@ -121,7 +124,9 @@ pub fn generate_commons_by_template<T: TemplateGeneratorTargetFs>(
         &GeneratorContext {
             template,
             application_name: Some(application_name),
+            application_dir: target_path,
             component_name: None,
+            component_dir: None,
             target_path,
             sdk_overrides,
         },
@@ -131,6 +136,7 @@ pub fn generate_commons_by_template<T: TemplateGeneratorTargetFs>(
 
 pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
+    application_dir: &Path,
     target_path: &Path,
     sdk_overrides: &SdkOverrides,
     mut target: T,
@@ -159,7 +165,9 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
         &GeneratorContext {
             template,
             application_name: None,
+            application_dir,
             component_name: None,
+            component_dir: None,
             target_path,
             sdk_overrides,
         },
@@ -175,9 +183,10 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
 
 pub fn generate_component_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
-    target_path: &Path,
     application_name: &ApplicationName,
+    application_dir: &Path,
     component_name: &ComponentName,
+    component_dir: &Path,
     sdk_overrides: &SdkOverrides,
     mut target: T,
 ) -> anyhow::Result<T::Output> {
@@ -191,7 +200,9 @@ pub fn generate_component_by_template<T: TemplateGeneratorTargetFs>(
             template,
             application_name: Some(application_name),
             component_name: Some(component_name),
-            target_path,
+            application_dir,
+            component_dir: Some(component_dir),
+            target_path: &application_dir,
             sdk_overrides,
         },
     )?;
@@ -200,9 +211,10 @@ pub fn generate_component_by_template<T: TemplateGeneratorTargetFs>(
 
 pub fn generate_agent_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
-    target_path: &Path,
     application_name: &ApplicationName,
+    application_dir: &Path,
     component_name: &ComponentName,
+    component_dir: &Path,
     sdk_overrides: &SdkOverrides,
     mut target: T,
 ) -> anyhow::Result<T::Output> {
@@ -215,8 +227,10 @@ pub fn generate_agent_by_template<T: TemplateGeneratorTargetFs>(
         &GeneratorContext {
             template,
             application_name: Some(application_name),
+            application_dir,
             component_name: Some(component_name),
-            target_path,
+            component_dir: Some(component_dir),
+            target_path: &application_dir,
             sdk_overrides,
         },
     )?;
@@ -249,47 +263,54 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
         .entries()
     {
         let entry_path = entry.path();
-        let name = entry_path.file_name().unwrap().to_str().unwrap();
-        if name != "metadata.json" {
-            let name = transform_file_name(ctx, name);
-            match entry {
-                DirEntry::Dir(dir) => {
-                    generate_directory(
-                        target,
-                        ctx,
-                        templates_dir,
-                        dir.path(),
-                        &target_path.join(&name),
-                    )?;
-                }
-                DirEntry::File(file) => {
-                    let content_transform = match (ctx.template.metadata.is_common(), name.as_str())
-                    {
-                        (true, "golem.yaml") => {
-                            vec![Transform::ManifestHints, Transform::ApplicationName]
-                        }
-                        (true, "package.json") => vec![Transform::TsSdk],
-                        (true, "Cargo.toml") => vec![Transform::RustSdk],
-                        (true, _) => vec![],
-                        (false, "golem.yaml") => {
-                            vec![
-                                Transform::ManifestHints,
-                                Transform::ComponentName,
-                                Transform::ApplicationName,
-                            ]
-                        }
-                        (false, _) => vec![Transform::ComponentName],
-                    };
+        let name = fs::file_name_to_str(entry_path)?;
 
-                    instantiate_file(
-                        target,
-                        ctx,
-                        templates_dir,
-                        file.path(),
-                        &target_path.join(&name),
-                        content_transform,
-                    )?;
-                }
+        if name == "metadata.json" {
+            continue;
+        }
+
+        let name = transform_file_name(ctx, name)?;
+        match entry {
+            DirEntry::Dir(dir) => {
+                generate_directory(
+                    target,
+                    ctx,
+                    templates_dir,
+                    dir.path(),
+                    &target_path.join(&name),
+                )?;
+            }
+            DirEntry::File(file) => {
+                let content_transform = match (
+                    ctx.template.metadata.is_common()
+                        || ctx.template.metadata.is_common_on_demand(),
+                    name.as_str(),
+                ) {
+                    (true, "golem.yaml") => {
+                        vec![Transform::ManifestHints, Transform::ApplicationName]
+                    }
+                    (true, "package.json") => vec![Transform::TsSdk],
+                    (true, "Cargo.toml") => vec![Transform::RustSdk],
+                    (true, _) => vec![],
+                    (false, "golem.yaml") => {
+                        vec![
+                            Transform::ManifestHints,
+                            Transform::ComponentDir,
+                            Transform::ComponentName,
+                            Transform::ApplicationName,
+                        ]
+                    }
+                    (false, _) => vec![Transform::ComponentName],
+                };
+
+                instantiate_file(
+                    target,
+                    ctx,
+                    templates_dir,
+                    file.path(),
+                    &target_path.join(&name),
+                    content_transform,
+                )?;
             }
         }
     }
@@ -304,7 +325,9 @@ fn instantiate_file<T: TemplateGeneratorTargetFs>(
     target_path: &Path,
     content_transforms: Vec<Transform>,
 ) -> anyhow::Result<()> {
-    if target.exists(target_path) {
+    let target_path = transform_target_file_path(ctx, target_path)?;
+
+    if target.exists(&target_path) {
         bail!("Target {} already exists", target_path.display());
     }
 
@@ -312,14 +335,18 @@ fn instantiate_file<T: TemplateGeneratorTargetFs>(
     let rendered = if content_transforms.is_empty() {
         contents.to_string()
     } else {
-        transform(ctx, contents, &content_transforms)
+        transform(ctx, contents, &content_transforms)?
     };
 
-    target.write_file(target_path, rendered)
+    target.write_file(&target_path, rendered)
 }
 
-fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Transform]) -> String {
-    let transform_pack_and_comp = |str: &str| -> String {
+fn transform(
+    ctx: &GeneratorContext<'_>,
+    str: impl AsRef<str>,
+    transforms: &[Transform],
+) -> anyhow::Result<String> {
+    let transform_component = |str: &str| -> String {
         match &ctx.component_name {
             Some(component_name) => str
                 .replace("componentname", component_name.as_str())
@@ -328,6 +355,13 @@ fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Tra
                 .replace("__cn__", "componentName"),
             None => str.to_string(),
         }
+    };
+
+    let transform_component_dir = |str: &str| -> anyhow::Result<String> {
+        Ok(match &ctx.component_dir {
+            Some(component_dir) => str.replace("componentDir", fs::path_to_str(component_dir)?),
+            None => str.to_string(),
+        })
     };
 
     let transform_manifest_hints = |str: &str| -> String {
@@ -375,7 +409,8 @@ fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Tra
 
     for transform in transforms {
         transformed = match transform {
-            Transform::ComponentName => transform_pack_and_comp(&transformed),
+            Transform::ComponentDir => transform_component_dir(&transformed)?,
+            Transform::ComponentName => transform_component(&transformed),
             Transform::ManifestHints => transform_manifest_hints(&transformed),
             Transform::TsSdk => transform_ts_sdk(&transformed),
             Transform::RustSdk => transform_rust_sdk(&transformed),
@@ -383,11 +418,41 @@ fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Tra
         };
     }
 
-    transformed
+    Ok(transformed)
 }
 
-fn transform_file_name(ctx: &GeneratorContext<'_>, file_name: impl AsRef<str>) -> String {
-    transform(ctx, file_name, &[Transform::ComponentName]).replace("Cargo.toml._", "Cargo.toml")
+fn transform_file_name(
+    ctx: &GeneratorContext<'_>,
+    file_name: impl AsRef<str>,
+) -> anyhow::Result<String> {
+    Ok(transform(ctx, file_name, &[Transform::ComponentName])?
+        .replace("Cargo.toml._", "Cargo.toml"))
+}
+
+fn transform_target_file_path(
+    ctx: &GeneratorContext<'_>,
+    target_path: &Path,
+) -> anyhow::Result<PathBuf> {
+    match ctx.component_dir {
+        Some(component_dir) => {
+            let relative_target_path = fs::strip_prefix_or_err(target_path, ctx.application_dir)?;
+            let transformed_relative_target_path = {
+                if component_dir == Path::new(".") {
+                    fs::path_to_str(relative_target_path)?.replace("component-dir", "")
+                } else {
+                    fs::path_to_str(relative_target_path)?
+                        .replace("component-dir", fs::path_to_str(component_dir)?)
+                }
+            };
+
+            Ok(PathBuf::from(format!(
+                "{}/{}",
+                fs::path_to_str(&ctx.application_dir)?,
+                transformed_relative_target_path
+            )))
+        }
+        None => Ok(target_path.to_path_buf()),
+    }
 }
 
 fn get_contents<'a>(dir: &Dir<'a>, source: &'a Path) -> anyhow::Result<&'a str> {

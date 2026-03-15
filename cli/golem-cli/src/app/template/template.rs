@@ -152,24 +152,33 @@ impl AppTemplate {
 
     fn generate_on_demand_commons(
         &self,
+        application_dir: &Path,
         target_path: &Path,
         sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
-        generate_on_demand_commons_by_template(self, target_path, sdk_overrides, StdFs)
+        generate_on_demand_commons_by_template(
+            self,
+            application_dir,
+            target_path,
+            sdk_overrides,
+            StdFs,
+        )
     }
 
     fn generate_component(
         &self,
-        target_path: &Path,
         application_name: &ApplicationName,
+        application_dir: &Path,
         component_name: &ComponentName,
+        component_dir: &Path,
         sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
         generate_component_by_template(
             self,
-            target_path,
             application_name,
+            application_dir,
             component_name,
+            component_dir,
             sdk_overrides,
             InMemoryFs::new(),
         )
@@ -177,16 +186,18 @@ impl AppTemplate {
 
     fn generate_agent(
         &self,
-        target_path: &Path,
         application_name: &ApplicationName,
+        applcation_dir: &Path,
         component_name: &ComponentName,
+        component_dir: &Path,
         sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
         generate_agent_by_template(
             self,
-            target_path,
             application_name,
+            applcation_dir,
             component_name,
+            component_dir,
             sdk_overrides,
             InMemoryFs::new(),
         )
@@ -212,9 +223,14 @@ impl AppTemplateCommon {
 pub struct AppTemplateCommonOnDemand(pub AppTemplate);
 
 impl AppTemplateCommonOnDemand {
-    pub fn generate(&self, target_path: &Path, sdk_overrides: &SdkOverrides) -> anyhow::Result<()> {
+    pub fn generate(
+        &self,
+        application_dir: &Path,
+        target_path: &Path,
+        sdk_overrides: &SdkOverrides,
+    ) -> anyhow::Result<()> {
         self.0
-            .generate_on_demand_commons(target_path, sdk_overrides)
+            .generate_on_demand_commons(application_dir, target_path, sdk_overrides)
     }
 }
 
@@ -225,12 +241,18 @@ impl AppTemplateComponent {
     pub fn generate(
         &self,
         application_name: &ApplicationName,
+        application_dir: &Path,
         component_name: &ComponentName,
-        target_path: &Path,
+        component_dir: &Path,
         sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
-        self.0
-            .generate_component(target_path, application_name, component_name, sdk_overrides)
+        self.0.generate_component(
+            application_name,
+            application_dir,
+            component_name,
+            component_dir,
+            sdk_overrides,
+        )
     }
 }
 
@@ -241,12 +263,18 @@ impl AppTemplateAgent {
     pub fn generate(
         &self,
         application_name: &ApplicationName,
+        application_dir: &Path,
         component_name: &ComponentName,
-        target_path: &Path,
+        component_dir: &Path,
         sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
-        self.0
-            .generate_agent(target_path, application_name, component_name, sdk_overrides)
+        self.0.generate_agent(
+            application_name,
+            application_dir,
+            component_name,
+            component_dir,
+            sdk_overrides,
+        )
     }
 }
 
