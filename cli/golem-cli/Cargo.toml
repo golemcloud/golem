@@ -12,6 +12,7 @@ build = "build.rs"
 
 [features]
 default = []
+mcp = []
 server-commands = []
 
 [lib]
@@ -29,6 +30,8 @@ test = true
 harness = false
 
 [dependencies]
+rmcp = { workspace = true }
+schemars = "1.1"
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-wasm = { workspace = true, default-features = true }

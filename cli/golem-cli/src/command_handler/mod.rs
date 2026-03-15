@@ -59,6 +59,8 @@ mod component;
 mod environment;
 pub(crate) mod interactive;
 mod log;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod partial_match;
 mod plugin;
 mod profile;
@@ -393,7 +395,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handler_server_commands(self.ctx.clone(), subcommand)
                         .await
                 }
-                GolemCliSubcommand::Cloud { subcommand } => {
+                #[cfg(feature = "mcp")]
+            GolemCliSubcommand::Mcp { subcommand } => {
+                self.ctx.mcp_handler().handle_command(subcommand).await
+            }
+            GolemCliSubcommand::Cloud { subcommand } => {
                     self.ctx.cloud_handler().handle_command(subcommand).await
                 }
                 GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
@@ -433,6 +439,8 @@ pub trait Handlers {
     fn profile_config_handler(&self) -> ProfileConfigCommandHandler;
     fn profile_handler(&self) -> ProfileCommandHandler;
     fn repl_handler(&self) -> ReplHandler;
+    #[cfg(feature = "mcp")]
+    fn mcp_handler(&self) -> crate::command_handler::mcp::McpCommandHandler;
     fn worker_handler(&self) -> WorkerCommandHandler;
 }
 
@@ -521,6 +529,11 @@ impl Handlers for Arc<Context> {
 
     fn repl_handler(&self) -> ReplHandler {
         ReplHandler::new(self.clone())
+    }
+
+    #[cfg(feature = "mcp")]
+    fn mcp_handler(&self) -> crate::command_handler::mcp::McpCommandHandler {
+        crate::command_handler::mcp::McpCommandHandler::new(self.clone())
     }
 
     fn worker_handler(&self) -> WorkerCommandHandler {

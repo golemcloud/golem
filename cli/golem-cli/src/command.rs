@@ -638,6 +638,12 @@ pub enum GolemCliSubcommand {
         /// Languages that the application should support
         language: Vec<GuestLanguage>,
     },
+    #[cfg(feature = "mcp")]
+    /// Model Context Protocol (MCP) server
+    Mcp {
+        #[clap(subcommand)]
+        subcommand: McpSubcommand,
+    },
     /// Build all or selected components in the application
     Build {
         #[command(flatten)]
@@ -1920,4 +1926,15 @@ mod test {
             }
         }
     }
+}
+
+#[cfg(feature = "mcp")]
+#[derive(Debug, clap::Subcommand)]
+pub enum McpSubcommand {
+    /// Run the Golem MCP server
+    Serve {
+        /// Port to serve on (stdio if not provided)
+        #[clap(long)]
+        port: Option<u16>,
+    },
 }
