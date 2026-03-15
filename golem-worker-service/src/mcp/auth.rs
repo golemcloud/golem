@@ -60,6 +60,15 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
+        // Only check auth on session-creating requests (no mcp-session-id header).
+        // Once a session is established, subsequent requests are trusted via the session.
+        // This avoids a gRPC call to the registry on every MCP message.
+        let has_session = req.headers().contains_key("mcp-session-id");
+
+        if has_session {
+            return self.inner.call(req).await.map(|resp| resp.into_response());
+        }
+
         let host = req
             .headers()
             .get("host")
