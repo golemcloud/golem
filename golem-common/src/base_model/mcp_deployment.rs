@@ -16,6 +16,7 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
+use crate::base_model::security_scheme::SecuritySchemeName;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
 use std::collections::BTreeMap;
@@ -28,7 +29,7 @@ declare_structs! {
     #[derive(Default)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub struct McpDeploymentAgentOptions {
-        // TODO: MCP agent configuration options coming soon
+        pub security_scheme: Option<SecuritySchemeName>,
     }
 
     pub struct McpDeploymentCreation {

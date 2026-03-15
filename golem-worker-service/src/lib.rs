@@ -25,7 +25,7 @@ pub mod service;
 
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::mcp::GolemAgentMcpServer;
+use crate::mcp::{GolemAgentMcpServer, McpBearerAuth};
 use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -233,6 +233,7 @@ impl WorkerService {
             .port();
 
         let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
+        let mcp_capability_lookup_for_auth = mcp_capability_lookup.clone();
 
         let worker_service = self.services.worker_service.clone();
 
@@ -249,6 +250,7 @@ impl WorkerService {
 
         let route = Route::new()
             .nest("/mcp", service.compat())
+            .with(McpBearerAuth::new(mcp_capability_lookup_for_auth))
             .with(OpenTelemetryMetrics::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())

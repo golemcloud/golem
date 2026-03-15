@@ -19,21 +19,26 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpDeploymentAgentOptions {
-    // TODO: MCP agent configuration options coming soon
+    pub security_scheme: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpDeploymentAgentOptionsDiff {
-    // TODO: MCP agent configuration diff tracking coming soon
+    pub security_scheme_changed: bool,
 }
 
 impl Diffable for McpDeploymentAgentOptions {
     type DiffResult = McpDeploymentAgentOptionsDiff;
 
-    fn diff(_new: &Self, _current: &Self) -> Option<Self::DiffResult> {
-        // TODO: Implement diff when configuration options are added
-        None
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        if new.security_scheme != current.security_scheme {
+            Some(McpDeploymentAgentOptionsDiff {
+                security_scheme_changed: true,
+            })
+        } else {
+            None
+        }
     }
 }
 
