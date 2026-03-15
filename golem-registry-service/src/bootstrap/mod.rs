@@ -294,6 +294,7 @@ impl Services {
             http_api_deployment_service.clone(),
             mcp_deployment_service.clone(),
             agent_secret_service.clone(),
+            security_scheme_service.clone(),
         ));
 
         let deployed_routes_service =

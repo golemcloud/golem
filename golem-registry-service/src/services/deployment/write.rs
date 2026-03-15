@@ -21,6 +21,7 @@ use crate::services::deployment::route_compilation::render_http_method;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
+use crate::services::security_scheme::SecuritySchemeService;
 use futures::TryFutureExt;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, HttpMethod};
 use golem_common::model::component::ComponentName;
@@ -235,6 +236,7 @@ pub struct DeploymentWriteService {
     http_api_deployment_service: Arc<HttpApiDeploymentService>,
     mcp_deployment_service: Arc<McpDeploymentService>,
     agent_secrets_service: Arc<AgentSecretService>,
+    security_scheme_service: Arc<SecuritySchemeService>,
 }
 
 impl DeploymentWriteService {
@@ -245,6 +247,7 @@ impl DeploymentWriteService {
         http_api_deployment_service: Arc<HttpApiDeploymentService>,
         mcp_deployment_service: Arc<McpDeploymentService>,
         agent_secrets_service: Arc<AgentSecretService>,
+        security_scheme_service: Arc<SecuritySchemeService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -253,6 +256,7 @@ impl DeploymentWriteService {
             http_api_deployment_service,
             mcp_deployment_service,
             agent_secrets_service,
+            security_scheme_service,
         }
     }
 
@@ -354,10 +358,32 @@ impl DeploymentWriteService {
 
         let compiled_routes = deployment_context.compile_http_api_routes(&mut errors);
 
+        let security_schemes_list = self
+            .security_scheme_service
+            .get_security_schemes_in_environment(environment_id, auth)
+            .await
+            .unwrap_or_default();
+
+        let security_schemes_map: HashMap<SecuritySchemeName, golem_service_base::custom_api::SecuritySchemeDetails> = security_schemes_list
+            .into_iter()
+            .map(|s| {
+                let details = golem_service_base::custom_api::SecuritySchemeDetails {
+                    id: s.id,
+                    name: s.name.clone(),
+                    provider_type: s.provider_type,
+                    client_id: s.client_id,
+                    client_secret: s.client_secret,
+                    redirect_url: s.redirect_url,
+                    scopes: s.scopes,
+                };
+                (s.name, details)
+            })
+            .collect();
+
         let compiled_mcps = deployment_context.compile_mcp_deployments(
             account_id,
             next_deployment_revision,
-            &HashMap::new(),
+            &security_schemes_map,
             &mut errors,
         );
 
