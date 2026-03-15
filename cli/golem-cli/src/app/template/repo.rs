@@ -99,13 +99,18 @@ impl AppTemplateRepo {
 
     pub fn agent_template(
         &self,
-        language: GuestLanguage,
         template_name: &AppTemplateName,
     ) -> anyhow::Result<&AppTemplateAgent> {
-        self.language_templates(language)?
+        self.language_templates(template_name.language())?
             .agent
             .get(template_name)
-            .ok_or_else(|| anyhow!("{} template '{}' not found", language, template_name))
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} template '{}' not found",
+                    template_name.language(),
+                    template_name
+                )
+            })
     }
 
     pub fn search_agent_templates(
@@ -127,7 +132,7 @@ impl AppTemplateRepo {
                         .iter()
                         .filter(|(name, template)| {
                             query.is_none_or(|q| {
-                                name.as_str().to_lowercase().contains(q)
+                                name.name().to_lowercase().contains(q)
                                     || template.0.description().to_lowercase().contains(q)
                             })
                         })

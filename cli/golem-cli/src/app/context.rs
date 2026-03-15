@@ -161,7 +161,7 @@ impl ApplicationContext {
         let _output = LogOutput::new(Output::None);
 
         match preload_app(source_mode, dev_mode, sdk_overrides) {
-            Some(environments) => to_anyhow(
+            Some(environments) => validated_to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,
                 Some(|mut preload_result| {
@@ -195,7 +195,7 @@ impl ApplicationContext {
             return Ok(None);
         };
 
-        let ctx = to_anyhow(
+        let ctx = validated_to_anyhow(
             "Failed to load application manifest, see problems above",
             Self::create_context(app_and_calling_working_dir, config, file_download_client).await,
             Some(|mut app_ctx| {
@@ -312,7 +312,7 @@ impl ApplicationContext {
                 }
             };
 
-        let selected_component_names = to_anyhow(
+        let selected_component_names = validated_to_anyhow(
             "Failed to select requested components",
             selected_component_names,
             None,
@@ -791,7 +791,7 @@ fn find_main_source() -> Option<PathBuf> {
     last_source
 }
 
-pub fn to_anyhow<T>(
+pub fn validated_to_anyhow<T>(
     message: &str,
     result: ValidatedResult<T>,
     mark_had_warns: Option<fn(T) -> T>,

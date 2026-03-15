@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::context::validated_to_anyhow;
 use crate::app::error::CustomCommandError;
-use crate::app::template::{AppTemplateName, TemplatePlanBuilder, TemplatePlanStep};
+use crate::app::template::{
+    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName,
+    TemplatePlanBuilder, TemplatePlanStep,
+};
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -50,6 +54,7 @@ use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use crate::model::GuestLanguage;
+use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -94,12 +99,15 @@ impl AppCommandHandler {
 
     pub async fn cmd_new(
         &self,
-        application_path: PathBuf,
-        template_names: Vec<String>,
+        application_path: Option<PathBuf>,
+        application_name: Option<ApplicationName>,
+        component_name: Option<ComponentName>,
+        template_names: Vec<AppTemplateName>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
-        let is_dot_application_path = application_path.as_path() == Path::new(".");
+        let is_dot_application_path =
+            application_path.as_ref().map(|p| p.as_path()) == Some(Path::new("."));
 
         let (application_name_candidate, app_dir, component_languages): (
             String,
@@ -122,6 +130,16 @@ impl AppCommandHandler {
                         bail!(NonSuccessfulExit);
                     }
 
+                    if application_name.is_some() {
+                        logln("");
+                        log_error(
+                            "Specifying the application name is not allowed in an existing application directory",
+                        );
+                        logln("");
+                        logln("Use `golem new .` for adding new templates to the current application,");
+                        logln("or switch to a different directory!");
+                    }
+
                     (
                         app_ctx.application().application_name().0.clone(),
                         app_ctx.application().app_root_dir().to_path_buf(),
@@ -139,12 +157,16 @@ impl AppCommandHandler {
                     )
                 }
                 None => {
-                    let application_path = fs::canonicalize_path(&application_path)?;
-                    (
-                        fs::file_name_to_str(&application_path)?.to_string(),
-                        application_path,
-                        BTreeMap::new(),
-                    )
+                    let application_path = fs::canonicalize_path(
+                        application_path
+                            .as_deref()
+                            .unwrap_or_else(|| Path::new(".")),
+                    )?;
+                    let application_name = match application_name {
+                        Some(application_name) => application_name.0,
+                        None => fs::file_name_to_str(&application_path)?.to_string(),
+                    };
+                    (application_name, application_path, BTreeMap::new())
                 }
             }
         };
@@ -187,28 +209,107 @@ impl AppCommandHandler {
             .map(AppTemplateName::from)
             .collect();
 
-        // TODO: FCL: support multi lang, multi comp
+        let template_to_component: HashMap<AppTemplateName, ComponentName> = {
+            let mut template_to_component = HashMap::new();
+            let mut validation = ValidationBuilder::new();
 
-        let language = GuestLanguage::TypeScript;
+            for template_name in template_names {
+                match component_name.as_ref() {
+                    Some(component_name) => {
+                        if let Some(component_language) = component_languages.get(component_name) {
+                            if template_name.language() != *component_language {
+                                validation.add_error(
+                                    format!(
+                                        "Cannot add {} template {} to existing {} component {}, language mismatch!",
+                                        template_name.language().name().log_color_highlight(),
+                                        template_name.as_str().log_color_error_highlight(),
+                                        component_language.name().log_color_highlight(),
+                                        component_name.as_str().log_color_highlight(),
+                                    ));
+                                continue;
+                            }
+                        }
 
-        let component_name = component_languages
-            .iter()
-            .find(|(_, &l)| l == language)
-            .map(|(component_name, _)| Ok(component_name.clone()))
-            .unwrap_or(
-                ComponentName::try_from(
-                    format!("{}:{}-main", application_name.0, language.id()).as_str(),
-                )
-                .map_err(|err| anyhow!(err)),
+                        template_to_component.insert(template_name, component_name.clone());
+                    }
+                    None => {
+                        let matching_components = component_languages
+                            .iter()
+                            .filter_map(|(component_name, component_language)| {
+                                (*component_language == template_name.language())
+                                    .then_some(component_name)
+                            })
+                            .collect::<Vec<_>>();
+
+                        match matching_components.as_slice() {
+                            [] => {
+                                let component_name = ComponentName::try_from(
+                                    format!(
+                                        "{}:{}-main",
+                                        application_name.0,
+                                        template_name.language().id()
+                                    )
+                                    .as_str(),
+                                )
+                                .map_err(|err| anyhow!(err))?;
+                                template_to_component.insert(template_name, component_name);
+                            }
+                            [&component_name] => {
+                                template_to_component.insert(template_name, component_name.clone());
+                            }
+                            _ => {
+                                // TODO: FCL: interactive selection
+                                todo!("interactive component selection")
+                            }
+                        }
+                    }
+                }
+            }
+
+            validated_to_anyhow(
+                "Failed to map templates to components",
+                validation.build(()),
+                None,
             )?;
 
+            template_to_component
+        };
+
         let app_template_repo = self.ctx.app_template_repo()?;
-        let common_template = app_template_repo.common_template(language)?;
-        let component_template = app_template_repo.component_template(language)?;
-        let agent_templates = {
-            let mut agent_templates = vec![];
+        let (common_templates, component_templates, agent_templates): (
+            BTreeMap<AppTemplateName, &AppTemplateCommon>,
+            BTreeMap<ComponentName, &AppTemplateComponent>,
+            BTreeMap<AppTemplateName, &AppTemplateAgent>,
+        ) = {
+            let mut common_templates = BTreeMap::new();
+            let mut component_templates = BTreeMap::new();
+            let mut agent_templates = BTreeMap::new();
+
             for template_name in &template_names {
-                match app_template_repo.agent_template(language, template_name) {
+                let component_name = template_to_component.get(template_name).ok_or_else(|| {
+                    anyhow!(
+                        "Illegal state: template {} has no assigned component",
+                        template_name
+                    )
+                })?;
+
+                if let Some(common_template) =
+                    app_template_repo.common_template(template_name.language())?
+                {
+                    if !common_templates.contains_key(&common_template.0.name) {
+                        common_templates.insert(template_name.clone(), common_template);
+                    }
+                }
+
+                if !component_templates.contains_key(component_name) {
+                    if let Some(component_template) =
+                        app_template_repo.component_templates(template_name.language())?
+                    {
+                        component_templates.insert(component_name.clone(), component_template);
+                    }
+                }
+
+                match app_template_repo.agent_template(template_name) {
                     Ok(agent_template) => {
                         agent_templates.push(agent_template);
                     }
@@ -219,21 +320,24 @@ impl AppCommandHandler {
                             template_name.as_str().log_color_error_highlight()
                         ));
                         logln("");
-                        self.log_templates_help(Some(language), None)?;
+                        self.log_templates_help(Some(template_name.language()), None)?;
                         bail!(NonSuccessfulExit);
                     }
                 }
             }
-            agent_templates
+
+            (common_templates, component_templates, agent_templates)
         };
+
+        // TODO: FCL check and handle single to multi component switch
+        // TODO: FCL handle multi component layouts (as calculate component dirs)
 
         let template_plan_builder = {
             let mut template_plan_builder = TemplatePlanBuilder::new();
 
-            // TODO: FCL: should we skip adding this if the app already exists? (vs build time dep checkd)
-            if let Some(common_template) = common_template {
+            for (common_template_name, common_template) in &common_templates {
                 template_plan_builder.add(
-                    common_template.0.name.as_str(),
+                    common_template_name.as_str(),
                     &common_template.generate(
                         &application_name,
                         &app_dir,
@@ -242,8 +346,7 @@ impl AppCommandHandler {
                 );
             }
 
-            // TODO: FCL: should we skip adding this if the component already exists? (vs build time dep checks)
-            if let Some(component_template) = component_template {
+            for (component_name, component_template) in &component_templates {
                 template_plan_builder.add(
                     component_template.0.name.as_str(),
                     &component_template.generate(
@@ -255,9 +358,19 @@ impl AppCommandHandler {
                 );
             }
 
-            for agent_template in agent_templates {
+            for (agent_template_name, agent_template) in &agent_templates {
+                let component_name =
+                    template_to_component
+                        .get(agent_template_name)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "Illegal state: template {} has no assigned component",
+                                agent_template_name
+                            )
+                        })?;
+
                 template_plan_builder.add(
-                    agent_template.0.name.as_str(),
+                    agent_template_name,
                     &agent_template.generate(
                         &application_name,
                         &component_name,
@@ -2256,20 +2369,11 @@ impl AppCommandHandler {
         for (language, templates) in templates {
             logln(format!("- {}", language.to_string().bold()));
             for (template_name, template) in templates {
-                if template_name.as_str() == "default" {
-                    logln(format!(
-                        "  - {}: {}",
-                        language.id().bold(),
-                        template.0.description(),
-                    ));
-                } else {
-                    logln(format!(
-                        "  - {}/{}: {}",
-                        language.id().bold(),
-                        template.0.name.as_str().bold(),
-                        template.0.description(),
-                    ));
-                }
+                logln(format!(
+                    "  - {}: {}",
+                    template_name.as_str().bold(),
+                    template.0.description(),
+                ));
             }
         }
 

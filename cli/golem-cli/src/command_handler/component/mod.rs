@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{to_anyhow, BuildContext};
+use crate::app::context::{validated_to_anyhow, BuildContext};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
@@ -22,7 +22,7 @@ use crate::command_handler::component::staging::ComponentStager;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
-use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
+use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_error, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
@@ -116,12 +116,13 @@ impl ComponentCommandHandler {
         })
     }
 
-    // TODO: FCL: drop
+    // TODO: FCL: drop or use golem new
     async fn cmd_new(
         &self,
-        template: Option<ComponentTemplateName>,
-        component_name: Option<ComponentName>,
+        _template: Option<ComponentTemplateName>,
+        _component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
+        /*
         self.ctx.silence_app_context_init().await;
 
         // Loading app for:
@@ -171,8 +172,7 @@ impl ComponentCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        // TODO: FCL
-        /*self.ctx.app_handler().generate_component(
+        self.ctx.app_handler().generate_component(
             &application_name,
             &component_name,
             &PathBuf::from("."),
@@ -1283,7 +1283,7 @@ fn resolve_env_vars(
         },
     );
 
-    to_anyhow(
+    validated_to_anyhow(
         &format!(
             "Failed to prepare environment variables for component: {}",
             component_name.as_str().log_color_highlight()

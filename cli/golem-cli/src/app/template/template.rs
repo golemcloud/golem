@@ -24,33 +24,73 @@ use golem_common::base_model::component::ComponentName;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct AppTemplateName(String);
+pub struct AppTemplateName {
+    language: GuestLanguage,
+    name: String,
+
+    rendered_name: String,
+}
 
 impl AppTemplateName {
+    pub fn new(language: GuestLanguage, name: String) -> Self {
+        let rendered_name = {
+            if name == "default" {
+                format!("{}", language.id())
+            } else {
+                format!("{}/{}", language.id(), name)
+            }
+        };
+
+        Self {
+            language,
+            name,
+            rendered_name,
+        }
+    }
+
+    pub fn language(&self) -> GuestLanguage {
+        self.language
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.rendered_name
     }
 }
 
-impl From<&str> for AppTemplateName {
-    fn from(s: &str) -> Self {
-        AppTemplateName(s.to_string())
+impl FromStr for AppTemplateName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let Some((lang, name)) = s.split_once("/") else {
+            return match GuestLanguage::from_id_string(s) {
+                Some(language) => Ok(Self::new(language, "default".to_string())),
+                None => Err(format!("Missing language prefix in template name: {}", s)),
+            };
+        };
+
+        let language = GuestLanguage::from_id_string(lang).ok_or_else(|| {
+            format!(
+                "Failed to parse template language prefix {} for template name: {}",
+                lang, s
+            )
+        })?;
+
+        Ok(Self::new(language, name.to_string()))
     }
 }
 
-impl From<String> for AppTemplateName {
-    fn from(s: String) -> Self {
-        AppTemplateName(s)
-    }
-}
-
-impl fmt::Display for AppTemplateName {
+impl Display for AppTemplateName {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(self.as_str())
     }
 }
 
@@ -66,7 +106,7 @@ pub struct AppTemplate {
 impl AppTemplate {
     pub fn load(language: GuestLanguage, template_path: &Path) -> anyhow::Result<Self> {
         Ok(Self {
-            name: fs::file_name_to_str(template_path)?.into(),
+            name: AppTemplateName::new(language, fs::file_name_to_str(template_path)?.to_string()),
             language,
             template_path: template_path.into(),
             metadata: AppTemplateMetadata::load(template_path)?,

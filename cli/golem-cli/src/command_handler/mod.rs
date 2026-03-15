@@ -251,9 +251,16 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             match command.subcommand {
                 // App scoped root commands
                 GolemCliSubcommand::New {
-                    application_path: app_path,
+                    application_path,
+                    application_name,
+                    component_name,
                     template,
-                } => self.ctx.app_handler().cmd_new(app_path, template).await,
+                } => {
+                    self.ctx
+                        .app_handler()
+                        .cmd_new(application_path, application_name, component_name, template)
+                        .await
+                }
                 GolemCliSubcommand::Build {
                     component_name,
                     build: build_args,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
@@ -44,6 +45,7 @@ use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use lenient_bool::LenientBool;
@@ -633,10 +635,16 @@ pub enum GolemCliSubcommand {
     /// Create a new application, component, or agent
     New {
         /// Application folder path where the new application should be created, use `.` for the current directory or for an existing application
-        application_path: PathBuf,
+        application_path: Option<PathBuf>,
+        /// Optional application name, defaults to the folder name (if that is a valid application name)
+        #[arg(long)]
+        application_name: Option<ApplicationName>,
+        /// Optional existing or new component name, by default uses an existing component or name the component based on the application name and the used language
+        #[arg(long)]
+        component_name: Option<ComponentName>,
         /// Optional template names to apply, in non-interactive mode at least one template must be specified
-        #[arg(long, short)]
-        template: Vec<String>,
+        #[arg(long)]
+        template: Vec<AppTemplateName>,
     },
     /// Build all or selected components in the application
     Build {

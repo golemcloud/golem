@@ -27,8 +27,6 @@ use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
 use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
-
-use crate::app::template::AppTemplateName;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
@@ -593,9 +591,9 @@ impl PartitionedComponentPresets {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ComponentLayerId {
-    TemplateCommon(AppTemplateName),
-    TemplateEnvironmentPresets(AppTemplateName),
-    TemplateCustomPresets(AppTemplateName),
+    TemplateCommon(String),
+    TemplateEnvironmentPresets(String),
+    TemplateCustomPresets(String),
     ComponentCommon(ComponentName),
     ComponentEnvironmentPresets(ComponentName),
     ComponentCustomPresets(ComponentName),
@@ -660,7 +658,7 @@ impl ComponentLayerId {
         }
     }
 
-    pub fn template_name(&self) -> Option<&AppTemplateName> {
+    pub fn template_name(&self) -> Option<&str> {
         match self {
             ComponentLayerId::TemplateCommon(template_name)
             | ComponentLayerId::TemplateEnvironmentPresets(template_name)
@@ -1008,7 +1006,7 @@ impl<'a> Component<'a> {
     pub fn guess_language(&self) -> Option<GuestLanguage> {
         self.applied_layers().iter().find_map(|(id, _)| {
             id.template_name()
-                .and_then(|template_name| match template_name.as_str() {
+                .and_then(|template_name| match template_name {
                     "ts" => Some(GuestLanguage::TypeScript),
                     "rust" => Some(GuestLanguage::Rust),
                     _ => None,
@@ -1490,7 +1488,6 @@ impl PluginInstallation {
 }
 
 mod app_builder {
-    use crate::app::template::AppTemplateName;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
@@ -1550,7 +1547,7 @@ mod app_builder {
         App,
         Include,
         CustomCommand(String),
-        Template(AppTemplateName),
+        Template(String),
         Component(ComponentName),
         Environment(EnvironmentName),
         Bridge,
@@ -1770,7 +1767,6 @@ mod app_builder {
                     }
 
                     for (template_name, template) in app.application.component_templates {
-                        let template_name = AppTemplateName::from(template_name);
                         if self.add_entity_source(
                             UniqueSourceCheckedEntityKey::Template(template_name.clone()),
                             &app.source,
@@ -1985,7 +1981,7 @@ mod app_builder {
         fn add_component_template(
             &mut self,
             validation: &mut ValidationBuilder,
-            template_name: AppTemplateName,
+            template_name: String,
             template: app_raw::ComponentTemplate,
         ) {
             validation.with_context(
