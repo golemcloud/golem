@@ -3,19 +3,21 @@
 componentTemplates:
   ts:
     build:
-    - command: npx tsc --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+    - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
       sources:
       - "{{ componentDir }}/src"
       - "{{ componentDir }}/tsconfig.json"
       targets:
       - "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
-    - command: "npx --no golem-typegen {{ componentDir }}/tsconfig.json --files {{ componentDir }}/src/**/*.ts"
+    - command: npx --no golem-typegen "{{ componentDir }}/tsconfig.json" --files "{{ componentDir }}/src/**/*.ts"
       dir: "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
       sources:
       - "{{ componentDir }}/src"
+      - "{{ componentDir }}/tsconfig.json"
       targets:
       - .metadata
-    - command: npx --no rollup -- -c {{ golemTempDir }}/common/ts/rollup.config.component.mjs
+    - command: npx --no rollup -- -c "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
+      dir: "{{ componentDir }}"
       env:
         GOLEM_APP_ROOT: "{{ appRootDir }}"
         GOLEM_TEMP: "{{ golemTempDir }}"

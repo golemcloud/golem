@@ -79,9 +79,6 @@ export default (async () => { return await import("./src/main");})();
             json(),
             typescript({
                 noEmitOnError: true,
-                include: [
-                    `./src/**/*.ts`,
-                ],
             }),
         ],
     };
