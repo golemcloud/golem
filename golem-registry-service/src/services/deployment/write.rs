@@ -28,6 +28,7 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, Dep
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
+use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
@@ -38,6 +39,7 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use golem_wasm::analysis::AnalysedType;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -121,6 +123,15 @@ pub enum DeployValidationError {
     ComponentNotFound(ComponentName),
     #[error("No security scheme configured for agent {0} but agent has methods that require auth")]
     NoSecuritySchemeConfigured(AgentTypeName),
+    #[error("MCP deployment {mcp_deployment_domain} has conflicting security schemes across agents")]
+    McpDeploymentConflictingSecuritySchemes {
+        mcp_deployment_domain: Domain,
+    },
+    #[error("MCP deployment {mcp_deployment_domain} references unknown security scheme {security_scheme}")]
+    McpDeploymentUnknownSecurityScheme {
+        mcp_deployment_domain: Domain,
+        security_scheme: SecuritySchemeName,
+    },
     #[error(
         "Method {agent_method} of agent {agent_type} used by http api at {method} {domain}/{path} is invalid: {error}"
     )]
@@ -346,6 +357,7 @@ impl DeploymentWriteService {
         let compiled_mcps = deployment_context.compile_mcp_deployments(
             account_id,
             next_deployment_revision,
+            &HashMap::new(),
             &mut errors,
         );
 

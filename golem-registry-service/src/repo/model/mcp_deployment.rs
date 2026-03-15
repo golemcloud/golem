@@ -132,8 +132,10 @@ impl McpDeploymentRevisionRecord {
                 .data
                 .value()
                 .agents
-                .keys()
-                .map(|k| (k.0.clone(), DiffMcpDeploymentAgentOptions::default()))
+                .iter()
+                .map(|(k, v)| (k.0.clone(), DiffMcpDeploymentAgentOptions {
+                    security_scheme: v.security_scheme.as_ref().map(|s| s.0.clone()),
+                }))
                 .collect(),
         }
     }

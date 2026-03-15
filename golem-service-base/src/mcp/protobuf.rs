@@ -22,6 +22,7 @@ impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
                     )
                 })
                 .collect(),
+            security_scheme: value.security_scheme.map(|s| s.into()),
         }
     }
 }
@@ -66,6 +67,7 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
                 .map_err(|e| format!("Invalid deployment_revision: {}", e))?,
             domain: Domain(value.domain),
             agent_type_implementers,
+            security_scheme: value.security_scheme.map(|s| s.try_into()).transpose().map_err(|e| format!("Invalid security_scheme: {}", e))?,
         })
     }
 }
