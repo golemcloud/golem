@@ -1,11 +1,11 @@
-import * as fs from 'node:fs/promises';
-import { spawn } from 'node:child_process';
-import * as path from 'node:path';
-import * as yaml from 'yaml';
-import { z } from 'zod';
-import { AgentDriver } from './driver/base.js';
-import { SkillWatcher } from './watcher.js';
-import { evaluate, ExpectSchema, type AssertionContext } from './assertions.js';
+import * as fs from "node:fs/promises";
+import { spawn } from "node:child_process";
+import * as path from "node:path";
+import * as yaml from "yaml";
+import { z } from "zod";
+import { AgentDriver } from "./driver/base.js";
+import { SkillWatcher } from "./watcher.js";
+import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
 
@@ -39,55 +39,73 @@ const DeleteAgentSchema = z.object({
   name: z.string(),
 });
 
-const ACTION_FIELDS = ['prompt', 'invoke', 'shell', 'trigger', 'create_agent', 'delete_agent', 'sleep'] as const;
+const ACTION_FIELDS = [
+  "prompt",
+  "invoke",
+  "shell",
+  "trigger",
+  "create_agent",
+  "delete_agent",
+  "sleep",
+] as const;
 
-const StepSpecSchema = z.object({
-  id: z.string().optional(),
-  prompt: z.string().optional(),
-  expectedSkills: z.array(z.string()).optional(),
-  allowedExtraSkills: z.array(z.string()).optional(),
-  strictSkillMatch: z.boolean().optional(),
-  timeout: z.number().optional(),
-  continue_session: z.boolean().optional(),
-  verify: z.object({
-    build: z.boolean().optional(),
-    deploy: z.boolean().optional(),
-  }).optional(),
-  invoke: InvokeSchema.optional(),
-  expect: ExpectSchema.optional(),
-  sleep: z.number().optional(),
-  shell: ShellSchema.optional(),
-  trigger: TriggerSchema.optional(),
-  create_agent: CreateAgentSchema.optional(),
-  delete_agent: DeleteAgentSchema.optional(),
-}).refine(
-  (step) => {
-    const presentActions = ACTION_FIELDS.filter((f) => step[f] !== undefined);
-    return presentActions.length === 1;
-  },
-  {
-    message: `Step must have exactly one action field (${ACTION_FIELDS.join(', ')})`,
-  }
-);
+const StepSpecSchema = z
+  .object({
+    id: z.string().optional(),
+    prompt: z.string().optional(),
+    expectedSkills: z.array(z.string()).optional(),
+    allowedExtraSkills: z.array(z.string()).optional(),
+    strictSkillMatch: z.boolean().optional(),
+    timeout: z.number().optional(),
+    continue_session: z.boolean().optional(),
+    verify: z
+      .object({
+        build: z.boolean().optional(),
+        deploy: z.boolean().optional(),
+      })
+      .optional(),
+    invoke: InvokeSchema.optional(),
+    expect: ExpectSchema.optional(),
+    sleep: z.number().optional(),
+    shell: ShellSchema.optional(),
+    trigger: TriggerSchema.optional(),
+    create_agent: CreateAgentSchema.optional(),
+    delete_agent: DeleteAgentSchema.optional(),
+  })
+  .refine(
+    (step) => {
+      const presentActions = ACTION_FIELDS.filter((f) => step[f] !== undefined);
+      return presentActions.length === 1;
+    },
+    {
+      message: `Step must have exactly one action field (${ACTION_FIELDS.join(", ")})`,
+    },
+  );
 
-const SettingsSchema = z.object({
-  timeout_per_subprompt: z.number().optional(),
-  golem_server: z.object({
-    router_port: z.number().optional(),
-    custom_request_port: z.number().optional(),
-  }).optional(),
-  cleanup: z.boolean().optional(),
-}).optional();
+const SettingsSchema = z
+  .object({
+    timeout_per_subprompt: z.number().optional(),
+    golem_server: z
+      .object({
+        router_port: z.number().optional(),
+        custom_request_port: z.number().optional(),
+      })
+      .optional(),
+    cleanup: z.boolean().optional(),
+  })
+  .optional();
 
-const PrerequisitesSchema = z.object({
-  env: z.record(z.string()).optional(),
-}).optional();
+const PrerequisitesSchema = z
+  .object({
+    env: z.record(z.string()).optional(),
+  })
+  .optional();
 
 const ScenarioSpecSchema = z.object({
   name: z.string({ required_error: 'Scenario must have a "name" field' }),
   settings: SettingsSchema,
   prerequisites: PrerequisitesSchema,
-  steps: z.array(StepSpecSchema).min(1, 'Scenario must have at least one step'),
+  steps: z.array(StepSpecSchema).min(1, "Scenario must have at least one step"),
 });
 
 interface StepCommon {
@@ -107,17 +125,77 @@ interface StepCommon {
 type InvokeSpec = { agent: string; function: string; args?: string };
 type ShellSpec = { command: string; args?: string[]; cwd?: string };
 type TriggerSpec = { agent: string; function: string; args?: string };
-type CreateAgentSpec = { name: string; env?: Record<string, string>; config?: Record<string, string> };
+type CreateAgentSpec = {
+  name: string;
+  env?: Record<string, string>;
+  config?: Record<string, string>;
+};
 type DeleteAgentSpec = { name: string };
 
 export type StepSpec =
-  | (StepCommon & { prompt: string; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined })
-  | (StepCommon & { invoke: InvokeSpec; prompt?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined })
-  | (StepCommon & { shell: ShellSpec; prompt?: undefined; invoke?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined })
-  | (StepCommon & { trigger: TriggerSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined })
-  | (StepCommon & { create_agent: CreateAgentSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; delete_agent?: undefined; sleep?: undefined })
-  | (StepCommon & { delete_agent: DeleteAgentSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; sleep?: undefined })
-  | (StepCommon & { sleep: number; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined });
+  | (StepCommon & {
+      prompt: string;
+      invoke?: undefined;
+      shell?: undefined;
+      trigger?: undefined;
+      create_agent?: undefined;
+      delete_agent?: undefined;
+      sleep?: undefined;
+    })
+  | (StepCommon & {
+      invoke: InvokeSpec;
+      prompt?: undefined;
+      shell?: undefined;
+      trigger?: undefined;
+      create_agent?: undefined;
+      delete_agent?: undefined;
+      sleep?: undefined;
+    })
+  | (StepCommon & {
+      shell: ShellSpec;
+      prompt?: undefined;
+      invoke?: undefined;
+      trigger?: undefined;
+      create_agent?: undefined;
+      delete_agent?: undefined;
+      sleep?: undefined;
+    })
+  | (StepCommon & {
+      trigger: TriggerSpec;
+      prompt?: undefined;
+      invoke?: undefined;
+      shell?: undefined;
+      create_agent?: undefined;
+      delete_agent?: undefined;
+      sleep?: undefined;
+    })
+  | (StepCommon & {
+      create_agent: CreateAgentSpec;
+      prompt?: undefined;
+      invoke?: undefined;
+      shell?: undefined;
+      trigger?: undefined;
+      delete_agent?: undefined;
+      sleep?: undefined;
+    })
+  | (StepCommon & {
+      delete_agent: DeleteAgentSpec;
+      prompt?: undefined;
+      invoke?: undefined;
+      shell?: undefined;
+      trigger?: undefined;
+      create_agent?: undefined;
+      sleep?: undefined;
+    })
+  | (StepCommon & {
+      sleep: number;
+      prompt?: undefined;
+      invoke?: undefined;
+      shell?: undefined;
+      trigger?: undefined;
+      create_agent?: undefined;
+      delete_agent?: undefined;
+    });
 
 export interface ScenarioSpec {
   name: string;
@@ -137,13 +215,13 @@ export interface ScenarioSpec {
 
 export class ScenarioLoader {
   static async load(filePath: string): Promise<ScenarioSpec> {
-    const content = await fs.readFile(filePath, 'utf8');
+    const content = await fs.readFile(filePath, "utf8");
     const raw = yaml.parse(content);
     const result = ScenarioSpecSchema.safeParse(raw);
     if (!result.success) {
       const issues = result.error.issues
-        .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
-        .join('\n');
+        .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+        .join("\n");
       throw new Error(`Invalid scenario file "${filePath}":\n${issues}`);
     }
     // The refine() guarantees exactly one action field, making the cast safe
@@ -161,7 +239,7 @@ export interface StepResult {
 }
 
 export interface ScenarioRunResult {
-  status: 'pass' | 'fail';
+  status: "pass" | "fail";
   durationSeconds: number;
   stepResults: StepResult[];
   artifactPaths: string[];
@@ -184,7 +262,7 @@ export class ScenarioExecutor {
     watcher: SkillWatcher,
     workspace: string,
     skillsDir: string,
-    options?: ScenarioExecutorOptions
+    options?: ScenarioExecutorOptions,
   ) {
     this.driver = driver;
     this.watcher = watcher;
@@ -213,7 +291,11 @@ export class ScenarioExecutor {
     await fs.mkdir(this.workspace, { recursive: true });
     await this.driver.setup(this.workspace, this.skillsDir);
     // Watch all agent skill directories — each agent reads skills from its own location
-    const agentSkillsDirs = ['.claude/skills', '.gemini/skills', '.agents/skills'];
+    const agentSkillsDirs = [
+      ".claude/skills",
+      ".gemini/skills",
+      ".agents/skills",
+    ];
     for (const rel of agentSkillsDirs) {
       this.watcher.addWatchDir(path.join(this.workspace, rel));
     }
@@ -230,26 +312,38 @@ export class ScenarioExecutor {
         const stepStartTime = Date.now();
         let stepSuccess = true;
         const stepErrors: string[] = [];
-        const stepTimeoutSeconds = step.timeout
-          ?? spec.settings?.timeout_per_subprompt
-          ?? this.options.globalTimeoutSeconds
-          ?? DEFAULT_STEP_TIMEOUT_SECONDS;
+        const stepTimeoutSeconds =
+          step.timeout ??
+          spec.settings?.timeout_per_subprompt ??
+          this.options.globalTimeoutSeconds ??
+          DEFAULT_STEP_TIMEOUT_SECONDS;
         const stepBaseline = this.watcher.markBaseline();
         await this.watcher.snapshotAtimes();
-        console.log(`Step ${step.id ?? '(unnamed)'}: starting (timeout=${stepTimeoutSeconds}s)`);
+        console.log(
+          `Step ${step.id ?? "(unnamed)"}: starting (timeout=${stepTimeoutSeconds}s)`,
+        );
 
         // Sleep action
         if (step.sleep !== undefined) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: sleeping for ${step.sleep}s`);
-          await new Promise(resolve => setTimeout(resolve, step.sleep! * 1000));
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: sleeping for ${step.sleep}s`,
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, step.sleep! * 1000),
+          );
         }
 
         // Create agent action
         if (step.create_agent) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: creating agent "${step.create_agent.name}"`);
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: creating agent "${step.create_agent.name}"`,
+          );
           const createResult = await this.runLocalCommand(
-            'golem', ['agent', 'new', step.create_agent.name],
-            stepTimeoutSeconds, this.workspace, commandEnv
+            "golem",
+            ["agent", "new", step.create_agent.name],
+            stepTimeoutSeconds,
+            this.workspace,
+            commandEnv,
           );
           if (!createResult.success) {
             stepSuccess = false;
@@ -259,10 +353,15 @@ export class ScenarioExecutor {
 
         // Delete agent action
         if (step.delete_agent) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: deleting agent "${step.delete_agent.name}"`);
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: deleting agent "${step.delete_agent.name}"`,
+          );
           const deleteResult = await this.runLocalCommand(
-            'golem', ['agent', 'delete', step.delete_agent.name],
-            stepTimeoutSeconds, this.workspace, commandEnv
+            "golem",
+            ["agent", "delete", step.delete_agent.name],
+            stepTimeoutSeconds,
+            this.workspace,
+            commandEnv,
           );
           if (!deleteResult.success) {
             stepSuccess = false;
@@ -272,26 +371,33 @@ export class ScenarioExecutor {
 
         // Shell action
         if (step.shell) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: running shell command "${step.shell.command}"`);
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: running shell command "${step.shell.command}"`,
+          );
           const shellCwd = step.shell.cwd
             ? path.resolve(this.workspace, step.shell.cwd)
             : this.workspace;
           const shellResult = await this.runLocalCommand(
-            step.shell.command, step.shell.args ?? [],
-            stepTimeoutSeconds, shellCwd, commandEnv
+            step.shell.command,
+            step.shell.args ?? [],
+            stepTimeoutSeconds,
+            shellCwd,
+            commandEnv,
           );
 
           if (step.expect) {
             const ctx: AssertionContext = {
               stdout: shellResult.output,
-              stderr: '',
+              stderr: "",
               exitCode: shellResult.exitCode,
             };
             const assertionResults = evaluate(ctx, step.expect);
             for (const ar of assertionResults) {
               if (!ar.passed) {
                 stepSuccess = false;
-                stepErrors.push(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
+                stepErrors.push(
+                  `ASSERTION_FAILED (${ar.assertion}): ${ar.message}`,
+                );
               }
             }
           } else if (!shellResult.success) {
@@ -302,27 +408,51 @@ export class ScenarioExecutor {
 
         // Trigger action — fire-and-forget
         if (step.trigger) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: triggering ${step.trigger.agent}.${step.trigger.function}`);
-          const triggerArgs = ['agent', 'invoke', step.trigger.agent, step.trigger.function, '--trigger'];
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: triggering ${step.trigger.agent}.${step.trigger.function}`,
+          );
+          const triggerArgs = [
+            "agent",
+            "invoke",
+            step.trigger.agent,
+            step.trigger.function,
+            "--trigger",
+          ];
           if (step.trigger.args) triggerArgs.push(step.trigger.args);
           // Fire and forget — don't await completion
-          this.runLocalCommand('golem', triggerArgs, stepTimeoutSeconds, this.workspace, commandEnv)
-            .catch(() => { /* fire and forget */ });
+          this.runLocalCommand(
+            "golem",
+            triggerArgs,
+            stepTimeoutSeconds,
+            this.workspace,
+            commandEnv,
+          ).catch(() => {
+            /* fire and forget */
+          });
         }
 
         // Execute prompt if present
         if (step.prompt) {
-          const useContinueSession = step.continue_session !== false && !isFirstPrompt;
+          const useContinueSession =
+            step.continue_session !== false && !isFirstPrompt;
           if (useContinueSession) {
-            console.log(`Step ${step.id ?? '(unnamed)'}: sending followup prompt`);
-            const agentResult = await this.driver.sendFollowup(step.prompt, stepTimeoutSeconds);
+            console.log(
+              `Step ${step.id ?? "(unnamed)"}: sending followup prompt`,
+            );
+            const agentResult = await this.driver.sendFollowup(
+              step.prompt,
+              stepTimeoutSeconds,
+            );
             if (!agentResult.success) {
               stepSuccess = false;
               stepErrors.push(`Agent failed: ${agentResult.output}`);
             }
           } else {
-            console.log(`Step ${step.id ?? '(unnamed)'}: sending prompt`);
-            const agentResult = await this.driver.sendPrompt(step.prompt, stepTimeoutSeconds);
+            console.log(`Step ${step.id ?? "(unnamed)"}: sending prompt`);
+            const agentResult = await this.driver.sendPrompt(
+              step.prompt,
+              stepTimeoutSeconds,
+            );
             if (!agentResult.success) {
               stepSuccess = false;
               stepErrors.push(`Agent failed: ${agentResult.output}`);
@@ -333,11 +463,22 @@ export class ScenarioExecutor {
 
         // Invoke action
         if (step.invoke) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: invoking ${step.invoke.agent}.${step.invoke.function}`);
-          const invokeArgs = ['agent', 'invoke', step.invoke.agent, step.invoke.function];
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: invoking ${step.invoke.agent}.${step.invoke.function}`,
+          );
+          const invokeArgs = [
+            "agent",
+            "invoke",
+            step.invoke.agent,
+            step.invoke.function,
+          ];
           if (step.invoke.args) invokeArgs.push(step.invoke.args);
           const invokeResult = await this.runLocalCommand(
-            'golem', invokeArgs, stepTimeoutSeconds, this.workspace, commandEnv
+            "golem",
+            invokeArgs,
+            stepTimeoutSeconds,
+            this.workspace,
+            commandEnv,
           );
 
           if (step.expect) {
@@ -349,7 +490,7 @@ export class ScenarioExecutor {
             }
             const ctx: AssertionContext = {
               stdout: invokeResult.output,
-              stderr: '',
+              stderr: "",
               exitCode: invokeResult.exitCode,
               resultJson,
             };
@@ -357,7 +498,9 @@ export class ScenarioExecutor {
             for (const ar of assertionResults) {
               if (!ar.passed) {
                 stepSuccess = false;
-                stepErrors.push(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
+                stepErrors.push(
+                  `ASSERTION_FAILED (${ar.assertion}): ${ar.message}`,
+                );
               }
             }
           } else if (!invokeResult.success) {
@@ -367,20 +510,32 @@ export class ScenarioExecutor {
         }
 
         // Verify skills activation — merge fswatch events + atime changes
-        const watcherEvents = this.watcher.getActivatedEventsSince(stepBaseline);
+        const watcherEvents =
+          this.watcher.getActivatedEventsSince(stepBaseline);
         const atimeResults = await this.watcher.getSkillsWithChangedAtime();
         for (const evt of watcherEvents) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: fswatch detected "${evt.skillName}" via ${evt.path}`);
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: fswatch detected "${evt.skillName}" via ${evt.path}`,
+          );
         }
         for (const res of atimeResults) {
-          console.log(`Step ${step.id ?? '(unnamed)'}: atime detected "${res.skillName}" via ${res.path}`);
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: atime detected "${res.skillName}" via ${res.path}`,
+          );
         }
-        const activatedSkills = Array.from(new Set([
-          ...watcherEvents.map(e => e.skillName),
-          ...atimeResults.map(r => r.skillName),
-        ]));
-        console.log(`Step ${step.id ?? '(unnamed)'}: activated skills [${activatedSkills.join(', ')}]`);
-        const assertionError = this.assertSkillActivation(step, activatedSkills);
+        const activatedSkills = Array.from(
+          new Set([
+            ...watcherEvents.map((e) => e.skillName),
+            ...atimeResults.map((r) => r.skillName),
+          ]),
+        );
+        console.log(
+          `Step ${step.id ?? "(unnamed)"}: activated skills [${activatedSkills.join(", ")}]`,
+        );
+        const assertionError = this.assertSkillActivation(
+          step,
+          activatedSkills,
+        );
         if (assertionError) {
           stepSuccess = false;
           stepErrors.push(assertionError);
@@ -389,8 +544,16 @@ export class ScenarioExecutor {
         // Build verification
         if (step.verify?.build) {
           const buildDir = await this.findGolemProjectDir();
-          console.log(`Step ${step.id ?? '(unnamed)'}: running golem build in ${buildDir}`);
-          const buildResult = await this.runLocalCommand('golem', ['build'], 600, buildDir, commandEnv);
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: running golem build in ${buildDir}`,
+          );
+          const buildResult = await this.runLocalCommand(
+            "golem",
+            ["build"],
+            600,
+            buildDir,
+            commandEnv,
+          );
           if (!buildResult.success) {
             stepSuccess = false;
             stepErrors.push(`BUILD_FAILED: ${buildResult.output}`);
@@ -402,8 +565,16 @@ export class ScenarioExecutor {
           // Deploy implies build — run build first if not already run
           if (!step.verify?.build) {
             const buildDir = await this.findGolemProjectDir();
-            console.log(`Step ${step.id ?? '(unnamed)'}: running implicit golem build before deploy in ${buildDir}`);
-            const buildResult = await this.runLocalCommand('golem', ['build'], 600, buildDir, commandEnv);
+            console.log(
+              `Step ${step.id ?? "(unnamed)"}: running implicit golem build before deploy in ${buildDir}`,
+            );
+            const buildResult = await this.runLocalCommand(
+              "golem",
+              ["build"],
+              600,
+              buildDir,
+              commandEnv,
+            );
             if (!buildResult.success) {
               stepSuccess = false;
               stepErrors.push(`BUILD_FAILED: ${buildResult.output}`);
@@ -412,9 +583,15 @@ export class ScenarioExecutor {
 
           if (stepSuccess) {
             const deployDir = await this.findGolemProjectDir();
-            console.log(`Step ${step.id ?? '(unnamed)'}: running golem deploy in ${deployDir}`);
+            console.log(
+              `Step ${step.id ?? "(unnamed)"}: running golem deploy in ${deployDir}`,
+            );
             const deployResult = await this.runLocalCommand(
-              'golem', ['deploy', '--yes'], 600, deployDir, commandEnv
+              "golem",
+              ["deploy", "--yes"],
+              600,
+              deployDir,
+              commandEnv,
             );
             if (!deployResult.success) {
               stepSuccess = false;
@@ -429,7 +606,7 @@ export class ScenarioExecutor {
           durationSeconds: (Date.now() - stepStartTime) / 1000,
           expectedSkills: step.expectedSkills ?? [],
           activatedSkills,
-          error: stepErrors.length > 0 ? stepErrors.join('\n') : undefined
+          error: stepErrors.length > 0 ? stepErrors.join("\n") : undefined,
         });
 
         if (!stepSuccess) break; // Stop on failure
@@ -449,7 +626,7 @@ export class ScenarioExecutor {
     }
 
     return {
-      status: results.every((result) => result.success) ? 'pass' : 'fail',
+      status: results.every((result) => result.success) ? "pass" : "fail",
       durationSeconds: (Date.now() - startTime) / 1000,
       stepResults: results,
       artifactPaths: [this.workspace],
@@ -457,7 +634,10 @@ export class ScenarioExecutor {
     };
   }
 
-  private assertSkillActivation(step: StepSpec, activatedSkills: string[]): string | undefined {
+  private assertSkillActivation(
+    step: StepSpec,
+    activatedSkills: string[],
+  ): string | undefined {
     const expectedSkills = step.expectedSkills ?? [];
     if (expectedSkills.length === 0) {
       return undefined;
@@ -468,24 +648,24 @@ export class ScenarioExecutor {
 
     for (const expected of expectedSet) {
       if (!activatedSet.has(expected)) {
-        return `SKILL_NOT_ACTIVATED: expected "${expected}" but activated [${activatedSkills.join(', ')}]`;
+        return `SKILL_NOT_ACTIVATED: expected "${expected}" but activated [${activatedSkills.join(", ")}]`;
       }
     }
 
     if (step.strictSkillMatch) {
       const extras = activatedSkills.filter((skill) => !expectedSet.has(skill));
       if (extras.length > 0) {
-        return `SKILL_MISMATCH: strict match enabled; unexpected skills [${extras.join(', ')}]`;
+        return `SKILL_MISMATCH: strict match enabled; unexpected skills [${extras.join(", ")}]`;
       }
       return undefined;
     }
 
     const allowedExtras = new Set(step.allowedExtraSkills ?? []);
     const unexpectedExtras = activatedSkills.filter(
-      (skill) => !expectedSet.has(skill) && !allowedExtras.has(skill)
+      (skill) => !expectedSet.has(skill) && !allowedExtras.has(skill),
     );
     if (unexpectedExtras.length > 0) {
-      return `SKILL_MISMATCH: unexpected extra skills [${unexpectedExtras.join(', ')}]`;
+      return `SKILL_MISMATCH: unexpected extra skills [${unexpectedExtras.join(", ")}]`;
     }
 
     return undefined;
@@ -494,10 +674,12 @@ export class ScenarioExecutor {
   private buildCommandEnv(spec: ScenarioSpec): Record<string, string> {
     const env: Record<string, string> = {};
     if (spec.settings?.golem_server?.router_port) {
-      env['GOLEM_ROUTER_PORT'] = String(spec.settings.golem_server.router_port);
+      env["GOLEM_ROUTER_PORT"] = String(spec.settings.golem_server.router_port);
     }
     if (spec.settings?.golem_server?.custom_request_port) {
-      env['GOLEM_CUSTOM_REQUEST_PORT'] = String(spec.settings.golem_server.custom_request_port);
+      env["GOLEM_CUSTOM_REQUEST_PORT"] = String(
+        spec.settings.golem_server.custom_request_port,
+      );
     }
     if (spec.prerequisites?.env) {
       Object.assign(env, spec.prerequisites.env);
@@ -509,30 +691,34 @@ export class ScenarioExecutor {
     const routerPort = spec?.settings?.golem_server?.router_port ?? 9881;
 
     const profileCheck = await this.runLocalCommand(
-      'golem',
-      ['profile', 'get', '--profile', 'local'],
+      "golem",
+      ["profile", "get", "--profile", "local"],
       30,
-      this.workspace
+      this.workspace,
     );
     if (!profileCheck.success) {
-      throw new Error(`Failed to verify local Golem profile: ${profileCheck.output}`);
+      throw new Error(
+        `Failed to verify local Golem profile: ${profileCheck.output}`,
+      );
     }
 
     const serverCheck = await this.runLocalCommand(
-      'curl',
-      ['-fsS', `http://localhost:${routerPort}/healthcheck`],
+      "curl",
+      ["-fsS", `http://localhost:${routerPort}/healthcheck`],
       30,
-      this.workspace
+      this.workspace,
     );
     if (!serverCheck.success) {
-      throw new Error(`Failed to connect to local Golem server on localhost:${routerPort}: ${serverCheck.output}`);
+      throw new Error(
+        `Failed to connect to local Golem server on localhost:${routerPort}: ${serverCheck.output}`,
+      );
     }
   }
 
   private async findGolemProjectDir(): Promise<string> {
     // Check workspace root first
     try {
-      await fs.access(path.join(this.workspace, 'golem.yaml'));
+      await fs.access(path.join(this.workspace, "golem.yaml"));
       return this.workspace;
     } catch {
       // Not in root, search immediate subdirectories
@@ -540,10 +726,10 @@ export class ScenarioExecutor {
 
     const entries = await fs.readdir(this.workspace, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
       const candidate = path.join(this.workspace, entry.name);
       try {
-        await fs.access(path.join(candidate, 'golem.yaml'));
+        await fs.access(path.join(candidate, "golem.yaml"));
         return candidate;
       } catch {
         // Continue searching
@@ -559,7 +745,7 @@ export class ScenarioExecutor {
     args: string[],
     timeoutSeconds: number,
     cwd: string,
-    extraEnv?: Record<string, string>
+    extraEnv?: Record<string, string>,
   ): Promise<{ success: boolean; output: string; exitCode: number | null }> {
     const controller = new AbortController();
     const { signal } = controller;
@@ -569,25 +755,29 @@ export class ScenarioExecutor {
         cwd,
         signal,
         env: { ...process.env, ...extraEnv },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ["ignore", "pipe", "pipe"],
       });
 
-      let output = '';
-      child.stdout?.on('data', (data) => (output += data.toString()));
-      child.stderr?.on('data', (data) => (output += data.toString()));
+      let output = "";
+      child.stdout?.on("data", (data) => (output += data.toString()));
+      child.stderr?.on("data", (data) => (output += data.toString()));
 
       const timeoutId = setTimeout(() => {
         controller.abort();
       }, timeoutSeconds * 1000);
 
-      child.on('close', (exitCode) => {
+      child.on("close", (exitCode) => {
         clearTimeout(timeoutId);
         resolve({ success: exitCode === 0, output, exitCode });
       });
 
-      child.on('error', (error) => {
+      child.on("error", (error) => {
         clearTimeout(timeoutId);
-        resolve({ success: false, output: output + error.message, exitCode: null });
+        resolve({
+          success: false,
+          output: output + error.message,
+          exitCode: null,
+        });
       });
     });
   }

@@ -1,10 +1,10 @@
-import { BaseAgentDriver, AgentResult } from './base.js';
+import { BaseAgentDriver, AgentResult } from "./base.js";
 
 export class OpenCodeAgentDriver extends BaseAgentDriver {
-  protected readonly skillDirs = ['.claude/skills', '.agents/skills'];
+  protected readonly skillDirs = [".claude/skills", ".agents/skills"];
 
   async sendPrompt(prompt: string, timeout: number): Promise<AgentResult> {
-    return this.runCommand('opencode', ['run', prompt], timeout);
+    return this.runCommand("opencode", ["run", prompt], timeout);
   }
 
   async sendFollowup(prompt: string, timeout: number): Promise<AgentResult> {
