@@ -16,14 +16,14 @@ use crate::custom_api::oidc::IdentityProvider;
 use crate::custom_api::oidc::model::{McpPendingAuth, McpProxyCodeEntry};
 use crate::custom_api::oidc::session_store::SessionStore;
 use crate::mcp::McpCapabilityLookup;
-use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
 use poem::http;
 use poem::{Endpoint, IntoResponse, Middleware, Request, Response, Result, Route};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use uuid::Uuid;
 
 /// The expected path suffix for the MCP OAuth callback.
@@ -34,17 +34,19 @@ const MCP_OAUTH_CALLBACK_PATH: &str = "/mcp/oauth/callback";
 /// How long a successfully validated token is cached before re-validation.
 const TOKEN_CACHE_TTL: Duration = Duration::from_secs(60);
 
+/// How often the background task scans for expired cache entries.
+const TOKEN_CACHE_EVICTION_PERIOD: Duration = Duration::from_secs(30);
+
 /// Hash of a Bearer token, used as a cache key to avoid re-validating
 /// the same token against the identity provider on every request.
 type TokenHash = u64;
 
-/// When a cached token validation expires and must be re-checked.
-type ValidationExpiry = Instant;
-
 /// Per-instance cache of successfully validated tokens.
 /// Each instance maintains its own cache independently; a cache miss
 /// simply triggers a fresh validation against the identity provider.
-type ValidatedTokenCache = Arc<DashMap<TokenHash, ValidationExpiry>>;
+/// Uses `Cache<TokenHash, (), (), String>` — the value `()` means we only
+/// care about presence (token was validated), not about storing data.
+type ValidatedTokenCache = Cache<TokenHash, (), (), String>;
 
 /// Poem middleware that validates Bearer JWT tokens on MCP requests.
 ///
@@ -65,11 +67,19 @@ impl McpBearerAuth {
         Self {
             mcp_capability_lookup,
             identity_provider,
-            validated_tokens: ValidatedTokenCache::default(),
+            validated_tokens: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::OlderThan {
+                    ttl: TOKEN_CACHE_TTL,
+                    period: TOKEN_CACHE_EVICTION_PERIOD,
+                },
+                "mcp_validated_tokens",
+            ),
         }
     }
 
-    fn token_hash(token: &str) -> u64 {
+    fn token_hash(token: &str) -> TokenHash {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         token.hash(&mut hasher);
@@ -133,25 +143,21 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
             };
 
             let hash = McpBearerAuth::token_hash(&token);
+            let identity_provider = self.identity_provider.clone();
 
-            // Check the local cache before hitting the identity provider
-            let cached = self.validated_tokens.get(&hash).map(|entry| *entry.value());
+            let result = self
+                .validated_tokens
+                .get_or_insert_simple(&hash, async || {
+                    identity_provider
+                        .validate_bearer_token(&scheme, &token)
+                        .await
+                        .map_err(|err| err.to_string())
+                })
+                .await;
 
-            let is_cached_valid = cached.is_some_and(|expiry| Instant::now() < expiry);
-
-            if !is_cached_valid {
-                if let Err(err) = self
-                    .identity_provider
-                    .validate_bearer_token(&scheme, &token)
-                    .await
-                {
-                    self.validated_tokens.remove(&hash);
-                    tracing::warn!("MCP Bearer token validation failed: {err}");
-                    return Ok(unauthorized_response(host.as_deref()));
-                }
-
-                self.validated_tokens
-                    .insert(hash, Instant::now() + TOKEN_CACHE_TTL);
+            if let Err(err) = result {
+                tracing::warn!("MCP Bearer token validation failed: {err}");
+                return Ok(unauthorized_response(host.as_deref()));
             }
         }
 
