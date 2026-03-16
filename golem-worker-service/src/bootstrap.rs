@@ -46,6 +46,7 @@ pub struct Services {
     pub request_handler: Arc<RequestHandler>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
     pub identity_provider: Arc<dyn IdentityProvider>,
+    pub session_store: Arc<dyn SessionStore>,
 }
 
 impl Services {
@@ -164,6 +165,7 @@ impl Services {
             request_handler,
             mcp_capability_lookup,
             identity_provider,
+            session_store,
         })
     }
 }

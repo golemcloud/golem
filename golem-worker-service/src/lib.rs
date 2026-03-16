@@ -25,11 +25,7 @@ pub mod service;
 
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::mcp::auth::{
-    OAuthProxyState, authorization_server_metadata, oauth_authorize, oauth_callback,
-    oauth_register, oauth_token, protected_resource_metadata,
-};
-use crate::mcp::{GolemAgentMcpServer, McpBearerAuth};
+use crate::mcp::{GolemAgentMcpServer, McpBearerAuth, oauth_proxy_routes};
 use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -38,7 +34,7 @@ use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
 use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
-use poem::{EndpointExt, Request, Route};
+use poem::{EndpointExt, Route};
 use prometheus::Registry;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
@@ -254,72 +250,15 @@ impl WorkerService {
             StreamableHttpServerConfig::default(),
         );
 
-        let mcp_capability_lookup_for_metadata = mcp_capability_lookup_for_auth.clone();
-        let mcp_capability_lookup_for_authz_server = mcp_capability_lookup_for_auth.clone();
-        let mcp_capability_lookup_for_register = mcp_capability_lookup_for_auth.clone();
-        let mcp_capability_lookup_for_authorize = mcp_capability_lookup_for_auth.clone();
-        let mcp_capability_lookup_for_callback = mcp_capability_lookup_for_auth.clone();
-
-        let identity_provider_for_authorize = identity_provider.clone();
-        let identity_provider_for_callback = identity_provider.clone();
-
-        let oauth_proxy_state = OAuthProxyState::new();
-        let oauth_proxy_state_for_authorize = oauth_proxy_state.clone();
-        let oauth_proxy_state_for_callback = oauth_proxy_state.clone();
-        let oauth_proxy_state_for_token = oauth_proxy_state.clone();
+        let oauth_routes = oauth_proxy_routes(
+            mcp_capability_lookup_for_auth.clone(),
+            identity_provider.clone(),
+            self.services.session_store.clone(),
+        );
 
         let route = Route::new()
             .nest("/mcp", service.compat())
-            .at(
-                "/.well-known/oauth-protected-resource",
-                poem::endpoint::make(move |req: Request| {
-                    let lookup = mcp_capability_lookup_for_metadata.clone();
-                    async move { protected_resource_metadata(&req, lookup.as_ref()).await }
-                }),
-            )
-            .at(
-                "/.well-known/oauth-authorization-server",
-                poem::endpoint::make(move |req: Request| {
-                    let lookup = mcp_capability_lookup_for_authz_server.clone();
-                    async move { authorization_server_metadata(&req, lookup.as_ref()).await }
-                }),
-            )
-            .at(
-                "/mcp/oauth/register",
-                poem::endpoint::make(move |req: Request| {
-                    let lookup = mcp_capability_lookup_for_register.clone();
-                    async move { oauth_register(&req, lookup.as_ref()).await }
-                }),
-            )
-            .at(
-                "/mcp/oauth/authorize",
-                poem::endpoint::make(move |req: Request| {
-                    let lookup = mcp_capability_lookup_for_authorize.clone();
-                    let idp = identity_provider_for_authorize.clone();
-                    let state = oauth_proxy_state_for_authorize.clone();
-                    async move {
-                        oauth_authorize(&req, lookup.as_ref(), idp.as_ref(), state.as_ref()).await
-                    }
-                }),
-            )
-            .at(
-                "/mcp/oauth/callback",
-                poem::endpoint::make(move |req: Request| {
-                    let lookup = mcp_capability_lookup_for_callback.clone();
-                    let idp = identity_provider_for_callback.clone();
-                    let state = oauth_proxy_state_for_callback.clone();
-                    async move {
-                        oauth_callback(&req, lookup.as_ref(), idp.as_ref(), state.as_ref()).await
-                    }
-                }),
-            )
-            .at(
-                "/mcp/oauth/token",
-                poem::endpoint::make(move |req: Request| {
-                    let state = oauth_proxy_state_for_token.clone();
-                    async move { oauth_token(req, state.as_ref()).await }
-                }),
-            )
+            .nest("/", oauth_routes)
             .with(McpBearerAuth::new(
                 mcp_capability_lookup_for_auth,
                 identity_provider_for_auth,

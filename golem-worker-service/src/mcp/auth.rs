@@ -13,16 +13,21 @@
 // limitations under the License.
 
 use crate::custom_api::oidc::IdentityProvider;
+use crate::custom_api::oidc::model::{McpPendingAuth, McpProxyCodeEntry};
+use crate::custom_api::oidc::session_store::SessionStore;
 use crate::mcp::McpCapabilityLookup;
 use golem_common::base_model::domain_registration::Domain;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
 use poem::http;
-use poem::{Endpoint, IntoResponse, Middleware, Request, Response, Result};
-use std::collections::HashMap;
+use poem::{Endpoint, IntoResponse, Middleware, Request, Response, Result, Route};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use uuid::Uuid;
+
+/// The expected path suffix for the MCP OAuth callback.
+/// The security scheme's `redirect_url` MUST have this path for the proxy flow to work,
+/// because this is where the external provider (e.g. Google) redirects after authentication.
+const MCP_OAUTH_CALLBACK_PATH: &str = "/mcp/oauth/callback";
 
 /// Poem middleware that validates Bearer JWT tokens on MCP requests.
 ///
@@ -147,48 +152,30 @@ fn unauthorized_response(host: Option<&str>) -> Response {
         .body(())
 }
 
-/// In-memory state for the OAuth proxy flow.
-/// Tracks pending authorization requests and proxy codes that can be exchanged for tokens.
-pub struct OAuthProxyState {
-    /// Keyed by the `state` parameter sent to the external provider.
-    /// Stores the MCP client's original redirect_uri and state.
-    pending_requests: RwLock<HashMap<String, PendingAuthRequest>>,
-    /// Keyed by the proxy authorization code that Golem issues to the MCP client.
-    /// Stores the tokens obtained from the external provider.
-    proxy_codes: RwLock<HashMap<String, ProxyCodeEntry>>,
-}
-
-struct PendingAuthRequest {
-    client_redirect_uri: String,
-    client_state: Option<String>,
-}
-
-struct ProxyCodeEntry {
-    id_token: String,
-    refresh_token: Option<String>,
-    expires_in: Option<u64>,
-    token_type: String,
-}
-
-impl OAuthProxyState {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            pending_requests: RwLock::new(HashMap::new()),
-            proxy_codes: RwLock::new(HashMap::new()),
-        })
-    }
-}
-
 fn resolve_base_url(scheme: &SecuritySchemeDetails) -> String {
     let redirect_base = scheme.redirect_url.url();
     format!("{}://{}", redirect_base.scheme(), redirect_base.authority())
 }
 
-/// Poem endpoint handler for `/.well-known/oauth-authorization-server` (RFC 8414).
-///
-/// Returns OAuth authorization server metadata pointing to Golem's own OAuth proxy
-/// endpoints so MCP clients like Claude Desktop and mcp-remote can complete the
-/// OAuth flow without needing DCR support from the provider.
+/// Validates that the security scheme's `redirect_url` ends with the expected
+/// MCP OAuth callback path. If it doesn't, the external provider would redirect
+/// to the wrong place and the proxy flow would silently break.
+fn validate_redirect_url(scheme: &SecuritySchemeDetails) -> std::result::Result<(), Response> {
+    let path = scheme.redirect_url.url().path();
+    if path != MCP_OAUTH_CALLBACK_PATH {
+        tracing::error!(
+            "Security scheme redirect_url path is '{}' but must be '{}' for MCP OAuth proxy",
+            path,
+            MCP_OAUTH_CALLBACK_PATH,
+        );
+        Err(Response::builder()
+            .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Security scheme redirect_url is not configured for MCP OAuth proxy"))
+    } else {
+        Ok(())
+    }
+}
+
 pub async fn authorization_server_metadata(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
@@ -234,8 +221,6 @@ pub async fn authorization_server_metadata(
     }
 }
 
-/// Poem endpoint handler for `/.well-known/oauth-protected-resource` (RFC 9728).
-///
 /// Returns JSON metadata pointing MCP clients to Golem's own authorization server
 /// so they can perform the OAuth dance to obtain a token.
 pub async fn protected_resource_metadata(
@@ -324,13 +309,13 @@ pub async fn oauth_register(
 
 /// `GET /authorize` — OAuth proxy authorization endpoint.
 ///
-/// Stores the MCP client's redirect_uri/state in memory, then redirects the user to the
-/// external provider's authorization endpoint via `IdentityProvider::get_authorization_url`.
+/// Stores the MCP client's redirect_uri/state in the session store, then redirects the user
+/// to the external provider's authorization endpoint via `IdentityProvider::get_authorization_url`.
 pub async fn oauth_authorize(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
     identity_provider: &dyn IdentityProvider,
-    state: &OAuthProxyState,
+    session_store: &dyn SessionStore,
 ) -> Response {
     let host = req
         .headers()
@@ -353,6 +338,10 @@ pub async fn oauth_authorize(
                 .body("No security scheme configured for this domain");
         }
     };
+
+    if let Err(resp) = validate_redirect_url(&scheme) {
+        return resp;
+    }
 
     let query = req.uri().query().unwrap_or("");
     let params: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
@@ -382,21 +371,39 @@ pub async fn oauth_authorize(
     let proxy_csrf = CsrfToken::new(Uuid::new_v4().to_string());
     let proxy_nonce = Nonce::new_random();
 
-    state.pending_requests.write().await.insert(
-        proxy_csrf.secret().clone(),
-        PendingAuthRequest {
-            client_redirect_uri,
-            client_state,
-        },
-    );
+    if let Err(err) = session_store
+        .store_mcp_pending_auth(
+            proxy_csrf.secret(),
+            McpPendingAuth {
+                client_redirect_uri,
+                client_state,
+            },
+        )
+        .await
+    {
+        tracing::error!("Failed to store MCP pending auth: {err}");
+        return Response::builder()
+            .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to store pending authorization");
+    }
 
+    // Filter out "openid" — the openidconnect library's AuthenticationFlow::AuthorizationCode
+    // adds it automatically, so including it here would duplicate it in the URL.
     let scopes: Vec<Scope> = scope
         .map(|s| {
             s.split_whitespace()
+                .filter(|s| *s != "openid")
                 .map(|s| Scope::new(s.to_string()))
                 .collect()
         })
-        .unwrap_or_else(|| scheme.scopes.clone());
+        .unwrap_or_else(|| {
+            scheme
+                .scopes
+                .iter()
+                .filter(|s| s.as_str() != "openid")
+                .cloned()
+                .collect()
+        });
 
     match identity_provider
         .get_authorization_url(&scheme, scopes, proxy_csrf, proxy_nonce)
@@ -424,7 +431,7 @@ pub async fn oauth_callback(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
     identity_provider: &dyn IdentityProvider,
-    proxy_state: &OAuthProxyState,
+    session_store: &dyn SessionStore,
 ) -> Response {
     let host = req
         .headers()
@@ -464,17 +471,18 @@ pub async fn oauth_callback(
         }
     };
 
-    let pending = proxy_state
-        .pending_requests
-        .write()
-        .await
-        .remove(&state_param);
-    let pending = match pending {
-        Some(p) => p,
-        None => {
+    let pending = match session_store.take_mcp_pending_auth(&state_param).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
             return Response::builder()
                 .status(http::StatusCode::BAD_REQUEST)
                 .body("Unknown or expired state parameter");
+        }
+        Err(err) => {
+            tracing::error!("Failed to retrieve MCP pending auth: {err}");
+            return Response::builder()
+                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to retrieve pending authorization");
         }
     };
 
@@ -508,15 +516,23 @@ pub async fn oauth_callback(
     // Generate a proxy authorization code for the MCP client
     let proxy_code = Uuid::new_v4().to_string();
 
-    proxy_state.proxy_codes.write().await.insert(
-        proxy_code.clone(),
-        ProxyCodeEntry {
-            id_token: raw_tokens.id_token,
-            refresh_token: raw_tokens.refresh_token,
-            expires_in: raw_tokens.expires_in,
-            token_type: raw_tokens.token_type,
-        },
-    );
+    if let Err(err) = session_store
+        .store_mcp_proxy_code(
+            &proxy_code,
+            McpProxyCodeEntry {
+                id_token: raw_tokens.id_token,
+                refresh_token: raw_tokens.refresh_token,
+                expires_in: raw_tokens.expires_in,
+                token_type: raw_tokens.token_type,
+            },
+        )
+        .await
+    {
+        tracing::error!("Failed to store MCP proxy code: {err}");
+        return Response::builder()
+            .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to store proxy authorization code");
+    }
 
     // Redirect to the MCP client's original redirect_uri with the proxy code
     let mut redirect_url = format!(
@@ -539,7 +555,7 @@ pub async fn oauth_callback(
 ///
 /// The MCP client exchanges Golem's proxy authorization code for the stored tokens.
 /// Takes an owned `Request` so we can consume the POST form body.
-pub async fn oauth_token(mut req: Request, proxy_state: &OAuthProxyState) -> Response {
+pub async fn oauth_token(mut req: Request, session_store: &dyn SessionStore) -> Response {
     let body_bytes = match req.take_body().into_bytes().await {
         Ok(b) => b,
         Err(_) => bytes::Bytes::new(),
@@ -569,7 +585,20 @@ pub async fn oauth_token(mut req: Request, proxy_state: &OAuthProxyState) -> Res
         }
     };
 
-    let entry = proxy_state.proxy_codes.write().await.remove(&code);
+    let entry = match session_store.take_mcp_proxy_code(&code).await {
+        Ok(e) => e,
+        Err(err) => {
+            tracing::error!("Failed to retrieve MCP proxy code: {err}");
+            return Response::builder()
+                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                .header("Content-Type", "application/json")
+                .body(
+                    serde_json::json!({"error": "server_error", "error_description": "Internal error"})
+                        .to_string(),
+                );
+        }
+    };
+
     match entry {
         Some(entry) => {
             let mut response = serde_json::json!({
@@ -597,4 +626,78 @@ pub async fn oauth_token(mut req: Request, proxy_state: &OAuthProxyState) -> Res
                     .to_string(),
             ),
     }
+}
+
+/// Builds the Poem `Route` with all MCP OAuth proxy endpoints wired up.
+///
+/// Keeps the route setup out of `lib.rs` and co-located with the handler functions.
+pub fn oauth_proxy_routes(
+    mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
+    identity_provider: Arc<dyn IdentityProvider>,
+    session_store: Arc<dyn SessionStore>,
+) -> Route {
+    let lookup_metadata = mcp_capability_lookup.clone();
+    let lookup_authz = mcp_capability_lookup.clone();
+    let lookup_register = mcp_capability_lookup.clone();
+    let lookup_authorize = mcp_capability_lookup.clone();
+    let lookup_callback = mcp_capability_lookup;
+
+    let idp_authorize = identity_provider.clone();
+    let idp_callback = identity_provider;
+
+    let store_authorize = session_store.clone();
+    let store_callback = session_store.clone();
+    let store_token = session_store;
+
+    Route::new()
+        .at(
+            "/.well-known/oauth-protected-resource",
+            poem::endpoint::make(move |req: Request| {
+                let lookup = lookup_metadata.clone();
+                async move { protected_resource_metadata(&req, lookup.as_ref()).await }
+            }),
+        )
+        .at(
+            "/.well-known/oauth-authorization-server",
+            poem::endpoint::make(move |req: Request| {
+                let lookup = lookup_authz.clone();
+                async move { authorization_server_metadata(&req, lookup.as_ref()).await }
+            }),
+        )
+        .at(
+            "/mcp/oauth/register",
+            poem::endpoint::make(move |req: Request| {
+                let lookup = lookup_register.clone();
+                async move { oauth_register(&req, lookup.as_ref()).await }
+            }),
+        )
+        .at(
+            "/mcp/oauth/authorize",
+            poem::endpoint::make(move |req: Request| {
+                let lookup = lookup_authorize.clone();
+                let idp = idp_authorize.clone();
+                let store = store_authorize.clone();
+                async move {
+                    oauth_authorize(&req, lookup.as_ref(), idp.as_ref(), store.as_ref()).await
+                }
+            }),
+        )
+        .at(
+            MCP_OAUTH_CALLBACK_PATH,
+            poem::endpoint::make(move |req: Request| {
+                let lookup = lookup_callback.clone();
+                let idp = idp_callback.clone();
+                let store = store_callback.clone();
+                async move {
+                    oauth_callback(&req, lookup.as_ref(), idp.as_ref(), store.as_ref()).await
+                }
+            }),
+        )
+        .at(
+            "/mcp/oauth/token",
+            poem::endpoint::make(move |req: Request| {
+                let store = store_token.clone();
+                async move { oauth_token(req, store.as_ref()).await }
+            }),
+        )
 }

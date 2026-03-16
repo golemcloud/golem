@@ -277,16 +277,7 @@ impl IdentityProvider for DefaultIdentityProvider {
             })?;
 
         let id_token_string = match token_response.extra_fields().id_token() {
-            Some(id_token) => {
-                // serde_json::to_string wraps the JWT in quotes ("eyJ..."),
-                // so we trim them to get the raw JWT string.
-                let serialized = serde_json::to_string(id_token).map_err(|err| {
-                    IdentityProviderError::IdTokenVerificationError(format!(
-                        "Failed to serialize id_token: {err}"
-                    ))
-                })?;
-                serialized.trim_matches('"').to_string()
-            }
+            Some(id_token) => id_token.to_string(),
             None => token_response.access_token().secret().clone(),
         };
 
