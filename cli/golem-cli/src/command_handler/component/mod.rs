@@ -16,7 +16,7 @@ use crate::app::context::{validated_to_anyhow, BuildContext};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
-use crate::command::shared_args::{ComponentTemplateName, OptionalComponentNames, PostDeployArgs};
+use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
 use crate::command_handler::Handlers;
@@ -77,11 +77,6 @@ impl ComponentCommandHandler {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
         Box::pin(async move {
             match subcommand {
-                ComponentSubcommand::New {
-                    component_template,
-                    component_name,
-                } => self.cmd_new(component_template, component_name).await,
-                ComponentSubcommand::Templates { filter } => self.cmd_templates(filter),
                 ComponentSubcommand::List => self.cmd_list().await,
                 ComponentSubcommand::Get {
                     component_name,
@@ -114,88 +109,6 @@ impl ComponentCommandHandler {
                 }
             }
         })
-    }
-
-    // TODO: FCL: drop or use golem new
-    async fn cmd_new(
-        &self,
-        _template: Option<ComponentTemplateName>,
-        _component_name: Option<ComponentName>,
-    ) -> anyhow::Result<()> {
-        /*
-        self.ctx.silence_app_context_init().await;
-
-        // Loading app for:
-        //   - checking that we are inside an application
-        //   - switching to the root dir as a side effect
-        //   - getting existing component names
-        let (existing_component_names, _application_name) = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            (
-                app_ctx
-                    .application()
-                    .component_names()
-                    .map(|name| name.to_string())
-                    .collect::<HashSet<_>>(),
-                app_ctx.application().application_name().clone(),
-            )
-        };
-
-        let Some((_template, component_name)) = ({
-            match (template, component_name) {
-                (Some(template), Some(component_package_name)) => {
-                    Some((template, component_package_name))
-                }
-                _ => self
-                    .ctx
-                    .interactive_handler()
-                    .select_new_component_template_and_package_name(
-                        existing_component_names.clone(),
-                    )?,
-            }
-        }) else {
-            log_error("Both TEMPLATE and COMPONENT_NAME are required in non-interactive mode");
-            logln("");
-            self.ctx.app_handler().log_templates_help(None, None)?;
-            logln("");
-            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
-        };
-
-        if existing_component_names.contains(component_name.as_str()) {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-
-            log_error(format!("Component {component_name} already exists"));
-            logln("");
-            app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?;
-            bail!(NonSuccessfulExit)
-        }
-
-        self.ctx.app_handler().generate_component(
-            &application_name,
-            &component_name,
-            &PathBuf::from("."),
-            template.as_str(),
-        )?;*/
-        todo!()
-    }
-
-    fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
-        match filter {
-            Some(filter) => {
-                if let Some(language) = GuestLanguage::from_string(filter.clone()) {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None)
-                } else {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter))
-                }
-            }
-            None => self.ctx.app_handler().log_templates_help(None, None),
-        }
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {

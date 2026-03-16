@@ -202,7 +202,7 @@ pub fn generate_component_by_template<T: TemplateGeneratorTargetFs>(
             component_name: Some(component_name),
             application_dir,
             component_dir: Some(component_dir),
-            target_path: &application_dir,
+            target_path: application_dir,
             sdk_overrides,
         },
     )?;
@@ -230,7 +230,7 @@ pub fn generate_agent_by_template<T: TemplateGeneratorTargetFs>(
             application_dir,
             component_name: Some(component_name),
             component_dir: Some(component_dir),
-            target_path: &application_dir,
+            target_path: application_dir,
             sdk_overrides,
         },
     )?;
@@ -447,7 +447,7 @@ fn transform_target_file_path(
 
             Ok(PathBuf::from(format!(
                 "{}/{}",
-                fs::path_to_str(&ctx.application_dir)?,
+                fs::path_to_str(ctx.application_dir)?,
                 transformed_relative_target_path
             )))
         }

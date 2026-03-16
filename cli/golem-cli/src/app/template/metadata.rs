@@ -18,33 +18,27 @@ use anyhow::anyhow;
 use serde_derive::{Deserialize, Serialize};
 use std::path::Path;
 
-// TODO: FCL: drop or support exclude
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AppTemplateMetadata {
     #[serde(rename_all = "camelCase")]
     Common {
         description: Option<String>,
-        exclude: Option<Vec<String>>,
         dev_only: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]
     CommonOnDemand {
         description: Option<String>,
-        exclude: Option<Vec<String>>,
         dev_only: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]
     Component {
         description: String,
-        exclude: Option<Vec<String>>,
         dev_only: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]
     Agent {
         description: String,
-        exclude: Option<Vec<String>>,
         dev_only: Option<bool>,
     },
 }

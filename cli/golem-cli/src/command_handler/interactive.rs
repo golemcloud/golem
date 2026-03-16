@@ -377,7 +377,7 @@ impl InteractiveHandler {
             })
             .collect::<Vec<_>>();
 
-        let Some(selected) = MultiSelect::new(&"Select templates:", template_options)
+        let Some(selected) = MultiSelect::new("Select templates:", template_options)
             .prompt()
             .none_if_not_interactive_logged()?
         else {

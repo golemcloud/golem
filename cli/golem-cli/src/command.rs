@@ -646,6 +646,11 @@ pub enum GolemCliSubcommand {
         #[arg(long)]
         template: Vec<AppTemplateName>,
     },
+    /// List or search application templates
+    Templates {
+        /// Optional filter for language or template name
+        filter: Option<String>,
+    },
     /// Build all or selected components in the application
     Build {
         #[command(flatten)]
@@ -957,29 +962,13 @@ pub mod environment {
 }
 
 pub mod component {
-    use crate::command::shared_args::{
-        ComponentTemplateName, OptionalComponentName, OptionalComponentNames,
-    };
+    use crate::command::shared_args::{OptionalComponentName, OptionalComponentNames};
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
-    use golem_common::model::component::{ComponentName, ComponentRevision};
+    use golem_common::model::component::ComponentRevision;
 
     #[derive(Debug, Subcommand)]
     pub enum ComponentSubcommand {
-        // TODO: FCL: drop, and handle by golem new
-        /// Create new component in the current application
-        New {
-            /// Template to be used for the new component
-            component_template: Option<ComponentTemplateName>,
-            /// Name of the new component in 'namespace:name' form
-            component_name: Option<ComponentName>,
-        },
-        // TODO: FCL: root
-        /// List or search component templates
-        Templates {
-            /// Optional filter for language or template name
-            filter: Option<String>,
-        },
         /// List deployed component versions' metadata
         List,
         /// Get the latest or selected revision of deployed component metadata

@@ -276,13 +276,13 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 new,
                 validate_json,
                 edit::json::merge_object,
-            )?), // TODO: FCL: review if we still need the package.json specific editor
+            )?),
             "tsconfig.json" => Some(merge_with_validation(
                 current,
                 new,
                 validate_json,
                 edit::json::merge_object,
-            )?), // TODO: FCL: review if we still need the tsconfig.json specific editor
+            )?),
             _ => None,
         })
     }

@@ -686,7 +686,7 @@ impl ComponentLayerId {
         parent_ids
             .into_vec()
             .into_iter()
-            .map(|parent_id| Self::TemplateCustomPresets(parent_id.into()))
+            .map(Self::TemplateCustomPresets)
             .collect()
     }
 }

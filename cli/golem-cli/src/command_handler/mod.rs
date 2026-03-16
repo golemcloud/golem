@@ -261,6 +261,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .cmd_new(application_path, application_name, component_name, template)
                         .await
                 }
+                GolemCliSubcommand::Templates { filter } => {
+                    self.ctx.app_handler().cmd_templates(filter)
+                }
                 GolemCliSubcommand::Build {
                     component_name,
                     build: build_args,

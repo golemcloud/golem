@@ -40,7 +40,7 @@ impl AppTemplateName {
     pub fn new(language: GuestLanguage, name: String) -> Self {
         let rendered_name = {
             if name == "default" {
-                format!("{}", language.id())
+                language.id().to_string()
             } else {
                 format!("{}/{}", language.id(), name)
             }

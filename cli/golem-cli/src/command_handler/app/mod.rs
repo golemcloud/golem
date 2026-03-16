@@ -108,8 +108,7 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
-        let is_dot_application_path =
-            application_path.as_ref().map(|p| p.as_path()) == Some(Path::new("."));
+        let is_dot_application_path = application_path.as_deref() == Some(Path::new("."));
 
         #[derive(Debug)]
         struct ExistingComponent {
@@ -169,7 +168,7 @@ impl AppCommandHandler {
                                         .unwrap_or_else(|| Path::new(","))
                                         .to_path_buf(),
                                     component_dir: component.component_dir().to_path_buf(),
-                                    manifest_source_dir: fs::parent_or_err(&component.source())?
+                                    manifest_source_dir: fs::parent_or_err(component.source())?
                                         .to_path_buf(),
                                 };
 
@@ -226,10 +225,7 @@ impl AppCommandHandler {
             template_names
         };
 
-        let template_names: Vec<AppTemplateName> = template_names
-            .into_iter()
-            .map(AppTemplateName::from)
-            .collect();
+        let template_names: Vec<AppTemplateName> = template_names.into_iter().collect();
 
         let template_to_component: HashMap<&AppTemplateName, ComponentName> = {
             let mut template_to_component = HashMap::new();
@@ -508,7 +504,7 @@ impl AppCommandHandler {
                     &component_template.generate(
                         &application_name,
                         &app_dir,
-                        &component_name,
+                        component_name,
                         component_dir,
                         self.ctx.sdk_overrides(),
                     )?,
@@ -541,7 +537,7 @@ impl AppCommandHandler {
                     &agent_template.generate(
                         &application_name,
                         &app_dir,
-                        &component_name,
+                        component_name,
                         component_dir,
                         self.ctx.sdk_overrides(),
                     )?,
@@ -672,10 +668,10 @@ impl AppCommandHandler {
             }
         }
 
-        // TODO: FCL: ok, done, help messages
-
         logln("");
         log_finished_ok("applying template(s)");
+
+        // TODO: FCL: ok, done, help messages
 
         /*log_action(
             "Created",
@@ -973,6 +969,23 @@ impl AppCommandHandler {
             .await?;
 
         Ok(())
+    }
+
+    pub fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
+        match filter {
+            Some(filter) => {
+                if let Some(language) = GuestLanguage::from_string(filter.clone()) {
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(Some(language), None)
+                } else {
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(None, Some(&filter))
+                }
+            }
+            None => self.ctx.app_handler().log_templates_help(None, None),
+        }
     }
 
     pub async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
