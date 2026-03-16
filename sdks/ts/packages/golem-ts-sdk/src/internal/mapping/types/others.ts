@@ -25,6 +25,7 @@ type OthersCtx = Ctx & { type: Extract<TsType, { kind: 'others' }> };
 
 export function handleOthers(
   { type }: OthersCtx,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _mapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
   const name = type.name;

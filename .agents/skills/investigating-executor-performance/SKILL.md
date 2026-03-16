@@ -203,6 +203,7 @@ print(f'Total: {len(data[\"data\"])}, After filtering noise: {len(clean)}')
 ## Known Caveats
 
 - **Trace context propagation works end-to-end**: The `OtelGrpcLayer` on both client and server sides correctly injects/extracts `traceparent` headers. Test spans, gRPC client spans, and gRPC server handler spans (e.g., `invocation`, `replaying`) all appear in a single connected trace. If you see orphan traces, verify the `GOLEM__TRACING__OTLP__*` env vars are set — without them, the `tracing_opentelemetry` layer is not added to the subscriber, so spans have no OTel context and the propagator injects nothing.
+- **Span queue size (`OTEL_BSP_MAX_QUEUE_SIZE`)**: The `BatchSpanProcessor` has a default queue size of 2048 spans. Under high-throughput tests this queue can overflow, causing spans to be silently dropped. Set `OTEL_BSP_MAX_QUEUE_SIZE=65536` alongside the other env vars to avoid this. Example: `OTEL_BSP_MAX_QUEUE_SIZE=65536 GOLEM__TRACING__OTLP__ENABLED=true ... cargo test ...`.
 - **Background loop noise**: Long-lived background tasks create traces spanning the entire test duration (~90s). These are not performance issues but can obscure real test traces.
 - **Fresh Jaeger**: Always restart Jaeger with `docker compose down && docker compose up -d` before a new investigation to avoid mixing traces from different runs.
 

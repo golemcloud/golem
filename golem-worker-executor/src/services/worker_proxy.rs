@@ -29,6 +29,7 @@ use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::RevertWorkerTarget;
@@ -73,6 +74,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
+        environment_id: EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError>;
 
     async fn update(
@@ -296,6 +298,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
+        environment_id: EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         debug!("Invoking remote agent method {method_name} on worker {agent_id}");
 
@@ -330,6 +333,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: Some(principal.clone().into()),
+                    environment_id: Some(environment_id.into()),
                 }))
             })
             .await?

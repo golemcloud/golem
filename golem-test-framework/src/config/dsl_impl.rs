@@ -74,6 +74,7 @@ use uuid::Uuid;
 pub struct NameResolutionCache {
     app_names: Cache<ApplicationId, (), ApplicationName, String>,
     env_names: Cache<EnvironmentId, (), EnvironmentName, String>,
+    component_revisions: Cache<(ComponentId, ComponentRevision), (), ComponentDto, String>,
 }
 
 impl Default for NameResolutionCache {
@@ -96,6 +97,12 @@ impl NameResolutionCache {
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
                 "env_names",
+            ),
+            component_revisions: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_revisions",
             ),
         }
     }
@@ -129,6 +136,25 @@ impl NameResolutionCache {
                     .await
                     .map_err(|e| e.to_string())?;
                 Ok(env.name)
+            })
+            .await
+            .map_err(|e| anyhow!(e))
+    }
+
+    pub async fn resolve_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+        client: &RegistryServiceClientLive,
+    ) -> anyhow::Result<ComponentDto> {
+        let key = (*component_id, revision);
+        self.component_revisions
+            .get_or_insert_simple(&key, async || {
+                let component = client
+                    .get_component_revision(&component_id.0, revision.get())
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(component)
             })
             .await
             .map_err(|e| anyhow!(e))
@@ -484,11 +510,15 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         match result.result {
             Some(untyped_json) => {
-                let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
-                    .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
-                let worker_metadata = self.get_worker_metadata(&worker_agent_id).await?;
+                let revision = ComponentRevision::new(
+                    result
+                        .component_revision
+                        .ok_or_else(|| anyhow!("Missing component_revision in response"))?,
+                )
+                .context("Invalid component_revision in response")?;
                 let component_at_rev = self
-                    .get_component_at_revision(&component.id, worker_metadata.component_revision)
+                    .name_cache
+                    .resolve_component_at_revision(&component.id, revision, &registry_client)
                     .await?;
                 let agent_type = component_at_rev
                     .metadata
