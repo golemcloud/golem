@@ -433,6 +433,7 @@ name = "golem_it_http_tests"
 version = "0.0.1"
 dependencies = [
  "futures-concurrency",
+ "futures-util",
  "golem-rust",
  "golem-wasi-http",
  "log",

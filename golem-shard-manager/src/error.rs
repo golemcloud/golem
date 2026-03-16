@@ -17,6 +17,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::retriable_error::IsRetriableError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 
@@ -38,6 +39,10 @@ pub enum ShardManagerError {
     SerializationError(String),
     #[error("Redis error {0}")]
     RedisError(#[from] golem_common::redis::RedisError),
+    #[error("Postgres error {0}")]
+    PostgresError(#[from] RepoError),
+    #[error("Migration error {0}")]
+    MigrationError(#[from] anyhow::Error),
     #[error("IO error {0}")]
     IoError(#[from] std::io::Error),
 }
@@ -53,6 +58,8 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::WorkerExecutionError(_) => true, // TODO: can we define which ones are retryable?
             ShardManagerError::SerializationError(_) => false,
             ShardManagerError::RedisError(_) => false,
+            ShardManagerError::PostgresError(_) => false,
+            ShardManagerError::MigrationError(_) => false,
             ShardManagerError::IoError(_) => false,
         }
     }
@@ -96,6 +103,12 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 error(shard_manager_error::Error::Unknown, details)
             }
             ShardManagerError::RedisError(err) => {
+                error(shard_manager_error::Error::Unknown, err.to_string())
+            }
+            ShardManagerError::PostgresError(err) => {
+                error(shard_manager_error::Error::Unknown, err.to_string())
+            }
+            ShardManagerError::MigrationError(err) => {
                 error(shard_manager_error::Error::Unknown, err.to_string())
             }
             ShardManagerError::IoError(err) => {

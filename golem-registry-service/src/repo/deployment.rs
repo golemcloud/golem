@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent_secret::DbAgentSecretRepo;
 use super::model::BindFields;
+use super::model::agent_secrets::AgentSecretRepoError;
 use super::model::deployment::{
     CurrentDeploymentExtRevisionRecord, DeploymentCompiledMcpRecord,
     DeploymentCompiledRouteWithSecuritySchemeRecord, DeploymentRevisionCreationRecord,
@@ -88,7 +90,6 @@ pub trait DeploymentRepo: Send + Sync {
 
     async fn deploy(
         &self,
-        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
@@ -294,13 +295,15 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn deploy(
         &self,
-        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
-        let span = Self::span_user_and_env(user_account_id, deployment_creation.environment_id);
+        let span = Self::span_user_and_env(
+            deployment_creation.user_account_id,
+            deployment_creation.environment_id,
+        );
         self.repo
-            .deploy(user_account_id, deployment_creation, version_check)
+            .deploy(deployment_creation, version_check)
             .instrument(span)
             .await
     }
@@ -690,7 +693,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn deploy(
         &self,
-        user_account_id: Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
@@ -714,7 +716,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                 let deployment_revision = Self::create_deployment_revision(
                     tx,
-                    user_account_id,
+                    deployment_creation.user_account_id,
                     environment_id,
                     deployment_creation.deployment_revision_id,
                     deployment_creation.version,
@@ -753,9 +755,37 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     Self::create_deployment_mcp(tx, compiled_mcp).await?;
                 }
 
+                for agent_secret in deployment_creation.created_agent_secrets {
+                    let agent_secret_path = agent_secret.path.0.clone();
+                    DbAgentSecretRepo::<PostgresPool>::create_within_transaction(tx, agent_secret)
+                        .await
+                        .map_err(|err| match err {
+                            AgentSecretRepoError::SecretViolatesUniqueness => {
+                                DeployRepoError::AgentSecretConflict {
+                                    path: agent_secret_path,
+                                }
+                            }
+                            AgentSecretRepoError::ConcurrentModification => {
+                                DeployRepoError::ConcurrentModification
+                            }
+                            other => other.into(),
+                        })?;
+                }
+
+                for agent_secret in deployment_creation.updated_agent_secrets {
+                    DbAgentSecretRepo::<PostgresPool>::update_within_transaction(tx, agent_secret)
+                        .await
+                        .map_err(|err| match err {
+                            AgentSecretRepoError::ConcurrentModification => {
+                                DeployRepoError::ConcurrentModification
+                            }
+                            other => other.into(),
+                        })?;
+                }
+
                 let revision = Self::set_current_deployment_internal(
                     tx,
-                    user_account_id,
+                    deployment_creation.user_account_id,
                     deployment_revision.environment_id,
                     deployment_revision.revision_id,
                 )

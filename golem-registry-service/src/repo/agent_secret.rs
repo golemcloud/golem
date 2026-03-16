@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::model::agent_secrets::{
-    AgentSecretData, AgentSecretExtRevisionRecord, AgentSecretRepoError, AgentSecretRevisionRecord,
+    AgentSecretCreationRecord, AgentSecretExtRevisionRecord, AgentSecretRepoError,
+    AgentSecretRevisionRecord,
 };
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
@@ -25,9 +26,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo::ResultExt;
-use golem_service_base::repo::blob::Blob;
 use indoc::indoc;
-use sqlx::types::Json;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -35,10 +34,7 @@ use uuid::Uuid;
 pub trait AgentSecretRepo: Send + Sync {
     async fn create(
         &self,
-        environment_id: Uuid,
-        revision: AgentSecretRevisionRecord,
-        path: Json<Vec<String>>,
-        agent_secret_data: Blob<AgentSecretData>,
+        record: AgentSecretCreationRecord,
     ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError>;
 
     async fn update(
@@ -86,16 +82,10 @@ impl<Repo: AgentSecretRepo> LoggedAgentSecretRepo<Repo> {
 impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     async fn create(
         &self,
-        environment_id: Uuid,
-        revision: AgentSecretRevisionRecord,
-        path: Json<Vec<String>>,
-        agent_secret_data: Blob<AgentSecretData>,
+        record: AgentSecretCreationRecord,
     ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
-        let span = Self::span_environment_id(environment_id);
-        self.repo
-            .create(environment_id, revision, path, agent_secret_data)
-            .instrument(span)
-            .await
+        let span = Self::span_environment_id(record.environment_id);
+        self.repo.create(record).instrument(span).await
     }
 
     async fn update(
@@ -182,6 +172,69 @@ impl DbAgentSecretRepo<PostgresPool> {
 
         Ok(revision)
     }
+
+    pub async fn create_within_transaction(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        record: AgentSecretCreationRecord,
+    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+        let agent_secret_record: AgentSecretRecord = tx
+            .fetch_one_as(
+                sqlx::query_as(indoc! {r#"
+                    INSERT INTO agent_secrets (agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                    VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7)
+                    RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                "#})
+                    .bind(record.revision.agent_secret_id)
+                    .bind(record.environment_id)
+                    .bind(&record.path)
+                    .bind(&record.agent_secret_data)
+                    .bind(&record.revision.audit.created_at)
+                    .bind(record.revision.audit.created_by)
+                    .bind(record.revision.revision_id)
+            )
+            .await
+            .to_error_on_unique_violation(AgentSecretRepoError::SecretViolatesUniqueness)?;
+
+        let revision = Self::insert_revision(tx, record.revision).await?;
+
+        Ok(AgentSecretExtRevisionRecord {
+            environment_id: agent_secret_record.environment_id,
+            path: agent_secret_record.path,
+            agent_secret_data: agent_secret_record.agent_secret_data,
+            entity_created_at: agent_secret_record.audit.created_at,
+            revision,
+        })
+    }
+
+    pub async fn update_within_transaction(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        revision: AgentSecretRevisionRecord,
+    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+        let revision = Self::insert_revision(tx, revision).await?;
+
+        let agent_secret_record: AgentSecretRecord = tx
+            .fetch_optional_as(
+                sqlx::query_as(indoc! {r#"
+                    UPDATE agent_secrets
+                    SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                    WHERE agent_secret_id = $4
+                    RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                "#})
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.agent_secret_id)
+            ).await?
+            .ok_or(AgentSecretRepoError::ConcurrentModification)?;
+
+        Ok(AgentSecretExtRevisionRecord {
+            environment_id: agent_secret_record.environment_id,
+            path: agent_secret_record.path,
+            agent_secret_data: agent_secret_record.agent_secret_data,
+            entity_created_at: agent_secret_record.audit.created_at,
+            revision,
+        })
+    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -189,76 +242,24 @@ impl DbAgentSecretRepo<PostgresPool> {
 impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
     async fn create(
         &self,
-        environment_id: Uuid,
-        revision: AgentSecretRevisionRecord,
-        path: Json<Vec<String>>,
-        agent_secret_data: Blob<AgentSecretData>,
+        record: AgentSecretCreationRecord,
     ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
-            async move {
-                let agent_secret_record: AgentSecretRecord = tx
-                    .fetch_one_as(
-                        sqlx::query_as(indoc! {r#"
-                            INSERT INTO agent_secrets (agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                            VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7)
-                            RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(revision.agent_secret_id)
-                            .bind(environment_id)
-                            .bind(path)
-                            .bind(&agent_secret_data)
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                    )
-                    .await
-                    .to_error_on_unique_violation(AgentSecretRepoError::SecretViolatesUniqueness)?;
-
-                let revision = Self::insert_revision(tx, revision).await?;
-
-                Ok(AgentSecretExtRevisionRecord {
-                    environment_id: agent_secret_record.environment_id,
-                    path: agent_secret_record.path,
-                    agent_secret_data: agent_secret_record.agent_secret_data,
-                    entity_created_at: agent_secret_record.audit.created_at,
-                    revision
-                })
-            }.boxed()
-        }).await
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
+                Self::create_within_transaction(tx, record).boxed()
+            })
+            .await
     }
 
     async fn update(
         &self,
         revision: AgentSecretRevisionRecord,
     ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
-            async move {
-                let revision = Self::insert_revision(tx, revision).await?;
-
-                let agent_secret_record: AgentSecretRecord = tx
-                    .fetch_optional_as(
-                        sqlx::query_as(indoc! {r#"
-                            UPDATE agent_secrets
-                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE agent_secret_id = $4
-                            RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                            .bind(revision.agent_secret_id)
-                    ).await?
-                    .ok_or(AgentSecretRepoError::ConcurrentModification)?;
-
-                Ok(AgentSecretExtRevisionRecord {
-                    environment_id: agent_secret_record.environment_id,
-                    path: agent_secret_record.path,
-                    agent_secret_data: agent_secret_record.agent_secret_data,
-                    entity_created_at: agent_secret_record.audit.created_at,
-                    revision
-                })
-            }.boxed()
-        }).await
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
+                Self::update_within_transaction(tx, revision).boxed()
+            })
+            .await
     }
 
     async fn delete(

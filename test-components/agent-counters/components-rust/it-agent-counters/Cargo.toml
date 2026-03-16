@@ -8,9 +8,6 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-# To use common shared libs, use the following:
-# common-lib = { path = "../../common-rust/common-lib" }
-
 async-trait = { workspace = true }
 ctor = { workspace = true }
 golem-rust = { workspace = true }

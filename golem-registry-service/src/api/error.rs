@@ -18,7 +18,7 @@ use crate::services::agent_secret::AgentSecretError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
-use crate::services::deployment::{DeployedRoutesError, DeploymentError, DeploymentWriteError};
+use crate::services::deployment::{DeploymentError, DeploymentWriteError};
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
@@ -486,25 +486,6 @@ impl From<DeploymentError> for ApiError {
 
             DeploymentError::Unauthorized(inner) => inner.into(),
             DeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error,
-                cause: Some(value.into_anyhow()),
-            })),
-        }
-    }
-}
-
-impl From<DeployedRoutesError> for ApiError {
-    fn from(value: DeployedRoutesError) -> Self {
-        let error: String = value.to_safe_string();
-        match value {
-            DeployedRoutesError::NoActiveRoutesForDomain(_)
-            | DeployedRoutesError::ParentEnvironmentNotFound(_)
-            | DeployedRoutesError::DeploymentRevisionNotFound(_)
-            | DeployedRoutesError::DomainNotFoundInDeployment(_) => {
-                Self::Conflict(Json(ErrorBody { error, cause: None }))
-            }
-
-            DeployedRoutesError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),
