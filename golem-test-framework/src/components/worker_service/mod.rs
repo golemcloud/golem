@@ -45,7 +45,7 @@ pub trait WorkerService: Send + Sync {
 
     async fn kill(&self);
 
-    async fn base_http_client(&self) -> reqwest::Client;
+    async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware;
 
     async fn worker_http_client(&self, token: &TokenSecret) -> WorkerClientLive {
         let url = format!("http://{}:{}", self.http_host(), self.http_port());

@@ -26,7 +26,6 @@ import {
   ParameterDetail,
   serializeToDataValue,
 } from './mapping/values/dataValue';
-import * as Either from '../newTypes/either';
 import { AgentMethodMetadata, AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { createCustomError, invalidInput, invalidMethod, invalidType } from './agentError';
 import { TypeInfoInternal } from './typeInfoInternal';
@@ -64,7 +63,7 @@ export class ResolvedAgent {
   }
 
   phantomId(): Uuid | undefined {
-    const [_typeName, _params, phantomId] = this.uniqueAgentId.parsed();
+    const [, , phantomId] = this.uniqueAgentId.parsed();
     return phantomId;
   }
 
@@ -112,42 +111,34 @@ export class ResolvedAgent {
     }
     const methodInfo = methodInfoResult.val;
 
-    const deserializedArgs: Either.Either<unknown[], string> = deserializeDataValue(
-      methodArgs,
-      methodInfo.paramTypes,
-      principal,
-    );
-
-    if (Either.isLeft(deserializedArgs)) {
+    let deserializedArgs: any[];
+    try {
+      deserializedArgs = deserializeDataValue(methodArgs, methodInfo.paramTypes, principal);
+    } catch (e) {
       return {
         tag: 'err',
         val: invalidInput(
-          `Failed to deserialize arguments for method ${methodName} in agent ${this.agentClassName.value}: ${deserializedArgs.val}`,
+          `Failed to deserialize arguments for method ${methodName} in agent ${this.agentClassName.value}: ${e instanceof Error ? e.message : e}`,
         ),
       };
     }
 
-    const methodResult = await (methodInfo.method as (...args: unknown[]) => unknown).apply(
-      this.agentInstance,
-      deserializedArgs.val,
-    );
+    const methodResult = await methodInfo.method.apply(this.agentInstance, deserializedArgs);
 
     // Converting the result from the method back to data-value
-    const dataValueEither = serializeToDataValue(methodResult, methodInfo.returnType);
-
-    if (Either.isLeft(dataValueEither)) {
+    try {
+      return {
+        tag: 'ok',
+        val: serializeToDataValue(methodResult, methodInfo.returnType),
+      };
+    } catch (e) {
       return {
         tag: 'err',
         val: createCustomError(
-          `Failed to serialize the return value from ${methodName}: ${dataValueEither.val}`,
+          `Failed to serialize the return value from ${methodName}: ${e instanceof Error ? e.message : e}`,
         ),
       };
     }
-
-    return {
-      tag: 'ok',
-      val: dataValueEither.val,
-    };
   }
 
   private getMethodParameterMetadata(
@@ -193,7 +184,7 @@ export class ResolvedAgent {
         val: cachedInfo,
       };
     } else {
-      const agentMethod = this.agentInstance[methodName as keyof BaseAgent];
+      const agentMethod = (this.agentInstance as any)[methodName];
 
       if (!agentMethod) {
         return {
@@ -260,5 +251,5 @@ export class ResolvedAgent {
 type CachedMethodInfo = {
   paramTypes: ParameterDetail[];
   returnType: TypeInfoInternal;
-  method: unknown;
+  method: any;
 };

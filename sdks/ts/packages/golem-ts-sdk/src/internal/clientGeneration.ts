@@ -14,15 +14,7 @@
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as WitValue from './mapping/values/WitValue';
-import * as Either from '../newTypes/either';
-import {
-  getAgentType,
-  makeAgentId,
-  RegisteredAgentType,
-  Uuid,
-  WasmRpc,
-  Datetime,
-} from 'golem:agent/host@1.5.0';
+import { makeAgentId, Uuid, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
 import { AgentClassName } from '../agentClassName';
 import {
   AgentType,
@@ -31,7 +23,7 @@ import {
   ElementValue,
   TextReference,
 } from 'golem:agent/common@1.5.0';
-import { BaseAgent, RemoteMethod } from '../baseAgent';
+import { RemoteMethod } from '../baseAgent';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
@@ -43,17 +35,11 @@ import { TypeInfoInternal } from './typeInfoInternal';
 import { deserializeDataValue, serializeToDataValue } from './mapping/values/dataValue';
 import { randomUuid } from '../host/hostapi';
 import { AgentId } from '../agentId';
-import * as util from 'node:util';
 
-type AgentClass<T extends BaseAgent = BaseAgent> = {
-  readonly name: string;
-  readonly prototype: T;
-};
-
-export function getRemoteClient(
+export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
   agentType: AgentType,
-  ctor: AgentClass,
+  ctor: T,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -64,7 +50,7 @@ export function getRemoteClient(
   }
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (...args: unknown[]) => {
+  return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
     const constructedId = shared.constructAgentId(args);
@@ -73,10 +59,10 @@ export function getRemoteClient(
   };
 }
 
-export function getPhantomRemoteClient(
+export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: any[]) => any>(
   agentClassName: AgentClassName,
   agentType: AgentType,
-  ctor: AgentClass,
+  ctor: T,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -88,7 +74,7 @@ export function getPhantomRemoteClient(
 
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (finalPhantomId: Uuid, ...args: unknown[]) => {
+  return (finalPhantomId: Uuid, ...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
     const constructedId = shared.constructAgentId(args, finalPhantomId);
@@ -97,10 +83,10 @@ export function getPhantomRemoteClient(
   };
 }
 
-export function getNewPhantomRemoteClient(
+export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
   agentType: AgentType,
-  ctor: AgentClass,
+  ctor: T,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -111,7 +97,7 @@ export function getNewPhantomRemoteClient(
   }
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (...args: unknown[]) => {
+  return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
     const finalPhantomId = randomUuid();
@@ -167,19 +153,11 @@ class WasmRpxProxyHandlerShared {
     }
   }
 
-  constructAgentId(args: unknown[], phantomId?: Uuid): ConstructedAgentId {
+  constructAgentId(args: any[], phantomId?: Uuid): ConstructedAgentId {
     let constructorDataValue: DataValue;
 
     if (args.length === 1 && this.constructorParamTypes[0].tag === 'multimodal') {
-      const dataValueEither = serializeToDataValue(args[0], this.constructorParamTypes[0]);
-
-      if (Either.isLeft(dataValueEither)) {
-        throw new Error(
-          `Failed to serialize multimodal constructor argument: ${dataValueEither.val}. Input is ${util.format(args)}`,
-        );
-      }
-
-      constructorDataValue = dataValueEither.val;
+      constructorDataValue = serializeToDataValue(args[0], this.constructorParamTypes[0]);
     } else {
       const elementValues: ElementValue[] = [];
       for (const [index, arg] of args.entries()) {
@@ -187,10 +165,7 @@ class WasmRpxProxyHandlerShared {
 
         switch (typeInfoInternal.tag) {
           case 'analysed':
-            const witValue = Either.getOrThrowWith(
-              WitValue.fromTsValueDefault(arg, typeInfoInternal.val),
-              (err) => new Error(`Failed to encode constructor parameter ${arg}: ${err}`),
-            );
+            const witValue = WitValue.fromTsValueDefault(arg, typeInfoInternal.val);
             const elementValue: ElementValue = {
               tag: 'component-model',
               val: witValue,
@@ -290,16 +265,16 @@ class WasmRpxProxyHandlerShared {
   }
 }
 
-class WasmRpcProxyHandler implements ProxyHandler<Record<string, unknown>> {
+class WasmRpcProxyHandler implements ProxyHandler<any> {
   private readonly shared: WasmRpxProxyHandlerShared;
   private readonly agentId: AgentId;
   private readonly wasmRpc: WasmRpc;
 
-  private readonly methodProxyCache = new Map<string, RemoteMethod<unknown[], unknown>>();
+  private readonly methodProxyCache = new Map<string, RemoteMethod<any[], any>>();
 
   private readonly getIdMethod: () => AgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
-    const [_typeName, _params, phantomId] = this.agentId.parsed();
+    const [, , phantomId] = this.agentId.parsed();
     return phantomId;
   };
   private readonly getAgentTypeMethod: () => AgentType = () => this.shared.agentType;
@@ -315,8 +290,8 @@ class WasmRpcProxyHandler implements ProxyHandler<Record<string, unknown>> {
     );
   }
 
-  get(target: Record<string, unknown>, prop: string | symbol) {
-    const val = target[prop.toString()];
+  get(target: any, prop: string | symbol) {
+    const val = target[prop];
     const propString = prop.toString();
 
     if (typeof val === 'function') {
@@ -350,12 +325,12 @@ class WasmRpcProxyHandler implements ProxyHandler<Record<string, unknown>> {
     return undefined;
   }
 
-  private createMethodProxy(prop: string): RemoteMethod<unknown[], unknown> {
+  private createMethodProxy(prop: string): RemoteMethod<any[], any> {
     const methodInfo = this.shared.getMethodInfo(prop);
     const agentIdString = this.agentId.value;
     const wasmRpc = this.wasmRpc;
 
-    async function invokeAndAwait(...fnArgs: unknown[]) {
+    async function invokeAndAwait(...fnArgs: any[]) {
       const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
 
       const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(methodInfo.name, inputDataValue);
@@ -384,39 +359,33 @@ class WasmRpcProxyHandler implements ProxyHandler<Record<string, unknown>> {
       return deserializeRpcResult(resultDataValue, methodInfo.returnType);
     }
 
-    function invokeFireAndForget(...fnArgs: unknown[]) {
+    function invokeFireAndForget(...fnArgs: any[]) {
       const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
       wasmRpc.invoke(methodInfo.name, inputDataValue);
     }
 
-    function invokeSchedule(ts: Datetime, ...fnArgs: unknown[]) {
+    function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
       const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
       wasmRpc.scheduleInvocation(ts, methodInfo.name, inputDataValue);
     }
 
-    const methodFn: RemoteMethod<unknown[], unknown> = Object.assign(
-      (...args: unknown[]) => invokeAndAwait(...args),
-      {
-        trigger: (...args: unknown[]) => invokeFireAndForget(...args),
-        schedule: (ts: Datetime, ...args: unknown[]) => invokeSchedule(ts, ...args),
-      },
-    );
+    const methodFn: any = (...args: any[]) => invokeAndAwait(...args);
 
-    return methodFn;
+    methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
+    methodFn.schedule = (ts: Datetime, ...args: any[]) => invokeSchedule(ts, ...args);
+
+    return methodFn as RemoteMethod<any[], any>;
   }
 }
 
-function serializeArgs(params: CachedParamInfo[], fnArgs: unknown[]): DataValue {
+function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
   const elementValues: ElementValue[] = [];
   for (const [index, fnArg] of fnArgs.entries()) {
     const param = params[index];
 
     switch (param.type.tag) {
       case 'analysed': {
-        const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(fnArg, param.type.val),
-          (err) => new Error(`Failed to serialize arg ${param.name}: ${err}`),
-        );
+        const witValue = WitValue.fromTsValueDefault(fnArg, param.type.val);
         elementValues.push({ tag: 'component-model', val: witValue });
         break;
       }
@@ -439,14 +408,14 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: unknown[]): DataValue 
           'Internal error: Value of `Config` should not be serialized at any point during RPC call',
         );
       case 'multimodal': {
-        const dataValueEither = serializeToDataValue(fnArg, param.type);
-        if (Either.isLeft(dataValueEither)) {
-          throw new Error(
-            `Failed to serialize multimodal arg ${param.name}: ${dataValueEither.val}`,
-          );
-        }
-        const multimodalDv = dataValueEither.val;
+        // For a multimodal param, the serialized DataValue is itself the result;
+        // we wrap it as a single tuple with the multimodal elements
+        const multimodalDv = serializeToDataValue(fnArg, param.type);
         if (multimodalDv.tag === 'multimodal') {
+          // Each multimodal element becomes part of the overall DataValue
+          // But since params are tuple-based, we need to wrap multimodal as a single element
+          // The server expects each param as an ElementValue in the tuple
+          // For multimodal, we serialize the whole thing as a component-model WitValue
           for (const [, ev] of multimodalDv.val) {
             elementValues.push(ev);
           }
@@ -462,21 +431,15 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: unknown[]): DataValue 
   return { tag: 'tuple', val: elementValues };
 }
 
-function deserializeRpcResult<T = unknown>(
-  resultDataValue: DataValue,
-  typeInfoInternal: TypeInfoInternal,
-): T {
-  return Either.getOrThrowWith(
-    deserializeDataValue(
-      resultDataValue,
-      [
-        {
-          name: 'returnValue',
-          type: typeInfoInternal,
-        },
-      ],
-      { tag: 'anonymous' },
-    ),
-    (err) => new Error(`Failed to deserialize return value of RPC call: ${err}`),
-  )[0] as T;
+function deserializeRpcResult(resultDataValue: DataValue, typeInfoInternal: TypeInfoInternal): any {
+  return deserializeDataValue(
+    resultDataValue,
+    [
+      {
+        name: 'returnValue',
+        type: typeInfoInternal,
+      },
+    ],
+    { tag: 'anonymous' },
+  )[0];
 }

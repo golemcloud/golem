@@ -13,41 +13,37 @@
 // limitations under the License.
 
 import { WitValue } from 'golem:core/types@1.5.0';
-import * as Either from '../../../newTypes/either';
-import * as Value from './Value';
 import {
-  serializeBinaryReferenceTsValue,
-  serializeDefaultTsValue,
-  serializeTextReferenceTsValue,
+  serializeBinaryReferenceToWitNodes,
+  serializeTextReferenceToWitNodes,
+  serializeToWitNodes,
 } from './serializer';
-import { deserialize } from './deserializer';
+import { deserializeNodes } from './deserializer';
 import { AnalysedType } from '../types/analysedType';
+import { WitNodeBuilder } from './WitNodeBuilder';
 
 export { WitValue } from 'golem:core/types@1.5.0';
 
-export const fromTsValueDefault = (
-  tsValue: unknown,
-  analysedType: AnalysedType,
-): Either.Either<WitValue, string> => {
-  const valueEither = serializeDefaultTsValue(tsValue, analysedType);
-  return Either.map(valueEither, Value.toWitValue);
+export const fromTsValueDefault = (tsValue: any, analysedType: AnalysedType): WitValue => {
+  const builder = new WitNodeBuilder();
+  serializeToWitNodes(tsValue, analysedType, builder);
+  return builder.build();
 };
 
 // For RPC calls, we need wit-value representation of the binary reference (and not DataValue)
-export const fromTsValueTextReference = (tsValue: unknown): WitValue => {
-  const value = serializeTextReferenceTsValue(tsValue);
-
-  return Value.toWitValue(value);
+export const fromTsValueTextReference = (tsValue: any): WitValue => {
+  const builder = new WitNodeBuilder();
+  serializeTextReferenceToWitNodes(tsValue, builder);
+  return builder.build();
 };
 
 // For RPC calls, we need wit-value representation of the binary reference (and not DataValue)
-export const fromTsValueBinaryReference = (tsValue: unknown): WitValue => {
-  const value = serializeBinaryReferenceTsValue(tsValue);
-
-  return Value.toWitValue(value);
+export const fromTsValueBinaryReference = (tsValue: any): WitValue => {
+  const builder = new WitNodeBuilder();
+  serializeBinaryReferenceToWitNodes(tsValue, builder);
+  return builder.build();
 };
 
-export const toTsValue = <T = unknown>(witValue: WitValue, expectedType: AnalysedType): T => {
-  const value: Value.Value = Value.fromWitValue(witValue);
-  return deserialize<T>(value, expectedType);
+export const toTsValue = (witValue: WitValue, expectedType: AnalysedType): any => {
+  return deserializeNodes(witValue.nodes, 0, expectedType);
 };

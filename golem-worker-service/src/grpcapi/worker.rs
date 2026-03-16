@@ -30,7 +30,7 @@ use golem_common::model::AgentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::{proto_agent_id_string, proto_component_id_string};
 use golem_service_base::model::auth::AuthCtx;
@@ -267,12 +267,12 @@ impl WorkerGrpcApi {
             agent_id: request.name,
         };
 
-        let local_agent_config = request
-            .local_agent_config
+        let agent_config = request
+            .agent_config
             .into_iter()
-            .map(WorkerCreationLocalAgentConfigEntry::try_from)
+            .map(WorkerAgentConfigEntry::try_from)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| bad_request_error(format!("failed converting local_agent_config: {e}")))?;
+            .map_err(|e| bad_request_error(format!("failed converting agent_config: {e}")))?;
 
         let latest_component_revision = self
             .worker_service
@@ -280,7 +280,7 @@ impl WorkerGrpcApi {
                 &agent_id,
                 request.env,
                 request.config_vars.into_iter().collect(),
-                local_agent_config,
+                agent_config,
                 request.ignore_already_existing,
                 auth,
                 request.context,
@@ -415,6 +415,12 @@ impl WorkerGrpcApi {
             .principal
             .unwrap_or_else(|| golem_common::model::agent::Principal::anonymous().into());
 
+        let environment_id = request
+            .environment_id
+            .map(|id| id.try_into())
+            .transpose()
+            .map_err(|e| bad_request_error(format!("invalid environment_id: {e}")))?;
+
         let output = self
             .worker_service
             .invoke_agent(
@@ -427,6 +433,7 @@ impl WorkerGrpcApi {
                 request.context,
                 auth,
                 principal,
+                environment_id,
             )
             .await?;
 

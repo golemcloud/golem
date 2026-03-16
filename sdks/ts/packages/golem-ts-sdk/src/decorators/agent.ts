@@ -60,12 +60,6 @@ export type AgentDecoratorOptions = {
   phantom?: boolean;
 };
 
-type MutableAgentStatics = {
-  get?: unknown;
-  newPhantom?: unknown;
-  getPhantom?: unknown;
-};
-
 function parseDurationToNanoseconds(duration: string): bigint {
   const milliseconds = ms(duration as ms.StringValue);
   if (milliseconds === undefined) {
@@ -245,7 +239,7 @@ export function agent(options?: AgentDecoratorOptions) {
 
     if (!classMetadata) {
       const availableAgents = Array.from(TypeMetadata.getAll().entries())
-        .map(([key, _]) => key)
+        .map(([key]) => key)
         .join(', ');
 
       throw new Error(
@@ -331,22 +325,23 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    const decoratedCtor = ctor as T & MutableAgentStatics;
-    decoratedCtor.get = getRemoteClient(agentClassName, agentType, ctor);
-    decoratedCtor.newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
-    decoratedCtor.getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
+    (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor);
+    (ctor as any).newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
+
+    (ctor as any).getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue, principal: Principal) => {
-        const deserializedConstructorArgs = deserializeDataValue(
-          constructorInput,
-          constructorParamTypes,
-          principal,
-        );
-
-        if (Either.isLeft(deserializedConstructorArgs)) {
+        let deserializedConstructorArgs: any[];
+        try {
+          deserializedConstructorArgs = deserializeDataValue(
+            constructorInput,
+            constructorParamTypes,
+            principal,
+          );
+        } catch (e) {
           const error = createCustomError(
-            `Failed to deserialize constructor arguments for agent ${agentClassName.value}: ${deserializedConstructorArgs.val}`,
+            `Failed to deserialize constructor arguments for agent ${agentClassName.value}: ${e instanceof Error ? e.message : e}`,
           );
 
           return {
@@ -355,7 +350,7 @@ export function agent(options?: AgentDecoratorOptions) {
           };
         }
 
-        const instance = Reflect.construct(ctor, deserializedConstructorArgs.val) as BaseAgent;
+        const instance = new ctor(...deserializedConstructorArgs);
 
         const agentId = getRawSelfAgentId();
         if (!agentId.value.startsWith(agentTypeName.value)) {

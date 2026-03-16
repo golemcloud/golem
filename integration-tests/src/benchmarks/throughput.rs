@@ -35,7 +35,7 @@ use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
 use std::collections::BTreeMap;
-use tracing::{info, Level};
+use tracing::{info, Instrument, Level};
 
 pub struct ThroughputEcho {
     config: RunConfig,
@@ -502,21 +502,25 @@ impl ThroughputBenchmark {
         let user = self.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
 
-        info!("Registering components");
+        let (rust_agent_component, ts_agent_component) = async {
+            let rust_agent_component = user
+                .component(&env.id, "benchmark_agent_rust_release")
+                .name("benchmark:agent-rust")
+                .store()
+                .await
+                .unwrap();
 
-        let rust_agent_component = user
-            .component(&env.id, "benchmark_agent_rust_release")
-            .name("benchmark:agent-rust")
-            .store()
-            .await
-            .unwrap();
+            let ts_agent_component = user
+                .component(&env.id, "benchmark_agent_ts")
+                .name("benchmark:agent-ts")
+                .store()
+                .await
+                .unwrap();
 
-        let ts_agent_component = user
-            .component(&env.id, "benchmark_agent_ts")
-            .name("benchmark:agent-ts")
-            .store()
-            .await
-            .unwrap();
+            (rust_agent_component, ts_agent_component)
+        }
+        .instrument(tracing::info_span!("register_components"))
+        .await;
 
         for n in 0..config.size {
             rust_agent_ids.push(agent_id!("RustBenchmarkAgent", format!("test-{n}")));
@@ -538,47 +542,53 @@ impl ThroughputBenchmark {
 
         let client = user.registry_service_client().await;
 
-        info!("Registering domain");
-
         let domain = Domain(format!("{}.golem.cloud", env.id));
 
-        client
-            .create_domain_registration(
-                &env.id.0,
-                &DomainRegistrationCreation {
-                    domain: domain.clone(),
-                },
-            )
-            .await
-            .expect("Failed to register to register domain");
+        async {
+            client
+                .create_domain_registration(
+                    &env.id.0,
+                    &DomainRegistrationCreation {
+                        domain: domain.clone(),
+                    },
+                )
+                .await
+                .expect("Failed to register to register domain");
+        }
+        .instrument(tracing::info_span!("register_domain"))
+        .await;
 
-        info!("Creating http api deployment");
+        async {
+            let http_api_deployment_creation = HttpApiDeploymentCreation {
+                domain: domain.clone(),
+                webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+                agents: BTreeMap::from_iter([
+                    (
+                        AgentTypeName("BenchmarkAgent".to_string()),
+                        HttpApiDeploymentAgentOptions::default(),
+                    ),
+                    (
+                        AgentTypeName("RustBenchmarkAgent".to_string()),
+                        HttpApiDeploymentAgentOptions::default(),
+                    ),
+                ]),
+            };
 
-        let http_api_deployment_creation = HttpApiDeploymentCreation {
-            domain: domain.clone(),
-            webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
-            agents: BTreeMap::from_iter([
-                (
-                    AgentTypeName("BenchmarkAgent".to_string()),
-                    HttpApiDeploymentAgentOptions::default(),
-                ),
-                (
-                    AgentTypeName("RustBenchmarkAgent".to_string()),
-                    HttpApiDeploymentAgentOptions::default(),
-                ),
-            ]),
-        };
+            client
+                .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+                .await
+                .expect("Failed to create http api deployment");
+        }
+        .instrument(tracing::info_span!("create_http_deployment"))
+        .await;
 
-        client
-            .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
-            .await
-            .expect("Failed to create http api deployment");
-
-        info!("Deploying environment");
-
-        user.deploy_environment(env.id)
-            .await
-            .expect("Failed to deploy environment");
+        async {
+            user.deploy_environment(env.id)
+                .await
+                .expect("Failed to deploy environment");
+        }
+        .instrument(tracing::info_span!("deploy_environment"))
+        .await;
 
         IterationContext {
             user,
@@ -623,7 +633,6 @@ impl ThroughputBenchmark {
             let _ = result_futures.join().await;
         }
 
-        info!("Warming up rust agents...");
         warmup_agents(
             &iteration.user,
             &iteration.rust_agent_component,
@@ -632,9 +641,9 @@ impl ThroughputBenchmark {
             &self.agent_params,
             iteration.length,
         )
+        .instrument(tracing::info_span!("warmup_rust_agents"))
         .await;
 
-        info!("Warming up TS agents...");
         warmup_agents(
             &iteration.user,
             &iteration.ts_agent_component,
@@ -643,9 +652,9 @@ impl ThroughputBenchmark {
             &self.agent_params,
             iteration.length,
         )
+        .instrument(tracing::info_span!("warmup_ts_agents"))
         .await;
 
-        info!("Warming up Rust agents for http mapping...");
         warmup_agents(
             &iteration.user,
             &iteration.rust_agent_component,
@@ -654,9 +663,9 @@ impl ThroughputBenchmark {
             &self.agent_params,
             iteration.length,
         )
+        .instrument(tracing::info_span!("warmup_rust_agents_http"))
         .await;
 
-        info!("Warming up TS agents for http mapping...");
         warmup_agents(
             &iteration.user,
             &iteration.ts_agent_component,
@@ -665,9 +674,9 @@ impl ThroughputBenchmark {
             &self.agent_params,
             iteration.length,
         )
+        .instrument(tracing::info_span!("warmup_ts_agents_http"))
         .await;
 
-        info!("Warming up TS RPC agents...");
         warmup_agents(
             &iteration.user,
             &iteration.ts_agent_component,
@@ -680,9 +689,9 @@ impl ThroughputBenchmark {
             &self.agent_params,
             iteration.length,
         )
+        .instrument(tracing::info_span!("warmup_ts_rpc_agents"))
         .await;
 
-        info!("Warming up Rust RPC agents...");
         warmup_agents(
             &iteration.user,
             &iteration.rust_agent_component,
@@ -695,9 +704,8 @@ impl ThroughputBenchmark {
             &self.agent_params,
             iteration.length,
         )
+        .instrument(tracing::info_span!("warmup_rust_rpc_agents"))
         .await;
-
-        info!("Warmup completed");
     }
 
     pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
@@ -745,7 +753,6 @@ impl ThroughputBenchmark {
             }
         }
 
-        info!("Measuring rust agent throughput");
         measure_agents(
             &iteration.user,
             &iteration.routing_table,
@@ -765,9 +772,9 @@ impl ThroughputBenchmark {
             &self.agent_params,
             "rust-agent-",
         )
+        .instrument(tracing::info_span!("measure_rust_agents"))
         .await;
 
-        info!("Measuring TS agent throughput...");
         measure_agents(
             &iteration.user,
             &iteration.routing_table,
@@ -787,6 +794,7 @@ impl ThroughputBenchmark {
             &self.agent_params,
             "ts-agent-",
         )
+        .instrument(tracing::info_span!("measure_ts_agents"))
         .await;
 
         let port = self.deps.worker_service().custom_request_port();
@@ -800,8 +808,7 @@ impl ThroughputBenchmark {
                 .expect("Failed to create HTTP client")
         };
 
-        info!("Measuring Rust agent throughput through HTTP mapping...");
-        {
+        async {
             let client = client.clone();
             let result_futures = iteration
                 .rust_agent_ids_for_http
@@ -831,37 +838,41 @@ impl ThroughputBenchmark {
                 }
             }
         }
+        .instrument(tracing::info_span!("measure_rust_agents_http"))
+        .await;
 
-        info!("Measuring TS agent throughput through HTTP mapping...");
-        let result_futures = iteration
-            .ts_agent_ids_for_http
-            .iter()
-            .enumerate()
-            .map(move |(idx, _agent_id)| {
-                let client = client.clone();
-                async move {
-                    let mut results = vec![];
-                    for _ in 0..self.call_count {
-                        results.push(
-                            invoke_and_await_http(client.clone(), || {
-                                (self.http_request)(port, idx, iteration.length)
-                            })
-                            .await,
-                        )
+        async {
+            let result_futures = iteration
+                .ts_agent_ids_for_http
+                .iter()
+                .enumerate()
+                .map(move |(idx, _agent_id)| {
+                    let client = client.clone();
+                    async move {
+                        let mut results = vec![];
+                        for _ in 0..self.call_count {
+                            results.push(
+                                invoke_and_await_http(client.clone(), || {
+                                    (self.http_request)(port, idx, iteration.length)
+                                })
+                                .await,
+                            )
+                        }
+                        results
                     }
-                    results
-                }
-            })
-            .collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>();
 
-        let results = result_futures.join().await;
-        for (idx, results) in results.iter().enumerate() {
-            for result in results {
-                result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
+            let results = result_futures.join().await;
+            for (idx, results) in results.iter().enumerate() {
+                for result in results {
+                    result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
+                }
             }
         }
+        .instrument(tracing::info_span!("measure_ts_agents_http"))
+        .await;
 
-        info!("Measuring TS agent RPC throughput...");
         measure_agents(
             &iteration.user,
             &iteration.routing_table,
@@ -881,9 +892,9 @@ impl ThroughputBenchmark {
             &self.agent_params,
             "ts-agent-rpc-",
         )
+        .instrument(tracing::info_span!("measure_ts_rpc"))
         .await;
 
-        info!("Measuring Rust agent RPC throughput...");
         measure_agents(
             &iteration.user,
             &iteration.routing_table,
@@ -903,6 +914,7 @@ impl ThroughputBenchmark {
             &self.agent_params,
             "rust-agent-rpc-",
         )
+        .instrument(tracing::info_span!("measure_rust_rpc"))
         .await;
     }
 

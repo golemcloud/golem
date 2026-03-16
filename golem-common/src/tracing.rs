@@ -414,6 +414,16 @@ pub mod directive {
             warn("bollard"),
         ]
     }
+
+    /// Directives for the OTLP layer: same as default_deps but also
+    /// enables trace-level for `otel::tracing` target so that spans
+    /// created by `tonic-tracing-opentelemetry` (which uses TRACE level)
+    /// are exported and can propagate trace context across services.
+    pub fn otlp_deps() -> Vec<Directive> {
+        let mut deps = default_deps();
+        deps.push("otel::tracing=trace".parse().unwrap());
+        deps
+    }
 }
 
 pub mod filter {
@@ -463,6 +473,28 @@ pub mod filter {
         pub fn default_info_env() -> Boxed {
             env_with_directives(directive::default::info(), directive::default_deps())
         }
+
+        /// Filter for the OTLP layer: debug level by default, with
+        /// `otel::tracing=trace` so context-propagation spans are exported.
+        ///
+        /// Unlike the other filters this does **not** read `RUST_LOG`.
+        /// `RUST_LOG` controls console verbosity and is often set to `warn`
+        /// in benchmark/CI runs, which would silently suppress all
+        /// INFO/DEBUG spans from OTLP export.  Instead the OTLP layer
+        /// always starts from `debug` and can be overridden via
+        /// `GOLEM_OTLP_LOG` if needed.
+        pub fn default_otlp_env() -> Boxed {
+            let mut builder = EnvFilter::builder()
+                .with_default_directive(directive::default::debug())
+                .with_env_var("GOLEM_OTLP_LOG")
+                .from_env_lossy();
+
+            for directive in directive::otlp_deps() {
+                builder = builder.add_directive(directive);
+            }
+
+            Box::new(builder)
+        }
     }
 
     pub mod for_all_outputs {
@@ -471,7 +503,15 @@ pub mod filter {
         use crate::tracing::filter::{boxed, Boxed};
         use crate::tracing::Output;
 
-        pub const DEFAULT_ENV: fn(Output) -> Boxed = |_output| boxed::default_env();
+        /// For OTLP, uses a permissive debug-level filter with
+        /// `otel::tracing=trace` so that context-propagation spans created
+        /// by `tonic-tracing-opentelemetry` (at TRACE level) are always
+        /// exported. For other outputs falls back to the RUST_LOG-based
+        /// env filter.
+        pub const DEFAULT_ENV: fn(Output) -> Boxed = |output| match output {
+            Output::Otlp => boxed::default_otlp_env(),
+            _ => boxed::default_env(),
+        };
 
         pub fn debug_env_with_directives(directives: Vec<Directive>) -> impl Fn(Output) -> Boxed {
             move |_output| boxed::debug_env_with_directives(directives.clone())
@@ -495,8 +535,21 @@ pub fn init_tracing<F>(config: &TracingConfig, make_filter: F) -> Option<SdkTrac
 where
     F: Fn(Output) -> filter::Boxed,
 {
+    init_tracing_returning_provider(config, make_filter).map(|(tracer, _provider)| tracer)
+}
+
+/// Like [`init_tracing`] but also returns the [`SdkTracerProvider`] so the
+/// caller can call [`SdkTracerProvider::shutdown`] before process exit to
+/// flush pending OTLP spans.
+pub fn init_tracing_returning_provider<F>(
+    config: &TracingConfig,
+    make_filter: F,
+) -> Option<(SdkTracer, opentelemetry_sdk::trace::SdkTracerProvider)>
+where
+    F: Fn(Output) -> filter::Boxed,
+{
     let mut layers = Vec::new();
-    let mut result_tracer = None;
+    let mut result = None;
 
     if config.otlp.enabled {
         let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -522,7 +575,7 @@ where
 
         let tracer = tracer_provider.tracer(config.otlp.service_name.clone());
         let telemetry = tracing_opentelemetry::layer().with_tracer(tracer.clone());
-        result_tracer = Some(tracer);
+        result = Some((tracer, tracer_provider));
 
         layers.push(telemetry.with_filter(make_filter(Output::Otlp)).boxed());
     }
@@ -591,7 +644,7 @@ where
         );
     }
 
-    result_tracer
+    result
 }
 
 pub fn init_tracing_with_default_env_filter(config: &TracingConfig) -> Option<SdkTracer> {

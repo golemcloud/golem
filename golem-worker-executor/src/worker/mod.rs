@@ -18,7 +18,7 @@ mod invocation_loop;
 pub mod status;
 
 use self::agent_config::{
-    ensure_required_agent_secrets_are_configured, parse_worker_creation_local_agent_config,
+    ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
 use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
@@ -54,7 +54,7 @@ use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
+use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
@@ -146,7 +146,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -162,7 +162,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 account_id,
                 worker_env,
                 worker_config_vars,
-                worker_local_agent_config,
+                worker_agent_config,
                 component_revision,
                 parent,
                 invocation_context_stack,
@@ -178,7 +178,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -193,7 +193,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_agent_id,
             worker_env,
             worker_config_vars,
-            worker_local_agent_config,
+            worker_agent_config,
             component_revision,
             parent,
             invocation_context_stack,
@@ -238,7 +238,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -258,7 +258,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             worker_env,
             worker_config,
-            worker_local_agent_config,
+            worker_agent_config,
             parent,
         )
         .await?;
@@ -588,7 +588,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
         let subscription = self.events().subscribe();
 
-        let output = self.lookup_invocation_result(&idempotency_key).await;
+        let output = async { self.lookup_invocation_result(&idempotency_key).await }
+            .instrument(span!(Level::INFO, "lookup_invocation_result"))
+            .await;
         match output {
             LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
@@ -618,9 +620,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ResultOrSubscription::Pending(subscription) => {
                 debug!("Waiting for idempotency key to complete",);
 
-                let result = self
-                    .wait_for_invocation_result(&idempotency_key, subscription)
-                    .await;
+                let result = async {
+                    self.wait_for_invocation_result(&idempotency_key, subscription)
+                        .await
+                }
+                .instrument(span!(Level::INFO, "wait_for_invocation_result"))
+                .await;
 
                 match result {
                     Ok(LookupResult::Complete(Ok(output))) => Ok(output),
@@ -827,58 +832,62 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        let instance_guard = self.lock_non_stopping_worker().await;
+        async {
+            let instance_guard = self.lock_non_stopping_worker().await;
 
-        if instance_guard.is_deleting() {
-            return Err(WorkerExecutorError::invalid_request(
-                "Cannot enqueue invocation to a deleting worker",
-            ));
-        };
+            if instance_guard.is_deleting() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "Cannot enqueue invocation to a deleting worker",
+                ));
+            };
 
-        if let Some(err) = instance_guard.startup_failure() {
-            return Err(err.clone());
-        }
+            if let Some(err) = instance_guard.startup_failure() {
+                return Err(err.clone());
+            }
 
-        let (idempotency_key, invocation_payload, invocation_context) =
-            invocation.clone().into_parts();
-        let payload = self
-            .oplog
-            .upload_payload(&invocation_payload)
-            .await
-            .map_err(|e| {
-                WorkerExecutorError::invalid_request(format!(
-                    "Failed to upload invocation payload: {e}"
-                ))
-            })?;
-        let invocation_context_spans = invocation_context.to_oplog_data();
-        let entry = OplogEntry::pending_agent_invocation(
-            idempotency_key,
-            payload,
-            invocation_context.trace_id,
-            invocation_context.trace_states,
-            invocation_context_spans,
-        );
-        let timestamped_invocation = TimestampedAgentInvocation {
-            timestamp: entry.timestamp(),
-            invocation,
-        };
-        self.add_and_commit_oplog_internal(&instance_guard, entry)
-            .await;
-
-        if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
-            self.external_invocation_spans
-                .write()
+            let (idempotency_key, invocation_payload, invocation_context) =
+                invocation.clone().into_parts();
+            let payload = self
+                .oplog
+                .upload_payload(&invocation_payload)
                 .await
-                .insert(idempotency_key.clone(), Span::current());
+                .map_err(|e| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "Failed to upload invocation payload: {e}"
+                    ))
+                })?;
+            let invocation_context_spans = invocation_context.to_oplog_data();
+            let entry = OplogEntry::pending_agent_invocation(
+                idempotency_key,
+                payload,
+                invocation_context.trace_id,
+                invocation_context.trace_states,
+                invocation_context_spans,
+            );
+            let timestamped_invocation = TimestampedAgentInvocation {
+                timestamp: entry.timestamp(),
+                invocation,
+            };
+            self.add_and_commit_oplog_internal(&instance_guard, entry)
+                .await;
+
+            if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
+                self.external_invocation_spans
+                    .write()
+                    .await
+                    .insert(idempotency_key.clone(), Span::current());
+            }
+
+            if let WorkerInstance::Running(running) = &*instance_guard {
+                running.sender.send(WorkerCommand::Unblock).unwrap();
+            };
+
+            drop(instance_guard);
+
+            Ok(())
         }
-
-        if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Unblock).unwrap();
-        };
-
-        drop(instance_guard);
-
-        Ok(())
+        .instrument(span!(Level::INFO, "enqueue_invocation"))
+        .await
     }
 
     pub async fn get_file_system_node(
@@ -1515,7 +1524,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         parent: Option<AgentId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_agent_id.component_id();
@@ -1634,8 +1643,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )?
                 };
 
-                let initial_local_agent_config = parse_worker_creation_local_agent_config(
-                    worker_local_agent_config,
+                let initial_agent_config = parse_worker_creation_agent_config(
+                    worker_agent_config,
                     agent_id.as_ref(),
                     &component,
                 )?;
@@ -1670,7 +1679,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // the new effective set as the component revision changes otherwise.
                     env: worker_env,
                     config_vars: worker_config_vars.unwrap_or_default(),
-                    local_agent_config: initial_local_agent_config,
+                    agent_config: initial_agent_config,
                     environment_id: owned_agent_id.environment_id(),
                     created_by: *account_id,
                     created_at,
@@ -1699,7 +1708,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .clone(),
                     initial_worker_metadata.config_vars.clone(),
                     initial_worker_metadata
-                        .local_agent_config
+                        .agent_config
                         .iter()
                         .cloned()
                         .map(Into::into)
@@ -2235,7 +2244,7 @@ impl RunningWorker {
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.config_vars,
-                worker_metadata.local_agent_config,
+                worker_metadata.agent_config,
                 last_snapshot_index,
             ),
             parent.execution_status.clone(),

@@ -25,6 +25,8 @@ pub fn error_gen() -> Module {
             Item(T),
             #[error("Client error: {0}")]
             Reqwest(reqwest::Error),
+            #[error("Middleware error: {0}")]
+            Middleware(reqwest_middleware::Error),
             #[error("Invalid header value: {0}")]
             ReqwestHeader(reqwest::header::InvalidHeaderValue),
             #[error("Deserialization error: {0}")]
@@ -45,6 +47,12 @@ pub fn error_gen() -> Module {
         impl<T> From<reqwest::Error> for Error<T> {
             fn from(value: reqwest::Error) -> Self {
                 Error::Reqwest(value)
+            }
+        }
+
+        impl<T> From<reqwest_middleware::Error> for Error<T> {
+            fn from(value: reqwest_middleware::Error) -> Self {
+                Error::Middleware(value)
             }
         }
 
