@@ -4,6 +4,7 @@ package golem.worker.v1;
 
 import "golem/auth/auth_ctx.proto";
 import "golem/common/empty.proto";
+import "golem/common/environment.proto";
 import "golem/common/revert_worker_response.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
@@ -145,6 +146,7 @@ message InvokeAgentRequest {
   optional golem.worker.InvocationContext context = 7;
   golem.auth.AuthCtx auth_ctx = 8;
   golem.component.Principal principal = 9;
+  optional golem.common.EnvironmentId environment_id = 10;
 }
 
 message InvokeAgentResponse {
