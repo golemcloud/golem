@@ -97,7 +97,7 @@ steps:
     );
   });
 
-  // New tests for #2887 settings/prerequisites
+  // Settings/prerequisites tests
 
   it('loads scenario with settings', async () => {
     const filePath = await writeTempYaml(`
@@ -150,7 +150,7 @@ steps:
     assert.equal(spec.steps[1].timeout, 120);
   });
 
-  // New tests for #2890 invoke
+  // Invoke tests
 
   it('loads step with invoke and expect', async () => {
     const filePath = await writeTempYaml(`
@@ -172,7 +172,7 @@ steps:
     assert.equal(spec.steps[0].expect?.stdout_contains, 'success');
   });
 
-  // New tests for #2893 shell/sleep/trigger
+  // Shell/sleep/trigger tests
 
   it('loads step with sleep', async () => {
     const filePath = await writeTempYaml(`
@@ -217,7 +217,7 @@ steps:
     assert.equal(spec.steps[0].trigger?.function, 'do-thing');
   });
 
-  // New tests for #2894 create/delete agent
+  // Create/delete agent tests
 
   it('loads step with create_agent', async () => {
     const filePath = await writeTempYaml(`

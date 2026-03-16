@@ -141,7 +141,7 @@ Options:
     console.log(`${allPassed ? 'PASS' : 'FAIL'} ${spec.name} steps=${results.length}/${spec.steps.length}`);
   }
 
-  // Aggregated summary report (#2912)
+  // Aggregated summary report
   if (scenarioReports.length > 0) {
     const totalScenarios = scenarioReports.length;
     const passed = scenarioReports.filter(r => r.status === 'pass').length;

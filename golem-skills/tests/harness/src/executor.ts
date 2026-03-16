@@ -7,7 +7,7 @@ import { AgentDriver } from './driver/base.js';
 import { SkillWatcher } from './watcher.js';
 import { evaluate, ExpectSchema, type AssertionContext } from './assertions.js';
 
-// --- Schemas (#2887, #2890, #2893, #2894) ---
+// --- Schemas ---
 
 const InvokeSchema = z.object({
   agent: z.string(),
@@ -195,7 +195,7 @@ export class ScenarioExecutor {
     const savedEnv: Record<string, string | undefined> = {};
     const shouldCleanup = spec.settings?.cleanup !== false;
 
-    // Set prerequisites env vars (#2887)
+    // Set prerequisites env vars
     if (spec.prerequisites?.env) {
       for (const [key, value] of Object.entries(spec.prerequisites.env)) {
         savedEnv[key] = process.env[key];
@@ -235,13 +235,13 @@ export class ScenarioExecutor {
         await this.watcher.snapshotAtimes();
         console.log(`Step ${step.id ?? '(unnamed)'}: starting (timeout=${stepTimeoutSeconds}s)`);
 
-        // Sleep action (#2893)
+        // Sleep action
         if (step.sleep !== undefined) {
           console.log(`Step ${step.id ?? '(unnamed)'}: sleeping for ${step.sleep}s`);
           await new Promise(resolve => setTimeout(resolve, step.sleep! * 1000));
         }
 
-        // Create agent action (#2894)
+        // Create agent action
         if (step.create_agent) {
           console.log(`Step ${step.id ?? '(unnamed)'}: creating agent "${step.create_agent.name}"`);
           const createResult = await this.runLocalCommand(
@@ -254,7 +254,7 @@ export class ScenarioExecutor {
           }
         }
 
-        // Delete agent action (#2894)
+        // Delete agent action
         if (step.delete_agent) {
           console.log(`Step ${step.id ?? '(unnamed)'}: deleting agent "${step.delete_agent.name}"`);
           const deleteResult = await this.runLocalCommand(
@@ -267,7 +267,7 @@ export class ScenarioExecutor {
           }
         }
 
-        // Shell action (#2893)
+        // Shell action
         if (step.shell) {
           console.log(`Step ${step.id ?? '(unnamed)'}: running shell command "${step.shell.command}"`);
           const shellCwd = step.shell.cwd
@@ -297,7 +297,7 @@ export class ScenarioExecutor {
           }
         }
 
-        // Trigger action (#2893) — fire-and-forget
+        // Trigger action — fire-and-forget
         if (step.trigger) {
           console.log(`Step ${step.id ?? '(unnamed)'}: triggering ${step.trigger.agent}.${step.trigger.function}`);
           const triggerArgs = ['agent', 'invoke', step.trigger.agent, step.trigger.function, '--trigger'];
@@ -307,7 +307,7 @@ export class ScenarioExecutor {
             .catch(() => { /* fire and forget */ });
         }
 
-        // Execute prompt if present (#2887 continue_session)
+        // Execute prompt if present
         if (step.prompt) {
           const useContinueSession = step.continue_session !== false && !isFirstPrompt;
           if (useContinueSession) {
@@ -328,7 +328,7 @@ export class ScenarioExecutor {
           isFirstPrompt = false;
         }
 
-        // Invoke action (#2890)
+        // Invoke action
         if (step.invoke) {
           console.log(`Step ${step.id ?? '(unnamed)'}: invoking ${step.invoke.agent}.${step.invoke.function}`);
           const invokeArgs = ['agent', 'invoke', step.invoke.agent, step.invoke.function];
@@ -394,7 +394,7 @@ export class ScenarioExecutor {
           }
         }
 
-        // Deploy verification (#2889)
+        // Deploy verification
         if (step.verify?.deploy) {
           // Deploy implies build — run build first if not already run
           if (!step.verify?.build) {
@@ -432,7 +432,7 @@ export class ScenarioExecutor {
         if (!stepSuccess) break; // Stop on failure
       }
     } finally {
-      // Restore env vars (#2887)
+      // Restore env vars
       for (const [key, value] of Object.entries(savedEnv)) {
         if (value === undefined) {
           delete process.env[key];

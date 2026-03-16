@@ -8,7 +8,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
   }
 
   async sendFollowup(prompt: string, timeout: number): Promise<AgentResult> {
-    // OpenCode session continuity TBD
+    // OpenCode does not currently support session continuity
     return this.sendPrompt(prompt, timeout);
   }
 
