@@ -40,6 +40,7 @@ use desert_rust::{
     DeserializationContext, SerializationContext,
 };
 use golem_api_grpc::proto::golem::worker::UpdateMode;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::HashMap;
@@ -110,6 +111,10 @@ oplog_payload! {
             agent_id: AgentId,
             target_revision: ComponentRevision,
             mode: UpdateMode
+        },
+        GolemAgentGetConfigValue {
+            key: Vec<String>,
+            expected_type: AnalysedType
         },
         GolemAgentGetAgentType {
             agent_type_name: AgentTypeName
@@ -214,6 +219,9 @@ oplog_payload! {
         FileSystemStat {
             result: Result<SerializableFileTimes, FileSystemError>,
         },
+        GolemAgentGetConfigValue {
+            result: golem_wasm::Value,
+        },
         GolemAgentWebhookUrl {
             result: Result<String, String>
         },
@@ -281,7 +289,7 @@ oplog_payload! {
         GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
         GolemRpcUnit {},
         HttpFutureTrailersGet {
-            result:  Result<Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableHttpErrorCode>, ()>>, String>
+            result:  Result<Option<Result<Result<Option<HashMap<String, Vec<Vec<u8>>>>, SerializableHttpErrorCode>, ()>>, String>
         },
         HttpResponse {
             response: SerializableHttpResponse
@@ -320,11 +328,17 @@ oplog_payload! {
         SocketsResolveName {
             result: Result<SerializableIpAddresses, SerializableSocketError>
         },
+        StreamCheckWrite {
+            result: Result<u64, SerializableStreamError>
+        },
         StreamChunk {
             result: Result<Vec<u8>, SerializableStreamError>
         },
         StreamSkip {
             result: Result<u64, SerializableStreamError>
+        },
+        StreamWriteResult {
+            result: Result<(), SerializableStreamError>
         }
     }
 }
@@ -378,7 +392,7 @@ pub mod host_functions {
         (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure),
         (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocation),
         (GolemRpcCancellationTokenCancel => "golem::rpc::cancellation-token", "cancel", GolemRpcScheduledInvocationCancellation, GolemRpcUnit),
-        (IoPollReady => "io::poll", "ready", NoInput, PollReady),
+        (IoPollReady => "io::poll::pollable", "ready", NoInput, PollReady),
         (IoPollPoll => "io::poll", "poll", PollCount, PollResult),
         (HttpTypesFutureTrailersGet => "http::types::future_trailers", "get", HttpRequest, HttpFutureTrailersGet),
         (HttpTypesFutureIncomingResponseGet => "http::types::future_incoming_response", "get", HttpRequest, HttpResponse),
@@ -386,6 +400,13 @@ pub mod host_functions {
         (HttpTypesIncomingBodyStreamBlockingRead => "http::types::incoming_body_stream", "blocking_read", HttpRequest, StreamChunk),
         (HttpTypesIncomingBodyStreamSkip => "http::types::incoming_body_stream", "skip", HttpRequest, StreamSkip),
         (HttpTypesIncomingBodyStreamBlockingSkip => "http::types::incoming_body_stream", "blocking_skip", HttpRequest, StreamSkip),
+        (HttpTypesOutgoingBodyStreamCheckWrite => "http::types::outgoing_body_stream", "check_write", HttpRequest, StreamCheckWrite),
+        (HttpTypesOutgoingBodyStreamWrite => "http::types::outgoing_body_stream", "write", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamFlush => "http::types::outgoing_body_stream", "flush", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamBlockingFlush => "http::types::outgoing_body_stream", "blocking_flush", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamWriteZeroes => "http::types::outgoing_body_stream", "write_zeroes", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamSplice => "http::types::outgoing_body_stream", "splice", HttpRequest, StreamSkip),
+        (HttpTypesOutgoingBodyStreamBlockingSplice => "http::types::outgoing_body_stream", "blocking_splice", HttpRequest, StreamSkip),
         (WallClockNow => "wall_clock", "now", NoInput, WallClock),
         (WallClockResolution => "wall_clock", "resolution", NoInput, WallClock),
         (MonotonicClockNow => "monotonic_clock", "now", NoInput, MonotonicClockTimestamp),
@@ -411,6 +432,7 @@ pub mod host_functions {
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
+        (GolemAgentGetConfigValue => "golem::agent", "get_config_value", GolemAgentGetConfigValue, GolemAgentGetConfigValue),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),

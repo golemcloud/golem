@@ -30,7 +30,9 @@ impl UntypedParsedWorkerCreationLocalAgentConfigEntry {
 
         let value_type = component_metadata
             .find_agent_type_by_name(agent_type_name)
-            .ok_or("did not find expected agent type in the metadata")?
+            .ok_or_else(|| {
+                format!("did not find expected agent type {agent_type_name} in the metadata")
+            })?
             .config
             .into_iter()
             .find_map(|c| match c {

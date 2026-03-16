@@ -16,7 +16,7 @@ use anyhow::Context;
 use figment::providers::{Format, Toml};
 use figment::Figment;
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
+    ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::RetryConfig;
@@ -56,11 +56,12 @@ pub struct GolemConfig {
     pub resource_limits: ResourceLimitsConfig,
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
-    pub agent_deployments_service: AgentDeploymentsServiceConfig,
+    pub environment_state_service: EnvironmentStateServiceConfig,
     pub agent_webhooks_service: AgentWebhooksServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
     pub grpc: GrpcApiConfig,
+    pub http_client: HttpClientConfig,
     pub http_address: String,
     pub http_port: u16,
 }
@@ -160,11 +161,11 @@ impl SafeDisplay for GolemConfig {
             self.agent_types_service.to_safe_string_indented()
         );
 
-        let _ = writeln!(&mut result, "agent deployments service:");
+        let _ = writeln!(&mut result, "environment state service:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.agent_deployments_service.to_safe_string_indented()
+            self.environment_state_service.to_safe_string_indented()
         );
 
         let _ = writeln!(&mut result, "agent webhooks service:");
@@ -179,6 +180,13 @@ impl SafeDisplay for GolemConfig {
 
         let _ = writeln!(&mut result, "grpc:");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
+
+        let _ = writeln!(&mut result, "http client:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.http_client.to_safe_string_indented()
+        );
 
         let _ = writeln!(&mut result, "HTTP address: {}", self.http_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
@@ -209,7 +217,7 @@ impl Default for GolemConfig {
             resource_limits: ResourceLimitsConfig::default(),
             component_cache: ComponentCacheConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
-            agent_deployments_service: AgentDeploymentsServiceConfig::default(),
+            environment_state_service: EnvironmentStateServiceConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
             registry_service: GrpcRegistryServiceConfig {
                 client_config: GrpcClientConfig {
@@ -220,6 +228,7 @@ impl Default for GolemConfig {
             },
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
+            http_client: HttpClientConfig::default(),
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
         }
@@ -546,6 +555,8 @@ impl SafeDisplay for OplogConfig {
 #[serde(tag = "type", content = "config")]
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
+    Postgres(KeyValueStoragePostgresConfig),
+    NamespaceRouted(KeyValueStorageNamespaceRoutedConfig),
     Sqlite(DbSqliteConfig),
     MultiSqlite(KeyValueStorageMultiSqliteConfig),
     InMemory(KeyValueStorageInMemoryConfig),
@@ -559,6 +570,14 @@ impl SafeDisplay for KeyValueStorageConfig {
                 let _ = writeln!(&mut result, "redis:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
+            KeyValueStorageConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageConfig::NamespaceRouted(inner) => {
+                let _ = writeln!(&mut result, "namespace-routed:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
             KeyValueStorageConfig::Sqlite(inner) => {
                 let _ = writeln!(&mut result, "sqlite:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
@@ -568,6 +587,74 @@ impl SafeDisplay for KeyValueStorageConfig {
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             KeyValueStorageConfig::InMemory(inner) => {
+                let _ = writeln!(&mut result, "in-memory:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KeyValueStoragePostgresConfig {
+    #[serde(flatten)]
+    pub postgres: DbPostgresConfig,
+}
+
+impl SafeDisplay for KeyValueStoragePostgresConfig {
+    fn to_safe_string(&self) -> String {
+        self.postgres.to_safe_string()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KeyValueStorageNamespaceRoutedConfig {
+    pub cache: KeyValueStorageInnerConfig,
+    pub persistent: KeyValueStorageInnerConfig,
+}
+
+impl SafeDisplay for KeyValueStorageNamespaceRoutedConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "cache:");
+        let _ = writeln!(&mut result, "{}", self.cache.to_safe_string_indented());
+        let _ = writeln!(&mut result, "persistent:");
+        let _ = writeln!(&mut result, "{}", self.persistent.to_safe_string_indented());
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum KeyValueStorageInnerConfig {
+    Redis(RedisConfig),
+    Postgres(KeyValueStoragePostgresConfig),
+    Sqlite(DbSqliteConfig),
+    MultiSqlite(KeyValueStorageMultiSqliteConfig),
+    InMemory(KeyValueStorageInMemoryConfig),
+}
+
+impl SafeDisplay for KeyValueStorageInnerConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            KeyValueStorageInnerConfig::Redis(inner) => {
+                let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageInnerConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageInnerConfig::Sqlite(inner) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageInnerConfig::MultiSqlite(inner) => {
+                let _ = writeln!(&mut result, "multi-sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            KeyValueStorageInnerConfig::InMemory(inner) => {
                 let _ = writeln!(&mut result, "in-memory:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
@@ -607,6 +694,7 @@ impl SafeDisplay for KeyValueStorageInMemoryConfig {
 pub enum IndexedStorageConfig {
     KVStoreRedis(IndexedStorageKVStoreRedisConfig),
     Redis(RedisConfig),
+    Postgres(IndexedStoragePostgresConfig),
     KVStoreSqlite(IndexedStorageKVStoreSqliteConfig),
     KVStoreMultiSqlite(IndexedStorageKVStoreMultiSqliteConfig),
     Sqlite(DbSqliteConfig),
@@ -624,6 +712,10 @@ impl SafeDisplay for IndexedStorageConfig {
             }
             IndexedStorageConfig::Redis(inner) => {
                 let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            IndexedStorageConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             IndexedStorageConfig::KVStoreSqlite(inner) => {
@@ -702,6 +794,31 @@ impl SafeDisplay for IndexedStorageInMemoryConfig {
     fn to_safe_string(&self) -> String {
         "".to_string()
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndexedStoragePostgresConfig {
+    #[serde(flatten)]
+    pub postgres: DbPostgresConfig,
+    #[serde(default = "default_indexed_storage_postgres_drop_prefix_delete_batch_size")]
+    pub drop_prefix_delete_batch_size: u64,
+}
+
+impl SafeDisplay for IndexedStoragePostgresConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "{}", self.postgres.to_safe_string_indented());
+        let _ = writeln!(
+            &mut result,
+            "drop prefix delete batch size: {}",
+            self.drop_prefix_delete_batch_size
+        );
+        result
+    }
+}
+
+fn default_indexed_storage_postgres_drop_prefix_delete_batch_size() -> u64 {
+    1024
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -935,14 +1052,14 @@ impl SafeDisplay for AgentTypesServiceGrpcConfig {
 pub struct AgentTypesServiceLocalConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AgentDeploymentsServiceConfig {
+pub struct EnvironmentStateServiceConfig {
     pub cache_capacity: usize,
     pub cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub cache_eviction_interval: Duration,
 }
 
-impl Default for AgentDeploymentsServiceConfig {
+impl Default for EnvironmentStateServiceConfig {
     fn default() -> Self {
         Self {
             cache_capacity: 1000,
@@ -952,7 +1069,7 @@ impl Default for AgentDeploymentsServiceConfig {
     }
 }
 
-impl SafeDisplay for AgentDeploymentsServiceConfig {
+impl SafeDisplay for EnvironmentStateServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);
@@ -1227,6 +1344,103 @@ impl Default for AgentTypesServiceGrpcConfig {
         }
     }
 }
+
+/// Configuration for the HTTP connection pool used by outgoing wasi:http requests.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum HttpClientConfig {
+    Enabled(HttpClientEnabledConfig),
+    Disabled(HttpClientDisabledConfig),
+}
+
+impl Default for HttpClientConfig {
+    fn default() -> Self {
+        HttpClientConfig::Enabled(HttpClientEnabledConfig::default())
+    }
+}
+
+impl SafeDisplay for HttpClientConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            HttpClientConfig::Enabled(enabled) => {
+                let _ = writeln!(&mut result, "enabled:");
+                let _ = writeln!(&mut result, "{}", enabled.to_safe_string_indented());
+            }
+            HttpClientConfig::Disabled(_) => {
+                let _ = writeln!(&mut result, "disabled");
+            }
+        }
+        result
+    }
+}
+
+/// Configuration for the shared HTTP connection pool.
+///
+/// A shared connection pool is created at executor startup and reused across
+/// all workers, reducing TCP+TLS connection overhead.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HttpClientEnabledConfig {
+    /// Maximum number of idle connections per host.
+    pub max_idle_per_host: usize,
+    /// How long idle connections remain in the pool before being closed.
+    #[serde(with = "humantime_serde")]
+    pub idle_timeout: Duration,
+    /// Timeout for establishing new TCP connections via the pool.
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
+    /// Maximum number of concurrent in-flight connections per host.
+    pub max_connections_per_host: usize,
+    /// Maximum total number of concurrent in-flight connections across all hosts.
+    pub max_total_connections: usize,
+    /// Maximum number of distinct host entries tracked in the per-host semaphore map.
+    pub max_host_entries: usize,
+}
+
+impl Default for HttpClientEnabledConfig {
+    fn default() -> Self {
+        Self {
+            max_idle_per_host: 8,
+            idle_timeout: Duration::from_secs(90),
+            connect_timeout: Duration::from_secs(30),
+            max_connections_per_host: 20,
+            max_total_connections: 200,
+            max_host_entries: 1024,
+        }
+    }
+}
+
+impl SafeDisplay for HttpClientEnabledConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "max idle per host: {}", self.max_idle_per_host);
+        let _ = writeln!(
+            &mut result,
+            "idle timeout: {}s",
+            self.idle_timeout.as_secs()
+        );
+        let _ = writeln!(
+            &mut result,
+            "connect timeout: {}s",
+            self.connect_timeout.as_secs()
+        );
+        let _ = writeln!(
+            &mut result,
+            "max connections per host: {}",
+            self.max_connections_per_host
+        );
+        let _ = writeln!(
+            &mut result,
+            "max total connections: {}",
+            self.max_total_connections
+        );
+        let _ = writeln!(&mut result, "max host entries: {}", self.max_host_entries);
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HttpClientDisabledConfig {}
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
     ConfigLoader::new_with_examples(Path::new("config/worker-executor.toml"))

@@ -19,6 +19,7 @@ members = [
     "golem-wasm-derive",
     "cli/golem",
     "cli/golem-cli",
+    "golem-openapi-client-generator",
 ]
 
 exclude = [
@@ -38,7 +39,7 @@ golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
-golem-openapi-client-generator = { version = "=0.0.17" }
+golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
@@ -112,6 +113,7 @@ expectrl = "0.8.0"
 fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
+fmt = "0.1.0"
 flate2 = "1.1.0"
 fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", "enable-rustls-ring"] }
 fs-set-times = "0.20.3"
