@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::agent_webhooks::AgentWebhooksService;
+use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
-use super::HasAgentWebhooksService;
+use super::{HasAgentWebhooksService, HasEnvironmentStateService};
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
@@ -394,6 +395,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
     shutdown_token: tokio_util::sync::CancellationToken,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
     http_connection_pool: Option<HttpConnectionPool>,
@@ -429,6 +431,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
+            environment_state_service: self.environment_state_service.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
@@ -622,6 +625,12 @@ impl<Ctx: WorkerCtx> HasHttpConnectionPool for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ctx> {
+    fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
+        self.environment_state_service.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -653,6 +662,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         http_connection_pool: Option<HttpConnectionPool>,
@@ -685,6 +695,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin,
             resource_limits,
             shutdown_token,
+            environment_state_service,
             agent_types_service,
             agent_webhooks_service,
             http_connection_pool,

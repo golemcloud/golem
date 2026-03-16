@@ -15,10 +15,8 @@
 use crate::model::api_definition::{BoundCompiledRoute, UnboundRouteSecurity};
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
-use crate::services::http_api_deployment::HttpApiDeploymentError;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::{
     CompiledRoute, CompiledRoutes, RouteSecurity, SecuritySchemeRouteSecurity,
@@ -31,12 +29,8 @@ use std::sync::Arc;
 pub enum DeployedRoutesError {
     #[error("No active routes for domain {0} found")]
     NoActiveRoutesForDomain(Domain),
-    #[error("Environment {0} not found")]
-    ParentEnvironmentNotFound(EnvironmentId),
     #[error("Deployment revision {0} does not exist")]
     DeploymentRevisionNotFound(DeploymentRevision),
-    #[error("Api deployment for domain {0} not found in deployment")]
-    DomainNotFoundInDeployment(Domain),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -45,20 +39,13 @@ impl SafeDisplay for DeployedRoutesError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::NoActiveRoutesForDomain(_) => self.to_string(),
-            Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DeploymentRevisionNotFound(_) => self.to_string(),
-            Self::DomainNotFoundInDeployment(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
 }
 
-error_forwarding!(
-    DeployedRoutesError,
-    RepoError,
-    DeployRepoError,
-    HttpApiDeploymentError
-);
+error_forwarding!(DeployedRoutesError, RepoError, DeployRepoError);
 
 pub struct DeployedRoutesService {
     deployment_repo: Arc<dyn DeploymentRepo>,

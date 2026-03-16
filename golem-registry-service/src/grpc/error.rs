@@ -18,6 +18,7 @@ use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
 use crate::services::deployment::{DeployedMcpError, DeployedRoutesError, DeploymentError};
 use crate::services::environment::EnvironmentError;
+use crate::services::environment_state::EnvironmentStateError;
 use golem_common::IntoAnyhow;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
@@ -206,9 +207,7 @@ impl From<DeployedRoutesError> for GrpcApiError {
         let error: String = value.to_string();
         match value {
             DeployedRoutesError::NoActiveRoutesForDomain(_)
-            | DeployedRoutesError::ParentEnvironmentNotFound(_)
-            | DeployedRoutesError::DeploymentRevisionNotFound(_)
-            | DeployedRoutesError::DomainNotFoundInDeployment(_) => {
+            | DeployedRoutesError::DeploymentRevisionNotFound(_) => {
                 Self::NotFound(ErrorBody { error, cause: None })
             }
             DeployedRoutesError::InternalError(_) => Self::InternalError(ErrorBody {
@@ -252,6 +251,18 @@ impl From<EnvironmentError> for GrpcApiError {
             EnvironmentError::InternalError(_)
             | EnvironmentError::EnvironmentWithNameAlreadyExists
             | EnvironmentError::ConcurrentModification => Self::InternalError(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            }),
+        }
+    }
+}
+
+impl From<EnvironmentStateError> for GrpcApiError {
+    fn from(value: EnvironmentStateError) -> Self {
+        let error: String = value.to_string();
+        match value {
+            EnvironmentStateError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             }),

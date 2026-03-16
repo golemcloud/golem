@@ -21,3 +21,14 @@ openapiv3 = { workspace = true }
 convert_case = { workspace = true }
 indexmap = { workspace = true }
 clap = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
+
+[lib]
+harness = false
+doctest = false
+
+[[bin]]
+name = "golem-openapi-client-generator"
+test = false

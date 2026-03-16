@@ -4231,6 +4231,7 @@ dependencies = [
  "openapiv3",
  "serde",
  "serde_yaml",
+ "test-r",
 ]
 
 [[package]]
@@ -4398,14 +4399,17 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
+ "golem-test-framework",
  "http 1.3.1",
  "humantime-serde",
+ "include_dir",
  "itertools 0.14.0",
  "k8s-openapi",
  "kube",
  "prometheus",
  "rustls 0.23.35",
  "serde",
+ "sqlx",
  "test-r",
  "thiserror 2.0.17",
  "tokio",
@@ -4416,6 +4420,8 @@ dependencies = [
  "tonic-tracing-opentelemetry",
  "tracing",
  "tracing-test",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4654,6 +4660,7 @@ dependencies = [
  "anyhow",
  "assert2",
  "async-trait",
+ "base64 0.22.1",
  "bigdecimal",
  "bytes 1.11.0",
  "chrono",

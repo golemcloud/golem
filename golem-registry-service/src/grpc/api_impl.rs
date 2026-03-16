@@ -19,42 +19,43 @@ use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
 use crate::services::environment::EnvironmentService;
+use crate::services::environment_state::EnvironmentStateService;
 use applying::Apply;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
-use golem_api_grpc::proto::golem::registry::v1::get_agent_deployments_response::GetAgentDeploymentsSuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
     BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, BatchUpdateFuelUsageSuccessResponse,
     DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
     GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
     GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
-    GetActiveRoutesForDomainSuccessResponse, GetAgentDeploymentsRequest,
-    GetAgentDeploymentsResponse, GetAgentTypeRequest, GetAgentTypeResponse,
+    GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest, GetAgentTypeResponse,
     GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
     GetAllAgentTypesSuccessResponse, GetAllDeployedComponentRevisionsRequest,
     GetAllDeployedComponentRevisionsResponse, GetAllDeployedComponentRevisionsSuccessResponse,
     GetAuthDetailsForEnvironmentRequest, GetAuthDetailsForEnvironmentResponse,
     GetAuthDetailsForEnvironmentSuccessResponse, GetComponentMetadataRequest,
     GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
-    GetDeployedComponentMetadataRequest, GetDeployedComponentMetadataResponse,
-    GetDeployedComponentMetadataSuccessResponse, GetResourceLimitsRequest,
-    GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, RegistryServiceError,
-    ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeAtDeploymentResponse,
-    ResolveAgentTypeAtDeploymentSuccessResponse, ResolveAgentTypeByNamesRequest,
-    ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
-    ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
-    ResolveLatestAgentTypeByNamesRequest, ResolveLatestAgentTypeByNamesResponse,
-    ResolveLatestAgentTypeByNamesSuccessResponse, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
+    GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
+    GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse,
+    GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
+    RegistryServiceError, ResolveAgentTypeAtDeploymentRequest,
+    ResolveAgentTypeAtDeploymentResponse, ResolveAgentTypeAtDeploymentSuccessResponse,
+    ResolveAgentTypeByNamesRequest, ResolveAgentTypeByNamesResponse,
+    ResolveAgentTypeByNamesSuccessResponse, ResolveComponentRequest, ResolveComponentResponse,
+    ResolveComponentSuccessResponse, ResolveLatestAgentTypeByNamesRequest,
+    ResolveLatestAgentTypeByNamesResponse, ResolveLatestAgentTypeByNamesSuccessResponse,
+    UpdateWorkerConnectionLimitRequest, UpdateWorkerConnectionLimitResponse,
+    UpdateWorkerLimitRequest, UpdateWorkerLimitResponse, authenticate_token_response,
+    batch_update_fuel_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
-    get_agent_deployments_response, get_agent_type_response, get_all_agent_types_response,
+    get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_deployed_component_metadata_response,
-    get_resource_limits_response, registry_service_error,
+    get_component_metadata_response, get_current_environment_state_response,
+    get_deployed_component_metadata_response, get_resource_limits_response, registry_service_error,
     resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
     resolve_component_response, resolve_latest_agent_type_by_names_response,
     update_worker_connection_limit_response, update_worker_limit_response,
@@ -72,7 +73,6 @@ use golem_service_base::grpc::{
     proto_account_id_string, proto_application_id_string, proto_component_id_string,
     proto_environment_id_string,
 };
-use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -88,6 +88,7 @@ pub struct RegistryServiceGrpcApi {
     deployment_service: Arc<DeploymentService>,
     deployed_routes_service: Arc<DeployedRoutesService>,
     deployed_mcp_service: Arc<DeployedMcpService>,
+    environment_state_service: Arc<EnvironmentStateService>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -100,6 +101,7 @@ impl RegistryServiceGrpcApi {
         deployment_service: Arc<DeploymentService>,
         deployed_routes_service: Arc<DeployedRoutesService>,
         deployed_mcp_service: Arc<DeployedMcpService>,
+        environment_state_service: Arc<EnvironmentStateService>,
     ) -> Self {
         Self {
             auth_service,
@@ -110,6 +112,7 @@ impl RegistryServiceGrpcApi {
             deployment_service,
             deployed_routes_service,
             deployed_mcp_service,
+            environment_state_service,
         }
     }
 
@@ -428,23 +431,20 @@ impl RegistryServiceGrpcApi {
 
     async fn get_agent_deployments_internal(
         &self,
-        request: GetAgentDeploymentsRequest,
-    ) -> Result<GetAgentDeploymentsSuccessResponse, GrpcApiError> {
+        request: GetCurrentEnvironmentStateRequest,
+    ) -> Result<GetCurrentEnvironmentStateSuccessResponse, GrpcApiError> {
         let environment_id: EnvironmentId = request
             .environment_id
             .ok_or("missing environment_id field")?
             .try_into()?;
 
-        let agent_types = self
-            .deployment_service
-            .list_deployed_agent_types(environment_id)
+        let environment_state = self
+            .environment_state_service
+            .get_environment_state(environment_id)
             .await?;
 
-        Ok(GetAgentDeploymentsSuccessResponse {
-            agent_deployment_details: agent_types
-                .into_iter()
-                .map(|at| AgentDeploymentDetails::from(at).into())
-                .collect(),
+        Ok(GetCurrentEnvironmentStateSuccessResponse {
+            environment_state: Some(environment_state.into()),
         })
     }
 
@@ -1024,13 +1024,13 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         }))
     }
 
-    async fn get_agent_deployments(
+    async fn get_current_environment_state(
         &self,
-        request: Request<GetAgentDeploymentsRequest>,
-    ) -> Result<Response<GetAgentDeploymentsResponse>, tonic::Status> {
+        request: Request<GetCurrentEnvironmentStateRequest>,
+    ) -> Result<Response<GetCurrentEnvironmentStateResponse>, tonic::Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
-            "get_agent_deployments",
+            "get_current_environment_state",
             environment_id = proto_environment_id_string(&request.environment_id),
         );
 
@@ -1040,11 +1040,11 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
             .await
             .apply(|r| record.result(r))
         {
-            Ok(result) => get_agent_deployments_response::Result::Success(result),
-            Err(error) => get_agent_deployments_response::Result::Error(error.into()),
+            Ok(result) => get_current_environment_state_response::Result::Success(result),
+            Err(error) => get_current_environment_state_response::Result::Error(error.into()),
         };
 
-        Ok(Response::new(GetAgentDeploymentsResponse {
+        Ok(Response::new(GetCurrentEnvironmentStateResponse {
             result: Some(response),
         }))
     }
