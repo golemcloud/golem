@@ -392,6 +392,18 @@ impl InteractiveHandler {
         ))
     }
 
+    pub fn select_component_for_template(
+        &self,
+        template_name: &AppTemplateName,
+        component_names: Vec<ComponentName>,
+    ) -> anyhow::Result<Option<ComponentName>> {
+        let prompt = format!("Select component for template {}:", template_name.as_str());
+
+        Select::new(&prompt, component_names)
+            .prompt()
+            .none_if_not_interactive_logged()
+    }
+
     fn confirm<M: AsRef<str>>(
         &self,
         default: bool,

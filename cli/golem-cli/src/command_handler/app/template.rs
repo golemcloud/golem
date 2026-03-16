@@ -326,8 +326,27 @@ impl TemplateHandler {
                                 .insert(template_name.clone(), (*component_name).clone());
                         }
                         _ => {
-                            // TODO: FCL: interactive selection
-                            todo!("interactive component selection")
+                            let matching_components =
+                                matching_components.into_iter().cloned().collect::<Vec<_>>();
+
+                            let selected_component = self
+                                .ctx
+                                .interactive_handler()
+                                .select_component_for_template(
+                                    template_name,
+                                    matching_components,
+                                )?;
+
+                            let Some(selected_component) = selected_component else {
+                                logln("");
+                                log_error(format!(
+                                    "In non-interactive mode, --component-name must be specified when template {} matches multiple components",
+                                    template_name.as_str().log_color_error_highlight()
+                                ));
+                                bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                            };
+
+                            template_to_component.insert(template_name.clone(), selected_component);
                         }
                     }
                 }
