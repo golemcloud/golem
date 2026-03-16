@@ -125,10 +125,7 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
             let hash = McpBearerAuth::token_hash(&token);
 
             // Check the local cache before hitting the identity provider
-            let cached = self
-                .validated_tokens
-                .get(&hash)
-                .map(|entry| *entry.value());
+            let cached = self.validated_tokens.get(&hash).map(|entry| *entry.value());
 
             let is_cached_valid = cached.is_some_and(|expiry| Instant::now() < expiry);
 
@@ -394,7 +391,10 @@ pub async fn oauth_authorize(
     // to the intended MCP server. We accept it here for spec compliance; audience
     // validation against this value is a future enhancement (see validate_bearer_token).
     if let Some(resource) = get_param("resource") {
-        tracing::debug!(resource, "MCP OAuth authorize: client provided resource parameter");
+        tracing::debug!(
+            resource,
+            "MCP OAuth authorize: client provided resource parameter"
+        );
     }
 
     // Generate a unique state for the external provider request
