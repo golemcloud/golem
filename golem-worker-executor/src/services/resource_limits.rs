@@ -348,7 +348,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
+    use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::auth::TokenSecret;
     use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -679,7 +679,7 @@ mod tests {
             _deployment_revision: Option<DeploymentRevision>,
             _owner_account_email: Option<&str>,
             _auth_ctx: &AuthCtx,
-        ) -> Result<RegisteredAgentType, RegistryServiceError> {
+        ) -> Result<ResolvedAgentType, RegistryServiceError> {
             unimplemented!()
         }
 
