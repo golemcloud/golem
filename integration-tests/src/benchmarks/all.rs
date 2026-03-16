@@ -123,7 +123,7 @@ async fn main() {
     );
 
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
-    BenchmarkTestDependencies::init_logging(&params);
+    let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
 
     match &params.benchmark_config {
         BenchmarkConfig::Benchmark {
@@ -212,6 +212,10 @@ async fn main() {
                 println!("{}", suite_result.view());
             }
         }
+    }
+
+    if let Some(provider) = tracer_provider {
+        let _ = provider.shutdown();
     }
 }
 

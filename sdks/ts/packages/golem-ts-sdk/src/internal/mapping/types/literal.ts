@@ -25,6 +25,7 @@ type LiteralCtx = Ctx & { type: Extract<TsType, { kind: 'literal' }> };
 
 export function handleLiteral(
   { type }: LiteralCtx,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _mapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
   const literalName = type.literalValue;

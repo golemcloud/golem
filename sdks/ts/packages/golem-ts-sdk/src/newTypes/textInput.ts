@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { TextReference } from 'golem:agent/common@1.5.0';
-import * as Either from '../newTypes/either';
 
 type LanguageCode = string;
 
@@ -53,36 +52,36 @@ export const UnstructuredText = {
     parameterName: string,
     dataValue: TextReference,
     allowedCodes: string[],
-  ): Either.Either<UnstructuredText<LC>, string> {
+  ): UnstructuredText<LC> {
     if (dataValue.tag === 'url') {
-      return Either.right({
+      return {
         tag: 'url',
         val: dataValue.val,
-      });
+      };
     }
 
     if (allowedCodes.length > 0) {
       if (!dataValue.val.textType) {
-        return Either.left(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
+        throw new Error(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
       }
 
       if (!allowedCodes.includes(dataValue.val.textType.languageCode)) {
-        return Either.left(
+        throw new Error(
           `Invalid value for parameter ${parameterName}. Language code \`${dataValue.val.textType.languageCode}\` is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
         );
       }
 
-      return Either.right({
+      return {
         tag: 'inline',
         val: dataValue.val.data,
         languageCode: dataValue.val.textType.languageCode,
-      });
+      };
     }
 
-    return Either.right({
+    return {
       tag: 'inline',
       val: dataValue.val.data,
-    });
+    };
   },
 
   /**

@@ -16,6 +16,21 @@ harness = false
 name = "agent"
 harness = false
 
+[[test]]
+name = "agent_registry_bench"
+path = "benches/agent_registry_bench.rs"
+harness = false
+
+[[test]]
+name = "from_element_value_bench"
+path = "benches/from_element_value_bench.rs"
+harness = false
+
+[[test]]
+name = "eager_vs_lazy_format_bench"
+path = "benches/eager_vs_lazy_format_bench.rs"
+harness = false
+
 [dependencies]
 golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
 # golem-wasm = { version = "1.5.0-rc1", default-features = false, features = ["stub"] }

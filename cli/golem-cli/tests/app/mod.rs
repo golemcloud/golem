@@ -489,10 +489,13 @@ impl TestContext {
             let start = Instant::now();
             let client = golem_client::api::HealthCheckClientLive {
                 context: golem_client::Context {
-                    client: reqwest::ClientBuilder::new()
-                        .danger_accept_invalid_certs(true)
-                        .build()
-                        .expect("Failed to build reqwest client"),
+                    client: reqwest_middleware::ClientBuilder::new(
+                        reqwest::ClientBuilder::new()
+                            .danger_accept_invalid_certs(true)
+                            .build()
+                            .expect("Failed to build reqwest client"),
+                    )
+                    .build(),
                     base_url: Url::from_str("http://localhost:9881").unwrap(),
                     security_token: Security::Empty,
                 },

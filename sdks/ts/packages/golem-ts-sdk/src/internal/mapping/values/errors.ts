@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import * as util from 'node:util';
-import { Value } from './Value';
 import { NameOptionTypePair } from '../types/analysedType';
 
 // type mismatch in tsValue when converting from TS to WIT
@@ -25,9 +24,9 @@ export function customSerializationError(message: string): string {
   return `Internal error: ${message}`;
 }
 
-// Unable to convert the value to the expected type in the output direction
-export function typeMismatchInDeserialize(value: Value, expectedType: string) {
-  return `Failed to deserialize the following internal value to typescript type \`${expectedType}\`: \`${safeDisplay(value)}\``;
+// Unable to convert the WIT node to the expected type
+export function typeMismatchInDeserialize(nodeTag: string, expectedType: string) {
+  return `Failed to deserialize WIT node with tag \`${nodeTag}\` to typescript type \`${expectedType}\``;
 }
 
 // Missing keys in tsValue when converting from TS to WIT
