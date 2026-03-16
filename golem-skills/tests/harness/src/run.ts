@@ -6,8 +6,15 @@ import { ClaudeAgentDriver } from './driver/claude.js';
 import { GeminiAgentDriver } from './driver/gemini.js';
 import { OpenCodeAgentDriver } from './driver/opencode.js';
 import { CodexAgentDriver } from './driver/codex.js';
+import type { AgentDriver } from './driver/base.js';
 import { SkillWatcher } from './watcher.js';
 import chalk from 'chalk';
+
+const SUPPORTED_AGENTS = ['claude-code', 'gemini', 'opencode', 'codex'] as const;
+const SUPPORTED_LANGUAGES = ['ts', 'rust'] as const;
+
+type SupportedAgent = typeof SUPPORTED_AGENTS[number];
+type SupportedLanguage = typeof SUPPORTED_LANGUAGES[number];
 
 interface ScenarioReport {
   scenario: string;
@@ -17,6 +24,15 @@ interface ScenarioReport {
   durationSeconds: number;
   results: ScenarioRunResult['stepResults'];
   artifactPaths: string[];
+}
+
+function createDriver(agent: SupportedAgent): AgentDriver {
+  switch (agent) {
+    case 'claude-code': return new ClaudeAgentDriver();
+    case 'gemini': return new GeminiAgentDriver();
+    case 'opencode': return new OpenCodeAgentDriver();
+    case 'codex': return new CodexAgentDriver();
+  }
 }
 
 async function main() {
@@ -33,34 +49,50 @@ async function main() {
     }
   });
 
-  const { agent, language, scenarios, output, scenario: scenarioFilter, timeout, skills: skillsDirRel, help } = values;
+  const { scenarios, output, scenario: scenarioFilter, timeout, skills: skillsDirRel, help } = values;
+  const agentArg = values.agent ?? 'all';
+  const languageArg = values.language ?? 'all';
 
-  if (help || !agent || !language) {
+  if (help) {
     const usage = `
 golem-skill-harness — Skill testing harness for Golem coding agents
 
 Usage:
-  npx tsx src/run.ts --agent <name> --language <ts|rust> --scenarios <dir> [options]
-
-Required:
-  --agent <name>        Agent driver to use (claude-code, gemini, opencode, codex)
-  --language <lang>     Language for skill templates (ts, rust)
+  npx tsx src/run.ts [options]
 
 Options:
+  --agent <name>        Agent driver to use (${SUPPORTED_AGENTS.join(', ')}) (default: all)
+  --language <lang>     Language for skill templates (${SUPPORTED_LANGUAGES.join(', ')}) (default: all)
   --scenario <name>     Run only the named scenario
   --scenarios <dir>     Path to scenario YAML files (default: ./scenarios)
   --output <dir>        Results output directory (default: ./results)
-  --timeout <seconds>   Global timeout per scenario in seconds
+  --timeout <seconds>   Global timeout per scenario step in seconds (default: 300)
   --skills <dir>        Path to skills directory (default: ../../skills)
   -h, --help            Show this help message
 `.trim();
 
-    if (help) {
-      console.log(usage);
-      process.exit(0);
+    console.log(usage);
+    process.exit(0);
+  }
+
+  const agents: SupportedAgent[] = agentArg === 'all'
+    ? [...SUPPORTED_AGENTS]
+    : [agentArg as SupportedAgent];
+  const languages: SupportedLanguage[] = languageArg === 'all'
+    ? [...SUPPORTED_LANGUAGES]
+    : [languageArg as SupportedLanguage];
+
+  for (const a of agents) {
+    if (!SUPPORTED_AGENTS.includes(a)) {
+      console.error(chalk.red(`Unsupported agent: ${a}. Supported: ${SUPPORTED_AGENTS.join(', ')}`));
+      process.exit(1);
     }
-    console.error(chalk.red(usage));
-    process.exit(1);
+  }
+  for (const l of languages) {
+    if (!SUPPORTED_LANGUAGES.includes(l)) {
+      console.error(chalk.red(`Unsupported language: ${l}. Supported: ${SUPPORTED_LANGUAGES.join(', ')}`));
+      process.exit(1);
+    }
   }
 
   const skillsDir = path.resolve(process.cwd(), skillsDirRel!);
@@ -75,70 +107,62 @@ Options:
 
   await fs.mkdir(resultsDir, { recursive: true });
 
-  let driver;
-  if (agent === 'claude-code') {
-    driver = new ClaudeAgentDriver();
-  } else if (agent === 'gemini') {
-    driver = new GeminiAgentDriver();
-  } else if (agent === 'opencode') {
-    driver = new OpenCodeAgentDriver();
-  } else if (agent === 'codex') {
-    driver = new CodexAgentDriver();
-  } else {
-    console.error(chalk.red(`Unsupported agent: ${agent}`));
-    process.exit(1);
-  }
-
-  const watcher = new SkillWatcher(skillsDir);
   const scenarioFiles = (await fs.readdir(scenariosDir)).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
-  console.log(chalk.gray(`Config: agent=${agent}, language=${language}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? 'default'}`));
 
   const scenarioReports: ScenarioReport[] = [];
   let hasFailures = false;
 
-  for (const file of scenarioFiles) {
-    const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
+  for (const currentAgent of agents) {
+    for (const currentLanguage of languages) {
+      const driver = createDriver(currentAgent);
+      const watcher = new SkillWatcher(skillsDir);
+      console.log(chalk.gray(`Config: agent=${currentAgent}, language=${currentLanguage}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? 'default'}`));
 
-    if (scenarioFilter && spec.name !== scenarioFilter) continue;
+      for (const file of scenarioFiles) {
+        const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
 
-    console.log(chalk.blue(`Running scenario: ${spec.name}`));
-    const workspace = path.join(process.cwd(), 'workspaces', spec.name.replace(/\s+/g, '-').toLowerCase());
-    const executor = new ScenarioExecutor(driver, watcher, workspace, skillsDir, { globalTimeoutSeconds });
+        if (scenarioFilter && spec.name !== scenarioFilter) continue;
 
-    const scenarioResult = await executor.execute(spec);
-    const results = scenarioResult.stepResults;
+        console.log(chalk.blue(`Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`));
+        const workspace = path.join(process.cwd(), 'workspaces', spec.name.replace(/\s+/g, '-').toLowerCase());
+        const executor = new ScenarioExecutor(driver, watcher, workspace, skillsDir, { globalTimeoutSeconds });
 
-    const allPassed = scenarioResult.status === 'pass';
-    if (allPassed) {
-      console.log(chalk.green(`Scenario ${spec.name} PASSED`));
-    } else {
-      hasFailures = true;
-      console.log(chalk.red(`Scenario ${spec.name} FAILED`));
-      for (const res of results) {
-        if (!res.success) {
-          console.log(chalk.red(`  Step failed: ${res.step.prompt || res.step.id || 'unnamed'}`));
-          console.log(chalk.red(`  Error: ${res.error}`));
+        const scenarioResult = await executor.execute(spec);
+        const results = scenarioResult.stepResults;
+
+        const allPassed = scenarioResult.status === 'pass';
+        if (allPassed) {
+          console.log(chalk.green(`Scenario ${spec.name} PASSED`));
+        } else {
+          hasFailures = true;
+          console.log(chalk.red(`Scenario ${spec.name} FAILED`));
+          for (const res of results) {
+            if (!res.success) {
+              console.log(chalk.red(`  Step failed: ${'prompt' in res.step && res.step.prompt || res.step.id || 'unnamed'}`));
+              console.log(chalk.red(`  Error: ${res.error}`));
+            }
+          }
         }
+
+        // Write individual report with agent-language prefix to avoid collisions
+        const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const report: ScenarioReport = {
+          scenario: spec.name,
+          matrix: { agent: currentAgent, language: currentLanguage },
+          run_id: runId,
+          status: scenarioResult.status,
+          durationSeconds: scenarioResult.durationSeconds,
+          results,
+          artifactPaths: scenarioResult.artifactPaths,
+        };
+
+        const reportPath = path.join(resultsDir, `${currentAgent}-${currentLanguage}-${spec.name}.json`);
+        await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
+        scenarioReports.push(report);
+
+        console.log(`${allPassed ? 'PASS' : 'FAIL'} ${spec.name} steps=${results.length}/${spec.steps.length}`);
       }
     }
-
-    // Write individual report
-    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const report: ScenarioReport = {
-      scenario: spec.name,
-      matrix: { agent, language },
-      run_id: runId,
-      status: scenarioResult.status,
-      durationSeconds: scenarioResult.durationSeconds,
-      results,
-      artifactPaths: scenarioResult.artifactPaths,
-    };
-
-    const reportPath = path.join(resultsDir, `${spec.name}.json`);
-    await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
-    scenarioReports.push(report);
-
-    console.log(`${allPassed ? 'PASS' : 'FAIL'} ${spec.name} steps=${results.length}/${spec.steps.length}`);
   }
 
   // Aggregated summary report
