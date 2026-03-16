@@ -15,8 +15,8 @@
 use crate::mcp::McpCapabilityLookup;
 use golem_common::base_model::domain_registration::Domain;
 use golem_service_base::custom_api::SecuritySchemeDetails;
-use openidconnect::core::{CoreClient, CoreProviderMetadata};
 use openidconnect::Nonce;
+use openidconnect::core::{CoreClient, CoreProviderMetadata};
 use poem::http;
 use poem::{Endpoint, IntoResponse, Middleware, Request, Response, Result};
 use std::collections::HashMap;
@@ -66,12 +66,7 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
         // Skip auth for well-known discovery endpoints and OAuth proxy endpoints —
         // they must be publicly accessible so MCP clients can complete the OAuth flow.
         let path = req.uri().path();
-        if path.starts_with("/.well-known/")
-            || path == "/authorize"
-            || path == "/token"
-            || path == "/oauth/register"
-            || path == "/oauth/callback"
-        {
+        if path.starts_with("/.well-known/") || path.starts_with("/mcp/oauth/") {
             return self.inner.call(req).await.map(|resp| resp.into_response());
         }
 
@@ -121,10 +116,7 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
             }
         }
 
-        self.inner
-            .call(req)
-            .await
-            .map(|resp| resp.into_response())
+        self.inner.call(req).await.map(|resp| resp.into_response())
     }
 }
 
@@ -139,9 +131,7 @@ fn unauthorized_response(host: Option<&str>) -> Response {
         .status(http::StatusCode::UNAUTHORIZED)
         .header(
             "WWW-Authenticate",
-            format!(
-                "Bearer realm=\"mcp\", resource_metadata=\"{resource_metadata_url}\""
-            ),
+            format!("Bearer realm=\"mcp\", resource_metadata=\"{resource_metadata_url}\""),
         )
         .body(())
 }
@@ -167,10 +157,9 @@ async fn validate_bearer_token(
     let verifier = client.id_token_verifier();
 
     // Parse the raw JWT string as a CoreIdToken
-    let id_token: openidconnect::core::CoreIdToken = serde_json::from_value(
-        serde_json::Value::String(token.to_string()),
-    )
-    .map_err(|err| BearerValidationError::InvalidToken(err.to_string()))?;
+    let id_token: openidconnect::core::CoreIdToken =
+        serde_json::from_value(serde_json::Value::String(token.to_string()))
+            .map_err(|err| BearerValidationError::InvalidToken(err.to_string()))?;
 
     // Verify the token's signature and claims.
     // We use a nonce that accepts anything since we didn't initiate this OAuth flow —
@@ -238,7 +227,10 @@ impl OAuthProxyState {
 /// Returns OAuth authorization server metadata pointing to Golem's own OAuth proxy
 /// endpoints (`/authorize`, `/token`, `/oauth/register`) so MCP clients like Claude Desktop
 /// and mcp-remote can complete the OAuth flow without needing DCR support from the provider.
-pub async fn authorization_server_metadata(req: &Request, mcp_capability_lookup: &dyn McpCapabilityLookup) -> Response {
+pub async fn authorization_server_metadata(
+    req: &Request,
+    mcp_capability_lookup: &dyn McpCapabilityLookup,
+) -> Response {
     let host = req
         .headers()
         .get("host")
@@ -256,11 +248,14 @@ pub async fn authorization_server_metadata(req: &Request, mcp_capability_lookup:
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
 
+            let redirect_base = scheme.redirect_url.url();
+            let base = format!("{}://{}", redirect_base.scheme(), redirect_base.authority());
+
             let metadata = serde_json::json!({
-                "issuer": format!("http://{host}"),
-                "authorization_endpoint": format!("http://{host}/authorize"),
-                "token_endpoint": format!("http://{host}/token"),
-                "registration_endpoint": format!("http://{host}/oauth/register"),
+                "issuer": &base,
+                "authorization_endpoint": format!("{base}/mcp/oauth/authorize"),
+                "token_endpoint": format!("{base}/mcp/oauth/token"),
+                "registration_endpoint": format!("{base}/mcp/oauth/register"),
                 "scopes_supported": scopes,
                 "response_types_supported": ["code"],
                 "code_challenge_methods_supported": ["S256"],
@@ -273,11 +268,9 @@ pub async fn authorization_server_metadata(req: &Request, mcp_capability_lookup:
                 .header("Content-Type", "application/json")
                 .body(metadata.to_string())
         }
-        None => {
-            Response::builder()
-                .status(http::StatusCode::NOT_FOUND)
-                .body("No security scheme configured for this domain")
-        }
+        None => Response::builder()
+            .status(http::StatusCode::NOT_FOUND)
+            .body("No security scheme configured for this domain"),
     }
 }
 
@@ -285,7 +278,10 @@ pub async fn authorization_server_metadata(req: &Request, mcp_capability_lookup:
 ///
 /// Returns JSON metadata pointing MCP clients to Golem's own authorization server
 /// so they can perform the OAuth dance to obtain a token.
-pub async fn protected_resource_metadata(req: &Request, mcp_capability_lookup: &dyn McpCapabilityLookup) -> Response {
+pub async fn protected_resource_metadata(
+    req: &Request,
+    mcp_capability_lookup: &dyn McpCapabilityLookup,
+) -> Response {
     let host = req
         .headers()
         .get("host")
@@ -303,9 +299,12 @@ pub async fn protected_resource_metadata(req: &Request, mcp_capability_lookup: &
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
 
+            let redirect_base = scheme.redirect_url.url();
+            let base = format!("{}://{}", redirect_base.scheme(), redirect_base.authority());
+
             let metadata = serde_json::json!({
-                "resource": format!("http://{host}/mcp"),
-                "authorization_servers": [format!("http://{host}")],
+                "resource": format!("{base}/mcp"),
+                "authorization_servers": [&base],
                 "scopes_supported": scopes,
             });
 
@@ -314,11 +313,9 @@ pub async fn protected_resource_metadata(req: &Request, mcp_capability_lookup: &
                 .header("Content-Type", "application/json")
                 .body(metadata.to_string())
         }
-        None => {
-            Response::builder()
-                .status(http::StatusCode::NOT_FOUND)
-                .body("No security scheme configured for this domain")
-        }
+        None => Response::builder()
+            .status(http::StatusCode::NOT_FOUND)
+            .body("No security scheme configured for this domain"),
     }
 }
 
@@ -326,7 +323,10 @@ pub async fn protected_resource_metadata(req: &Request, mcp_capability_lookup: &
 ///
 /// MCP clients (mcp-remote, Claude Desktop) expect DCR support. Since providers like Google
 /// don't offer it, we return the pre-configured client_id from the security scheme.
-pub async fn oauth_register(req: &Request, mcp_capability_lookup: &dyn McpCapabilityLookup) -> Response {
+pub async fn oauth_register(
+    req: &Request,
+    mcp_capability_lookup: &dyn McpCapabilityLookup,
+) -> Response {
     let host = req
         .headers()
         .get("host")
@@ -358,11 +358,9 @@ pub async fn oauth_register(req: &Request, mcp_capability_lookup: &dyn McpCapabi
                 .header("Content-Type", "application/json")
                 .body(response.to_string())
         }
-        None => {
-            Response::builder()
-                .status(http::StatusCode::NOT_FOUND)
-                .body("No security scheme configured for this domain")
-        }
+        None => Response::builder()
+            .status(http::StatusCode::NOT_FOUND)
+            .body("No security scheme configured for this domain"),
     }
 }
 
@@ -404,7 +402,10 @@ pub async fn oauth_authorize(
         .collect();
 
     let get_param = |name: &str| -> Option<String> {
-        params.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+        params
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
     };
 
     let client_redirect_uri = match get_param("redirect_uri") {
@@ -437,22 +438,28 @@ pub async fn oauth_authorize(
     // Discover the provider's authorization endpoint
     let issuer_url = scheme.provider_type.issuer_url();
     let http_client = openidconnect::reqwest::Client::new();
-    let provider_metadata = match CoreProviderMetadata::discover_async(issuer_url, &http_client).await {
-        Ok(m) => m,
-        Err(err) => {
-            tracing::error!("Failed to discover OIDC provider for /authorize: {err}");
-            return Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to discover authorization server");
-        }
-    };
+    let provider_metadata =
+        match CoreProviderMetadata::discover_async(issuer_url, &http_client).await {
+            Ok(m) => m,
+            Err(err) => {
+                tracing::error!("Failed to discover OIDC provider for /authorize: {err}");
+                return Response::builder()
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .body("Failed to discover authorization server");
+            }
+        };
 
     let auth_endpoint = provider_metadata.authorization_endpoint().as_str();
 
-    let golem_callback_url = format!("http://{host}/oauth/callback");
+    let golem_callback_url = scheme.redirect_url.url().to_string();
 
     let scopes_str = scope.unwrap_or_else(|| {
-        scheme.scopes.iter().map(|s| (**s).clone()).collect::<Vec<_>>().join(" ")
+        scheme
+            .scopes
+            .iter()
+            .map(|s| (**s).clone())
+            .collect::<Vec<_>>()
+            .join(" ")
     });
 
     let redirect_url = format!(
@@ -494,7 +501,10 @@ pub async fn oauth_callback(
         .collect();
 
     let get_param = |name: &str| -> Option<String> {
-        params.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+        params
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
     };
 
     let provider_code = match get_param("code") {
@@ -516,7 +526,11 @@ pub async fn oauth_callback(
     };
 
     // Look up the pending request by the state we sent to the provider
-    let pending = proxy_state.pending_requests.write().await.remove(&state_param);
+    let pending = proxy_state
+        .pending_requests
+        .write()
+        .await
+        .remove(&state_param);
     let pending = match pending {
         Some(p) => p,
         None => {
@@ -543,15 +557,16 @@ pub async fn oauth_callback(
     // Exchange the provider's authorization code for tokens
     let issuer_url = scheme.provider_type.issuer_url();
     let http_client = openidconnect::reqwest::Client::new();
-    let provider_metadata = match CoreProviderMetadata::discover_async(issuer_url, &http_client).await {
-        Ok(m) => m,
-        Err(err) => {
-            tracing::error!("Failed to discover OIDC provider for /oauth/callback: {err}");
-            return Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to discover authorization server");
-        }
-    };
+    let provider_metadata =
+        match CoreProviderMetadata::discover_async(issuer_url, &http_client).await {
+            Ok(m) => m,
+            Err(err) => {
+                tracing::error!("Failed to discover OIDC provider for /oauth/callback: {err}");
+                return Response::builder()
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .body("Failed to discover authorization server");
+            }
+        };
 
     let token_endpoint = match provider_metadata.token_endpoint() {
         Some(url) => url.as_str().to_string(),
@@ -562,7 +577,7 @@ pub async fn oauth_callback(
         }
     };
 
-    let golem_callback_url = format!("http://{host}/oauth/callback");
+    let golem_callback_url = scheme.redirect_url.url().to_string();
 
     let http_post_client = openidconnect::reqwest::Client::new();
     let token_response = http_post_client
@@ -613,10 +628,20 @@ pub async fn oauth_callback(
         }
     };
 
-    let access_token = token_body.get("access_token").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let refresh_token = token_body.get("refresh_token").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let access_token = token_body
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let refresh_token = token_body
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let expires_in = token_body.get("expires_in").and_then(|v| v.as_u64());
-    let token_type = token_body.get("token_type").and_then(|v| v.as_str()).unwrap_or("Bearer").to_string();
+    let token_type = token_body
+        .get("token_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Bearer")
+        .to_string();
 
     // Generate a proxy authorization code for the MCP client
     let proxy_code = Uuid::new_v4().to_string();
@@ -656,10 +681,7 @@ pub async fn oauth_callback(
 /// MCP client's perspective.
 ///
 /// Takes an owned `Request` so we can consume the POST form body.
-pub async fn oauth_token(
-    mut req: Request,
-    proxy_state: &OAuthProxyState,
-) -> Response {
+pub async fn oauth_token(mut req: Request, proxy_state: &OAuthProxyState) -> Response {
     // Read the form body — MCP clients POST application/x-www-form-urlencoded
     let body_bytes = match req.take_body().into_bytes().await {
         Ok(b) => b,
@@ -671,7 +693,10 @@ pub async fn oauth_token(
         .collect();
 
     let get_param = |name: &str| -> Option<String> {
-        params.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+        params
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
     };
 
     let code = match get_param("code") {

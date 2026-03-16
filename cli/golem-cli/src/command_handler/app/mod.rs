@@ -1513,9 +1513,19 @@ impl AppCommandHandler {
                     let mcp_deployment_handler = self.ctx.api_deployment_handler();
                     let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);
                     let agents = mcp_deployment
-                        .agents.iter().map(|(k, v)| (k.clone(), golem_common::model::mcp_deployment::McpDeploymentAgentOptions {
-                            security_scheme: v.security_scheme.as_ref().and_then(|s| s.parse().ok()),
-                        }))
+                        .agents
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                golem_common::model::mcp_deployment::McpDeploymentAgentOptions {
+                                    security_scheme: v
+                                        .security_scheme
+                                        .as_ref()
+                                        .and_then(|s| s.parse().ok()),
+                                },
+                            )
+                        })
                         .collect();
 
                     mcp_deployment_handler

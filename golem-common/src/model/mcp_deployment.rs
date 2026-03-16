@@ -21,9 +21,14 @@ impl McpDeployment {
             agents: self
                 .agents
                 .iter()
-                .map(|(k, v)| (k.0.clone(), diff::McpDeploymentAgentOptions {
-                    security_scheme: v.security_scheme.as_ref().map(|s| s.0.clone()),
-                }))
+                .map(|(k, v)| {
+                    (
+                        k.0.clone(),
+                        diff::McpDeploymentAgentOptions {
+                            security_scheme: v.security_scheme.as_ref().map(|s| s.0.clone()),
+                        },
+                    )
+                })
                 .collect(),
         }
     }

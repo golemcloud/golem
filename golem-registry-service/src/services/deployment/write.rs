@@ -124,11 +124,13 @@ pub enum DeployValidationError {
     ComponentNotFound(ComponentName),
     #[error("No security scheme configured for agent {0} but agent has methods that require auth")]
     NoSecuritySchemeConfigured(AgentTypeName),
-    #[error("MCP deployment {mcp_deployment_domain} has conflicting security schemes across agents")]
-    McpDeploymentConflictingSecuritySchemes {
-        mcp_deployment_domain: Domain,
-    },
-    #[error("MCP deployment {mcp_deployment_domain} references unknown security scheme {security_scheme}")]
+    #[error(
+        "MCP deployment {mcp_deployment_domain} has conflicting security schemes across agents"
+    )]
+    McpDeploymentConflictingSecuritySchemes { mcp_deployment_domain: Domain },
+    #[error(
+        "MCP deployment {mcp_deployment_domain} references unknown security scheme {security_scheme}"
+    )]
     McpDeploymentUnknownSecurityScheme {
         mcp_deployment_domain: Domain,
         security_scheme: SecuritySchemeName,
@@ -364,7 +366,10 @@ impl DeploymentWriteService {
             .await
             .unwrap_or_default();
 
-        let security_schemes_map: HashMap<SecuritySchemeName, golem_service_base::custom_api::SecuritySchemeDetails> = security_schemes_list
+        let security_schemes_map: HashMap<
+            SecuritySchemeName,
+            golem_service_base::custom_api::SecuritySchemeDetails,
+        > = security_schemes_list
             .into_iter()
             .map(|s| {
                 let details = golem_service_base::custom_api::SecuritySchemeDetails {

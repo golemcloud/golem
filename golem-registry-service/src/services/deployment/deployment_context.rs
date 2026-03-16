@@ -31,8 +31,8 @@ use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
-use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
@@ -278,12 +278,10 @@ impl DeploymentContext {
                 match security_schemes.get(scheme_name) {
                     Some(details) => Some(details.clone()),
                     None => {
-                        errors.push(
-                            DeployValidationError::McpDeploymentUnknownSecurityScheme {
-                                mcp_deployment_domain: domain.clone(),
-                                security_scheme: scheme_name.clone(),
-                            },
-                        );
+                        errors.push(DeployValidationError::McpDeploymentUnknownSecurityScheme {
+                            mcp_deployment_domain: domain.clone(),
+                            security_scheme: scheme_name.clone(),
+                        });
                         None
                     }
                 }

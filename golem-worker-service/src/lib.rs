@@ -25,11 +25,11 @@ pub mod service;
 
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::mcp::{GolemAgentMcpServer, McpBearerAuth};
 use crate::mcp::auth::{
-    OAuthProxyState, authorization_server_metadata, oauth_authorize, oauth_callback, oauth_register,
-    oauth_token, protected_resource_metadata,
+    OAuthProxyState, authorization_server_metadata, oauth_authorize, oauth_callback,
+    oauth_register, oauth_token, protected_resource_metadata,
 };
+use crate::mcp::{GolemAgentMcpServer, McpBearerAuth};
 use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -280,14 +280,14 @@ impl WorkerService {
                 }),
             )
             .at(
-                "/oauth/register",
+                "/mcp/oauth/register",
                 poem::endpoint::make(move |req: Request| {
                     let lookup = mcp_capability_lookup_for_register.clone();
                     async move { oauth_register(&req, lookup.as_ref()).await }
                 }),
             )
             .at(
-                "/authorize",
+                "/mcp/oauth/authorize",
                 poem::endpoint::make(move |req: Request| {
                     let lookup = mcp_capability_lookup_for_authorize.clone();
                     let state = oauth_proxy_state_for_authorize.clone();
@@ -295,7 +295,7 @@ impl WorkerService {
                 }),
             )
             .at(
-                "/oauth/callback",
+                "/mcp/oauth/callback",
                 poem::endpoint::make(move |req: Request| {
                     let lookup = mcp_capability_lookup_for_callback.clone();
                     let state = oauth_proxy_state_for_callback.clone();
@@ -303,20 +303,25 @@ impl WorkerService {
                 }),
             )
             .at(
-                "/token",
+                "/mcp/oauth/token",
                 poem::endpoint::make(move |req: Request| {
                     let state = oauth_proxy_state_for_token.clone();
                     async move { oauth_token(req, state.as_ref()).await }
                 }),
             )
             .with(McpBearerAuth::new(mcp_capability_lookup_for_auth))
-            .with(Cors::new()
-                .allow_methods(vec!["GET", "POST", "DELETE", "OPTIONS"])
-                .allow_headers(vec![
-                    "Content-Type", "Authorization", "Mcp-Session-Id",
-                    "Accept", "Last-Event-ID",
-                ])
-                .expose_headers(vec!["Mcp-Session-Id"]))
+            .with(
+                Cors::new()
+                    .allow_methods(vec!["GET", "POST", "DELETE", "OPTIONS"])
+                    .allow_headers(vec![
+                        "Content-Type",
+                        "Authorization",
+                        "Mcp-Session-Id",
+                        "Accept",
+                        "Last-Event-ID",
+                    ])
+                    .expose_headers(vec!["Mcp-Session-Id"]),
+            )
             .with(OpenTelemetryMetrics::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())
