@@ -26,6 +26,7 @@ type UnresolvedCtx = Ctx & {
 
 export function handleUnresolved(
   { type }: UnresolvedCtx,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _mapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
   return Either.left(`Failed to resolve type for \`${type.text}\`: ${type.error}`);

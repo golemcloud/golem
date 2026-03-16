@@ -239,7 +239,7 @@ export function agent(options?: AgentDecoratorOptions) {
 
     if (!classMetadata) {
       const availableAgents = Array.from(TypeMetadata.getAll().entries())
-        .map(([key, _]) => key)
+        .map(([key]) => key)
         .join(', ');
 
       throw new Error(
@@ -332,15 +332,16 @@ export function agent(options?: AgentDecoratorOptions) {
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue, principal: Principal) => {
-        const deserializedConstructorArgs = deserializeDataValue(
-          constructorInput,
-          constructorParamTypes,
-          principal,
-        );
-
-        if (Either.isLeft(deserializedConstructorArgs)) {
+        let deserializedConstructorArgs: any[];
+        try {
+          deserializedConstructorArgs = deserializeDataValue(
+            constructorInput,
+            constructorParamTypes,
+            principal,
+          );
+        } catch (e) {
           const error = createCustomError(
-            `Failed to deserialize constructor arguments for agent ${agentClassName.value}: ${deserializedConstructorArgs.val}`,
+            `Failed to deserialize constructor arguments for agent ${agentClassName.value}: ${e instanceof Error ? e.message : e}`,
           );
 
           return {
@@ -349,7 +350,7 @@ export function agent(options?: AgentDecoratorOptions) {
           };
         }
 
-        const instance = new ctor(...deserializedConstructorArgs.val);
+        const instance = new ctor(...deserializedConstructorArgs);
 
         const agentId = getRawSelfAgentId();
         if (!agentId.value.startsWith(agentTypeName.value)) {

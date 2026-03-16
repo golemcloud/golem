@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::new_reqwest_client_with_tracing;
 use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{wait_for_startup, WorkerService};
-use crate::components::{new_reqwest_client, ChildProcessLogger};
+use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -32,7 +33,7 @@ pub struct SpawnedWorkerService {
     custom_request_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    base_http_client: OnceCell<reqwest::Client>,
+    base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
 impl SpawnedWorkerService {
@@ -134,9 +135,9 @@ impl WorkerService for SpawnedWorkerService {
         self.custom_request_port
     }
 
-    async fn base_http_client(&self) -> reqwest::Client {
+    async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {
         self.base_http_client
-            .get_or_init(async || new_reqwest_client())
+            .get_or_init(|| async { new_reqwest_client_with_tracing() })
             .await
             .clone()
     }

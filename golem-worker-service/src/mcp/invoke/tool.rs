@@ -90,6 +90,7 @@ pub async fn invoke_tool(
             None,
             auth_ctx,
             proto_principal,
+            None,
         )
         .await
         .map_err(|e| {

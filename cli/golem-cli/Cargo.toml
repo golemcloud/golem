@@ -75,6 +75,7 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+reqwest-middleware = { workspace = true }
 rustyline = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }

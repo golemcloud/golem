@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../../newTypes/either';
 import { Ctx } from './ctx';
 import { AnalysedType } from './analysedType';
@@ -24,6 +24,7 @@ type AliasCtx = Ctx & { type: Extract<TsType, { kind: 'alias' }> };
 
 export function handleAlias(
   { type }: AliasCtx,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _mapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
   return Either.left(`Type aliases are not supported. Found alias: ${type.name ?? '<anonymous>'}`);

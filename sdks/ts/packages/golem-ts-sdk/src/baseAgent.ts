@@ -68,7 +68,7 @@ export class BaseAgent {
    * Returns this agent's phantom ID, if any
    */
   phantomId(): Uuid | undefined {
-    const [_typeName, _params, phantomId] = this.getId().parsed();
+    const [, , phantomId] = this.getId().parsed();
     return phantomId;
   }
 
@@ -175,7 +175,8 @@ export class BaseAgent {
    */
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
-    ...args: GetArgs<ConstructorParameters<T>>
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ..._args: GetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
@@ -184,7 +185,8 @@ export class BaseAgent {
 
   static getPhantom<T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent>(
     this: T,
-    ...args: ConstructorParameters<T>
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ..._args: ConstructorParameters<T>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
@@ -193,7 +195,8 @@ export class BaseAgent {
 
   static newPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
-    ...args: ConstructorParameters<T>
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ..._args: ConstructorParameters<T>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,

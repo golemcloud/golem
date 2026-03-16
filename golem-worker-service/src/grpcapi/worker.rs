@@ -415,6 +415,12 @@ impl WorkerGrpcApi {
             .principal
             .unwrap_or_else(|| golem_common::model::agent::Principal::anonymous().into());
 
+        let environment_id = request
+            .environment_id
+            .map(|id| id.try_into())
+            .transpose()
+            .map_err(|e| bad_request_error(format!("invalid environment_id: {e}")))?;
+
         let output = self
             .worker_service
             .invoke_agent(
@@ -427,6 +433,7 @@ impl WorkerGrpcApi {
                 request.context,
                 auth,
                 principal,
+                environment_id,
             )
             .await?;
 

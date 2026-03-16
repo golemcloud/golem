@@ -36,12 +36,10 @@ import {
 import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
-import * as Value from '../values/Value';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
-import { Config, Secret } from '../../..';
+import { Config } from '../../..';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { getConfigValue } from 'golem:agent/host@1.5.0';
-import { typeMapper } from '../types/typeMapperImpl';
 import * as WitType from '../types/WitType.js';
 
 export type ParameterDetail = {
@@ -70,7 +68,7 @@ export function deserializeDataValue(
   dataValue: DataValue,
   paramTypes: ParameterDetail[],
   principal: Principal,
-): Either.Either<any[], string> {
+): any[] {
   switch (dataValue.tag) {
     case 'tuple':
       const inputElements = dataValue.val;
@@ -80,117 +78,111 @@ export function deserializeDataValue(
       // The index is incremented for each type unless it is autoinjected
       let schemaBasedIndex = 0;
 
-      return Either.all(
-        paramTypes.map((parameterDetail) => {
-          const parameterType = parameterDetail.type;
+      return paramTypes.map((parameterDetail) => {
+        const parameterType = parameterDetail.type;
 
-          if (schemaBasedIndex >= inputElementsLen) {
-            if (isOptionalWithQuestionMark(parameterType)) {
-              return Either.right(undefined);
-            }
+        if (schemaBasedIndex >= inputElementsLen) {
+          if (isOptionalWithQuestionMark(parameterType)) {
+            return undefined;
+          }
 
-            if (isEmptyType(parameterType)) {
-              return Either.right(undefined);
-            }
+          if (isEmptyType(parameterType)) {
+            return undefined;
+          }
 
-            if (isPrincipal(parameterType)) {
-              return Either.right(principal);
-            }
+          if (isPrincipal(parameterType)) {
+            return principal;
+          }
 
-            if (isConfig(parameterType)) {
-              return Either.right(constructConfigType(parameterType));
-            }
+          if (isConfig(parameterType)) {
+            return constructConfigType(parameterType);
+          }
 
+          throw new Error(
+            `Internal error: Not enough elements in data value to deserialize parameter ${parameterDetail.name}`,
+          );
+        }
+
+        const elementValue = inputElements[schemaBasedIndex];
+
+        switch (parameterType.tag) {
+          case 'multimodal':
             throw new Error(
-              `Internal error: Not enough elements in data value to deserialize parameter ${parameterDetail.name}`,
+              `Internal error: Unexpected multimodal type for parameter ${parameterDetail.name} in tuple data value`,
             );
-          }
 
-          const elementValue = inputElements[schemaBasedIndex];
+          case 'principal':
+            // If principal, we do not increment the data value element index,
+            // because principal is not represented in data value
+            return principal;
 
-          switch (parameterType.tag) {
-            case 'multimodal':
-              return Either.left(
-                `Internal error: Unexpected multimodal type for parameter ${parameterDetail.name} in tuple data value`,
+          case 'config':
+            // If config, we do not increment the data value element index,
+            // because config is not represented in data value
+            return constructConfigType(parameterType);
+
+          case 'unstructured-text':
+            const unstructuredTextParamName = parameterDetail.name;
+
+            if (elementValue.tag !== 'unstructured-text') {
+              throw new Error(
+                `Internal error: Expected unstructured-text element for parameter ${unstructuredTextParamName}, got ${util.format(elementValue)}`,
               );
+            }
 
-            case 'principal':
-              // If principal, we do not increment the data value element index,
-              // because principal is not represented in data value
-              return Either.right(principal);
+            const languageCodes = Either.getOrThrowWith(
+              getLanguageCodes(parameterType.tsType),
+              (err) =>
+                new Error(
+                  `Failed to get language codes for parameter ${unstructuredTextParamName}: ${err}`,
+                ),
+            );
 
-            case 'config':
-              // If config, we do not increment the data value element index,
-              // because config is not represented in data value
-              return Either.right(constructConfigType(parameterType));
+            schemaBasedIndex += 1;
 
-            case 'unstructured-text':
-              const unstructuredTextParamName = parameterDetail.name;
+            return UnstructuredText.fromDataValue(
+              unstructuredTextParamName,
+              elementValue.val,
+              languageCodes,
+            );
 
-              if (elementValue.tag !== 'unstructured-text') {
-                throw new Error(
-                  `Internal error: Expected unstructured-text element for parameter ${unstructuredTextParamName}, got ${util.format(elementValue)}`,
-                );
-              }
+          case 'unstructured-binary':
+            const binaryParameterDetail = paramTypes[schemaBasedIndex];
 
-              const languageCodes: Either.Either<string[], string> = getLanguageCodes(
-                parameterType.tsType,
+            if (elementValue.tag !== 'unstructured-binary') {
+              throw new Error(
+                `Internal error: Expected unstructured-binary element for parameter ${binaryParameterDetail.name}, got ${util.format(elementValue)}`,
               );
+            }
 
-              if (Either.isLeft(languageCodes)) {
-                throw new Error(
-                  `Failed to get language codes for parameter ${unstructuredTextParamName}: ${languageCodes.val}`,
-                );
-              }
+            const mimeTypes = Either.getOrThrowWith(
+              getMimeTypes(binaryParameterDetail.type.tsType),
+              (err) =>
+                new Error(
+                  `Failed to get mime types for parameter ${binaryParameterDetail.name}: ${err}`,
+                ),
+            );
 
-              schemaBasedIndex += 1;
+            schemaBasedIndex += 1;
 
-              return UnstructuredText.fromDataValue(
-                unstructuredTextParamName,
-                elementValue.val,
-                languageCodes.val,
+            return UnstructuredBinary.fromDataValue(
+              binaryParameterDetail.name,
+              elementValue.val,
+              mimeTypes,
+            );
+
+          case 'analysed':
+            if (elementValue.tag !== 'component-model') {
+              throw new Error(
+                `Internal error: Expected component-model element for parameter ${parameterDetail.name}, got ${util.format(elementValue)}`,
               );
+            }
 
-            case 'unstructured-binary':
-              const binaryParameterDetail = paramTypes[schemaBasedIndex];
+            schemaBasedIndex += 1;
 
-              if (elementValue.tag !== 'unstructured-binary') {
-                throw new Error(
-                  `Internal error: Expected unstructured-binary element for parameter ${binaryParameterDetail.name}, got ${util.format(elementValue)}`,
-                );
-              }
-
-              const mimeTypes: Either.Either<string[], string> = getMimeTypes(
-                binaryParameterDetail.type.tsType,
-              );
-
-              if (Either.isLeft(mimeTypes)) {
-                throw new Error(
-                  `Failed to get mime types for parameter ${binaryParameterDetail.name}: ${mimeTypes.val}`,
-                );
-              }
-
-              schemaBasedIndex += 1;
-
-              return UnstructuredBinary.fromDataValue(
-                binaryParameterDetail.name,
-                elementValue.val,
-                mimeTypes.val,
-              );
-
-            case 'analysed':
-              if (elementValue.tag !== 'component-model') {
-                throw new Error(
-                  `Internal error: Expected component-model element for parameter ${parameterDetail.name}, got ${util.format(elementValue)}`,
-                );
-              }
-
-              schemaBasedIndex += 1;
-
-              return Either.right(WitValue.toTsValue(elementValue.val, parameterType.val));
-          }
-        }),
-      );
+            return WitValue.toTsValue(elementValue.val, parameterType.val);
+        }
+      });
 
     case 'multimodal':
       const multiModalElements = dataValue.val;
@@ -206,103 +198,83 @@ export function deserializeDataValue(
       const multimodalParamTypes = typeInfo.types;
 
       // These are not separate parameters, but a single parameter of multimodal type
-      const multiModalValue: Either.Either<any[], string> = Either.all(
-        multiModalElements.map(([name, elem]) => {
-          switch (elem.tag) {
-            case 'unstructured-text':
-              const parameterDetail = multimodalParamTypes.find(
-                (paramDetail) => paramDetail.name === name,
+      const multiModalValue: any[] = multiModalElements.map(([name, elem]) => {
+        switch (elem.tag) {
+          case 'unstructured-text':
+            const parameterDetail = multimodalParamTypes.find(
+              (paramDetail) => paramDetail.name === name,
+            );
+
+            if (!parameterDetail) {
+              throw new Error(
+                `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
               );
+            }
 
-              if (!parameterDetail) {
-                throw new Error(
-                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
-                );
-              }
+            const type = parameterDetail.type;
+            const textRef = elem.val;
 
-              const type = parameterDetail.type;
-              const textRef = elem.val;
+            const languageCodes = Either.getOrThrowWith(
+              getLanguageCodes(type.tsType),
+              (err) => new Error(`Failed to get language codes for parameter ${name}: ${err}`),
+            );
 
-              const languageCodes: Either.Either<string[], string> = getLanguageCodes(type.tsType);
+            return {
+              tag: name,
+              val: UnstructuredText.fromDataValue(name, textRef, languageCodes),
+            };
 
-              if (Either.isLeft(languageCodes)) {
-                throw new Error(
-                  `Failed to get language codes for parameter ${name}: ${languageCodes.val}`,
-                );
-              }
+          case 'unstructured-binary':
+            const binaryParameterDetail = multimodalParamTypes.find(
+              (paramDetail) => paramDetail.name === name,
+            );
 
-              const unstructuredText = UnstructuredText.fromDataValue(
-                name,
-                textRef,
-                languageCodes.val,
+            if (!binaryParameterDetail) {
+              throw new Error(
+                `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
               );
+            }
 
-              return Either.map(unstructuredText, (v) => ({
-                tag: name,
-                val: v,
-              }));
+            const binaryType = binaryParameterDetail.type;
+            const binaryRef = elem.val;
+            const mimeTypes = Either.getOrThrowWith(
+              getMimeTypes(binaryType.tsType),
+              (err) => new Error(`Failed to get mime types for parameter ${name}: ${err}`),
+            );
 
-            case 'unstructured-binary':
-              const binaryParameterDetail = multimodalParamTypes.find(
-                (paramDetail) => paramDetail.name === name,
+            return {
+              tag: name,
+              val: UnstructuredBinary.fromDataValue(name, binaryRef, mimeTypes),
+            };
+
+          case 'component-model':
+            const witValue = elem.val;
+
+            const paramDetail = multimodalParamTypes.find(
+              (paramDetail) => paramDetail.name === name,
+            );
+
+            if (!paramDetail) {
+              throw new Error(
+                `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
               );
+            }
 
-              if (!binaryParameterDetail) {
-                throw new Error(
-                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
-                );
-              }
+            const paramType = paramDetail.type;
 
-              const binaryType = binaryParameterDetail.type;
-              const binaryRef = elem.val;
-              const mimeTypes = getMimeTypes(binaryType.tsType);
-
-              if (Either.isLeft(mimeTypes)) {
-                throw new Error(`Failed to get mime types for parameter ${name}: ${mimeTypes.val}`);
-              }
-
-              const unstructuredBinary = UnstructuredBinary.fromDataValue(
-                name,
-                binaryRef,
-                mimeTypes.val,
+            if (paramType.tag !== 'analysed') {
+              throw new Error(
+                `Internal error: Unknown parameter type for multimodal input ${util.format(elem.val)} with name ${name}`,
               );
+            }
 
-              return Either.map(unstructuredBinary, (v) => ({
-                tag: name,
-                val: v,
-              }));
+            let result = WitValue.toTsValue(witValue, paramType.val);
 
-            case 'component-model':
-              const witValue = elem.val;
+            return { tag: paramDetail.name, val: result };
+        }
+      });
 
-              const paramDetail = multimodalParamTypes.find(
-                (paramDetail) => paramDetail.name === name,
-              );
-
-              if (!paramDetail) {
-                throw new Error(
-                  `Unable to process multimodal input of elem ${util.format(Value.fromWitValue(elem.val))}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
-                );
-              }
-
-              const paramType = paramDetail.type;
-
-              if (paramType.tag !== 'analysed') {
-                throw new Error(
-                  `Internal error: Unknown parameter type for multimodal input ${util.format(Value.fromWitValue(elem.val))} with name ${name}`,
-                );
-              }
-
-              let result = WitValue.toTsValue(witValue, paramType.val);
-
-              let multimodal_result = { tag: paramDetail.name, val: result };
-
-              return Either.right(multimodal_result);
-          }
-        }),
-      );
-
-      return Either.map(multiModalValue, (v) => [v]);
+      return [multiModalValue];
   }
 }
 
@@ -324,56 +296,49 @@ export function loadConfigKey(path: string[], type: Type.Type): any {
 }
 
 // Used to serialize the return type of a method back to DataValue
-export function serializeToDataValue(
-  tsValue: any,
-  typeInfoInternal: TypeInfoInternal,
-): Either.Either<DataValue, string> {
+export function serializeToDataValue(tsValue: any, typeInfoInternal: TypeInfoInternal): DataValue {
   switch (typeInfoInternal.tag) {
     case 'analysed':
       if (isEmptyType(typeInfoInternal)) {
-        return Either.right({
-          tag: 'tuple',
-          val: [],
-        });
-      }
-
-      return Either.map(WitValue.fromTsValueDefault(tsValue, typeInfoInternal.val), (witValue) => {
-        let elementValue: ElementValue = {
-          tag: 'component-model',
-          val: witValue,
-        };
-
         return {
           tag: 'tuple',
-          val: [elementValue],
+          val: [],
         };
-      });
+      }
+
+      const witValue = WitValue.fromTsValueDefault(tsValue, typeInfoInternal.val);
+      const elementValue: ElementValue = {
+        tag: 'component-model',
+        val: witValue,
+      };
+      return {
+        tag: 'tuple',
+        val: [elementValue],
+      };
 
     case 'principal':
-      return Either.left(
+      throw new Error(
         `Internal Error: Serialization of 'Principal' data should have never happened`,
       );
 
     case 'config':
-      return Either.left(
-        `Internal Error: Serialization of 'Config' data should have never happened`,
-      );
+      throw new Error(`Internal Error: Serialization of 'Config' data should have never happened`);
 
     case 'unstructured-text':
-      return Either.right(serializeTextReferenceToDataValue(tsValue));
+      return serializeTextReferenceToDataValue(tsValue);
 
     case 'unstructured-binary':
-      return Either.right(serializeBinaryReferenceToDataValue(tsValue));
+      return serializeBinaryReferenceToDataValue(tsValue);
 
     case 'multimodal':
       const multiModalTypeInfo = typeInfoInternal.types;
 
       const nameAndElementValues = serializeMultimodalToDataValue(tsValue, multiModalTypeInfo);
 
-      return Either.right({
+      return {
         tag: 'multimodal',
         val: nameAndElementValues,
-      });
+      };
   }
 }
 
@@ -475,15 +440,7 @@ function serializeMultimodalToDataValue(
       );
     }
 
-    const result = serializeToDataValue(matchedVal, matchedParam.type);
-
-    if (Either.isLeft(result)) {
-      throw new Error(
-        `Failed to serialize multimodal element: ${util.format(elem)}. Error: ${result.val}`,
-      );
-    }
-
-    const dataValue = result.val;
+    const dataValue = serializeToDataValue(matchedVal, matchedParam.type);
 
     switch (dataValue.tag) {
       case 'tuple': {
