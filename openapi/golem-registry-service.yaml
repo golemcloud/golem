@@ -9082,6 +9082,9 @@ components:
     McpDeploymentAgentOptions:
       type: object
       title: McpDeploymentAgentOptions
+      properties:
+        securityScheme:
+          type: string
     McpDeploymentCreation:
       type: object
       title: McpDeploymentCreation
