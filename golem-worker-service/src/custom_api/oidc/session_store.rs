@@ -651,10 +651,10 @@ impl SessionStore for SqliteSessionStore {
     ) -> Result<Option<McpPendingAuth>, SessionStoreError> {
         let row = self
             .pool
-            .with_ro("session_store", "take_mcp_pending_auth_read")
+            .with_rw("session_store", "take_mcp_pending_auth")
             .fetch_optional(
                 sqlx::query(
-                    "SELECT value FROM mcp_pending_auth WHERE state = ? AND expires_at > ?",
+                    "DELETE FROM mcp_pending_auth WHERE state = ? AND expires_at > ? RETURNING value",
                 )
                 .bind(state)
                 .bind(Self::current_time()),
@@ -666,11 +666,6 @@ impl SessionStore for SqliteSessionStore {
             let record: records::McpPendingAuthRecord =
                 golem_common::serialization::deserialize(&bytes)
                     .map_err(|e| SessionStoreError::InternalError(anyhow::anyhow!(e)))?;
-
-            self.pool
-                .with_rw("session_store", "take_mcp_pending_auth_write")
-                .execute(sqlx::query("DELETE FROM mcp_pending_auth WHERE state = ?").bind(state))
-                .await?;
 
             Ok(Some(McpPendingAuth::from(record)))
         } else {
@@ -711,11 +706,13 @@ impl SessionStore for SqliteSessionStore {
     ) -> Result<Option<McpProxyCodeEntry>, SessionStoreError> {
         let row = self
             .pool
-            .with_ro("session_store", "take_mcp_proxy_code_read")
+            .with_rw("session_store", "take_mcp_proxy_code")
             .fetch_optional(
-                sqlx::query("SELECT value FROM mcp_proxy_code WHERE code = ? AND expires_at > ?")
-                    .bind(code)
-                    .bind(Self::current_time()),
+                sqlx::query(
+                    "DELETE FROM mcp_proxy_code WHERE code = ? AND expires_at > ? RETURNING value",
+                )
+                .bind(code)
+                .bind(Self::current_time()),
             )
             .await?;
 
@@ -724,11 +721,6 @@ impl SessionStore for SqliteSessionStore {
             let record: records::McpProxyCodeEntryRecord =
                 golem_common::serialization::deserialize(&bytes)
                     .map_err(|e| SessionStoreError::InternalError(anyhow::anyhow!(e)))?;
-
-            self.pool
-                .with_rw("session_store", "take_mcp_proxy_code_write")
-                .execute(sqlx::query("DELETE FROM mcp_proxy_code WHERE code = ?").bind(code))
-                .await?;
 
             Ok(Some(McpProxyCodeEntry::from(record)))
         } else {
