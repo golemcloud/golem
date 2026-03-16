@@ -39,7 +39,7 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::{ComponentCreation, ComponentUpdate, LocalAgentConfigEntry};
+use golem_common::model::component::{AgentConfigEntry, ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation,
@@ -52,7 +52,7 @@ use golem_common::model::environment::{
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
     AgentMetadataDto, AgentUpdateMode, FlatComponentFileSystemNode, RevertWorkerTarget,
-    WorkerCreationLocalAgentConfigEntry,
+    WorkerAgentConfigEntry,
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
@@ -213,7 +213,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<LocalAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -269,7 +269,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     file_options,
                     env,
                     config_vars,
-                    local_agent_config,
+                    agent_config,
                     plugins,
                     agent_types,
                 },
@@ -315,7 +315,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
-        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        agent_config: Option<Vec<AgentConfigEntry>>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
         let client = self.deps.registry_service().client(&self.token).await;
@@ -367,7 +367,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     removed_files,
                     env,
                     config_vars,
-                    local_agent_config,
+                    agent_config,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
@@ -391,7 +391,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         let client = self
             .deps
@@ -405,8 +405,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &golem_client::model::AgentCreationRequest {
                     name: id.to_string(),
                     env,
-                    config_vars: Some(config_vars.into_iter().collect()),
-                    local_agent_config: Some(local_agent_config),
+                    config_vars,
+                    agent_config,
                 },
             )
             .await;

@@ -58,7 +58,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor,
@@ -244,10 +244,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let config_vars = request.config_vars.into_iter().collect();
 
-        let local_agent_config = request
-            .local_agent_config
+        let agent_config = request
+            .agent_config
             .into_iter()
-            .map(WorkerCreationLocalAgentConfigEntry::try_from)
+            .map(WorkerAgentConfigEntry::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| {
                 WorkerExecutorError::invalid_request(format!(
@@ -263,7 +263,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             Some(env),
             Some(config_vars),
-            local_agent_config,
+            agent_config,
             None,
             None,
             &invocation_context,
@@ -806,7 +806,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             request.env(),
             request.config_vars()?,
-            request.local_agent_config(),
+            request.agent_config(),
             None,
             request.parent(),
             &invocation_context,
@@ -1806,6 +1806,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             config_vars: metadata.config_vars.into_iter().collect(),
+            agent_config: metadata.agent_config.into_iter().map(Into::into).collect(),
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
             status: Into::<golem::worker::AgentStatus>::into(latest_status.status.clone()).into(),

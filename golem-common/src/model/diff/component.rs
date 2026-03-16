@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::VecDiff;
+use super::{VecDiff, VecDiffable};
 use crate::model::component::ComponentFilePermissions;
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::plugin::PluginInstallation;
@@ -24,37 +24,45 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LocalAgentConfigEntry {
+pub struct AgentConfigEntry {
     pub agent: String,
-    pub key: Vec<String>,
+    pub path: Vec<String>,
     pub value: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LocalAgentConfigEntryDiff {
+pub struct AgentConfigEntryDiff {
     pub agent_changed: bool,
-    pub key_changed: bool,
+    pub path_changed: bool,
     pub value_changed: bool,
 }
 
-impl Diffable for LocalAgentConfigEntry {
-    type DiffResult = LocalAgentConfigEntryDiff;
+impl Diffable for AgentConfigEntry {
+    type DiffResult = AgentConfigEntryDiff;
 
     fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
         let agent_changed = new.agent != current.agent;
-        let key_changed = new.key != current.key;
+        let path_changed = new.path != current.path;
         let value_changed = new.value != current.value;
 
-        if agent_changed || key_changed || value_changed {
-            Some(LocalAgentConfigEntryDiff {
+        if agent_changed || path_changed || value_changed {
+            Some(AgentConfigEntryDiff {
                 agent_changed,
-                key_changed,
+                path_changed,
                 value_changed,
             })
         } else {
             None
         }
+    }
+}
+
+impl VecDiffable for AgentConfigEntry {
+    type OrderingKey = (String, Vec<String>);
+
+    fn ordering_key(&self) -> Self::OrderingKey {
+        (self.agent.clone(), self.path.clone())
     }
 }
 
@@ -123,7 +131,7 @@ pub struct Component {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins_by_grant_id: BTreeMap<Uuid, PluginInstallation>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub local_agent_config_ordered_by_agent_and_key: Vec<LocalAgentConfigEntry>,
+    pub ordered_agent_config: Vec<AgentConfigEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -135,8 +143,8 @@ pub struct ComponentDiff {
     pub file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin_changes: BTreeMapDiff<Uuid, PluginInstallation>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub local_agent_config_changes: VecDiff<LocalAgentConfigEntry>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub agent_config_changes: VecDiff<AgentConfigEntry>,
 }
 
 impl Diffable for Component {
@@ -153,23 +161,23 @@ impl Diffable for Component {
             .plugins_by_grant_id
             .diff_with_current(&current.plugins_by_grant_id)
             .unwrap_or_default();
-        let local_agent_config_changes = new
-            .local_agent_config_ordered_by_agent_and_key
-            .diff_with_current(&current.local_agent_config_ordered_by_agent_and_key)
+        let agent_config_changes = new
+            .ordered_agent_config
+            .diff_with_current(&current.ordered_agent_config)
             .unwrap_or_default();
 
         if metadata_changed
             || wasm_changed
             || !file_changes.is_empty()
             || !plugin_changes.is_empty()
-            || !local_agent_config_changes.is_empty()
+            || !agent_config_changes.is_empty()
         {
             Some(ComponentDiff {
                 metadata_changed,
                 wasm_changed,
                 file_changes,
                 plugin_changes,
-                local_agent_config_changes,
+                agent_config_changes,
             })
         } else {
             None

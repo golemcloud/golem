@@ -27,7 +27,6 @@ use crate::command::shared_args::{
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
-use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
 use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
@@ -36,13 +35,11 @@ use crate::model::repl::ReplLanguage;
 use crate::model::worker::{AgentUpdateMode, RawAgentId};
 use crate::model::GuestLanguage;
 use crate::{command_name, version};
-use anyhow::{anyhow, bail, Context as AnyhowContext};
-use chrono::{DateTime, Utc};
+use anyhow::{anyhow, Context as AnyhowContext};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
+use clap::{Command, CommandFactory, Subcommand};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
-use golem_client::model::ScanCursor;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -1011,7 +1008,7 @@ pub mod component {
     }
 
     pub mod plugin {
-        use crate::command::parse_key_val;
+        use crate::args::parse_key_val;
         use crate::command::shared_args::OptionalComponentName;
         use clap::Subcommand;
 
@@ -1070,8 +1067,9 @@ pub mod component {
 }
 
 pub mod worker {
-    use crate::command::parse_cursor;
-    use crate::command::parse_key_val;
+    use crate::args::parse_cursor;
+    use crate::args::parse_key_val;
+    use crate::args::parse_worker_agent_config;
     use crate::command::shared_args::{
         AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
@@ -1080,6 +1078,7 @@ pub mod worker {
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
     use golem_common::model::component::{ComponentName, ComponentRevision};
+    use golem_common::model::worker::WorkerAgentConfigEntry;
     use golem_common::model::IdempotencyKey;
     use uuid::Uuid;
 
@@ -1095,6 +1094,13 @@ pub mod worker {
             /// wasi:config entries visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
             config_vars: Vec<(String, String)>,
+            /// Configuration to be provided to the agent.
+            /// This parameter can be provided multiple times in the form --agent-config ${DOT_SEPERATED_CONFIG_PATH}=${CONFIG_VALUE}.
+            /// Only configuration declared by the agent can be provided. If a given config path is not provided, the default from the manifest
+            /// (components.*.agents.*.config) is used. If neither value nor default is provided and the config is non-optional, creation
+            /// of the agent will fail.
+            #[arg(short, long, value_parser = parse_worker_agent_config, verbatim_doc_comment)]
+            agent_config: Vec<WorkerAgentConfigEntry>,
         },
         // TODO: json args
         /// Invoke (or enqueue invocation for) agent
@@ -1491,7 +1497,7 @@ pub mod cloud {
     }
 
     pub mod token {
-        use crate::command::parse_instant;
+        use crate::args::parse_instant;
         use chrono::{DateTime, Utc};
         use clap::Subcommand;
         use golem_common::model::auth::TokenId;
@@ -1639,42 +1645,6 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
     }
 
     command.clone()
-}
-
-fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
-    let pos = key_and_val.find('=').ok_or_else(|| {
-        anyhow!(
-            "invalid KEY=VALUE: no `=` found in `{}`",
-            key_and_val.log_color_error_highlight()
-        )
-    })?;
-    Ok((
-        key_and_val[..pos].to_string(),
-        key_and_val[pos + 1..].to_string(),
-    ))
-}
-
-// TODO: better error context and messages
-fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
-    let parts = cursor.split('/').collect::<Vec<_>>();
-
-    if parts.len() != 2 {
-        bail!("Invalid cursor format: {}", cursor);
-    }
-
-    Ok(ScanCursor {
-        layer: parts[0].parse()?,
-        cursor: parts[1].parse()?,
-    })
-}
-
-fn parse_instant(
-    s: &str,
-) -> Result<DateTime<Utc>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-    match s.parse::<DateTime<Utc>>() {
-        Ok(dt) => Ok(dt),
-        Err(err) => Err(err.into()),
-    }
 }
 
 #[cfg(test)]

@@ -33,7 +33,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::clients::registry::RegistryService;
@@ -74,7 +74,7 @@ impl WorkerService {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -90,7 +90,7 @@ impl WorkerService {
             component,
             environment_variables,
             config_vars,
-            local_agent_config,
+            agent_config,
             ignore_already_existing,
             auth_ctx,
             invocation_context,
@@ -106,7 +106,7 @@ impl WorkerService {
         component: Component,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -128,7 +128,7 @@ impl WorkerService {
                 agent_id,
                 environment_variables,
                 config_vars,
-                local_agent_config,
+                agent_config,
                 ignore_already_existing,
                 environment_auth_details.account_id_owning_environment,
                 component.environment_id,
