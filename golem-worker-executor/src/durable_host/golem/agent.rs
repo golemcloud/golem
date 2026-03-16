@@ -21,6 +21,7 @@ use golem_common::model::agent::bindings::golem::agent::common::{
 };
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::agent::{ConfigValueType, ConfigValueTypeLocal, ConfigValueTypeShared};
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
     GolemAgentGetConfigValue,
