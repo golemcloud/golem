@@ -285,10 +285,10 @@ pub async fn protected_resource_metadata(
     }
 }
 
-/// `POST /oauth/register` — fake Dynamic Client Registration.
+/// `POST /oauth/register` — Dynamic Client Registration (RFC 7591).
 ///
-/// MCP clients (mcp-remote, Claude Desktop) expect DCR support. Since providers like Google
-/// don't offer it, we return the pre-configured client_id from the security scheme.
+/// Returns the pre-configured `client_id` and `client_secret` from the security scheme,
+/// allowing MCP clients to discover credentials without manual configuration.
 pub async fn oauth_register(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
