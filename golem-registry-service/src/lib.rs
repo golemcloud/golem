@@ -79,6 +79,10 @@ impl RegistryService {
     ) -> Result<RunDetails, anyhow::Error> {
         let http_port = self.start_http_server(join_set, tracer).await?;
         let grpc_port = self.start_grpc_server(join_set).await?;
+        self.start_cleanup_task(join_set);
+        self.services
+            .deployment_change_notifier
+            .start_background_tasks(join_set);
 
         Ok(RunDetails {
             http_port,
@@ -92,6 +96,10 @@ impl RegistryService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<SingleExecutableRunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
+        self.start_cleanup_task(join_set);
+        self.services
+            .deployment_change_notifier
+            .start_background_tasks(join_set);
         let endpoint = api::make_open_api_service(&self.services).boxed();
 
         Ok(SingleExecutableRunDetails {
@@ -102,6 +110,31 @@ impl RegistryService {
 
     pub fn http_service(&self) -> OpenApiService<api::Apis, ()> {
         api::make_open_api_service(&self.services)
+    }
+
+    fn start_cleanup_task(
+        &self,
+        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    ) {
+        let repo = self.services.deployment_change_repo.clone();
+        let retention = self.config.deployment_events.retention;
+        let interval = self.config.deployment_events.cleanup_interval;
+
+        join_set.spawn(async move {
+            loop {
+                tokio::time::sleep(interval).await;
+                match repo.cleanup_old_events(retention.as_secs() as i64).await {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!("Cleaned up {count} old deployment change events");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to clean up old deployment change events: {e}");
+                    }
+                }
+            }
+        });
     }
 
     async fn start_grpc_server(

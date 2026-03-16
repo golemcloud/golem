@@ -1,0 +1,645 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::repo::deployment_change::{ChangeEventId, DeploymentChangeEvent, DeploymentChangeRepo};
+use golem_api_grpc::proto::golem::registry::v1::DeploymentInvalidationEvent;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+/// Manages deployment change event broadcasting. Delivery is at-least-once;
+/// subscribers must deduplicate by event_id.
+pub trait DeploymentChangeNotifier: Send + Sync {
+    /// Publish an event to all subscribers.
+    fn notify(&self, event: DeploymentChangeEvent);
+
+    /// Get a new broadcast receiver for subscribing to live events.
+    fn subscribe(&self) -> broadcast::Receiver<DeploymentChangeEvent>;
+
+    /// Start any background tasks needed by this implementation (e.g., PgListener).
+    /// No-op for implementations that don't need background tasks.
+    fn start_background_tasks(
+        &self,
+        _join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) {
+        // Default no-op
+    }
+}
+
+/// Local in-process notifier for single-node deployments (e.g., SQLite).
+/// No background tasks needed — notify() directly publishes to the broadcast.
+pub struct LocalDeploymentChangeNotifier {
+    sender: broadcast::Sender<DeploymentChangeEvent>,
+}
+
+impl LocalDeploymentChangeNotifier {
+    pub fn new(capacity: usize) -> Self {
+        let (sender, _) = broadcast::channel(capacity);
+        Self { sender }
+    }
+}
+
+impl DeploymentChangeNotifier for LocalDeploymentChangeNotifier {
+    fn notify(&self, event: DeploymentChangeEvent) {
+        let _ = self.sender.send(event);
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<DeploymentChangeEvent> {
+        self.sender.subscribe()
+    }
+}
+
+/// Postgres-backed notifier that uses LISTEN/NOTIFY for cross-node propagation.
+/// Immediate local delivery is also provided via notify() for low-latency
+/// same-node event propagation; the PgListener handles cross-node delivery.
+/// This means same-node subscribers may see duplicate events — dedup by event_id.
+pub struct PostgresDeploymentChangeNotifier {
+    sender: broadcast::Sender<DeploymentChangeEvent>,
+    repo: Arc<dyn DeploymentChangeRepo>,
+    connect_url: String,
+}
+
+impl PostgresDeploymentChangeNotifier {
+    pub fn new(
+        capacity: usize,
+        repo: Arc<dyn DeploymentChangeRepo>,
+        pg_config: &golem_common::config::DbPostgresConfig,
+    ) -> Self {
+        let (sender, _) = broadcast::channel(capacity);
+        let connect_url = format!(
+            "postgres://{}:{}@{}:{}/{}",
+            pg_config.username, pg_config.password, pg_config.host, pg_config.port, pg_config.database
+        );
+        Self {
+            sender,
+            repo,
+            connect_url,
+        }
+    }
+}
+
+impl DeploymentChangeNotifier for PostgresDeploymentChangeNotifier {
+    fn notify(&self, event: DeploymentChangeEvent) {
+        let _ = self.sender.send(event);
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<DeploymentChangeEvent> {
+        self.sender.subscribe()
+    }
+
+    fn start_background_tasks(
+        &self,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) {
+        let connect_url = self.connect_url.clone();
+        let repo = self.repo.clone();
+        let sender = self.sender.clone();
+
+        join_set.spawn(async move {
+            let mut last_processed_event_id = ChangeEventId(0);
+            let mut backoff = std::time::Duration::from_millis(100);
+            let max_backoff = std::time::Duration::from_secs(30);
+
+            loop {
+                match sqlx::postgres::PgListener::connect(&connect_url).await {
+                    Ok(mut listener) => {
+                        if let Err(e) = listener.listen("deployment_change").await {
+                            tracing::warn!("Failed to LISTEN on deployment_change: {e}");
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(max_backoff);
+                            continue;
+                        }
+
+                        tracing::info!(
+                            "PgListener connected, listening on deployment_change channel"
+                        );
+                        backoff = std::time::Duration::from_millis(100);
+
+                        // Catch up on any events that were written while we were disconnected
+                        // or before this listener was started.
+                        match repo.get_events_since(last_processed_event_id).await {
+                            Ok(events) => {
+                                for event in events {
+                                    last_processed_event_id = event.event_id;
+                                    let _ = sender.send(event);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to catch up on events after connect: {e}, reconnecting"
+                                );
+                                tokio::time::sleep(backoff).await;
+                                backoff = (backoff * 2).min(max_backoff);
+                                continue;
+                            }
+                        }
+
+                        loop {
+                            match listener.recv().await {
+                                Ok(_notification) => {
+                                    match repo.get_events_since(last_processed_event_id).await {
+                                        Ok(events) => {
+                                            for event in events {
+                                                last_processed_event_id = event.event_id;
+                                                let _ = sender.send(event);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Failed to fetch events after NOTIFY: {e}"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "PgListener error on deployment_change: {e}, reconnecting"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to connect PgListener: {e}");
+                    }
+                }
+
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(max_backoff);
+            }
+        });
+    }
+}
+
+/// Sends a batch of events from the repo through the channel, advancing the cursor.
+/// Returns `Ok(new_cursor)` on success, or `Err(())` if the receiver disconnected.
+async fn send_events(
+    tx: &tokio::sync::mpsc::Sender<Result<DeploymentInvalidationEvent, tonic::Status>>,
+    events: Vec<DeploymentChangeEvent>,
+    cursor: ChangeEventId,
+) -> Result<ChangeEventId, ()> {
+    let mut cursor = cursor;
+    for event in &events {
+        cursor = event.event_id;
+        if tx.send(Ok(event.into())).await.is_err() {
+            return Err(());
+        }
+    }
+    Ok(cursor)
+}
+
+/// Replays events from the outbox since `cursor`. If the outbox returns no events
+/// but newer events exist (i.e., older events were purged by retention cleanup),
+/// sends a `cursor_expired` signal so the subscriber can flush its cache.
+///
+/// Returns:
+/// - `Ok(new_cursor)` on success
+/// - `Err(ReplayError::Disconnected)` if the receiver disconnected
+/// - `Err(ReplayError::RepoError(e))` if the repo query failed
+enum ReplayError {
+    Disconnected,
+    RepoError(String),
+}
+
+async fn replay_from_cursor(
+    tx: &tokio::sync::mpsc::Sender<Result<DeploymentInvalidationEvent, tonic::Status>>,
+    repo: &dyn DeploymentChangeRepo,
+    cursor: ChangeEventId,
+) -> Result<ChangeEventId, ReplayError> {
+    match repo.get_events_since(cursor).await {
+        Ok(events) if events.is_empty() => {
+            if let Ok(Some(latest_id)) = repo.get_latest_event_id().await {
+                // Events between the client's cursor and the current latest have been
+                // purged by retention cleanup. Signal the client to flush its cache.
+                if latest_id.0 > cursor.0 + 1 {
+                    if tx
+                        .send(Ok(DeploymentInvalidationEvent {
+                            event_id: latest_id.0 as u64,
+                            environment_id: None,
+                            deployment_revision: 0,
+                            cursor_expired: true,
+                        }))
+                        .await
+                        .is_err()
+                    {
+                        return Err(ReplayError::Disconnected);
+                    }
+                    return Ok(latest_id);
+                }
+            }
+            Ok(cursor)
+        }
+        Ok(events) => send_events(tx, events, cursor)
+            .await
+            .map_err(|()| ReplayError::Disconnected),
+        Err(e) => Err(ReplayError::RepoError(e.to_string())),
+    }
+}
+
+/// Produces a stream of deployment invalidation events by replaying missed events from the
+/// repository and then forwarding live events from the broadcast channel.
+///
+/// Returns a `ReceiverStream` that yields `DeploymentInvalidationEvent` proto messages,
+/// or a `tonic::Status` error if replay fails.
+pub fn subscribe_deployment_invalidations(
+    repo: Arc<dyn DeploymentChangeRepo>,
+    notifier: &dyn DeploymentChangeNotifier,
+    last_seen_event_id: Option<u64>,
+) -> tokio_stream::wrappers::ReceiverStream<Result<DeploymentInvalidationEvent, tonic::Status>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(256);
+    // Subscribe to the broadcast BEFORE spawning the replay task. This ensures no
+    // events are lost between the end of replay and the start of live listening —
+    // events arriving during replay are buffered in the receiver and then
+    // deduplicated by the `event.event_id > cursor` check.
+    let mut broadcast_rx = notifier.subscribe();
+
+    tokio::spawn(async move {
+        let mut cursor = ChangeEventId(last_seen_event_id.map(|id| id as i64).unwrap_or(0));
+
+        if last_seen_event_id.is_some() {
+            match replay_from_cursor(&tx, repo.as_ref(), cursor).await {
+                Ok(new_cursor) => cursor = new_cursor,
+                Err(ReplayError::Disconnected) => return,
+                Err(ReplayError::RepoError(e)) => {
+                    let _ = tx
+                        .send(Err(tonic::Status::internal(format!(
+                            "Failed to replay events: {e}"
+                        ))))
+                        .await;
+                    return;
+                }
+            }
+        }
+
+        loop {
+            match broadcast_rx.recv().await {
+                Ok(event) => {
+                    if event.event_id > cursor {
+                        cursor = event.event_id;
+                        if tx.send(Ok((&event).into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    match replay_from_cursor(&tx, repo.as_ref(), cursor).await {
+                        Ok(new_cursor) => cursor = new_cursor,
+                        Err(ReplayError::Disconnected) => return,
+                        Err(ReplayError::RepoError(_)) => break,
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    tokio_stream::wrappers::ReceiverStream::new(rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    async fn test_broadcast_single_subscriber() {
+        let notifier = LocalDeploymentChangeNotifier::new(16);
+        let mut rx = notifier.subscribe();
+
+        let env_id = Uuid::new_v4();
+        notifier.notify(DeploymentChangeEvent {
+            event_id: ChangeEventId(1),
+            environment_id: env_id,
+            deployment_revision_id: 42,
+        });
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.event_id, ChangeEventId(1));
+        assert_eq!(event.environment_id, env_id);
+        assert_eq!(event.deployment_revision_id, 42);
+    }
+
+    #[test]
+    async fn test_broadcast_multiple_subscribers() {
+        let notifier = LocalDeploymentChangeNotifier::new(16);
+        let mut rx1 = notifier.subscribe();
+        let mut rx2 = notifier.subscribe();
+
+        let env_id = Uuid::new_v4();
+        notifier.notify(DeploymentChangeEvent {
+            event_id: ChangeEventId(5),
+            environment_id: env_id,
+            deployment_revision_id: 99,
+        });
+
+        let e1 = rx1.recv().await.unwrap();
+        let e2 = rx2.recv().await.unwrap();
+
+        assert_eq!(e1.event_id, ChangeEventId(5));
+        assert_eq!(e1.environment_id, env_id);
+        assert_eq!(e1.deployment_revision_id, 99);
+
+        assert_eq!(e2.event_id, ChangeEventId(5));
+        assert_eq!(e2.environment_id, env_id);
+        assert_eq!(e2.deployment_revision_id, 99);
+    }
+
+    #[test]
+    fn test_notify_no_receivers() {
+        let notifier = LocalDeploymentChangeNotifier::new(16);
+        // Should not panic even with no subscribers
+        notifier.notify(DeploymentChangeEvent {
+            event_id: ChangeEventId(10),
+            environment_id: Uuid::new_v4(),
+            deployment_revision_id: 7,
+        });
+    }
+
+    #[test]
+    fn test_subscribe_after_notify() {
+        let notifier = LocalDeploymentChangeNotifier::new(16);
+
+        notifier.notify(DeploymentChangeEvent {
+            event_id: ChangeEventId(20),
+            environment_id: Uuid::new_v4(),
+            deployment_revision_id: 100,
+        });
+
+        // Subscribe after the event was sent
+        let mut rx = notifier.subscribe();
+
+        // The new subscriber should not see the old event
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "expected empty channel, but got a message"
+        );
+    }
+
+    // ── Mock repo for subscribe_deployment_invalidations tests ──
+
+    struct MockDeploymentChangeRepo {
+        events: std::sync::Mutex<Vec<DeploymentChangeEvent>>,
+        latest_event_id_override: std::sync::Mutex<Option<ChangeEventId>>,
+    }
+
+    impl MockDeploymentChangeRepo {
+        fn new() -> Self {
+            Self {
+                events: std::sync::Mutex::new(Vec::new()),
+                latest_event_id_override: std::sync::Mutex::new(None),
+            }
+        }
+
+        fn push(&self, event: DeploymentChangeEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+
+        fn set_latest_event_id_override(&self, id: ChangeEventId) {
+            *self.latest_event_id_override.lock().unwrap() = Some(id);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DeploymentChangeRepo for MockDeploymentChangeRepo {
+        async fn record_change_event(
+            &self,
+            environment_id: Uuid,
+            deployment_revision_id: i64,
+        ) -> golem_service_base::repo::RepoResult<ChangeEventId> {
+            let mut events = self.events.lock().unwrap();
+            let id = ChangeEventId(events.len() as i64 + 1);
+            events.push(DeploymentChangeEvent {
+                event_id: id,
+                environment_id,
+                deployment_revision_id,
+            });
+            Ok(id)
+        }
+
+        async fn get_events_since(
+            &self,
+            last_seen_event_id: ChangeEventId,
+        ) -> golem_service_base::repo::RepoResult<Vec<DeploymentChangeEvent>> {
+            let events = self.events.lock().unwrap();
+            Ok(events
+                .iter()
+                .filter(|e| e.event_id > last_seen_event_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_latest_event_id(
+            &self,
+        ) -> golem_service_base::repo::RepoResult<Option<ChangeEventId>> {
+            if let Some(id) = *self.latest_event_id_override.lock().unwrap() {
+                return Ok(Some(id));
+            }
+            let events = self.events.lock().unwrap();
+            Ok(events.last().map(|e| e.event_id))
+        }
+
+        async fn cleanup_old_events(
+            &self,
+            _retention_seconds: i64,
+        ) -> golem_service_base::repo::RepoResult<u64> {
+            Ok(0)
+        }
+    }
+
+    fn make_event(id: i64) -> DeploymentChangeEvent {
+        DeploymentChangeEvent {
+            event_id: ChangeEventId(id),
+            environment_id: Uuid::new_v4(),
+            deployment_revision_id: id * 10,
+        }
+    }
+
+    #[test]
+    async fn test_subscribe_replays_missed_events() {
+        use tokio_stream::StreamExt;
+
+        let repo = Arc::new(MockDeploymentChangeRepo::new());
+        repo.push(make_event(1));
+        repo.push(make_event(2));
+        repo.push(make_event(3));
+
+        let notifier = LocalDeploymentChangeNotifier::new(16);
+        let mut stream =
+            subscribe_deployment_invalidations(repo, &notifier, Some(1));
+
+        let e1 = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout")
+            .expect("stream ended")
+            .expect("error");
+        assert_eq!(e1.event_id, 2);
+
+        let e2 = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout")
+            .expect("stream ended")
+            .expect("error");
+        assert_eq!(e2.event_id, 3);
+    }
+
+    #[test]
+    async fn test_subscribe_forwards_live_events() {
+        use tokio_stream::StreamExt;
+
+        let repo = Arc::new(MockDeploymentChangeRepo::new());
+        let notifier = LocalDeploymentChangeNotifier::new(16);
+        let mut stream =
+            subscribe_deployment_invalidations(repo, &notifier, None);
+
+        // Give the spawned task time to start
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let ev = make_event(10);
+        notifier.notify(ev);
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout")
+            .expect("stream ended")
+            .expect("error");
+        assert_eq!(received.event_id, 10);
+    }
+
+    #[test]
+    async fn test_subscribe_deduplicates_events() {
+        use tokio_stream::StreamExt;
+
+        let repo = Arc::new(MockDeploymentChangeRepo::new());
+        let ev1 = make_event(1);
+        let ev2 = make_event(2);
+        repo.push(ev1.clone());
+        repo.push(ev2.clone());
+
+        let notifier = LocalDeploymentChangeNotifier::new(16);
+        // Subscribe with cursor 0, so replay returns events 1 and 2
+        let mut stream =
+            subscribe_deployment_invalidations(repo, &notifier, Some(0));
+
+        // Also push the same events through the notifier (simulating overlap)
+        notifier.notify(ev1);
+        notifier.notify(ev2);
+        // Push a new event to confirm the stream advances
+        let ev3 = make_event(3);
+        notifier.notify(ev3);
+
+        let mut received_ids = Vec::new();
+        for _ in 0..3 {
+            let ev = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                .await
+                .expect("timeout")
+                .expect("stream ended")
+                .expect("error");
+            received_ids.push(ev.event_id);
+        }
+
+        // Should see exactly [1, 2, 3] with no duplicates
+        assert_eq!(received_ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    async fn test_subscribe_handles_lag_recovery() {
+        use tokio_stream::StreamExt;
+
+        let repo = Arc::new(MockDeploymentChangeRepo::new());
+        // Pre-populate events 1..=5 so replay can find them
+        for i in 1..=5 {
+            repo.push(make_event(i));
+        }
+
+        // Capacity 2 — will lag when we burst
+        let notifier = LocalDeploymentChangeNotifier::new(2);
+        let mut stream =
+            subscribe_deployment_invalidations(repo, &notifier, None);
+
+        // Give the spawned task time to start listening
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Burst 5 events to overflow the capacity-2 broadcast
+        for i in 1..=5 {
+            notifier.notify(make_event(i));
+        }
+
+        // The stream should eventually deliver all 5 events (via lag recovery replay)
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..5 {
+            let ev = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                .await
+                .expect("timeout")
+                .expect("stream ended")
+                .expect("error");
+            seen.insert(ev.event_id);
+        }
+
+        for i in 1..=5u64 {
+            assert!(seen.contains(&i), "missing event_id {i}");
+        }
+    }
+
+    #[test]
+    async fn test_subscribe_cursor_expired() {
+        use tokio_stream::StreamExt;
+
+        let repo = Arc::new(MockDeploymentChangeRepo::new());
+        // No events in the repo (simulating retention cleanup wiped them),
+        // but latest_event_id is 100 (events existed and were cleaned up).
+        repo.set_latest_event_id_override(ChangeEventId(100));
+
+        let notifier = LocalDeploymentChangeNotifier::new(16);
+        // Subscribe with cursor 5 — events 6..100 were purged
+        let mut stream =
+            subscribe_deployment_invalidations(repo, &notifier, Some(5));
+
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout")
+            .expect("stream ended")
+            .expect("error");
+        assert!(ev.cursor_expired, "expected cursor_expired=true");
+        assert_eq!(ev.event_id, 100);
+    }
+
+    #[test]
+    async fn test_lagged_receiver() {
+        // Create notifier with capacity of 2
+        let notifier = LocalDeploymentChangeNotifier::new(2);
+        let mut rx = notifier.subscribe();
+
+        // Send 3 events to overflow the capacity-2 buffer
+        for i in 1..=3 {
+            notifier.notify(DeploymentChangeEvent {
+                event_id: ChangeEventId(i),
+                environment_id: Uuid::new_v4(),
+                deployment_revision_id: i * 10,
+            });
+        }
+
+        // First recv should report Lagged
+        let result = rx.recv().await;
+        assert!(
+            matches!(result, Err(broadcast::error::RecvError::Lagged(_))),
+            "expected Lagged error, got {result:?}"
+        );
+
+        // After lagged, we can still receive the remaining buffered events
+        let event = rx.recv().await.unwrap();
+        // With capacity=2, after lag recovery we get the oldest surviving event
+        assert!(event.event_id >= ChangeEventId(2), "expected surviving event, got {}", event.event_id.0);
+    }
+}

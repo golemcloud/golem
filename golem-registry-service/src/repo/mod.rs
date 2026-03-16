@@ -19,6 +19,7 @@ pub mod agent_secret;
 pub mod application;
 pub mod component;
 pub mod deployment;
+pub mod deployment_change;
 pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;

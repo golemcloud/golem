@@ -27,6 +27,7 @@ use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
+use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient, WorkerService};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::redis::RedisPool;
@@ -45,6 +46,8 @@ pub struct Services {
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
+    pub registry_service: Arc<dyn RegistryService>,
+    pub agent_resolution_cache: Arc<AgentResolutionCache>,
 }
 
 impl Services {
@@ -85,12 +88,20 @@ impl Services {
             routing_table_service.clone(),
         ));
 
+        let agent_resolution_cache = Arc::new(AgentResolutionCache::new(
+            registry_service_client.clone(),
+            config.agent_resolution_cache.max_capacity,
+            config.agent_resolution_cache.ttl,
+            config.agent_resolution_cache.eviction_period,
+        ));
+
         let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
             registry_service_client.clone(),
             component_service.clone(),
             auth_service.clone(),
             limit_service.clone(),
             worker_client.clone(),
+            agent_resolution_cache.clone(),
         ));
 
         let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(
@@ -162,6 +173,8 @@ impl Services {
             worker_service,
             request_handler,
             mcp_capability_lookup,
+            registry_service: registry_service_client,
+            agent_resolution_cache,
         })
     }
 }

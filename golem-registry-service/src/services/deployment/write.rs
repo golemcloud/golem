@@ -18,6 +18,8 @@ use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreation
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::route_compilation::render_http_method;
+use crate::repo::deployment_change::DeploymentChangeEvent;
+use crate::services::deployment_change_notifier::DeploymentChangeNotifier;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
@@ -224,6 +226,7 @@ pub struct DeploymentWriteService {
     http_api_deployment_service: Arc<HttpApiDeploymentService>,
     mcp_deployment_service: Arc<McpDeploymentService>,
     agent_secrets_service: Arc<AgentSecretService>,
+    deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
 }
 
 impl DeploymentWriteService {
@@ -234,6 +237,7 @@ impl DeploymentWriteService {
         http_api_deployment_service: Arc<HttpApiDeploymentService>,
         mcp_deployment_service: Arc<McpDeploymentService>,
         agent_secrets_service: Arc<AgentSecretService>,
+        deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -242,6 +246,7 @@ impl DeploymentWriteService {
             http_api_deployment_service,
             mcp_deployment_service,
             agent_secrets_service,
+            deployment_change_notifier,
         }
     }
 
@@ -383,7 +388,7 @@ impl DeploymentWriteService {
             auth.account_id(),
         )?;
 
-        let deployment: CurrentDeployment = self
+        let (ext_revision, change_event_id) = self
             .deployment_repo
             .deploy(record, deployment_context.environment.version_check)
             .await
@@ -402,8 +407,17 @@ impl DeploymentWriteService {
                     DeploymentWriteError::VersionAlreadyExists { version }
                 }
                 other => other.into(),
-            })?
-            .try_into()?;
+            })?;
+
+        let deployment: CurrentDeployment = ext_revision.try_into()?;
+
+        // Notify subscribers (event was already recorded in the deploy transaction)
+        self.deployment_change_notifier
+            .notify(DeploymentChangeEvent {
+                event_id: change_event_id,
+                environment_id: environment_id.0,
+                deployment_revision_id: deployment.revision.into(),
+            });
 
         Ok(deployment)
     }
@@ -453,7 +467,7 @@ impl DeploymentWriteService {
             ))?
             .try_into()?;
 
-        let current_deployment: CurrentDeployment = self
+        let (revision_record, change_event_id) = self
             .deployment_repo
             .set_current_deployment(
                 auth.account_id().0,
@@ -466,8 +480,18 @@ impl DeploymentWriteService {
                     DeploymentWriteError::ConcurrentDeployment
                 }
                 other => other.into(),
-            })?
-            .into_model(target_deployment.version, target_deployment.deployment_hash)?;
+            })?;
+
+        let current_deployment: CurrentDeployment =
+            revision_record.into_model(target_deployment.version, target_deployment.deployment_hash)?;
+
+        // Notify subscribers (event was already recorded in the rollback transaction)
+        self.deployment_change_notifier
+            .notify(DeploymentChangeEvent {
+                event_id: change_event_id,
+                environment_id: environment_id.0,
+                deployment_revision_id: payload.deployment_revision.into(),
+            });
 
         Ok(current_deployment)
     }
@@ -492,4 +516,5 @@ impl DeploymentWriteService {
 
         Ok(deployment)
     }
+
 }

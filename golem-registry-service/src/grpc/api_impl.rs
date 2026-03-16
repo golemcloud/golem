@@ -18,6 +18,8 @@ use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
+use crate::repo::deployment_change::DeploymentChangeRepo;
+use crate::services::deployment_change_notifier::DeploymentChangeNotifier;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_state::EnvironmentStateService;
 use applying::Apply;
@@ -27,6 +29,7 @@ use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
+    DeploymentInvalidationEvent, SubscribeDeploymentInvalidationsRequest,
     BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, BatchUpdateFuelUsageSuccessResponse,
     DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
     GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
@@ -89,6 +92,8 @@ pub struct RegistryServiceGrpcApi {
     deployed_routes_service: Arc<DeployedRoutesService>,
     deployed_mcp_service: Arc<DeployedMcpService>,
     environment_state_service: Arc<EnvironmentStateService>,
+    deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
+    deployment_change_repo: Arc<dyn DeploymentChangeRepo>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -102,6 +107,8 @@ impl RegistryServiceGrpcApi {
         deployed_routes_service: Arc<DeployedRoutesService>,
         deployed_mcp_service: Arc<DeployedMcpService>,
         environment_state_service: Arc<EnvironmentStateService>,
+        deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
+        deployment_change_repo: Arc<dyn DeploymentChangeRepo>,
     ) -> Self {
         Self {
             auth_service,
@@ -113,6 +120,8 @@ impl RegistryServiceGrpcApi {
             deployed_routes_service,
             deployed_mcp_service,
             environment_state_service,
+            deployment_change_notifier,
+            deployment_change_repo,
         }
     }
 
@@ -508,6 +517,7 @@ impl RegistryServiceGrpcApi {
         Ok(ResolveAgentTypeByNamesSuccessResponse {
             agent_type: Some(resolved.registered_agent_type.into()),
             environment_id: Some(resolved.environment_id.into()),
+            deployment_revision: resolved.deployment_revision.get(),
         })
     }
 
@@ -1047,6 +1057,27 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         Ok(Response::new(GetCurrentEnvironmentStateResponse {
             result: Some(response),
         }))
+    }
+
+    type SubscribeDeploymentInvalidationsStream = std::pin::Pin<
+        Box<
+            dyn futures::Stream<Item = Result<DeploymentInvalidationEvent, tonic::Status>> + Send,
+        >,
+    >;
+
+    async fn subscribe_deployment_invalidations(
+        &self,
+        request: Request<SubscribeDeploymentInvalidationsRequest>,
+    ) -> Result<Response<Self::SubscribeDeploymentInvalidationsStream>, Status> {
+        let last_seen = request.into_inner().last_seen_event_id;
+
+        let stream = crate::services::deployment_change_notifier::subscribe_deployment_invalidations(
+            self.deployment_change_repo.clone(),
+            self.deployment_change_notifier.as_ref(),
+            last_seen,
+        );
+
+        Ok(Response::new(Box::pin(stream)))
     }
 }
 

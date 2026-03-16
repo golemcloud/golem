@@ -52,6 +52,10 @@ service RegistryService {
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
   rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
   rpc GetCurrentEnvironmentState (GetCurrentEnvironmentStateRequest) returns (GetCurrentEnvironmentStateResponse);
+
+  // deployment invalidation stream
+  rpc SubscribeDeploymentInvalidations(SubscribeDeploymentInvalidationsRequest)
+      returns (stream DeploymentInvalidationEvent);
 }
 
 message AuthenticateTokenRequest {
@@ -309,6 +313,7 @@ message ResolveAgentTypeByNamesResponse {
 message ResolveAgentTypeByNamesSuccessResponse {
   RegisteredAgentType agent_type = 1;
   golem.common.EnvironmentId environment_id = 2;
+  uint64 deployment_revision = 3;
 }
 
 message GetActiveRoutesForDomainRequest {
@@ -354,4 +359,24 @@ message GetCurrentEnvironmentStateResponse {
 
 message GetCurrentEnvironmentStateSuccessResponse {
   EnvironmentState environment_state = 1;
+}
+
+message SubscribeDeploymentInvalidationsRequest {
+  // The event_id of the last event the client successfully processed.
+  // If omitted, the server starts streaming from live events only (no replay).
+  optional uint64 last_seen_event_id = 1;
+}
+
+// Streamed to worker-service subscribers when a deployment changes.
+// Used to invalidate cached agent resolution data.
+message DeploymentInvalidationEvent {
+  uint64 event_id = 1;
+  // The environment whose current deployment changed. Not set when cursor_expired is true.
+  golem.common.EnvironmentId environment_id = 2;
+  // The new deployment revision for the environment. Not meaningful when cursor_expired is true.
+  uint64 deployment_revision = 3;
+  // When true, the client's last_seen_event_id is older than the server's event
+  // retention window, so missed events cannot be replayed. The client must flush
+  // its entire cache and use this event's event_id as its new cursor.
+  bool cursor_expired = 4;
 }

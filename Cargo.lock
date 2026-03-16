@@ -4708,6 +4708,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "rustls 0.23.35",
  "rustls-pemfile",
+ "scc",
  "serde",
  "serde_json",
  "serde_yaml",

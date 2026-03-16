@@ -195,6 +195,23 @@ pub trait RegistryService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<EnvironmentState, RegistryServiceError>;
+
+    async fn subscribe_deployment_invalidations(
+        &self,
+        last_seen_event_id: Option<u64>,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            golem_common::model::agent::DeploymentInvalidationEvent,
+                            RegistryServiceError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        RegistryServiceError,
+    >;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -782,9 +799,12 @@ impl RegistryService for GrpcRegistryService {
                     .environment_id
                     .ok_or("missing environment_id field")?
                     .try_into()?;
+                let deployment_revision = DeploymentRevision::try_from(payload.deployment_revision)
+                    .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
                 Ok(ResolvedAgentType {
                     registered_agent_type,
                     environment_id,
+                    deployment_revision,
                 })
             }
             Some(resolve_agent_type_by_names_response::Result::Error(error)) => Err(error.into()),
@@ -873,6 +893,55 @@ impl RegistryService for GrpcRegistryService {
             }
             Some(get_current_environment_state_response::Result::Error(error)) => Err(error.into()),
         }
+    }
+
+    async fn subscribe_deployment_invalidations(
+        &self,
+        last_seen_event_id: Option<u64>,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            golem_common::model::agent::DeploymentInvalidationEvent,
+                            RegistryServiceError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        RegistryServiceError,
+    > {
+        use futures::StreamExt;
+        use golem_api_grpc::proto::golem::registry::v1::SubscribeDeploymentInvalidationsRequest;
+        use golem_common::model::agent::DeploymentInvalidationEvent;
+
+        let response = self
+            .client
+            .call("subscribe_deployment_invalidations", move |client| {
+                let request = SubscribeDeploymentInvalidationsRequest {
+                    last_seen_event_id,
+                };
+                Box::pin(client.subscribe_deployment_invalidations(request))
+            })
+            .await?
+            .into_inner();
+
+        let stream = response.map(move |result| match result {
+            Ok(event) => {
+                let env_id = event
+                    .environment_id
+                    .and_then(|eid| eid.try_into().ok());
+                Ok(DeploymentInvalidationEvent {
+                    event_id: event.event_id,
+                    environment_id: env_id,
+                    deployment_revision: event.deployment_revision,
+                    cursor_expired: event.cursor_expired,
+                })
+            }
+            Err(status) => Err(RegistryServiceError::from(status)),
+        });
+
+        Ok(Box::pin(stream))
     }
 }
 

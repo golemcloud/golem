@@ -14,6 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
+use crate::base_model::deployment::DeploymentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::AgentId;
 use crate::model::Empty;
@@ -110,9 +111,20 @@ impl From<DeployedRegisteredAgentType> for RegisteredAgentType {
 
 /// Result of resolving an agent type by names, bundling the agent type
 /// with the environment it belongs to.
+#[derive(Clone)]
 pub struct ResolvedAgentType {
     pub registered_agent_type: RegisteredAgentType,
     pub environment_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
+}
+
+/// Event received from the registry service when a deployment changes.
+#[derive(Debug, Clone)]
+pub struct DeploymentInvalidationEvent {
+    pub event_id: u64,
+    pub environment_id: Option<EnvironmentId>,
+    pub deployment_revision: u64,
+    pub cursor_expired: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]

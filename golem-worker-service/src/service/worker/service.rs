@@ -36,6 +36,7 @@ use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
+use crate::service::agent_resolution_cache::AgentResolutionCache;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::component::Component;
@@ -50,6 +51,7 @@ pub struct WorkerService {
     auth_service: Arc<dyn AuthService>,
     limit_service: Arc<dyn LimitService>,
     worker_client: Arc<dyn WorkerClient>,
+    agent_resolution_cache: Arc<AgentResolutionCache>,
 }
 
 impl WorkerService {
@@ -59,6 +61,7 @@ impl WorkerService {
         auth_service: Arc<dyn AuthService>,
         limit_service: Arc<dyn LimitService>,
         worker_client: Arc<dyn WorkerClient>,
+        agent_resolution_cache: Arc<AgentResolutionCache>,
     ) -> Self {
         Self {
             registry_service,
@@ -66,6 +69,7 @@ impl WorkerService {
             auth_service,
             limit_service,
             worker_client,
+            agent_resolution_cache,
         }
     }
 
@@ -772,17 +776,28 @@ impl WorkerService {
             })
             .transpose()?;
 
-        let resolved = self
-            .registry_service
-            .resolve_agent_type_by_names(
-                &request.app_name,
-                &request.env_name,
-                &request.agent_type_name,
-                deployment_revision,
-                request.owner_account_email.as_deref(),
-                &auth,
-            )
-            .await?;
+        let resolved = if deployment_revision.is_none() {
+            self.agent_resolution_cache
+                .resolve(
+                    &request.app_name,
+                    &request.env_name,
+                    &request.agent_type_name,
+                    request.owner_account_email.as_deref(),
+                    &auth,
+                )
+                .await?
+        } else {
+            self.registry_service
+                .resolve_agent_type_by_names(
+                    &request.app_name,
+                    &request.env_name,
+                    &request.agent_type_name,
+                    deployment_revision,
+                    request.owner_account_email.as_deref(),
+                    &auth,
+                )
+                .await?
+        };
 
         let registered_agent_type = resolved.registered_agent_type;
         let environment_id = resolved.environment_id;
