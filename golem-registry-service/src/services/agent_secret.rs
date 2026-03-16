@@ -203,7 +203,7 @@ impl AgentSecretService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteShare,
+            EnvironmentAction::DeleteAgentSecret,
         )?;
 
         if agent_secret.revision != current_revision {
