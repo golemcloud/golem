@@ -49,8 +49,8 @@ use colored::Colorize;
 use crate::agent_id_display::SourceLanguage;
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
 use crate::model::worker::{
-    AgentUpdateMode, RawAgentId, AgentMetadata, AgentMetadataView, AgentNameMatch,
-    AgentsMetadataResponseView,
+    AgentMetadata, AgentMetadataView, AgentNameMatch, AgentUpdateMode, AgentsMetadataResponseView,
+    RawAgentId,
 };
 use golem_client::api::{AgentClient, ComponentClient, EnvironmentClient, WorkerClient};
 use golem_client::model::ScanCursor;
@@ -1898,10 +1898,7 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    pub async fn match_agent_name(
-        &self,
-        agent_name: RawAgentId,
-    ) -> anyhow::Result<AgentNameMatch> {
+    pub async fn match_agent_name(&self, agent_name: RawAgentId) -> anyhow::Result<AgentNameMatch> {
         let segments = split_agent_name(&agent_name.0);
         match segments.len() {
             // <WORKER>

@@ -19,7 +19,7 @@ use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    RawAgentId, AgentMetadata, AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView,
+    AgentMetadata, AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;

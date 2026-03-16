@@ -645,15 +645,15 @@ pub trait InteractiveSession {
     }
 
     fn send_line_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
-        self.send_line(&line)?;
-        self.expect_str(&expected)
+        self.send_line(line)?;
+        self.expect_str(expected)
             .with_context(|| format!("after sending line: {line}"))?;
         Ok(())
     }
 
     fn send_line_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
-        self.send_line(&line)?;
-        self.expect_regex(&expected)
+        self.send_line(line)?;
+        self.expect_regex(expected)
             .with_context(|| format!("after sending line: {line}"))?;
         Ok(())
     }
