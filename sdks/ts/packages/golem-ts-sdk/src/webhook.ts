@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createWebhook as createWebhookHost, PromiseId } from 'golem:agent/host@1.5.0';
-import { createPromise, getPromise, GetPromiseResult } from 'golem:api/host@1.5.0';
+import { createPromise } from 'golem:api/host@1.5.0';
 import { awaitPromise } from './host/hostapi';
 
 export function createWebhook(): WebhookHandler {

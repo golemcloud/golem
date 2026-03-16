@@ -203,13 +203,7 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
 
     fn from_element_value(value: ElementValue) -> Result<Self, String> {
         match value {
-            ElementValue::ComponentModel(wv) => {
-                let value_and_type = ValueAndType {
-                    value: wv,
-                    typ: T::get_type(),
-                };
-                T::from_value_and_type(value_and_type)
-            }
+            ElementValue::ComponentModel(wv) => T::from_extractor(&wv),
             other => Err(format!(
                 "Expected ComponentModel ElementValue, got: {:?}",
                 other

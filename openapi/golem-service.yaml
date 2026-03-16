@@ -8849,11 +8849,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
+            $ref: '#/components/schemas/WorkerAgentConfigEntry'
       required:
       - name
       - env
@@ -9099,6 +9099,9 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
+        componentRevision:
+          type: integer
+          format: uint64
     AgentMetadataDto:
       title: AgentMetadataDto
       type: object
@@ -9119,6 +9122,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        agentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
         status:
           $ref: '#/components/schemas/AgentStatus'
         componentRevision:
@@ -9173,6 +9180,7 @@ components:
       - createdBy
       - env
       - configVars
+      - agentConfig
       - status
       - componentRevision
       - retryCount
@@ -10087,8 +10095,8 @@ components:
       required:
       - start
       - end
-    ParsedWorkerCreationLocalAgentConfigEntry:
-      title: ParsedWorkerCreationLocalAgentConfigEntry
+    ParsedWorkerAgentConfigEntry:
+      title: ParsedWorkerAgentConfigEntry
       type: object
       properties:
         key:
@@ -11709,17 +11717,17 @@ components:
           type: string
       required:
       - version
-    WorkerCreationLocalAgentConfigEntry:
-      title: WorkerCreationLocalAgentConfigEntry
+    WorkerAgentConfigEntry:
+      title: WorkerAgentConfigEntry
       type: object
       properties:
-        key:
+        path:
           type: array
           items:
             type: string
         value: {}
       required:
-      - key
+      - path
       - value
     WorkerCreationResponse:
       title: WorkerCreationResponse
@@ -11950,7 +11958,7 @@ components:
         localAgentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/ParsedWorkerCreationLocalAgentConfigEntry'
+            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
@@ -12516,6 +12524,21 @@ components:
           type: string
       required:
       - currentRevision
+    AgentConfigEntry:
+      title: AgentConfigEntry
+      type: object
+      properties:
+        agent:
+          type: string
+        path:
+          type: array
+          items:
+            type: string
+        value: {}
+      required:
+      - agent
+      - path
+      - value
     AgentConstructor:
       title: AgentConstructor
       type: object
@@ -12830,11 +12853,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         agentTypes:
           default: []
           type: array
@@ -12895,10 +12918,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         wasmHash:
           type: string
           format: hash
@@ -12917,7 +12940,7 @@ components:
       - installedPlugins
       - env
       - configVars
-      - localAgentConfig
+      - agentConfig
       - wasmHash
     ComponentFileOptions:
       title: ComponentFileOptions
@@ -12997,10 +13020,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         agentTypes:
           type: array
           items:
@@ -13985,21 +14008,6 @@ components:
         value:
           type: string
       required:
-      - value
-    LocalAgentConfigEntry:
-      title: LocalAgentConfigEntry
-      type: object
-      properties:
-        agent:
-          type: string
-        key:
-          type: array
-          items:
-            type: string
-        value: {}
-      required:
-      - agent
-      - key
       - value
     McpDeployment:
       title: McpDeployment

@@ -15,7 +15,7 @@
 use crate::log::{logln, LogColorize};
 use crate::model::text::fmt::TextView;
 use colored::Colorize;
-use golem_common::model::diff::{BTreeMapDiffValue, DeploymentDiff, DiffForHashOf};
+use golem_common::model::diff::{BTreeMapDiffValue, DeploymentDiff, DiffForHashOf, VecDiffValue};
 
 impl TextView for DeploymentDiff {
     fn log(&self) {
@@ -104,6 +104,45 @@ impl TextView for DeploymentDiff {
                             if !diff.plugin_changes.is_empty() {
                                 // TODO: atomic: detailed readable plan (requires id -> name, version mapping)
                                 logln("    - update plugins");
+                            }
+                            if !diff.agent_config_changes.is_empty() {
+                                logln("    - agent config");
+                                for agent_config_diff in &diff.agent_config_changes {
+                                    match agent_config_diff {
+                                        VecDiffValue::Create((agent_name, path)) => {
+                                            logln(format!(
+                                                "      - {} agent config for agent {} and path {}",
+                                                "create".green(),
+                                                agent_name.log_color_highlight(),
+                                                path.join(".").log_color_highlight()
+                                            ));
+                                        }
+                                        VecDiffValue::Delete((agent_name, path)) => {
+                                            logln(format!(
+                                                "      - {} agent config for agent {} and path {}",
+                                                "delete".red(),
+                                                agent_name.log_color_highlight(),
+                                                path.join(".").log_color_highlight()
+                                            ));
+                                        }
+                                        VecDiffValue::Update((agent_name, path), diff) => {
+                                            // structure of the vec diff should only produce update entries
+                                            // for values with the same ordering key
+                                            assert!(!diff.agent_changed);
+                                            assert!(!diff.path_changed);
+
+                                            logln(format!(
+                                                "      - {} agent config for agent {} and path {}:",
+                                                "update".yellow(),
+                                                agent_name.log_color_highlight(),
+                                                path.join(".").log_color_highlight()
+                                            ));
+                                            if diff.value_changed {
+                                                logln("        - value");
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     },

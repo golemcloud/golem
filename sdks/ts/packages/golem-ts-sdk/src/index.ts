@@ -20,7 +20,6 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
-import { TypeInfoInternal } from './internal/typeInfoInternal';
 import { loadConfigKey } from './internal/mapping/values/dataValue';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { setAgentId } from './internal/registry/agentId';
@@ -194,7 +193,7 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
 
   initializationPrincipal = principal;
 
-  const [agentTypeName, agentParameters, _phantomId] = getRawSelfAgentId().parsed();
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
 
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 

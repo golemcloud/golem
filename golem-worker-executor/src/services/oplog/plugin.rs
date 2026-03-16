@@ -348,6 +348,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 target_agent_id,
                 idempotency_key.clone(),
                 running_plugin.account_id,
+                Some(environment_id),
             )
             .await
             .map_err(|e| {
@@ -1605,7 +1606,7 @@ mod tests {
                 installed_plugins: self.installed_plugins.clone(),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
-                local_agent_config: Vec::new(),
+                agent_config: Vec::new(),
                 wasm_hash: diff::Hash::empty(),
                 object_store_key: String::new(),
             })
@@ -1743,7 +1744,7 @@ mod tests {
             environment_id,
             created_by: account_id,
             config_vars: BTreeMap::new(),
-            local_agent_config: Vec::new(),
+            agent_config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: status.clone(),

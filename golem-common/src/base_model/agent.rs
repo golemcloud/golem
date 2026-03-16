@@ -14,6 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
+use crate::base_model::environment::EnvironmentId;
 use crate::base_model::AgentId;
 use crate::model::Empty;
 use async_trait::async_trait;
@@ -105,6 +106,13 @@ impl From<DeployedRegisteredAgentType> for RegisteredAgentType {
             implemented_by: value.implemented_by,
         }
     }
+}
+
+/// Result of resolving an agent type by names, bundling the agent type
+/// with the environment it belongs to.
+pub struct ResolvedAgentType {
+    pub registered_agent_type: RegisteredAgentType,
+    pub environment_id: EnvironmentId,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
@@ -548,13 +556,43 @@ pub enum UntypedDataValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "full",
-    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
-)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct UntypedNamedElementValue {
     pub name: String,
     pub value: UntypedElementValue,
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::FromValue for UntypedNamedElementValue {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Tuple(fields) if fields.len() == 2 => {
+                let mut iter = fields.into_iter();
+                let name = String::from_value(iter.next().unwrap())?;
+                let value = UntypedElementValue::from_value(iter.next().unwrap())?;
+                Ok(UntypedNamedElementValue { name, value })
+            }
+            _ => Err(format!(
+                "Expected Tuple with 2 fields for UntypedNamedElementValue, got {:?}",
+                value
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for UntypedNamedElementValue {
+    fn into_value(self) -> Value {
+        Value::Tuple(vec![self.name.into_value(), self.value.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        AnalysedType::Tuple(golem_wasm::analysis::TypeTuple {
+            name: None,
+            owner: None,
+            items: vec![String::get_type(), UntypedElementValue::get_type()],
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

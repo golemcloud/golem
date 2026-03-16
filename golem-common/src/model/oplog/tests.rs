@@ -37,7 +37,7 @@ use crate::model::oplog::{
     PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
-use crate::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
+use crate::model::worker::ParsedWorkerAgentConfigEntry;
 use crate::model::{
     AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
@@ -72,7 +72,7 @@ fn create_serialization_poem_serde_equivalence() {
             .collect(),
         created_by: AccountId::new(),
         config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
-        local_agent_config: vec![ParsedWorkerCreationLocalAgentConfigEntry {
+        local_agent_config: vec![ParsedWorkerAgentConfigEntry {
             key: vec!["foo".to_string(), "bar".to_string()],
             value: 1.into_value_and_type(),
         }],

@@ -95,6 +95,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
         _principal: Principal,
+        _environment_id: golem_common::model::environment::EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -281,6 +282,7 @@ impl WorkerProxy for TestWorkerProxy {
         _agent_id: &AgentId,
         _idempotency_key: IdempotencyKey,
         _caller_account_id: AccountId,
+        _environment_id: Option<golem_common::base_model::environment::EnvironmentId>,
     ) -> Result<InvocationStatus, WorkerProxyError> {
         Ok(InvocationStatus::Unknown)
     }

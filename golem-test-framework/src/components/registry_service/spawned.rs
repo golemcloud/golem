@@ -14,8 +14,9 @@
 
 use super::{wait_for_startup, RegistryService};
 use crate::components::component_compilation_service::ComponentCompilationService;
+use crate::components::new_reqwest_client_with_tracing;
 use crate::components::rdb::Rdb;
-use crate::components::{new_reqwest_client, ChildProcessLogger};
+use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
@@ -34,12 +35,12 @@ pub struct SpawnedRegistryService {
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    base_http_client: OnceCell<reqwest::Client>,
     admin_account_id: AccountId,
     admin_account_email: AccountEmail,
     admin_account_token: TokenSecret,
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
+    base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
 impl SpawnedRegistryService {
@@ -116,12 +117,12 @@ impl SpawnedRegistryService {
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
-            base_http_client: OnceCell::new(),
             admin_account_id,
             admin_account_email,
             admin_account_token,
             default_plan_id,
             low_fuel_plan_id,
+            base_http_client: OnceCell::new(),
         }
     }
 }
@@ -159,9 +160,9 @@ impl RegistryService for SpawnedRegistryService {
         self.low_fuel_plan_id
     }
 
-    async fn base_http_client(&self) -> reqwest::Client {
+    async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {
         self.base_http_client
-            .get_or_init(async || new_reqwest_client())
+            .get_or_init(|| async { new_reqwest_client_with_tracing() })
             .await
             .clone()
     }
