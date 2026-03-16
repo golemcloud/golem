@@ -417,6 +417,7 @@ impl TextView for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
+                logln(format!("{pad}retry from:        {}", params.retry_from));
                 logln(format!(
                     "{pad}error:             {}",
                     format_error(&params.error)

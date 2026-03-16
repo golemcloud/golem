@@ -19,6 +19,7 @@ members = [
     "golem-wasm-derive",
     "cli/golem",
     "cli/golem-cli",
+    "golem-openapi-client-generator",
 ]
 
 exclude = [
@@ -38,7 +39,7 @@ golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
-golem-openapi-client-generator = { version = "=0.0.17" }
+golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
@@ -82,8 +83,6 @@ bytes = "1.10.1"
 camino = "1.1.10"
 cap-std = "3.4.5" # keep in sync with wasmtime
 cap-time-ext = "3.4.5"
-cargo-component = "0.21.1"
-cargo-component-core = "0.21.1"
 cargo_metadata = "0.21.0"
 cargo_toml = "0.22.1"
 chrono = { version = "0.4.40", features = ["serde"] }
@@ -113,8 +112,9 @@ evicting_cache_map = "0.4.0"
 fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
+fmt = "0.1.0"
 flate2 = "1.1.0"
-fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", ] }
+fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", "enable-rustls-ring"] }
 fs-set-times = "0.20.3"
 fs_extra = "1.3.0"
 futures = "0.3.31"
@@ -211,6 +211,7 @@ rsa = "0.9.7"
 
 rustc-hash = "2.1.1"
 rustls = { version = "0.23.23", features = ["ring"] }
+rustls-pemfile = "2.2.0"
 rustyline = "15.0.0"
 sanitize-filename = "0.6.0"
 scc = "3.6.9"

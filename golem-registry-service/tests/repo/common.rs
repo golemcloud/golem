@@ -1271,10 +1271,13 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         compiled_routes: vec![],
         compiled_mcp: vec![],
         registered_agent_types: vec![agent_type_record],
+        created_agent_secrets: vec![],
+        updated_agent_secrets: vec![],
+        user_account_id: owner_account_id,
     };
 
     deps.full_deployment_repo
-        .deploy(owner_account_id, deployment_creation, false)
+        .deploy(deployment_creation, false)
         .await
         .unwrap();
 

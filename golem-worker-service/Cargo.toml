@@ -38,6 +38,7 @@ golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
+base64 = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true }
@@ -104,6 +105,8 @@ criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
+rustls-pemfile = { workspace = true }
 tempfile.workspace = true
 test-r = { workspace = true }
 tryhard = { workspace = true }

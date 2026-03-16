@@ -1497,7 +1497,7 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 1769472);
+    assert_eq!(metadata2.total_linear_memory_size, 1638400);
     Ok(())
 }
 
@@ -1919,6 +1919,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
             multiplier: 1.5,
             max_jitter_factor: None,
         }),
+        None,
         None,
         None,
     )
