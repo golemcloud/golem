@@ -41,9 +41,8 @@ use std::time::Duration;
 use tempfile::{TempDir, tempdir};
 use test_r::{define_matrix_dimension, test, test_dep};
 use testcontainers::ContainerAsync;
-use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{GenericImage, ImageExt};
+use testcontainers_modules::rustfs::RustFS;
 use uuid::Uuid;
 
 #[async_trait]
@@ -113,19 +112,13 @@ impl Debug for S3Test {
 #[async_trait]
 impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        let container = tryhard::retry_fn(|| {
-            GenericImage::new("minio/minio", "RELEASE.2025-01-20T14-49-07Z")
-                .with_exposed_port(9000.tcp())
-                .with_wait_for(WaitFor::message_on_stderr("API:"))
-                .with_env_var("MINIO_CONSOLE_ADDRESS", ":9001")
-                .with_cmd(["server", "/data"])
-                .start()
-        })
-        .retries(5)
-        .exponential_backoff(Duration::from_millis(10))
-        .max_delay(Duration::from_secs(10))
-        .await
-        .expect("Failed to start MinIO");
+        let container = tryhard::retry_fn(|| RustFS::default().start())
+            .retries(5)
+            .exponential_backoff(Duration::from_millis(10))
+            .max_delay(Duration::from_secs(10))
+            .await
+            .expect("Failed to start RustFS");
+
         let host_port = container
             .get_host_port_ipv4(9000)
             .await
@@ -137,8 +130,8 @@ impl GetBlobStorage for S3Test {
             object_prefix: self.prefixed.clone().unwrap_or_default(),
             aws_endpoint_url: Some(format!("http://127.0.0.1:{host_port}")),
             aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
-                "minioadmin",
-                "minioadmin",
+                "rustfsadmin",
+                "rustfsadmin",
                 "test",
             )),
             ..std::default::Default::default()
@@ -155,7 +148,7 @@ impl GetBlobStorage for S3Test {
 async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
     let endpoint_uri = format!("http://127.0.0.1:{host_port}");
     let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
-    let creds = Credentials::new("minioadmin", "minioadmin", None, None, "test");
+    let creds = Credentials::new("rustfsadmin", "rustfsadmin", None, None, "test");
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(region_provider)
         .endpoint_url(endpoint_uri)
@@ -189,7 +182,7 @@ async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
 
 struct S3BlobStorageWithContainer {
     storage: s3::S3BlobStorage,
-    _container: ContainerAsync<GenericImage>,
+    _container: ContainerAsync<RustFS>,
 }
 
 impl Debug for S3BlobStorageWithContainer {
