@@ -513,6 +513,13 @@ pub struct OplogConfig {
     #[serde(with = "humantime_serde")]
     pub archive_interval: Duration,
     pub default_snapshotting: SnapshotPolicy,
+    /// Maximum number of oplog commits before the ForwardingOplog flushes
+    /// buffered entries to oplog processor plugins.
+    pub plugin_max_commit_count: usize,
+    /// Maximum elapsed time before the ForwardingOplog flushes buffered
+    /// entries to oplog processor plugins.
+    #[serde(with = "humantime_serde")]
+    pub plugin_max_elapsed_time: Duration,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -546,6 +553,16 @@ impl SafeDisplay for OplogConfig {
             &mut result,
             "{}",
             self.default_snapshotting.to_safe_string_indented()
+        );
+        let _ = writeln!(
+            &mut result,
+            "plugin max commit count: {}",
+            self.plugin_max_commit_count
+        );
+        let _ = writeln!(
+            &mut result,
+            "plugin max elapsed time: {:?}",
+            self.plugin_max_elapsed_time
         );
         result
     }
@@ -1230,6 +1247,8 @@ impl Default for OplogConfig {
             entry_count_limit: 1024,
             archive_interval: Duration::from_secs(60 * 60 * 24), // 24 hours
             default_snapshotting: SnapshotPolicy::default(),
+            plugin_max_commit_count: 3,
+            plugin_max_elapsed_time: Duration::from_secs(5),
         }
     }
 }

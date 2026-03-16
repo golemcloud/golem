@@ -399,6 +399,9 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAgentRequest,
     ) -> Result<InvokeAgentSuccess, GrpcAgentError> {
+        let is_lookup =
+            request.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
+
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
@@ -407,9 +410,18 @@ impl WorkerGrpcApi {
 
         let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
-        let method_parameters = request
-            .method_parameters
-            .ok_or_else(|| bad_request_error("Missing method_parameters"))?;
+        if !is_lookup {
+            if request.method_name.is_none() {
+                return Err(bad_request_error(
+                    "method_name is required for non-lookup invocations",
+                ));
+            }
+            if request.method_parameters.is_none() {
+                return Err(bad_request_error(
+                    "method_parameters is required for non-lookup invocations",
+                ));
+            }
+        }
 
         let principal = request
             .principal
@@ -426,7 +438,7 @@ impl WorkerGrpcApi {
             .invoke_agent(
                 &agent_id,
                 request.method_name,
-                method_parameters,
+                request.method_parameters,
                 request.mode,
                 request.schedule_at,
                 request.idempotency_key.map(|k| k.into()),
@@ -443,10 +455,14 @@ impl WorkerGrpcApi {
             }
             _ => None,
         };
+        let proto_status = output
+            .invocation_status
+            .map(|s| golem_api_grpc::proto::golem::worker::InvocationStatus::from(s) as i32);
         Ok(InvokeAgentSuccess {
             result: result_value,
             fuel_consumed: output.consumed_fuel,
             component_revision: output.component_revision.map(|r| r.get()),
+            status: proto_status,
         })
     }
 }

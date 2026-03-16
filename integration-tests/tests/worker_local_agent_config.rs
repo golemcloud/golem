@@ -336,6 +336,7 @@ async fn agent_with_mixed_agent_config_update(
                     value: json!("baz"),
                 },
             ]),
+            Vec::new(),
         )
         .await?;
 

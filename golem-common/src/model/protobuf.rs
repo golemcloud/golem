@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{diff, AgentConfigVarsFilter, AgentResourceDescription};
+use super::{diff, AgentConfigVarsFilter, AgentResourceDescription, InvocationStatus};
 use crate::model::component::{ComponentFileContentHash, ComponentFilePath, InitialComponentFile};
 use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{
@@ -610,6 +610,38 @@ pub fn to_protobuf_resource_description(
         resource_id: key.0,
         resource_owner: description.resource_owner,
         resource_name: description.resource_name,
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::InvocationStatus> for InvocationStatus {
+    fn from(value: golem_api_grpc::proto::golem::worker::InvocationStatus) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::InvocationStatus::Unknown => {
+                InvocationStatus::Unknown
+            }
+            golem_api_grpc::proto::golem::worker::InvocationStatus::Pending => {
+                InvocationStatus::Pending
+            }
+            golem_api_grpc::proto::golem::worker::InvocationStatus::Complete => {
+                InvocationStatus::Complete
+            }
+        }
+    }
+}
+
+impl From<InvocationStatus> for golem_api_grpc::proto::golem::worker::InvocationStatus {
+    fn from(value: InvocationStatus) -> Self {
+        match value {
+            InvocationStatus::Unknown => {
+                golem_api_grpc::proto::golem::worker::InvocationStatus::Unknown
+            }
+            InvocationStatus::Pending => {
+                golem_api_grpc::proto::golem::worker::InvocationStatus::Pending
+            }
+            InvocationStatus::Complete => {
+                golem_api_grpc::proto::golem::worker::InvocationStatus::Complete
+            }
+        }
     }
 }
 

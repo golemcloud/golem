@@ -2,7 +2,6 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_components=("oplog-processor")
 rust_test_apps=("host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-rpc" "agent-mcp")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts")
 benchmark_apps=("benchmarks")
@@ -47,38 +46,11 @@ for arg in "$@"; do
   esac
 done
 
+GOLEM_CLI="${TEST_COMP_DIR:-$(pwd)}/../target/debug/golem-cli"
+
 should_clean() {
   [ "$clean_only" = true ] || [ "$rebuild" = true ]
 }
-
-if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
-  if [ "$clean_only" = true ]; then
-    echo "Cleaning the Rust test components"
-  else
-    echo "Building the Rust test components"
-  fi
-  for subdir in "${rust_test_components[@]}"; do
-    pushd "$subdir" || exit
-
-    if should_clean; then
-      echo "Cleaning $subdir..."
-      cargo clean
-    fi
-
-    if [ "$clean_only" = false ]; then
-      echo "Building $subdir..."
-      cargo-component build --release
-
-      echo "Turning the module into a WebAssembly Component..."
-      target="../$subdir.wasm"
-      target_wat="../$subdir.wat"
-      cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
-      wasm-tools print "$target" >"$target_wat"
-    fi
-
-    popd || exit
-  done
-fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
   if [ "$clean_only" = true ]; then
@@ -93,14 +65,14 @@ if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
 
     if should_clean; then
       echo "Cleaning $subdir..."
-      golem-cli clean
+      "$GOLEM_CLI" clean
       cargo clean
     fi
 
     if [ "$clean_only" = false ]; then
       echo "Building $subdir..."
-      golem-cli --preset release  build
-      golem-cli --preset release exec copy
+      "$GOLEM_CLI" --preset release  build
+      "$GOLEM_CLI" --preset release exec copy
     fi
 
     popd || exit
@@ -119,14 +91,14 @@ if [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
     if should_clean; then
       echo "Cleaning $subdir..."
       rm -rf node_modules
-      golem-cli clean
+      "$GOLEM_CLI" clean
     fi
 
     if [ "$clean_only" = false ]; then
       echo "Building $subdir..."
       npm install
-      golem-cli build
-      golem-cli exec copy
+      "$GOLEM_CLI" build
+      "$GOLEM_CLI" exec copy
     fi
 
     popd || exit
@@ -145,15 +117,15 @@ if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
     if should_clean; then
       echo "Cleaning $subdir..."
       rm -rf node_modules
-      golem-cli clean
+      "$GOLEM_CLI" clean
       cargo clean
     fi
 
     if [ "$clean_only" = false ]; then
       echo "Building $subdir..."
       npm install
-      golem-cli build
-      golem-cli exec copy
+      "$GOLEM_CLI" build
+      "$GOLEM_CLI" exec copy
     fi
 
     popd || exit

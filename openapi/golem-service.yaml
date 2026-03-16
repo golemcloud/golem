@@ -9159,11 +9159,8 @@ components:
         activePlugins:
           type: array
           items:
-            title: |-
-              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-              There can only be a single plugin with a given priority installed to a component.
-            type: integer
-            format: int32
+            type: string
+            format: uuid
         skippedRegions:
           description: |-
             Oplog regions that are skipped during the worker's state recovery, but describe
@@ -10134,6 +10131,9 @@ components:
       title: PluginInstallationDescription
       type: object
       properties:
+        environmentPluginGrantId:
+          type: string
+          format: uuid
         pluginPriority:
           title: |-
             Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
@@ -10149,6 +10149,7 @@ components:
           additionalProperties:
             type: string
       required:
+      - environmentPluginGrantId
       - pluginPriority
       - pluginName
       - pluginVersion
@@ -10477,6 +10478,7 @@ components:
           CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
           Snapshot: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
+          OplogProcessorCheckpoint: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -10517,6 +10519,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -10841,6 +10844,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#NoOpParams'
+    PublicOplogEntry_r#OplogProcessorCheckpointParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: OplogProcessorCheckpoint
+            type: string
+            enum:
+            - OplogProcessorCheckpoint
+        required:
+        - type
+      - $ref: '#/components/schemas/r#OplogProcessorCheckpointParams'
     PublicOplogEntry_r#PendingAgentInvocationParams:
       allOf:
       - type: object
@@ -12169,6 +12184,33 @@ components:
           format: date-time
       required:
       - timestamp
+    r#OplogProcessorCheckpointParams:
+      title: r#OplogProcessorCheckpointParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
+        targetAgentId:
+          $ref: '#/components/schemas/AgentId'
+        confirmedUpTo:
+          type: integer
+          format: uint64
+        sendingUpTo:
+          type: integer
+          format: uint64
+        lastBatchStart:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - plugin
+      - targetAgentId
+      - confirmedUpTo
+      - sendingUpTo
+      - lastBatchStart
     r#PendingAgentInvocationParams:
       title: r#PendingAgentInvocationParams
       type: object

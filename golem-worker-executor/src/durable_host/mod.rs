@@ -84,7 +84,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
-    InitialComponentFile, PluginPriority,
+    InitialComponentFile,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
@@ -1110,10 +1110,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     target_revision,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
-                                        component_metadata
-                                            .installed_plugins
-                                            .into_iter()
-                                            .map(|installation| installation.priority),
+                                        component_metadata.installed_plugins.into_iter().map(
+                                            |installation| installation.environment_plugin_grant_id,
+                                        ),
                                     ),
                                 )
                                 .await;
@@ -1372,10 +1371,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 target_revision,
                                 component_metadata.component_size,
                                 HashSet::from_iter(
-                                    component_metadata
-                                        .installed_plugins
-                                        .into_iter()
-                                        .map(|installation| installation.priority),
+                                    component_metadata.installed_plugins.into_iter().map(
+                                        |installation| installation.environment_plugin_grant_id,
+                                    ),
                                 ),
                             )
                             .await;
@@ -1846,7 +1844,9 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginPriority>,
+        new_active_plugins: HashSet<
+            golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
+        >,
     ) {
         info!("Worker update to {} finished successfully", target_revision);
         let entry = OplogEntry::successful_update(
@@ -2187,6 +2187,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 let output = AgentInvocationOutput {
                                     result: invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
+                                    invocation_status: None,
                                     component_revision: Some(component_revision),
                                 };
                                 if let Err(err) = store

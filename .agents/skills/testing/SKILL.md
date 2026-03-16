@@ -38,12 +38,29 @@ cargo test -p <crate> -- <test_name> --report-time
 
 This project uses `test-r` which supports **multiple filter arguments after `--`**. Filters are OR-matched (a test runs if it matches any filter). Each filter is a **substring match**, not a regex.
 
+Test names in `test-r` are module-qualified paths **without the crate/binary name prefix**. For example, `--list` shows `golem_common::model::oplog::payload::tests::roundtrip_ipaddress` or `integration::plugins::oplog_processor`, but the first segment (`golem_common::` or `integration::`) is the crate/binary name and is **not part of the filterable test name**. The filterable name starts from the second segment.
+
 ```shell
-# Run a single specific test:
-cargo test -p <crate> -- <test_name> --report-time
+# Run a single specific test by function name (substring match):
+cargo test -p <crate> -- roundtrip_ipaddress --report-time
+
+# Run a single specific test using module path (substring match, omit first segment):
+cargo test -p <crate> -- payload::tests::roundtrip_ipaddress --report-time
+
+# Run a single specific test with --exact (must use FULL module path, omitting first segment):
+cargo test -p <crate> -- model::oplog::payload::tests::roundtrip_ipaddress --exact --report-time
+# For integration tests where --list shows integration::plugins::oplog_processor:
+cargo test -p integration-tests --test integration -- plugins::oplog_processor --exact --report-time
 
 # Run multiple specific tests (filters go AFTER --, not before):
 cargo test -p <crate> -- test_name_1 test_name_2 test_name_3 --report-time
+
+# WRONG - do NOT include the first segment (crate/binary name) in filters:
+# cargo test -p golem-common -- golem_common::model::oplog --report-time
+# cargo test -p integration-tests --test integration -- integration::plugins::oplog_processor --report-time
+
+# WRONG - --exact with just the function name (needs full module path minus first segment):
+# cargo test -p <crate> -- roundtrip_ipaddress --exact --report-time
 
 # WRONG - multiple filters before -- causes "unexpected argument" error:
 # cargo test -p <crate> test1 test2 -- --report-time
