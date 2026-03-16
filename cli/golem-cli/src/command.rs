@@ -27,7 +27,6 @@ use crate::command::shared_args::{
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
-use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
 use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
@@ -36,18 +35,15 @@ use crate::model::repl::ReplLanguage;
 use crate::model::worker::{AgentUpdateMode, RawAgentId};
 use crate::model::GuestLanguage;
 use crate::{command_name, version};
-use anyhow::{anyhow, bail, Context as AnyhowContext};
-use chrono::{DateTime, Utc};
+use anyhow::{anyhow, Context as AnyhowContext};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
+use clap::{Command, CommandFactory, Subcommand};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
-use golem_client::model::ScanCursor;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::worker::WorkerAgentConfigEntry;
 use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -1012,7 +1008,7 @@ pub mod component {
     }
 
     pub mod plugin {
-        use crate::command::parse_key_val;
+        use crate::args::parse_key_val;
         use crate::command::shared_args::OptionalComponentName;
         use clap::Subcommand;
 
@@ -1071,9 +1067,9 @@ pub mod component {
 }
 
 pub mod worker {
-    use crate::command::parse_cursor;
-    use crate::command::parse_key_val;
-    use crate::command::parse_worker_agent_config;
+    use crate::args::parse_cursor;
+    use crate::args::parse_key_val;
+    use crate::args::parse_worker_agent_config;
     use crate::command::shared_args::{
         AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
@@ -1098,8 +1094,12 @@ pub mod worker {
             /// wasi:config entries visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
             config_vars: Vec<(String, String)>,
-            /// agent config for entries
-            #[arg(short, long, value_parser = parse_worker_agent_config)]
+            /// Configuration to be provided to the agent.
+            /// This parameter can be provided multiple times in the form --agent-config ${DOT_SEPERATED_CONFIG_PATH}=${CONFIG_VALUE}.
+            /// Only configuration declared by the agent can be provided. If a given config path is not provided, the default from the manifest
+            /// (components.*.agents.*.config) is used. If neither value nor default is provided and the config is non-optional, creation
+            /// of the agent will fail.
+            #[arg(short, long, value_parser = parse_worker_agent_config, verbatim_doc_comment)]
             agent_config: Vec<WorkerAgentConfigEntry>,
         },
         // TODO: json args
@@ -1497,7 +1497,7 @@ pub mod cloud {
     }
 
     pub mod token {
-        use crate::command::parse_instant;
+        use crate::args::parse_instant;
         use chrono::{DateTime, Utc};
         use clap::Subcommand;
         use golem_common::model::auth::TokenId;
@@ -1645,127 +1645,6 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
     }
 
     command.clone()
-}
-
-fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
-    let pos = key_and_val.find('=').ok_or_else(|| {
-        anyhow!(
-            "invalid KEY=VALUE: no `=` found in `{}`",
-            key_and_val.log_color_error_highlight()
-        )
-    })?;
-    Ok((
-        key_and_val[..pos].to_string(),
-        key_and_val[pos + 1..].to_string(),
-    ))
-}
-
-fn parse_worker_agent_config(s: &str) -> anyhow::Result<WorkerAgentConfigEntry> {
-    let (path, value) = split_worker_agent_config_path_and_value(s)?;
-
-    let path = parse_worker_agent_config_path(path)?;
-
-    let value: serde_json::Value = serde_json::from_str(value)?;
-
-    Ok(WorkerAgentConfigEntry { path, value })
-}
-
-fn split_worker_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
-    let chars = input.char_indices();
-    let mut in_quotes = false;
-    let mut escape = false;
-
-    for (i, c) in chars {
-        if escape {
-            escape = false;
-            continue;
-        }
-
-        match c {
-            '\\' => escape = true,
-            '"' => in_quotes = !in_quotes,
-            '=' if !in_quotes => {
-                let key = &input[..i];
-                let value = &input[i + 1..];
-                return Ok((key, value));
-            }
-            _ => {}
-        }
-    }
-
-    Err(anyhow!("expected unescaped '=' separating key and value"))
-}
-
-fn parse_worker_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
-    let mut keys = Vec::new();
-    let mut buf = String::new();
-
-    let mut chars = input.chars().peekable();
-    let mut in_quotes = false;
-
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                // escape next char
-                let next = chars.next().ok_or_else(|| anyhow!("dangling escape"))?;
-                buf.push(next);
-            }
-
-            '"' => {
-                in_quotes = !in_quotes;
-            }
-
-            '.' if !in_quotes => {
-                push_agent_config_path_segment(&mut keys, &mut buf)?;
-            }
-
-            _ => buf.push(c),
-        }
-    }
-
-    if in_quotes {
-        return Err(anyhow!("unterminated quote"));
-    }
-
-    push_agent_config_path_segment(&mut keys, &mut buf)?;
-
-    Ok(keys)
-}
-
-fn push_agent_config_path_segment(keys: &mut Vec<String>, buf: &mut String) -> anyhow::Result<()> {
-    let segment = buf.trim();
-
-    if segment.is_empty() {
-        return Err(anyhow!("empty path segment"));
-    }
-
-    keys.push(segment.to_string());
-    buf.clear();
-
-    Ok(())
-}
-
-// TODO: better error context and messages
-fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
-    let parts = cursor.split('/').collect::<Vec<_>>();
-
-    if parts.len() != 2 {
-        bail!("Invalid cursor format: {}", cursor);
-    }
-
-    Ok(ScanCursor {
-        layer: parts[0].parse()?,
-        cursor: parts[1].parse()?,
-    })
-}
-
-fn parse_instant(
-    s: &str,
-) -> Result<DateTime<Utc>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-    match s.parse::<DateTime<Utc>>() {
-        Ok(dt) => Ok(dt),
-        Err(err) => Err(err.into()),
-    }
 }
 
 #[cfg(test)]
@@ -2010,115 +1889,5 @@ mod test {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod parse_worker_agent_config_tests {
-    use crate::command::{parse_worker_agent_config, parse_worker_agent_config_path};
-    use golem_common::model::worker::WorkerAgentConfigEntry;
-    use serde_json::json;
-    use test_r::test;
-
-    fn parse(input: &str) -> WorkerAgentConfigEntry {
-        parse_worker_agent_config(input).unwrap()
-    }
-
-    #[test]
-    fn simple_path() {
-        let e = parse(r#"a.b.c=1"#);
-
-        assert_eq!(e.path, vec!["a", "b", "c"]);
-        assert_eq!(e.value, json!(1));
-    }
-
-    #[test]
-    fn string_value() {
-        let e = parse(r#"a.b="hello""#);
-
-        assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!("hello"));
-    }
-
-    #[test]
-    fn json_object_value() {
-        let e = parse(r#"a.b={"x":1,"y":2}"#);
-
-        assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!({"x":1,"y":2}));
-    }
-
-    #[test]
-    fn quoted_path_segment() {
-        let e = parse(r#""foo.bar".baz=1"#);
-
-        assert_eq!(e.path, vec!["foo.bar", "baz"]);
-        assert_eq!(e.value, json!(1));
-    }
-
-    #[test]
-    fn quoted_segment_with_spaces() {
-        let e = parse(r#""foo bar".baz=1"#);
-
-        assert_eq!(e.path, vec!["foo bar", "baz"]);
-        assert_eq!(e.value, json!(1));
-    }
-
-    #[test]
-    fn escaped_dot_in_segment() {
-        let e = parse(r#"foo\.bar.baz=1"#);
-
-        assert_eq!(e.path, vec!["foo.bar", "baz"]);
-        assert_eq!(e.value, json!(1));
-    }
-
-    #[test]
-    fn equals_inside_value() {
-        let e = parse(r#"a.b="foo=bar""#);
-
-        assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!("foo=bar"));
-    }
-
-    #[test]
-    fn equals_inside_path() {
-        let e = parse(r#""foo=bar".baz=1"#);
-
-        assert_eq!(e.path, vec!["foo=bar", "baz"]);
-        assert_eq!(e.value, json!(1));
-    }
-
-    #[test]
-    fn escaped_equals_in_path() {
-        let e = parse(r#"foo\=bar.baz=1"#);
-
-        assert_eq!(e.path, vec!["foo=bar", "baz"]);
-        assert_eq!(e.value, json!(1));
-    }
-
-    #[test]
-    fn complex_case() {
-        let e = parse(r#""foo.bar=baz"."x.y"={"hello":"world"}"#);
-
-        assert_eq!(e.path, vec!["foo.bar=baz", "x.y"]);
-        assert_eq!(e.value, json!({"hello":"world"}));
-    }
-
-    #[test]
-    fn split_fails_without_equals() {
-        let err = parse_worker_agent_config("a.b.c").unwrap_err();
-        assert!(err.to_string().contains("expected unescaped '='"));
-    }
-
-    #[test]
-    fn unterminated_quote_in_path() {
-        let err = parse_worker_agent_config_path(r#""foo.bar.baz"#).unwrap_err();
-        assert!(err.to_string().contains("unterminated quote"));
-    }
-
-    #[test]
-    fn dangling_escape() {
-        let err = parse_worker_agent_config_path(r#"foo.bar\"#).unwrap_err();
-        assert!(err.to_string().contains("dangling escape"));
     }
 }
