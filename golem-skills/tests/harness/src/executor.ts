@@ -37,6 +37,8 @@ const DeleteAgentSchema = z.object({
   name: z.string(),
 });
 
+const ACTION_FIELDS = ['prompt', 'invoke', 'shell', 'trigger', 'create_agent', 'delete_agent', 'sleep'] as const;
+
 const StepSpecSchema = z.object({
   id: z.string().optional(),
   prompt: z.string().optional(),
@@ -56,7 +58,15 @@ const StepSpecSchema = z.object({
   trigger: TriggerSchema.optional(),
   create_agent: CreateAgentSchema.optional(),
   delete_agent: DeleteAgentSchema.optional(),
-});
+}).refine(
+  (step) => {
+    const presentActions = ACTION_FIELDS.filter((f) => step[f] !== undefined);
+    return presentActions.length === 1;
+  },
+  {
+    message: `Step must have exactly one action field (${ACTION_FIELDS.join(', ')})`,
+  }
+);
 
 const SettingsSchema = z.object({
   timeout_per_subprompt: z.number().optional(),
@@ -78,9 +88,8 @@ const ScenarioSpecSchema = z.object({
   steps: z.array(StepSpecSchema).min(1, 'Scenario must have at least one step'),
 });
 
-export interface StepSpec {
+interface StepCommon {
   id?: string;
-  prompt?: string;
   expectedSkills?: string[];
   allowedExtraSkills?: string[];
   strictSkillMatch?: boolean;
@@ -90,32 +99,23 @@ export interface StepSpec {
     build?: boolean;
     deploy?: boolean;
   };
-  invoke?: {
-    agent: string;
-    function: string;
-    args?: string;
-  };
   expect?: z.infer<typeof ExpectSchema>;
-  sleep?: number;
-  shell?: {
-    command: string;
-    args?: string[];
-    cwd?: string;
-  };
-  trigger?: {
-    agent: string;
-    function: string;
-    args?: string;
-  };
-  create_agent?: {
-    name: string;
-    env?: Record<string, string>;
-    config?: Record<string, string>;
-  };
-  delete_agent?: {
-    name: string;
-  };
 }
+
+type InvokeSpec = { agent: string; function: string; args?: string };
+type ShellSpec = { command: string; args?: string[]; cwd?: string };
+type TriggerSpec = { agent: string; function: string; args?: string };
+type CreateAgentSpec = { name: string; env?: Record<string, string>; config?: Record<string, string> };
+type DeleteAgentSpec = { name: string };
+
+export type StepSpec =
+  | (StepCommon & { prompt: string; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined })
+  | (StepCommon & { invoke: InvokeSpec; prompt?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined })
+  | (StepCommon & { shell: ShellSpec; prompt?: undefined; invoke?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined })
+  | (StepCommon & { trigger: TriggerSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined })
+  | (StepCommon & { create_agent: CreateAgentSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; delete_agent?: undefined; sleep?: undefined })
+  | (StepCommon & { delete_agent: DeleteAgentSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; sleep?: undefined })
+  | (StepCommon & { sleep: number; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined });
 
 export interface ScenarioSpec {
   name: string;
@@ -144,7 +144,8 @@ export class ScenarioLoader {
         .join('\n');
       throw new Error(`Invalid scenario file "${filePath}":\n${issues}`);
     }
-    return result.data;
+    // The refine() guarantees exactly one action field, making the cast safe
+    return result.data as unknown as ScenarioSpec;
   }
 }
 

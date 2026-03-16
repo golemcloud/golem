@@ -217,6 +217,44 @@ steps:
     assert.equal(spec.steps[0].trigger?.function, 'do-thing');
   });
 
+  // Validation: exactly one action per step
+
+  it('rejects step with two actions (prompt + shell)', async () => {
+    const filePath = await writeTempYaml(`
+name: "two-actions"
+steps:
+  - id: "bad"
+    prompt: "hello"
+    shell:
+      command: "echo"
+      args: ["hi"]
+`);
+    await assert.rejects(
+      () => ScenarioLoader.load(filePath),
+      (err: Error) => {
+        assert.ok(err.message.includes('exactly one action'));
+        return true;
+      }
+    );
+  });
+
+  it('rejects step with zero actions', async () => {
+    const filePath = await writeTempYaml(`
+name: "no-action"
+steps:
+  - id: "empty"
+    expectedSkills:
+      - "some-skill"
+`);
+    await assert.rejects(
+      () => ScenarioLoader.load(filePath),
+      (err: Error) => {
+        assert.ok(err.message.includes('exactly one action'));
+        return true;
+      }
+    );
+  });
+
   // Create/delete agent tests
 
   it('loads step with create_agent', async () => {
