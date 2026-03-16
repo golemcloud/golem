@@ -2262,7 +2262,7 @@ impl RunningWorker {
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
-            if !data_mut.borrow_fuel(current_level) {
+            if !data_mut.ensure_fuel(current_level) {
                 warn!("Could not borrow more fuel, suspending");
                 return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }

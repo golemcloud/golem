@@ -570,7 +570,7 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
-    fn borrow_fuel(&mut self, _current_level: u64) -> bool {
+    fn ensure_fuel(&mut self, _current_level: u64) -> bool {
         true
     }
 
