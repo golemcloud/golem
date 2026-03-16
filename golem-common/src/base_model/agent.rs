@@ -14,6 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
+use crate::base_model::environment::EnvironmentId;
 use crate::base_model::AgentId;
 use crate::model::Empty;
 use async_trait::async_trait;
@@ -107,6 +108,13 @@ impl From<DeployedRegisteredAgentType> for RegisteredAgentType {
     }
 }
 
+/// Result of resolving an agent type by names, bundling the agent type
+/// with the environment it belongs to.
+pub struct ResolvedAgentType {
+    pub registered_agent_type: RegisteredAgentType,
+    pub environment_id: EnvironmentId,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]
@@ -119,6 +127,7 @@ pub enum AgentMode {
 pub enum AgentInvocationMode {
     Await,
     Schedule,
+    Lookup,
 }
 
 #[derive(

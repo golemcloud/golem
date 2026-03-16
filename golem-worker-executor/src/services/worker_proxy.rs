@@ -29,11 +29,13 @@ use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedAgentId, PromiseId,
+    AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, InvocationStatus,
+    OwnedAgentId, PromiseId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::GrpcClient;
@@ -73,6 +75,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
+        environment_id: EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError>;
 
     async fn update(
@@ -112,6 +115,14 @@ pub trait WorkerProxy: Send + Sync {
         data: Vec<u8>,
         caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError>;
+
+    async fn lookup_invocation_status(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        caller_account_id: AccountId,
+        environment_id: Option<EnvironmentId>,
+    ) -> Result<InvocationStatus, WorkerProxyError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
@@ -255,7 +266,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     env: caller_env.clone(),
                     config_vars: caller_config_vars.clone().into_iter().collect(),
                     // FIXME: agent-config
-                    local_agent_config: Vec::new(),
+                    agent_config: Vec::new(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
@@ -296,12 +307,13 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
+        environment_id: EnvironmentId,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         debug!("Invoking remote agent method {method_name} on worker {agent_id}");
 
         let auth_ctx = self.get_auth_ctx(caller_account_id);
 
-        let proto_mode: golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode = mode.into();
+        let proto_mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode = mode.into();
         let proto_mode = proto_mode as i32;
 
         let proto_schedule_at = schedule_at.map(|dt| prost_types::Timestamp {
@@ -317,7 +329,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("invoke_agent", move |client| {
                 Box::pin(client.invoke_agent(InvokeAgentRequest {
                     agent_id: Some(agent_id.clone().into()),
-                    method_name: method_name.clone(),
+                    method_name: Some(method_name.clone()),
                     method_parameters: Some(proto_method_parameters.clone()),
                     mode: proto_mode,
                     schedule_at: proto_schedule_at,
@@ -330,6 +342,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: Some(principal.clone().into()),
+                    environment_id: Some(environment_id.into()),
                 }))
             })
             .await?
@@ -356,15 +369,22 @@ impl WorkerProxy for RemoteWorkerProxy {
                             "Failed to parse component revision: {e}"
                         )))
                     })?;
+                let invocation_status = success.status.and_then(|s| {
+                    golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(s)
+                        .ok()
+                        .map(InvocationStatus::from)
+                });
                 let output = match result {
                     Some(output) => AgentInvocationOutput {
                         result: AgentInvocationResult::AgentMethod { output },
                         consumed_fuel: success.fuel_consumed,
+                        invocation_status,
                         component_revision,
                     },
                     None => AgentInvocationOutput {
                         result: AgentInvocationResult::AgentInitialization,
                         consumed_fuel: success.fuel_consumed,
+                        invocation_status,
                         component_revision,
                     },
                 };
@@ -533,6 +553,53 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(complete_promise_response::Result::Success(success)) => Ok(success),
             Some(complete_promise_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
+        }
+    }
+
+    async fn lookup_invocation_status(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        caller_account_id: AccountId,
+        environment_id: Option<EnvironmentId>,
+    ) -> Result<InvocationStatus, WorkerProxyError> {
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
+        let proto_mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode =
+            AgentInvocationMode::Lookup.into();
+        let proto_mode = proto_mode as i32;
+
+        let response: InvokeAgentResponse = self
+            .worker_service_client
+            .call("lookup_invocation_status", move |client| {
+                Box::pin(client.invoke_agent(InvokeAgentRequest {
+                    agent_id: Some(agent_id.clone().into()),
+                    method_name: None,
+                    method_parameters: None,
+                    mode: proto_mode,
+                    schedule_at: None,
+                    idempotency_key: Some(idempotency_key.clone().into()),
+                    context: None,
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: Some(Principal::anonymous().into()),
+                    environment_id: environment_id.map(|id| id.into()),
+                }))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(invoke_agent_response::Result::Success(success)) => match success.status {
+                Some(status) => Ok(
+                    golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(status)
+                        .map(InvocationStatus::from)
+                        .unwrap_or(InvocationStatus::Unknown),
+                ),
+                None => Ok(InvocationStatus::Unknown),
+            },
+            Some(invoke_agent_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
             )),

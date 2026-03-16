@@ -48,10 +48,11 @@ use crate::workerctx::{
 };
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component::{ComponentFilePath, ComponentRevision, PluginPriority};
+use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -436,7 +437,7 @@ impl UpdateManagement for Context {
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginPriority>,
+        new_active_plugins: HashSet<EnvironmentPluginGrantId>,
     ) {
         self.durable_ctx
             .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)

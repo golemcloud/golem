@@ -348,17 +348,22 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
                 let invocation_span = invocation_span.unwrap_or(Span::current());
 
-                let mut store = self.store.lock().await;
-                let mut invocation = Invocation {
-                    owned_agent_id: self.owned_agent_id.clone(),
-                    parent: self.parent.clone(),
-                    instance: self.instance,
-                    store: store.deref_mut(),
-                };
-                match invocation
-                    .external_invocation(timestamped_invocation.clone(), &invocation_span)
-                    .await
-                {
+                let outcome = async {
+                    let mut store = self.store.lock().await;
+                    let mut invocation = Invocation {
+                        owned_agent_id: self.owned_agent_id.clone(),
+                        parent: self.parent.clone(),
+                        instance: self.instance,
+                        store: store.deref_mut(),
+                    };
+                    invocation
+                        .external_invocation(timestamped_invocation.clone(), &invocation_span)
+                        .await
+                }
+                .instrument(span!(parent: &invocation_span, Level::INFO, "invocation_queue_pickup"))
+                .await;
+
+                match outcome {
                     CommandOutcome::Continue => {
                         self.on_external_invocation_completed().await;
                         continue;
@@ -566,42 +571,53 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: IdempotencyKey,
         invocation: AgentInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
-        self.store
-            .data_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
-            .await;
-
-        let component_metadata = self.store.data().component_metadata().metadata.clone();
-
-        Self::extend_invocation_context(
-            &mut invocation_context,
-            &idempotency_key,
-            &invocation,
-            &self.owned_agent_id.agent_id(),
-            &self.parent.parsed_agent_id,
-        );
-
-        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
-        self.store
-            .data_mut()
-            .set_current_invocation_context(invocation_context)
-            .await?;
-
-        if let Some(idempotency_key) = self.store.data().get_current_idempotency_key().await {
+        let (lowered, local_span_ids, inherited_span_ids, component_metadata) = async {
             self.store
-                .data()
-                .get_public_state()
-                .worker()
-                .store_invocation_resuming(&idempotency_key)
+                .data_mut()
+                .set_current_idempotency_key(idempotency_key.clone())
                 .await;
-        }
 
-        let invocation_for_lowering = invocation.clone();
-        let lowered = lower_invocation(
-            invocation_for_lowering,
-            &component_metadata,
-            self.parent.parsed_agent_id.as_ref(),
-        )?;
+            let component_metadata = self.store.data().component_metadata().metadata.clone();
+
+            Self::extend_invocation_context(
+                &mut invocation_context,
+                &idempotency_key,
+                &invocation,
+                &self.owned_agent_id.agent_id(),
+                &self.parent.parsed_agent_id,
+            );
+
+            let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+            self.store
+                .data_mut()
+                .set_current_invocation_context(invocation_context)
+                .await?;
+
+            if let Some(idempotency_key) = self.store.data().get_current_idempotency_key().await {
+                self.store
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .store_invocation_resuming(&idempotency_key)
+                    .await;
+            }
+
+            let invocation_for_lowering = invocation.clone();
+            let lowered = lower_invocation(
+                invocation_for_lowering,
+                &component_metadata,
+                self.parent.parsed_agent_id.as_ref(),
+            )?;
+
+            Ok::<_, WorkerExecutorError>((
+                lowered,
+                local_span_ids,
+                inherited_span_ids,
+                component_metadata,
+            ))
+        }
+        .instrument(span!(Level::INFO, "prepare_invocation_context"))
+        .await?;
 
         let result = invoke_observed_and_traced(
             lowered,
@@ -642,6 +658,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let output = AgentInvocationOutput {
             result: invocation_result,
             consumed_fuel: Some(consumed_fuel),
+            invocation_status: None,
             component_revision: Some(component_revision),
         };
         match self

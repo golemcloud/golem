@@ -17,9 +17,18 @@ test_r::enable!();
 #[test_r::sequential]
 mod tests {
     use async_trait::async_trait;
+    use axum::routing::post;
+    use axum::Router;
+    use bytes::Bytes;
     use golem_api_grpc::proto::golem::worker;
+    use golem_client::api::RegistryServiceClient;
+    use golem_common::model::base64::Base64;
     use golem_common::model::component::ComponentDto;
-    use golem_common::model::IdempotencyKey;
+    use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+    use golem_common::model::plugin_registration::{
+        OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
+    };
+    use golem_common::model::{AgentStatus, IdempotencyKey};
     use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
     use golem_common::{agent_id, data_value};
     use golem_test_framework::config::{
@@ -30,11 +39,14 @@ mod tests {
     use golem_common::model::agent::ParsedAgentId;
     use rand::prelude::*;
     use rand::rng;
+    use std::collections::{BTreeMap, HashSet};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use test_r::{flaky, test, test_dep, timeout};
     use tokio::sync::mpsc;
-    use tokio::task::JoinSet;
+    use tokio::task::{JoinHandle, JoinSet};
     use tracing::{error, info, Instrument};
+    use uuid::Uuid;
 
     pub struct Tracing;
 
@@ -784,5 +796,593 @@ mod tests {
             std::thread::sleep(Duration::from_secs(random_seconds()));
             worker(deps).await;
         }
+    }
+
+    // ========================================================================
+    // Oplog processor plugin helpers for sharding tests
+    // ========================================================================
+
+    #[derive(Clone, Debug, serde::Deserialize)]
+    struct BatchCallback {
+        #[allow(dead_code)]
+        source_worker_id: String,
+        #[allow(dead_code)]
+        account_id: String,
+        #[allow(dead_code)]
+        component_id: String,
+        #[allow(dead_code)]
+        first_entry_index: u64,
+        #[allow(dead_code)]
+        entry_count: u64,
+        invocations: Vec<InvocationRecord>,
+    }
+
+    #[derive(Clone, Debug, serde::Deserialize)]
+    struct InvocationRecord {
+        oplog_index: u64,
+        fn_name: String,
+    }
+
+    fn invocation_count(batches: &[BatchCallback]) -> usize {
+        batches.iter().map(|b| b.invocations.len()).sum()
+    }
+
+    fn extract_function_names(batches: &[BatchCallback]) -> Vec<String> {
+        let mut all: Vec<_> = batches.iter().flat_map(|b| b.invocations.iter()).collect();
+        all.sort_by_key(|i| i.oplog_index);
+        all.into_iter().map(|i| i.fn_name.clone()).collect()
+    }
+
+    fn assert_unique_oplog_indices(batches: &[BatchCallback]) {
+        let indices: Vec<u64> = batches
+            .iter()
+            .flat_map(|b| b.invocations.iter().map(|i| i.oplog_index))
+            .collect();
+        let unique: HashSet<u64> = indices.iter().copied().collect();
+        assert_eq!(
+            indices.len(),
+            unique.len(),
+            "Duplicate oplog indices found: {:?}",
+            indices
+        );
+    }
+
+    async fn start_callback_server() -> (String, Arc<Mutex<Vec<BatchCallback>>>, JoinHandle<()>) {
+        let received: Arc<Mutex<Vec<BatchCallback>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = tokio::spawn(async move {
+            let route = Router::new().route(
+                "/callback",
+                post(move |body: Bytes| {
+                    async move {
+                        let body_str = String::from_utf8(body.to_vec()).unwrap();
+                        let batch: BatchCallback = serde_json::from_str(&body_str).unwrap();
+                        let mut batches = received_clone.lock().unwrap();
+                        batches.push(batch);
+                        "ok"
+                    }
+                    .in_current_span()
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        });
+
+        (
+            format!("http://localhost:{port}/callback"),
+            received,
+            handle,
+        )
+    }
+
+    async fn wait_for_invocations(
+        received: &Arc<Mutex<Vec<BatchCallback>>>,
+        expected_count: usize,
+        timeout: Duration,
+    ) -> Vec<BatchCallback> {
+        let start = tokio::time::Instant::now();
+        loop {
+            let batches = received.lock().unwrap().clone();
+            let count = invocation_count(&batches);
+            if count >= expected_count {
+                return batches;
+            }
+            if start.elapsed() > timeout {
+                panic!(
+                    "Timed out waiting for callbacks (got {} of {} expected, {} batches: {:?})",
+                    count,
+                    expected_count,
+                    batches.len(),
+                    batches,
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    // ========================================================================
+    // I1: Shard reassignment — no entry loss
+    // ========================================================================
+
+    #[test]
+    #[timeout(240000)]
+    #[flaky(3)]
+    async fn oplog_processor_shard_reassignment_no_loss(
+        deps: &EnvBasedTestDependencies,
+        _tracing: &Tracing,
+    ) {
+        deps.reset(16).await;
+
+        let user = deps.admin().await;
+        let (_, env) = user.app_and_env().await.unwrap();
+        let client = user.registry_service_client().await;
+
+        let (callback_url, received, _server) = start_callback_server().await;
+
+        let plugin_component = user
+            .component(&env.id, "oplog-processor")
+            .store()
+            .await
+            .unwrap();
+        let plugin = client
+            .create_plugin(
+                &user.account_id.0,
+                &PluginRegistrationCreation {
+                    name: format!("oplog-processor-{}", Uuid::new_v4()),
+                    version: "v1".to_string(),
+                    description: "A test".to_string(),
+                    icon: Base64(Vec::new()),
+                    homepage: "none".to_string(),
+                    spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                        component_id: plugin_component.id,
+                        component_revision: plugin_component.revision,
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        let grant = client
+            .create_environment_plugin_grant(
+                &env.id.0,
+                &EnvironmentPluginGrantCreation {
+                    plugin_registration_id: plugin.id,
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut params = BTreeMap::new();
+        params.insert("callback-url".to_string(), callback_url);
+
+        let component = user
+            .component(&env.id, "it_agent_counters_release")
+            .name("it:agent-counters")
+            .with_parametrized_plugin(&grant.id, 0, params)
+            .store()
+            .await
+            .unwrap();
+
+        let repo_id = agent_id!("Repository", "worker1");
+        let worker_id = user
+            .start_agent(&component.id, repo_id.clone())
+            .await
+            .unwrap();
+
+        for i in 0..3 {
+            user.invoke_and_await_agent(
+                &component,
+                &repo_id,
+                "add",
+                data_value!(format!("G{i}"), format!("Item {i}")),
+            )
+            .await
+            .unwrap();
+        }
+
+        let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
+
+        // Shard reassignment: stop 2 executors, wait, start them back
+        deps.stop_random_worker_executors(2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        deps.start_random_worker_executors(2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        // Wait for worker to be available again
+        user.wait_for_statuses(
+            &worker_id,
+            &[AgentStatus::Idle, AgentStatus::Running],
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+        for i in 3..6 {
+            user.invoke_and_await_agent(
+                &component,
+                &repo_id,
+                "add",
+                data_value!(format!("G{i}"), format!("Item {i}")),
+            )
+            .await
+            .unwrap();
+        }
+
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let fn_names = extract_function_names(&batches);
+        // Exactly-once: exactly 1 init + 6 adds, no duplicates across shard reassignment.
+        // Current bug: no checkpoint, so shard reassignment causes re-delivery.
+        assert_eq!(
+            fn_names
+                .iter()
+                .filter(|f| f.as_str() == "agent-initialization")
+                .count(),
+            1
+        );
+        assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 6);
+        assert_unique_oplog_indices(&batches);
+    }
+
+    // ========================================================================
+    // I2: Shard move with in-flight batch
+    // ========================================================================
+
+    #[test]
+    #[timeout(240000)]
+    #[flaky(3)]
+    async fn oplog_processor_shard_move_inflight(
+        deps: &EnvBasedTestDependencies,
+        _tracing: &Tracing,
+    ) {
+        deps.reset(16).await;
+
+        let user = deps.admin().await;
+        let (_, env) = user.app_and_env().await.unwrap();
+        let client = user.registry_service_client().await;
+
+        let (callback_url, received, _server) = start_callback_server().await;
+
+        let plugin_component = user
+            .component(&env.id, "oplog-processor")
+            .store()
+            .await
+            .unwrap();
+        let plugin = client
+            .create_plugin(
+                &user.account_id.0,
+                &PluginRegistrationCreation {
+                    name: format!("oplog-processor-{}", Uuid::new_v4()),
+                    version: "v1".to_string(),
+                    description: "A test".to_string(),
+                    icon: Base64(Vec::new()),
+                    homepage: "none".to_string(),
+                    spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                        component_id: plugin_component.id,
+                        component_revision: plugin_component.revision,
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        let grant = client
+            .create_environment_plugin_grant(
+                &env.id.0,
+                &EnvironmentPluginGrantCreation {
+                    plugin_registration_id: plugin.id,
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut params = BTreeMap::new();
+        params.insert("callback-url".to_string(), callback_url);
+
+        let component = user
+            .component(&env.id, "it_agent_counters_release")
+            .name("it:agent-counters")
+            .with_parametrized_plugin(&grant.id, 0, params)
+            .store()
+            .await
+            .unwrap();
+
+        let repo_id = agent_id!("Repository", "worker1");
+        let worker_id = user
+            .start_agent(&component.id, repo_id.clone())
+            .await
+            .unwrap();
+
+        for i in 0..2 {
+            user.invoke_and_await_agent(
+                &component,
+                &repo_id,
+                "add",
+                data_value!(format!("G{i}"), format!("Item {i}")),
+            )
+            .await
+            .unwrap();
+        }
+
+        // Stop all executors immediately — before flush timer fires
+        deps.stop_all_worker_executors().await;
+        deps.start_all_worker_executors().await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        user.wait_for_statuses(
+            &worker_id,
+            &[AgentStatus::Idle, AgentStatus::Running],
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+        for i in 2..4 {
+            user.invoke_and_await_agent(
+                &component,
+                &repo_id,
+                "add",
+                data_value!(format!("G{i}"), format!("Item {i}")),
+            )
+            .await
+            .unwrap();
+        }
+
+        let batches = wait_for_invocations(&received, 5, Duration::from_secs(60)).await;
+        let fn_names = extract_function_names(&batches);
+        // Exactly-once: exactly 1 init + 4 adds, no duplicates across shard move.
+        // Current bug: no checkpoint, in-flight batch may be re-delivered.
+        assert_eq!(
+            fn_names
+                .iter()
+                .filter(|f| f.as_str() == "agent-initialization")
+                .count(),
+            1
+        );
+        assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 4);
+        assert_unique_oplog_indices(&batches);
+    }
+
+    // ========================================================================
+    // I3: Locality recovery — delivery continues after shard reassignment
+    // ========================================================================
+
+    #[test]
+    #[timeout(240000)]
+    #[flaky(3)]
+    async fn oplog_processor_locality_recovery(
+        deps: &EnvBasedTestDependencies,
+        _tracing: &Tracing,
+    ) {
+        deps.reset(16).await;
+
+        let user = deps.admin().await;
+        let (_, env) = user.app_and_env().await.unwrap();
+        let client = user.registry_service_client().await;
+
+        let (callback_url, received, _server) = start_callback_server().await;
+
+        let plugin_component = user
+            .component(&env.id, "oplog-processor")
+            .store()
+            .await
+            .unwrap();
+        let plugin = client
+            .create_plugin(
+                &user.account_id.0,
+                &PluginRegistrationCreation {
+                    name: format!("oplog-processor-{}", Uuid::new_v4()),
+                    version: "v1".to_string(),
+                    description: "A test".to_string(),
+                    icon: Base64(Vec::new()),
+                    homepage: "none".to_string(),
+                    spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                        component_id: plugin_component.id,
+                        component_revision: plugin_component.revision,
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        let grant = client
+            .create_environment_plugin_grant(
+                &env.id.0,
+                &EnvironmentPluginGrantCreation {
+                    plugin_registration_id: plugin.id,
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut params = BTreeMap::new();
+        params.insert("callback-url".to_string(), callback_url);
+
+        let component = user
+            .component(&env.id, "it_agent_counters_release")
+            .name("it:agent-counters")
+            .with_parametrized_plugin(&grant.id, 0, params)
+            .store()
+            .await
+            .unwrap();
+
+        let repo_id = agent_id!("Repository", "worker1");
+        let worker_id = user
+            .start_agent(&component.id, repo_id.clone())
+            .await
+            .unwrap();
+
+        for i in 0..3 {
+            user.invoke_and_await_agent(
+                &component,
+                &repo_id,
+                "add",
+                data_value!(format!("G{i}"), format!("Item {i}")),
+            )
+            .await
+            .unwrap();
+        }
+
+        let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
+
+        deps.stop_random_worker_executors(2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        deps.start_random_worker_executors(2).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        user.wait_for_statuses(
+            &worker_id,
+            &[AgentStatus::Idle, AgentStatus::Running],
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+
+        for i in 3..6 {
+            user.invoke_and_await_agent(
+                &component,
+                &repo_id,
+                "add",
+                data_value!(format!("G{i}"), format!("Item {i}")),
+            )
+            .await
+            .unwrap();
+        }
+
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let fn_names = extract_function_names(&batches);
+        // Exactly-once: exactly 1 init + 6 adds, no duplicates after locality recovery.
+        // Current bug: no checkpoint, so shard reassignment causes re-delivery.
+        assert_eq!(
+            fn_names
+                .iter()
+                .filter(|f| f.as_str() == "agent-initialization")
+                .count(),
+            1
+        );
+        assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 6);
+        assert_unique_oplog_indices(&batches);
+    }
+
+    // ========================================================================
+    // I4: End-to-end stress with crashes
+    // ========================================================================
+
+    #[test]
+    #[timeout(360000)]
+    #[flaky(5)]
+    async fn oplog_processor_stress_with_crashes(
+        deps: &EnvBasedTestDependencies,
+        _tracing: &Tracing,
+    ) {
+        deps.reset(16).await;
+
+        let user = deps.admin().await;
+        let (_, env) = user.app_and_env().await.unwrap();
+        let client = user.registry_service_client().await;
+
+        let (callback_url, received, _server) = start_callback_server().await;
+
+        let plugin_component = user
+            .component(&env.id, "oplog-processor")
+            .store()
+            .await
+            .unwrap();
+        let plugin = client
+            .create_plugin(
+                &user.account_id.0,
+                &PluginRegistrationCreation {
+                    name: format!("oplog-processor-{}", Uuid::new_v4()),
+                    version: "v1".to_string(),
+                    description: "A test".to_string(),
+                    icon: Base64(Vec::new()),
+                    homepage: "none".to_string(),
+                    spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                        component_id: plugin_component.id,
+                        component_revision: plugin_component.revision,
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        let grant = client
+            .create_environment_plugin_grant(
+                &env.id.0,
+                &EnvironmentPluginGrantCreation {
+                    plugin_registration_id: plugin.id,
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut params = BTreeMap::new();
+        params.insert("callback-url".to_string(), callback_url);
+
+        let component = user
+            .component(&env.id, "it_agent_counters_release")
+            .name("it:agent-counters")
+            .with_parametrized_plugin(&grant.id, 0, params)
+            .store()
+            .await
+            .unwrap();
+
+        let repo_id = agent_id!("Repository", "worker1");
+        let worker_id = user
+            .start_agent(&component.id, repo_id.clone())
+            .await
+            .unwrap();
+
+        for i in 0..20 {
+            user.invoke_and_await_agent(
+                &component,
+                &repo_id,
+                "add",
+                data_value!(format!("G{i}"), format!("Item {i}")),
+            )
+            .await
+            .unwrap();
+
+            // Crash at iteration 7
+            if i == 7 {
+                info!("I4: Triggering simulated crash at iteration {i}");
+                user.simulated_crash(&worker_id).await.unwrap();
+                user.wait_for_statuses(
+                    &worker_id,
+                    &[AgentStatus::Idle, AgentStatus::Running],
+                    Duration::from_secs(30),
+                )
+                .await
+                .unwrap();
+            }
+
+            // Stop/start executor at iteration 14
+            if i == 14 {
+                info!("I4: Stopping/starting executor at iteration {i}");
+                deps.stop_random_worker_executors(1).await;
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                deps.start_random_worker_executors(1).await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                user.wait_for_statuses(
+                    &worker_id,
+                    &[AgentStatus::Idle, AgentStatus::Running],
+                    Duration::from_secs(60),
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        // Exactly-once: exactly 1 init + 20 adds, no duplicates despite crash + executor restart.
+        // Current bug: no checkpoint, crash and executor stop/start cause re-delivery.
+        let batches = wait_for_invocations(&received, 21, Duration::from_secs(120)).await;
+        let fn_names = extract_function_names(&batches);
+        assert_eq!(
+            fn_names
+                .iter()
+                .filter(|f| f.as_str() == "agent-initialization")
+                .count(),
+            1
+        );
+        assert_eq!(fn_names.iter().filter(|f| f.as_str() == "add").count(), 20);
+        assert_unique_oplog_indices(&batches);
     }
 }

@@ -21,13 +21,14 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, PendingAgentInvocationParams,
-    PendingUpdateParams, PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams,
-    SnapshotParams, StartSpanParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType,
+    PublicRetryConfig, PublicSpanData, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, PublicOplogEntry,
@@ -365,6 +366,21 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     mime_type,
                 })
             }
+            PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
+                timestamp,
+                plugin,
+                target_agent_id,
+                confirmed_up_to,
+                sending_up_to,
+                last_batch_start,
+            }) => Self::OplogProcessorCheckpoint(oplog::OplogProcessorCheckpointParameters {
+                timestamp: timestamp.into(),
+                plugin: plugin.into(),
+                target_agent_id: target_agent_id.into(),
+                confirmed_up_to: confirmed_up_to.into(),
+                sending_up_to: sending_up_to.into(),
+                last_batch_start: last_batch_start.into(),
+            }),
         }
     }
 }
@@ -761,7 +777,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 initial_active_plugins: params
                     .initial_active_plugins
                     .into_iter()
-                    .map(golem_common::model::component::PluginPriority)
+                    .map(|v| golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(uuid::Uuid::from_u64_pair(v.uuid.high_bits, v.uuid.low_bits)))
                     .collect(),
                 config_vars: params.config_vars.into_iter().collect(),
                 // FIXME: agent-config
@@ -893,7 +909,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 new_active_plugins: params
                     .new_active_plugins
                     .into_iter()
-                    .map(golem_common::model::component::PluginPriority)
+                    .map(|v| golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(uuid::Uuid::from_u64_pair(v.uuid.high_bits, v.uuid.low_bits)))
                     .collect(),
             }),
             oplog::OplogEntry::FailedUpdate(params) => Ok(Self::FailedUpdate {
@@ -935,14 +951,14 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::ActivatePlugin(params) => Ok(Self::ActivatePlugin {
                 timestamp: timestamp_from_datetime(params.timestamp),
-                plugin_priority: golem_common::model::component::PluginPriority(
-                    params.plugin_priority,
+                plugin_grant_id: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(
+                    uuid::Uuid::from_u64_pair(params.plugin_grant_id.uuid.high_bits, params.plugin_grant_id.uuid.low_bits),
                 ),
             }),
             oplog::OplogEntry::DeactivatePlugin(params) => Ok(Self::DeactivatePlugin {
                 timestamp: timestamp_from_datetime(params.timestamp),
-                plugin_priority: golem_common::model::component::PluginPriority(
-                    params.plugin_priority,
+                plugin_grant_id: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(
+                    uuid::Uuid::from_u64_pair(params.plugin_grant_id.uuid.high_bits, params.plugin_grant_id.uuid.low_bits),
                 ),
             }),
             oplog::OplogEntry::Revert(params) => Ok(Self::Revert {
@@ -1046,6 +1062,24 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 data: oplog_payload_from_wit(params.data),
                 mime_type: params.mime_type,
             }),
+            oplog::OplogEntry::OplogProcessorCheckpoint(params) => {
+                Ok(Self::OplogProcessorCheckpoint {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    plugin_grant_id: golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(
+                        uuid::Uuid::from_u64_pair(params.plugin_grant_id.uuid.high_bits, params.plugin_grant_id.uuid.low_bits),
+                    ),
+                    target_agent_id: golem_common::model::AgentId::from(params.target_agent_id),
+                    confirmed_up_to: golem_common::model::OplogIndex::from_u64(
+                        params.confirmed_up_to,
+                    ),
+                    sending_up_to: golem_common::model::OplogIndex::from_u64(
+                        params.sending_up_to,
+                    ),
+                    last_batch_start: golem_common::model::OplogIndex::from_u64(
+                        params.last_batch_start,
+                    ),
+                })
+            }
         }
     }
 }

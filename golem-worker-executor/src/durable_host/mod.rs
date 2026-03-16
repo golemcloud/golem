@@ -61,7 +61,7 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::HasOplogService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::wasi_host;
-use crate::worker::agent_config::{effective_local_agent_config, validate_local_agent_config};
+use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
     invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
 };
@@ -84,7 +84,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
-    InitialComponentFile, PluginPriority,
+    InitialComponentFile,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
@@ -95,7 +95,7 @@ use golem_common::model::oplog::{
     OplogIndex, PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::{
@@ -223,10 +223,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             component_metadata.config_vars.clone(),
         );
 
-        let local_agent_config = if let Some(agent_id) = &agent_id {
-            effective_local_agent_config(
-                worker_config.initial_local_agent_config.clone(),
-                component_metadata.local_agent_config.clone(),
+        let agent_config = if let Some(agent_id) = &agent_id {
+            effective_agent_config(
+                worker_config.initial_agent_config.clone(),
+                component_metadata.agent_config.clone(),
                 &agent_id.agent_type,
             )
         } else {
@@ -290,8 +290,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.created_by,
                 worker_config.initial_config_vars,
                 config_vars,
-                worker_config.initial_local_agent_config,
-                local_agent_config,
+                worker_config.initial_agent_config,
+                agent_config,
                 shard_service,
                 pending_update,
                 original_phantom_id,
@@ -1110,10 +1110,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     target_revision,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
-                                        component_metadata
-                                            .installed_plugins
-                                            .into_iter()
-                                            .map(|installation| installation.priority),
+                                        component_metadata.installed_plugins.into_iter().map(
+                                            |installation| installation.environment_plugin_grant_id,
+                                        ),
                                     ),
                                 )
                                 .await;
@@ -1372,10 +1371,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 target_revision,
                                 component_metadata.component_size,
                                 HashSet::from_iter(
-                                    component_metadata
-                                        .installed_plugins
-                                        .into_iter()
-                                        .map(|installation| installation.priority),
+                                    component_metadata.installed_plugins.into_iter().map(
+                                        |installation| installation.environment_plugin_grant_id,
+                                    ),
                                 ),
                             )
                             .await;
@@ -1446,15 +1444,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     ))
                 })?;
 
-            let updated_local_agent_config = effective_local_agent_config(
-                self.state.initial_local_agent_config.clone(),
-                new_metadata.local_agent_config.clone(),
+            let updated_agent_config = effective_agent_config(
+                self.state.initial_agent_config.clone(),
+                new_metadata.agent_config.clone(),
                 &agent_id.agent_type,
             );
 
-            validate_local_agent_config(&updated_local_agent_config, &agent_type)?;
+            validate_agent_config(&updated_agent_config, &agent_type)?;
 
-            self.state.local_agent_config = updated_local_agent_config;
+            self.state.agent_config = updated_agent_config;
         };
 
         self.state.component_metadata = new_metadata;
@@ -1846,7 +1844,9 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginPriority>,
+        new_active_plugins: HashSet<
+            golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
+        >,
     ) {
         info!("Worker update to {} finished successfully", target_revision);
         let entry = OplogEntry::successful_update(
@@ -2187,6 +2187,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 let output = AgentInvocationOutput {
                                     result: invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
+                                    invocation_status: None,
                                     component_revision: Some(component_revision),
                                 };
                                 if let Err(err) = store
@@ -2924,9 +2925,9 @@ struct PrivateDurableWorkerState {
     config_vars: BTreeMap<String, String>,
 
     // The initial local agent config that the worker was configured with
-    initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+    initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
-    local_agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
 
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
     promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
@@ -2985,8 +2986,8 @@ impl PrivateDurableWorkerState {
         created_by: AccountId,
         initial_config_vars: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
-        local_agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+        initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
+        agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -3051,8 +3052,8 @@ impl PrivateDurableWorkerState {
             created_by,
             initial_config_vars,
             config_vars,
-            initial_local_agent_config,
-            local_agent_config,
+            initial_agent_config,
+            agent_config,
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),

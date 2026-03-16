@@ -119,6 +119,7 @@ pub mod service {
     pub enum ServiceErrorKind {
         ErrorResponse(ServiceErrorResponse),
         ReqwestError(reqwest::Error),
+        MiddlewareError(reqwest_middleware::Error),
         ReqwestHeaderError(reqwest::header::InvalidHeaderValue),
         SerdeError(serde_json::Error),
         UnexpectedResponse { status_code: u16, payload: Bytes },
@@ -158,6 +159,14 @@ pub mod service {
                     }
 
                     Ok(())
+                }
+                ServiceErrorKind::MiddlewareError(error) => {
+                    write!(
+                        f,
+                        "{} - HTTP Middleware Error: {}",
+                        service_name,
+                        error.to_string().log_color_warn()
+                    )
                 }
                 ServiceErrorKind::ReqwestHeaderError(error) => {
                     write!(
@@ -219,6 +228,9 @@ pub mod service {
                         ServiceErrorKind::ErrorResponse(error.into())
                     }
                     golem_client::Error::Reqwest(error) => ServiceErrorKind::ReqwestError(error),
+                    golem_client::Error::Middleware(error) => {
+                        ServiceErrorKind::MiddlewareError(error)
+                    }
                     golem_client::Error::ReqwestHeader(error) => {
                         ServiceErrorKind::ReqwestHeaderError(error)
                     }

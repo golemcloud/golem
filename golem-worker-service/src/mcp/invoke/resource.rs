@@ -87,14 +87,15 @@ pub async fn invoke_resource(
     let agent_output = worker_service
         .invoke_agent(
             &agent_id,
-            mcp_resource.raw_method.name.clone(),
-            proto_method_parameters,
-            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32,
+            Some(mcp_resource.raw_method.name.clone()),
+            Some(proto_method_parameters),
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             None,
             None,
             None,
             auth_ctx,
             proto_principal,
+            None,
         )
         .await
         .map_err(|e| {

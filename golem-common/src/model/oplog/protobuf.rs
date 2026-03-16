@@ -34,14 +34,15 @@ use crate::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
-    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
-use crate::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
+use crate::model::worker::ParsedWorkerAgentConfigEntry;
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
@@ -148,6 +149,11 @@ impl From<PluginInstallationDescription>
 {
     fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
         golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
+            environment_plugin_grant_id: Some(
+                plugin_installation_description
+                    .environment_plugin_grant_id
+                    .into(),
+            ),
             plugin_priority: plugin_installation_description.plugin_priority.0,
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
@@ -166,6 +172,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription
         value: golem_api_grpc::proto::golem::worker::PluginInstallationDescription,
     ) -> Result<Self, Self::Error> {
         Ok(PluginInstallationDescription {
+            environment_plugin_grant_id: value
+                .environment_plugin_grant_id
+                .ok_or("Missing environment_plugin_grant_id field")?
+                .try_into()?,
             plugin_priority: PluginPriority(value.plugin_priority),
             plugin_name: value.plugin_name,
             plugin_version: value.plugin_version,
@@ -218,9 +228,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 env: create.env.into_iter().collect(),
                 config_vars: create.config_vars.into_iter().collect(),
                 local_agent_config: create
-                    .local_agent_config
+                    .agent_config
                     .into_iter()
-                    .map(ParsedWorkerCreationLocalAgentConfigEntry::try_from)
+                    .map(ParsedWorkerAgentConfigEntry::try_from)
                     .collect::<Result<Vec<_>, _>>()?,
                 environment_id: create
                     .environment_id
@@ -595,6 +605,19 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     data,
                 }))
             }
+            oplog_entry::Entry::OplogProcessorCheckpoint(value) => Ok(
+                PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
+                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                    plugin: value.plugin.ok_or("Missing plugin field")?.try_into()?,
+                    target_agent_id: value
+                        .target_agent_id
+                        .ok_or("Missing target_agent_id field")?
+                        .try_into()?,
+                    confirmed_up_to: OplogIndex::from_u64(value.confirmed_up_to),
+                    sending_up_to: OplogIndex::from_u64(value.sending_up_to),
+                    last_batch_start: OplogIndex::from_u64(value.last_batch_start),
+                }),
+            ),
         }
     }
 }
@@ -612,7 +635,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
                         config_vars: create.config_vars.into_iter().collect(),
-                        local_agent_config: create
+                        agent_config: create
                             .local_agent_config
                             .into_iter()
                             .map(Into::into)
@@ -1033,6 +1056,20 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::SnapshotDataParameters {
                             timestamp: Some(snapshot.timestamp.into()),
                             data: Some(data),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::OplogProcessorCheckpoint(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::OplogProcessorCheckpoint(
+                        golem_api_grpc::proto::golem::worker::OplogProcessorCheckpointParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            plugin: Some(params.plugin.into()),
+                            target_agent_id: Some(params.target_agent_id.into()),
+                            confirmed_up_to: params.confirmed_up_to.into(),
+                            sending_up_to: params.sending_up_to.into(),
+                            last_batch_start: params.last_batch_start.into(),
                         },
                     )),
                 }
