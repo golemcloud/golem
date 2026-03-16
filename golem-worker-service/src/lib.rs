@@ -238,6 +238,8 @@ impl WorkerService {
 
         let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         let mcp_capability_lookup_for_auth = mcp_capability_lookup.clone();
+        let identity_provider = self.services.identity_provider.clone();
+        let identity_provider_for_auth = identity_provider.clone();
 
         let worker_service = self.services.worker_service.clone();
 
@@ -257,6 +259,9 @@ impl WorkerService {
         let mcp_capability_lookup_for_register = mcp_capability_lookup_for_auth.clone();
         let mcp_capability_lookup_for_authorize = mcp_capability_lookup_for_auth.clone();
         let mcp_capability_lookup_for_callback = mcp_capability_lookup_for_auth.clone();
+
+        let identity_provider_for_authorize = identity_provider.clone();
+        let identity_provider_for_callback = identity_provider.clone();
 
         let oauth_proxy_state = OAuthProxyState::new();
         let oauth_proxy_state_for_authorize = oauth_proxy_state.clone();
@@ -290,16 +295,22 @@ impl WorkerService {
                 "/mcp/oauth/authorize",
                 poem::endpoint::make(move |req: Request| {
                     let lookup = mcp_capability_lookup_for_authorize.clone();
+                    let idp = identity_provider_for_authorize.clone();
                     let state = oauth_proxy_state_for_authorize.clone();
-                    async move { oauth_authorize(&req, lookup.as_ref(), state.as_ref()).await }
+                    async move {
+                        oauth_authorize(&req, lookup.as_ref(), idp.as_ref(), state.as_ref()).await
+                    }
                 }),
             )
             .at(
                 "/mcp/oauth/callback",
                 poem::endpoint::make(move |req: Request| {
                     let lookup = mcp_capability_lookup_for_callback.clone();
+                    let idp = identity_provider_for_callback.clone();
                     let state = oauth_proxy_state_for_callback.clone();
-                    async move { oauth_callback(&req, lookup.as_ref(), state.as_ref()).await }
+                    async move {
+                        oauth_callback(&req, lookup.as_ref(), idp.as_ref(), state.as_ref()).await
+                    }
                 }),
             )
             .at(
@@ -309,7 +320,10 @@ impl WorkerService {
                     async move { oauth_token(req, state.as_ref()).await }
                 }),
             )
-            .with(McpBearerAuth::new(mcp_capability_lookup_for_auth))
+            .with(McpBearerAuth::new(
+                mcp_capability_lookup_for_auth,
+                identity_provider_for_auth,
+            ))
             .with(
                 Cors::new()
                     .allow_methods(vec!["GET", "POST", "DELETE", "OPTIONS"])

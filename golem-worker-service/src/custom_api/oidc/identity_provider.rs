@@ -20,8 +20,8 @@ use golem_common::IntoAnyhow;
 use golem_common::model::security_scheme::Provider;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use openidconnect::core::{
-    CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
-    CoreTokenResponse,
+    CoreClient, CoreIdToken, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata,
+    CoreResponseType, CoreTokenResponse,
 };
 use openidconnect::{
     AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse, Scope,
@@ -44,6 +44,14 @@ pub enum IdentityProviderError {
     OidcTokenExchangeFailed,
 }
 
+pub struct RawTokenResponse {
+    pub id_token: String,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub expires_in: Option<u64>,
+    pub token_type: String,
+}
+
 impl IntoAnyhow for IdentityProviderError {
     fn into_anyhow(self) -> anyhow::Error {
         anyhow::Error::from(self).context("IdentityProviderError")
@@ -52,7 +60,12 @@ impl IntoAnyhow for IdentityProviderError {
 
 #[async_trait]
 pub trait IdentityProvider: Send + Sync {
-    // exchange code for token + get claims
+    /// Exchanges an authorization code for parsed claims and scopes.
+    ///
+    /// Used by the **HTTP API gateway** OIDC flow where Golem is the relying party:
+    /// Golem initiated the OAuth flow itself (with its own nonce), so it can verify
+    /// the nonce and parse the id_token into structured claims (subject, email, etc.)
+    /// to build an authenticated session.
     async fn exchange_code_for_scopes_and_claims(
         &self,
         security_scheme: &SecuritySchemeDetails,
@@ -60,6 +73,11 @@ pub trait IdentityProvider: Send + Sync {
         nonce: &Nonce,
     ) -> Result<(Vec<Scope>, CoreIdTokenClaims), IdentityProviderError>;
 
+    /// Builds the authorization URL that redirects the user to the identity provider.
+    ///
+    /// Used by both flows:
+    /// - **HTTP**: redirects users to Google when they hit a protected route
+    /// - **MCP**: redirects users to Google when the MCP client initiates OAuth
     async fn get_authorization_url(
         &self,
         security_scheme: &SecuritySchemeDetails,
@@ -67,6 +85,41 @@ pub trait IdentityProvider: Send + Sync {
         state: CsrfToken,
         nonce: Nonce,
     ) -> Result<AuthorizationUrl, IdentityProviderError>;
+
+    /// Exchanges an authorization code for tokens, returning the raw JWT strings.
+    ///
+    /// Used by the **MCP OAuth proxy** flow where Golem acts as an intermediary:
+    /// the MCP client (Claude Desktop, mcp-remote) cannot talk to Google directly
+    /// (no DCR support), so Golem proxies the entire OAuth dance. After exchanging
+    /// the code with Google, Golem doesn't need to parse the claims — it just needs
+    /// the raw id_token string to pass back to the MCP client as a Bearer token.
+    ///
+    /// Key differences from `exchange_code_for_scopes_and_claims`:
+    /// - Returns raw JWT strings instead of parsed `CoreIdTokenClaims`
+    /// - Does not verify a nonce (Golem generated the nonce internally just to
+    ///   satisfy the OIDC library; the MCP client never sees it)
+    /// - The MCP client will later present this token as `Authorization: Bearer <jwt>`
+    ///   and `validate_bearer_token` will verify it at that point
+    async fn exchange_code_for_raw_id_token(
+        &self,
+        security_scheme: &SecuritySchemeDetails,
+        code: &AuthorizationCode,
+    ) -> Result<RawTokenResponse, IdentityProviderError>;
+
+    /// Validates a Bearer JWT token against the provider's JWKS.
+    ///
+    /// Used by the **MCP Bearer auth middleware** to verify tokens on incoming requests.
+    /// The token may have been obtained through the OAuth proxy flow above, or
+    /// directly by the client through their own OAuth flow — either way, we validate
+    /// the signature and claims against the provider's published keys.
+    ///
+    /// Uses a no-op nonce verifier because we didn't necessarily initiate the OAuth
+    /// flow that produced this token.
+    async fn validate_bearer_token(
+        &self,
+        security_scheme: &SecuritySchemeDetails,
+        token: &str,
+    ) -> Result<(), IdentityProviderError>;
 }
 
 pub struct DefaultIdentityProvider;
@@ -150,6 +203,10 @@ impl DefaultIdentityProvider {
     }
 }
 
+fn noop_nonce_verifier(_nonce: Option<&Nonce>) -> Result<(), String> {
+    Ok(())
+}
+
 #[async_trait]
 impl IdentityProvider for DefaultIdentityProvider {
     async fn exchange_code_for_scopes_and_claims(
@@ -202,5 +259,79 @@ impl IdentityProvider for DefaultIdentityProvider {
             csrf_state,
             nonce,
         })
+    }
+
+    async fn exchange_code_for_raw_id_token(
+        &self,
+        security_scheme: &SecuritySchemeDetails,
+        code: &AuthorizationCode,
+    ) -> Result<RawTokenResponse, IdentityProviderError> {
+        let client = self.get_client(security_scheme).await?;
+
+        let token_response = self
+            .exchange_code_for_tokens(&client, code)
+            .await
+            .map_err(|err| {
+                tracing::warn!("OIDC token exchange failed: {err}");
+                IdentityProviderError::OidcTokenExchangeFailed
+            })?;
+
+        let id_token_string = match token_response.extra_fields().id_token() {
+            Some(id_token) => {
+                // serde_json::to_string wraps the JWT in quotes ("eyJ..."),
+                // so we trim them to get the raw JWT string.
+                let serialized = serde_json::to_string(id_token).map_err(|err| {
+                    IdentityProviderError::IdTokenVerificationError(format!(
+                        "Failed to serialize id_token: {err}"
+                    ))
+                })?;
+                serialized.trim_matches('"').to_string()
+            }
+            None => token_response.access_token().secret().clone(),
+        };
+
+        let access_token = Some(token_response.access_token().secret().clone());
+        let refresh_token = token_response.refresh_token().map(|t| t.secret().clone());
+        let expires_in = token_response.expires_in().map(|d| d.as_secs());
+        let token_type = token_response.token_type().as_ref().to_string();
+
+        Ok(RawTokenResponse {
+            id_token: id_token_string,
+            access_token,
+            refresh_token,
+            expires_in,
+            token_type,
+        })
+    }
+
+    async fn validate_bearer_token(
+        &self,
+        security_scheme: &SecuritySchemeDetails,
+        token: &str,
+    ) -> Result<(), IdentityProviderError> {
+        let provider_metadata = self
+            .get_provider_metadata(&security_scheme.provider_type)
+            .await?;
+
+        let client = CoreClient::from_provider_metadata(
+            provider_metadata,
+            security_scheme.client_id.clone(),
+            Some(security_scheme.client_secret.clone()),
+        );
+
+        let verifier = client.id_token_verifier();
+
+        let id_token: CoreIdToken = serde_json::from_value(serde_json::Value::String(
+            token.to_string(),
+        ))
+        .map_err(|err| {
+            IdentityProviderError::IdTokenVerificationError(format!("Failed to parse token: {err}"))
+        })?;
+
+        let _claims = id_token
+            .into_claims(&verifier, noop_nonce_verifier)
+            .map_err(|err| IdentityProviderError::IdTokenVerificationError(err.to_string()))?;
+
+        Ok(())
     }
 }

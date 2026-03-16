@@ -17,9 +17,9 @@ use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
 use crate::custom_api::call_agent::CallAgentHandler;
-use crate::custom_api::oidc::DefaultIdentityProvider;
 use crate::custom_api::oidc::handler::OidcHandler;
 use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, SqliteSessionStore};
+use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhoooks::WebhookCallbackHandler;
@@ -45,6 +45,7 @@ pub struct Services {
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
+    pub identity_provider: Arc<dyn IdentityProvider>,
 }
 
 impl Services {
@@ -162,6 +163,7 @@ impl Services {
             worker_service,
             request_handler,
             mcp_capability_lookup,
+            identity_provider,
         })
     }
 }

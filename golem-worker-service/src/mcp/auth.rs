@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::custom_api::oidc::IdentityProvider;
 use crate::mcp::McpCapabilityLookup;
 use golem_common::base_model::domain_registration::Domain;
 use golem_service_base::custom_api::SecuritySchemeDetails;
-use openidconnect::Nonce;
-use openidconnect::core::{CoreClient, CoreProviderMetadata};
+use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
 use poem::http;
 use poem::{Endpoint, IntoResponse, Middleware, Request, Response, Result};
 use std::collections::HashMap;
@@ -33,12 +33,17 @@ use uuid::Uuid;
 /// 4. If no security scheme, passes through without auth
 pub struct McpBearerAuth {
     mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
+    identity_provider: Arc<dyn IdentityProvider>,
 }
 
 impl McpBearerAuth {
-    pub fn new(mcp_capability_lookup: Arc<dyn McpCapabilityLookup>) -> Self {
+    pub fn new(
+        mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
+        identity_provider: Arc<dyn IdentityProvider>,
+    ) -> Self {
         Self {
             mcp_capability_lookup,
+            identity_provider,
         }
     }
 }
@@ -50,6 +55,7 @@ impl<E: Endpoint> Middleware<E> for McpBearerAuth {
         McpBearerAuthEndpoint {
             inner: ep,
             mcp_capability_lookup: self.mcp_capability_lookup.clone(),
+            identity_provider: self.identity_provider.clone(),
         }
     }
 }
@@ -57,6 +63,7 @@ impl<E: Endpoint> Middleware<E> for McpBearerAuth {
 pub struct McpBearerAuthEndpoint<E> {
     inner: E,
     mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
+    identity_provider: Arc<dyn IdentityProvider>,
 }
 
 impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
@@ -110,7 +117,11 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
                 }
             };
 
-            if let Err(err) = validate_bearer_token(&token, &scheme).await {
+            if let Err(err) = self
+                .identity_provider
+                .validate_bearer_token(&scheme, &token)
+                .await
+            {
                 tracing::warn!("MCP Bearer token validation failed: {err}");
                 return Ok(unauthorized_response(host.as_deref()));
             }
@@ -136,62 +147,11 @@ fn unauthorized_response(host: Option<&str>) -> Response {
         .body(())
 }
 
-async fn validate_bearer_token(
-    token: &str,
-    scheme: &SecuritySchemeDetails,
-) -> std::result::Result<(), BearerValidationError> {
-    let issuer_url = scheme.provider_type.issuer_url();
-
-    let http_client = openidconnect::reqwest::Client::new();
-
-    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
-        .await
-        .map_err(|err| BearerValidationError::ProviderDiscoveryFailed(err.to_string()))?;
-
-    let client = CoreClient::from_provider_metadata(
-        provider_metadata,
-        scheme.client_id.clone(),
-        Some(scheme.client_secret.clone()),
-    );
-
-    let verifier = client.id_token_verifier();
-
-    // Parse the raw JWT string as a CoreIdToken
-    let id_token: openidconnect::core::CoreIdToken =
-        serde_json::from_value(serde_json::Value::String(token.to_string()))
-            .map_err(|err| BearerValidationError::InvalidToken(err.to_string()))?;
-
-    // Verify the token's signature and claims.
-    // We use a nonce that accepts anything since we didn't initiate this OAuth flow —
-    // the MCP client did the OAuth dance and we're just validating the resulting token.
-    let _claims = id_token
-        .into_claims(&verifier, noop_nonce_verifier)
-        .map_err(|err| BearerValidationError::TokenVerificationFailed(err.to_string()))?;
-
-    Ok(())
-}
-
-/// A nonce verifier function that accepts any nonce.
-/// Used for Bearer token validation where we didn't initiate the OAuth flow.
-fn noop_nonce_verifier(_nonce: Option<&Nonce>) -> std::result::Result<(), String> {
-    Ok(())
-}
-
-#[derive(Debug, thiserror::Error)]
-enum BearerValidationError {
-    #[error("Failed to discover OIDC provider: {0}")]
-    ProviderDiscoveryFailed(String),
-    #[error("Invalid token format: {0}")]
-    InvalidToken(String),
-    #[error("Token verification failed: {0}")]
-    TokenVerificationFailed(String),
-}
-
 /// In-memory state for the OAuth proxy flow.
 /// Tracks pending authorization requests and proxy codes that can be exchanged for tokens.
 pub struct OAuthProxyState {
     /// Keyed by the `state` parameter sent to the external provider.
-    /// Stores the MCP client's original redirect_uri, state, and PKCE code_challenge.
+    /// Stores the MCP client's original redirect_uri and state.
     pending_requests: RwLock<HashMap<String, PendingAuthRequest>>,
     /// Keyed by the proxy authorization code that Golem issues to the MCP client.
     /// Stores the tokens obtained from the external provider.
@@ -201,13 +161,10 @@ pub struct OAuthProxyState {
 struct PendingAuthRequest {
     client_redirect_uri: String,
     client_state: Option<String>,
-    _code_challenge: Option<String>,
-    _code_challenge_method: Option<String>,
 }
 
 struct ProxyCodeEntry {
     id_token: String,
-    _access_token: Option<String>,
     refresh_token: Option<String>,
     expires_in: Option<u64>,
     token_type: String,
@@ -222,11 +179,16 @@ impl OAuthProxyState {
     }
 }
 
+fn resolve_base_url(scheme: &SecuritySchemeDetails) -> String {
+    let redirect_base = scheme.redirect_url.url();
+    format!("{}://{}", redirect_base.scheme(), redirect_base.authority())
+}
+
 /// Poem endpoint handler for `/.well-known/oauth-authorization-server` (RFC 8414).
 ///
 /// Returns OAuth authorization server metadata pointing to Golem's own OAuth proxy
-/// endpoints (`/authorize`, `/token`, `/oauth/register`) so MCP clients like Claude Desktop
-/// and mcp-remote can complete the OAuth flow without needing DCR support from the provider.
+/// endpoints so MCP clients like Claude Desktop and mcp-remote can complete the
+/// OAuth flow without needing DCR support from the provider.
 pub async fn authorization_server_metadata(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
@@ -247,9 +209,7 @@ pub async fn authorization_server_metadata(
     match security_scheme {
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
-
-            let redirect_base = scheme.redirect_url.url();
-            let base = format!("{}://{}", redirect_base.scheme(), redirect_base.authority());
+            let base = resolve_base_url(&scheme);
 
             let metadata = serde_json::json!({
                 "issuer": &base,
@@ -298,9 +258,7 @@ pub async fn protected_resource_metadata(
     match security_scheme {
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
-
-            let redirect_base = scheme.redirect_url.url();
-            let base = format!("{}://{}", redirect_base.scheme(), redirect_base.authority());
+            let base = resolve_base_url(&scheme);
 
             let metadata = serde_json::json!({
                 "resource": format!("{base}/mcp"),
@@ -366,12 +324,12 @@ pub async fn oauth_register(
 
 /// `GET /authorize` — OAuth proxy authorization endpoint.
 ///
-/// Stores the MCP client's redirect_uri/state/code_challenge in memory, then redirects the
-/// user to the external provider's (e.g. Google's) authorization endpoint with Golem's own
-/// callback URL so we can intercept the authorization code.
+/// Stores the MCP client's redirect_uri/state in memory, then redirects the user to the
+/// external provider's authorization endpoint via `IdentityProvider::get_authorization_url`.
 pub async fn oauth_authorize(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
+    identity_provider: &dyn IdentityProvider,
     state: &OAuthProxyState,
 ) -> Response {
     let host = req
@@ -418,73 +376,54 @@ pub async fn oauth_authorize(
     };
 
     let client_state = get_param("state");
-    let code_challenge = get_param("code_challenge");
-    let code_challenge_method = get_param("code_challenge_method");
     let scope = get_param("scope");
 
-    // Generate a unique state for the external provider request so we can correlate the callback
-    let proxy_state = Uuid::new_v4().to_string();
+    // Generate a unique state for the external provider request
+    let proxy_csrf = CsrfToken::new(Uuid::new_v4().to_string());
+    let proxy_nonce = Nonce::new_random();
 
     state.pending_requests.write().await.insert(
-        proxy_state.clone(),
+        proxy_csrf.secret().clone(),
         PendingAuthRequest {
             client_redirect_uri,
             client_state,
-            _code_challenge: code_challenge,
-            _code_challenge_method: code_challenge_method,
         },
     );
 
-    // Discover the provider's authorization endpoint
-    let issuer_url = scheme.provider_type.issuer_url();
-    let http_client = openidconnect::reqwest::Client::new();
-    let provider_metadata =
-        match CoreProviderMetadata::discover_async(issuer_url, &http_client).await {
-            Ok(m) => m,
-            Err(err) => {
-                tracing::error!("Failed to discover OIDC provider for /authorize: {err}");
-                return Response::builder()
-                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to discover authorization server");
-            }
-        };
+    let scopes: Vec<Scope> = scope
+        .map(|s| {
+            s.split_whitespace()
+                .map(|s| Scope::new(s.to_string()))
+                .collect()
+        })
+        .unwrap_or_else(|| scheme.scopes.clone());
 
-    let auth_endpoint = provider_metadata.authorization_endpoint().as_str();
-
-    let golem_callback_url = scheme.redirect_url.url().to_string();
-
-    let scopes_str = scope.unwrap_or_else(|| {
-        scheme
-            .scopes
-            .iter()
-            .map(|s| (**s).clone())
-            .collect::<Vec<_>>()
-            .join(" ")
-    });
-
-    let redirect_url = format!(
-        "{auth_endpoint}?response_type=code&client_id={}&redirect_uri={}&state={}&scope={}&access_type=offline",
-        urlencoding::encode(scheme.client_id.as_str()),
-        urlencoding::encode(&golem_callback_url),
-        urlencoding::encode(&proxy_state),
-        urlencoding::encode(&scopes_str),
-    );
-
-    Response::builder()
-        .status(http::StatusCode::FOUND)
-        .header("Location", redirect_url)
-        .body(())
+    match identity_provider
+        .get_authorization_url(&scheme, scopes, proxy_csrf, proxy_nonce)
+        .await
+    {
+        Ok(auth_url) => Response::builder()
+            .status(http::StatusCode::FOUND)
+            .header("Location", auth_url.url.to_string())
+            .body(()),
+        Err(err) => {
+            tracing::error!("Failed to get authorization URL: {err}");
+            Response::builder()
+                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to initiate authorization")
+        }
+    }
 }
 
 /// `GET /oauth/callback` — OAuth proxy callback endpoint.
 ///
-/// The external provider (e.g. Google) redirects here with `?code=...&state=...`.
-/// Golem exchanges the authorization code for tokens at the provider's token endpoint,
-/// generates its own proxy authorization code, stores the tokens, then redirects to the
-/// MCP client's original redirect_uri with the proxy code and original state.
+/// The external provider redirects here with `?code=...&state=...`.
+/// Uses `IdentityProvider::exchange_code_for_raw_id_token` to exchange the code,
+/// generates a proxy authorization code, and redirects to the MCP client.
 pub async fn oauth_callback(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
+    identity_provider: &dyn IdentityProvider,
     proxy_state: &OAuthProxyState,
 ) -> Response {
     let host = req
@@ -525,7 +464,6 @@ pub async fn oauth_callback(
         }
     };
 
-    // Look up the pending request by the state we sent to the provider
     let pending = proxy_state
         .pending_requests
         .write()
@@ -554,94 +492,18 @@ pub async fn oauth_callback(
         }
     };
 
-    // Exchange the provider's authorization code for tokens
-    let issuer_url = scheme.provider_type.issuer_url();
-    let http_client = openidconnect::reqwest::Client::new();
-    let provider_metadata =
-        match CoreProviderMetadata::discover_async(issuer_url, &http_client).await {
-            Ok(m) => m,
-            Err(err) => {
-                tracing::error!("Failed to discover OIDC provider for /oauth/callback: {err}");
-                return Response::builder()
-                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to discover authorization server");
-            }
-        };
-
-    let token_endpoint = match provider_metadata.token_endpoint() {
-        Some(url) => url.as_str().to_string(),
-        None => {
-            return Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Provider has no token endpoint");
-        }
-    };
-
-    let golem_callback_url = scheme.redirect_url.url().to_string();
-
-    let http_post_client = openidconnect::reqwest::Client::new();
-    let token_response = http_post_client
-        .post(&token_endpoint)
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", &provider_code),
-            ("redirect_uri", &golem_callback_url),
-            ("client_id", scheme.client_id.as_str()),
-            ("client_secret", scheme.client_secret.secret()),
-        ])
-        .send()
-        .await;
-
-    let token_response: openidconnect::reqwest::Response = match token_response {
-        Ok(resp) => resp,
+    let raw_tokens = match identity_provider
+        .exchange_code_for_raw_id_token(&scheme, &AuthorizationCode::new(provider_code))
+        .await
+    {
+        Ok(t) => t,
         Err(err) => {
-            tracing::error!("Token exchange request failed: {err}");
+            tracing::error!("Token exchange failed: {err}");
             return Response::builder()
                 .status(http::StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Token exchange failed");
         }
     };
-
-    let token_body: serde_json::Value = match token_response.json().await {
-        Ok(v) => v,
-        Err(err) => {
-            tracing::error!("Failed to parse token response: {err}");
-            return Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to parse token response");
-        }
-    };
-
-    let id_token = match token_body.get("id_token").and_then(|v| v.as_str()) {
-        Some(t) => t.to_string(),
-        None => {
-            // If no id_token, try access_token as fallback
-            match token_body.get("access_token").and_then(|v| v.as_str()) {
-                Some(t) => t.to_string(),
-                None => {
-                    tracing::error!("Token response has no id_token or access_token: {token_body}");
-                    return Response::builder()
-                        .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                        .body("No token in provider response");
-                }
-            }
-        }
-    };
-
-    let access_token = token_body
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let refresh_token = token_body
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let expires_in = token_body.get("expires_in").and_then(|v| v.as_u64());
-    let token_type = token_body
-        .get("token_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("Bearer")
-        .to_string();
 
     // Generate a proxy authorization code for the MCP client
     let proxy_code = Uuid::new_v4().to_string();
@@ -649,11 +511,10 @@ pub async fn oauth_callback(
     proxy_state.proxy_codes.write().await.insert(
         proxy_code.clone(),
         ProxyCodeEntry {
-            id_token,
-            _access_token: access_token,
-            refresh_token,
-            expires_in,
-            token_type,
+            id_token: raw_tokens.id_token,
+            refresh_token: raw_tokens.refresh_token,
+            expires_in: raw_tokens.expires_in,
+            token_type: raw_tokens.token_type,
         },
     );
 
@@ -676,13 +537,9 @@ pub async fn oauth_callback(
 
 /// `POST /token` — OAuth proxy token endpoint.
 ///
-/// The MCP client exchanges Golem's proxy authorization code for the stored tokens
-/// (id_token from the external provider). This completes the OAuth flow from the
-/// MCP client's perspective.
-///
+/// The MCP client exchanges Golem's proxy authorization code for the stored tokens.
 /// Takes an owned `Request` so we can consume the POST form body.
 pub async fn oauth_token(mut req: Request, proxy_state: &OAuthProxyState) -> Response {
-    // Read the form body — MCP clients POST application/x-www-form-urlencoded
     let body_bytes = match req.take_body().into_bytes().await {
         Ok(b) => b,
         Err(_) => bytes::Bytes::new(),
@@ -705,7 +562,10 @@ pub async fn oauth_token(mut req: Request, proxy_state: &OAuthProxyState) -> Res
             return Response::builder()
                 .status(http::StatusCode::BAD_REQUEST)
                 .header("Content-Type", "application/json")
-                .body(serde_json::json!({"error": "invalid_request", "error_description": "Missing code parameter"}).to_string());
+                .body(
+                    serde_json::json!({"error": "invalid_request", "error_description": "Missing code parameter"})
+                        .to_string(),
+                );
         }
     };
 
@@ -729,11 +589,12 @@ pub async fn oauth_token(mut req: Request, proxy_state: &OAuthProxyState) -> Res
                 .header("Content-Type", "application/json")
                 .body(response.to_string())
         }
-        None => {
-            Response::builder()
-                .status(http::StatusCode::BAD_REQUEST)
-                .header("Content-Type", "application/json")
-                .body(serde_json::json!({"error": "invalid_grant", "error_description": "Unknown or expired authorization code"}).to_string())
-        }
+        None => Response::builder()
+            .status(http::StatusCode::BAD_REQUEST)
+            .header("Content-Type", "application/json")
+            .body(
+                serde_json::json!({"error": "invalid_grant", "error_description": "Unknown or expired authorization code"})
+                    .to_string(),
+            ),
     }
 }
