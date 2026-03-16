@@ -256,13 +256,14 @@ impl WorkerService {
             self.services.session_store.clone(),
         );
 
-        let route = Route::new()
-            .nest("/mcp", service.compat())
-            .nest("/", oauth_routes)
-            .with(McpBearerAuth::new(
-                mcp_capability_lookup_for_auth,
-                identity_provider_for_auth,
-            ))
+        let mcp_with_auth = service.compat().with(McpBearerAuth::new(
+            mcp_capability_lookup_for_auth,
+            identity_provider_for_auth,
+        ));
+
+        // OAuth routes use .at() so they take priority over .nest("/mcp", ...)
+        let route = oauth_routes
+            .nest("/mcp", mcp_with_auth)
             .with(
                 Cors::new()
                     .allow_methods(vec!["GET", "POST", "DELETE", "OPTIONS"])

@@ -16,12 +16,14 @@ use crate::custom_api::oidc::IdentityProvider;
 use crate::custom_api::oidc::model::{McpPendingAuth, McpProxyCodeEntry};
 use crate::custom_api::oidc::session_store::SessionStore;
 use crate::mcp::McpCapabilityLookup;
+use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
 use poem::http;
 use poem::{Endpoint, IntoResponse, Middleware, Request, Response, Result, Route};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// The expected path suffix for the MCP OAuth callback.
@@ -29,16 +31,20 @@ use uuid::Uuid;
 /// because this is where the external provider (e.g. Google) redirects after authentication.
 const MCP_OAUTH_CALLBACK_PATH: &str = "/mcp/oauth/callback";
 
+/// How long a successfully validated token is cached before re-validation.
+const TOKEN_CACHE_TTL: Duration = Duration::from_secs(60);
+
 /// Poem middleware that validates Bearer JWT tokens on MCP requests.
 ///
-/// On each request:
-/// 1. Extracts the `Host` header to determine the domain
-/// 2. Looks up the `CompiledMcp` for that domain to get the security scheme
-/// 3. If a security scheme is configured, validates the `Authorization: Bearer <jwt>` header
-/// 4. If no security scheme, passes through without auth
+/// Per the MCP spec (2025-06-18), authorization MUST be included in every HTTP
+/// request, even within an established session. To avoid hitting the identity
+/// provider on every message, validated tokens are cached locally with a short TTL.
 pub struct McpBearerAuth {
     mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
     identity_provider: Arc<dyn IdentityProvider>,
+    /// Cache of validated tokens: token hash → expiry instant.
+    /// Local per-instance; each instance warms independently.
+    validated_tokens: Arc<DashMap<u64, Instant>>,
 }
 
 impl McpBearerAuth {
@@ -49,7 +55,15 @@ impl McpBearerAuth {
         Self {
             mcp_capability_lookup,
             identity_provider,
+            validated_tokens: Arc::new(DashMap::new()),
         }
+    }
+
+    fn token_hash(token: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        token.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -61,6 +75,7 @@ impl<E: Endpoint> Middleware<E> for McpBearerAuth {
             inner: ep,
             mcp_capability_lookup: self.mcp_capability_lookup.clone(),
             identity_provider: self.identity_provider.clone(),
+            validated_tokens: self.validated_tokens.clone(),
         }
     }
 }
@@ -69,28 +84,13 @@ pub struct McpBearerAuthEndpoint<E> {
     inner: E,
     mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
     identity_provider: Arc<dyn IdentityProvider>,
+    validated_tokens: Arc<DashMap<u64, Instant>>,
 }
 
 impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
-        // Skip auth for well-known discovery endpoints and OAuth proxy endpoints —
-        // they must be publicly accessible so MCP clients can complete the OAuth flow.
-        let path = req.uri().path();
-        if path.starts_with("/.well-known/") || path.starts_with("/mcp/oauth/") {
-            return self.inner.call(req).await.map(|resp| resp.into_response());
-        }
-
-        // Only check auth on session-creating requests (no mcp-session-id header).
-        // Once a session is established, subsequent requests are trusted via the session.
-        // This avoids a gRPC call to the registry on every MCP message.
-        let has_session = req.headers().contains_key("mcp-session-id");
-
-        if has_session {
-            return self.inner.call(req).await.map(|resp| resp.into_response());
-        }
-
         let host = req
             .headers()
             .get("host")
@@ -122,13 +122,29 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
                 }
             };
 
-            if let Err(err) = self
-                .identity_provider
-                .validate_bearer_token(&scheme, &token)
-                .await
-            {
-                tracing::warn!("MCP Bearer token validation failed: {err}");
-                return Ok(unauthorized_response(host.as_deref()));
+            let hash = McpBearerAuth::token_hash(&token);
+
+            // Check the local cache before hitting the identity provider
+            let cached = self
+                .validated_tokens
+                .get(&hash)
+                .map(|entry| *entry.value());
+
+            let is_cached_valid = cached.is_some_and(|expiry| Instant::now() < expiry);
+
+            if !is_cached_valid {
+                if let Err(err) = self
+                    .identity_provider
+                    .validate_bearer_token(&scheme, &token)
+                    .await
+                {
+                    self.validated_tokens.remove(&hash);
+                    tracing::warn!("MCP Bearer token validation failed: {err}");
+                    return Ok(unauthorized_response(host.as_deref()));
+                }
+
+                self.validated_tokens
+                    .insert(hash, Instant::now() + TOKEN_CACHE_TTL);
             }
         }
 
@@ -149,7 +165,14 @@ fn unauthorized_response(host: Option<&str>) -> Response {
             "WWW-Authenticate",
             format!("Bearer realm=\"mcp\", resource_metadata=\"{resource_metadata_url}\""),
         )
-        .body(())
+        .header("Content-Type", "application/json")
+        .body(
+            serde_json::json!({
+                "error": "unauthorized",
+                "error_description": "Bearer token required"
+            })
+            .to_string(),
+        )
 }
 
 fn resolve_base_url(scheme: &SecuritySchemeDetails) -> String {
@@ -366,6 +389,13 @@ pub async fn oauth_authorize(
 
     let client_state = get_param("state");
     let scope = get_param("scope");
+
+    // RFC 8707: MCP clients MUST include the `resource` parameter to bind tokens
+    // to the intended MCP server. We accept it here for spec compliance; audience
+    // validation against this value is a future enhancement (see validate_bearer_token).
+    if let Some(resource) = get_param("resource") {
+        tracing::debug!(resource, "MCP OAuth authorize: client provided resource parameter");
+    }
 
     // Generate a unique state for the external provider request
     let proxy_csrf = CsrfToken::new(Uuid::new_v4().to_string());
