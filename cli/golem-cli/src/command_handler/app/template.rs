@@ -75,6 +75,34 @@ struct NewTemplateInputs {
     pub all_component_directories: BTreeMap<ComponentName, PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MultiComponentLayoutUpgradePlanStep {
+    Move { source: PathBuf, target: PathBuf },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct MultiComponentLayoutUpgradePlan {
+    steps: Vec<MultiComponentLayoutUpgradePlanStep>,
+}
+
+impl MultiComponentLayoutUpgradePlan {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn add(&mut self, step: MultiComponentLayoutUpgradePlanStep) {
+        self.steps.push(step);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    fn steps(&self) -> &[MultiComponentLayoutUpgradePlanStep] {
+        &self.steps
+    }
+}
+
 pub struct TemplateHandler {
     ctx: Arc<Context>,
 }
@@ -487,32 +515,30 @@ impl TemplateHandler {
 
                         let new_component_dir = new_component_dir()?;
 
-                        // TODO: with declarative plan, log and approve, and based on the component template
-                        match component.language {
-                            GuestLanguage::TypeScript => {
-                                log_action(
-                                    "Promoting",
-                                    format!(
-                                        "component {} to multi-component layout",
-                                        component_name.as_str().log_color_highlight()
-                                    ),
-                                );
-                                let source = app_dir;
-                                let target = app_dir.join(&new_component_dir);
+                        let component_template =
+                            app_template_repo.component_template(component.language)?;
+                        let upgrade_plan = self.build_multi_component_layout_upgrade_plan(
+                            component_name,
+                            component,
+                            app_dir,
+                            &new_component_dir,
+                            component_template.as_ref(),
+                        )?;
 
-                                std::fs::create_dir_all(&target)?;
+                        self.validate_multi_component_layout_upgrade_plan(&upgrade_plan)?;
 
-                                std::fs::rename(source.join("src"), target.join("src"))?;
-                                std::fs::rename(
-                                    source.join("tsconfig.json"),
-                                    target.join("tsconfig.json"),
-                                )?;
-                            }
-                            GuestLanguage::Rust => {
-                                // TODO: FCL
-                                todo!("implement rust multi-component promotion")
-                            }
+                        self.log_multi_component_layout_upgrade_plan(component_name, &upgrade_plan);
+
+                        if !upgrade_plan.is_empty()
+                            && !self
+                                .ctx
+                                .interactive_handler()
+                                .confirm_multi_component_layout_upgrade(component_name)?
+                        {
+                            bail!(NonSuccessfulExit);
                         }
+
+                        self.apply_multi_component_layout_upgrade_plan(&upgrade_plan)?;
 
                         all_component_directories.insert(component_name.clone(), new_component_dir);
                     }
@@ -625,6 +651,183 @@ impl TemplateHandler {
         debug!("template plan steps: {:#?}", template_plan_builder);
 
         Ok(template_plan_builder.build())
+    }
+
+    fn build_multi_component_layout_upgrade_plan(
+        &self,
+        component_name: &ComponentName,
+        component: &ExistingComponent,
+        app_dir: &Path,
+        new_component_dir: &Path,
+        _component_template: Option<&AppTemplateComponent>,
+    ) -> anyhow::Result<MultiComponentLayoutUpgradePlan> {
+        let mut upgrade_plan = MultiComponentLayoutUpgradePlan::new();
+
+        match component.language {
+            GuestLanguage::TypeScript => {
+                let target_root = app_dir.join(new_component_dir);
+
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: app_dir.join("src"),
+                    target: target_root.join("src"),
+                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: app_dir.join("tsconfig.json"),
+                    target: target_root.join("tsconfig.json"),
+                });
+            }
+            GuestLanguage::Rust => {
+                // TODO: FCL
+                todo!(
+                    "implement rust multi-component layout upgrade for component {}",
+                    component_name.as_str()
+                )
+            }
+        }
+
+        Ok(upgrade_plan)
+    }
+
+    fn log_multi_component_layout_upgrade_plan(
+        &self,
+        component_name: &ComponentName,
+        upgrade_plan: &MultiComponentLayoutUpgradePlan,
+    ) {
+        if upgrade_plan.is_empty() {
+            return;
+        }
+
+        logln("");
+        log_action(
+            "Planned",
+            format!(
+                "multi-component layout upgrade steps for component {}",
+                component_name.as_str().log_color_highlight()
+            ),
+        );
+        let _indent = self.ctx.log_handler().nested_text_view_indent();
+
+        for step in upgrade_plan.steps() {
+            match step {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                    logln(format!(
+                        "- {} {} -> {}",
+                        "move".yellow(),
+                        source.display().to_string().log_color_highlight(),
+                        target.display().to_string().log_color_highlight()
+                    ));
+                }
+            }
+        }
+    }
+
+    fn validate_multi_component_layout_upgrade_plan(
+        &self,
+        upgrade_plan: &MultiComponentLayoutUpgradePlan,
+    ) -> anyhow::Result<()> {
+        if upgrade_plan.is_empty() {
+            return Ok(());
+        }
+
+        let mut validation_errors = Vec::<String>::new();
+        let mut targets = BTreeSet::<PathBuf>::new();
+
+        for step in upgrade_plan.steps() {
+            match step {
+                MultiComponentLayoutUpgradePlanStep::Move { target, .. } => {
+                    if !targets.insert(target.clone()) {
+                        validation_errors.push(format!(
+                            "Duplicate move target in plan: {}",
+                            target.display().to_string().log_color_error_highlight()
+                        ));
+                    }
+
+                    if target.exists() {
+                        validation_errors.push(format!(
+                            "Target path already exists: {}",
+                            target.display().to_string().log_color_error_highlight()
+                        ));
+                    }
+
+                    if let Some(parent) = target.parent() {
+                        if parent.exists() {
+                            if !parent.is_dir() {
+                                validation_errors.push(format!(
+                                    "Target parent path is not a directory: {}",
+                                    parent.display().to_string().log_color_error_highlight()
+                                ));
+                            }
+                        } else {
+                            let mut ancestor = parent.parent();
+                            while let Some(path) = ancestor {
+                                if path.exists() {
+                                    if !path.is_dir() {
+                                        validation_errors.push(format!(
+                                            "Cannot create target parent directory, ancestor path is not a directory: {}",
+                                            path.display().to_string().log_color_error_highlight()
+                                        ));
+                                    }
+                                    break;
+                                }
+                                ancestor = path.parent();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !validation_errors.is_empty() {
+            logln("");
+            log_failed_to("validate Multi-component layout upgrade plan");
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+
+            logln("");
+            logln(
+                "Multi-component layout upgrade errors:"
+                    .log_color_help_group()
+                    .to_string(),
+            );
+            for error in validation_errors {
+                logln(format!("  - {}", error));
+            }
+            logln("");
+
+            bail!(NonSuccessfulExit);
+        }
+
+        Ok(())
+    }
+
+    fn apply_multi_component_layout_upgrade_plan(
+        &self,
+        upgrade_plan: &MultiComponentLayoutUpgradePlan,
+    ) -> anyhow::Result<()> {
+        if upgrade_plan.is_empty() {
+            return Ok(());
+        }
+
+        logln("");
+        log_action("Applying", "multi-component layout upgrade steps");
+        let _indent = LogIndent::new();
+
+        for step in upgrade_plan.steps() {
+            match step {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                    log_action(
+                        "Moving",
+                        format!(
+                            "{} to {}",
+                            source.display().to_string().log_color_highlight(),
+                            target.display().to_string().log_color_highlight()
+                        ),
+                    );
+                    fs::rename(source, target)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn validate_new_template_plan(&self, template_plan: &TemplatePlan) -> anyhow::Result<()> {

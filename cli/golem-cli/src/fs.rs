@@ -179,6 +179,22 @@ pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> anyhow::Re
     std::fs::write(path, contents).with_context(context)
 }
 
+pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<()> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+
+    let context = || {
+        anyhow!(
+            "Failed to rename {} to {}",
+            from.log_color_highlight(),
+            to.log_color_highlight()
+        )
+    };
+
+    create_dir_all(parent_or_err(to)?).with_context(context)?;
+    std::fs::rename(from, to).with_context(context)
+}
+
 pub fn remove<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     let path = path.as_ref();
     if path.exists() {

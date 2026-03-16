@@ -404,6 +404,20 @@ impl InteractiveHandler {
             .none_if_not_interactive_logged()
     }
 
+    pub fn confirm_multi_component_layout_upgrade(
+        &self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "The above multi-component layout upgrade steps for component {} will now be applied. Do you want to continue?",
+                component_name.as_str().log_color_highlight(),
+            ),
+            None,
+        )
+    }
+
     fn confirm<M: AsRef<str>>(
         &self,
         default: bool,
