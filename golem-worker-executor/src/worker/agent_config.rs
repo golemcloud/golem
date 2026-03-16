@@ -15,6 +15,7 @@
 use golem_common::model::agent::{
     AgentType, AgentTypeName, ConfigKeyValueType, ConfigValueType, ParsedAgentId,
 };
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{ParsedWorkerAgentConfigEntry, WorkerAgentConfigEntry};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -25,7 +26,7 @@ use golem_wasm::ValueAndType;
 use std::collections::HashMap;
 
 pub fn ensure_required_agent_secrets_are_configured(
-    agent_secrets: &HashMap<Vec<String>, AgentSecret>,
+    agent_secrets: &HashMap<CanonicalAgentSecretPath, AgentSecret>,
     agent_id: Option<&ParsedAgentId>,
     component: &Component,
 ) -> Result<(), WorkerExecutorError> {
@@ -47,7 +48,10 @@ pub fn ensure_required_agent_secrets_are_configured(
             continue;
         };
 
-        match agent_secrets.get(&key) {
+        let canonical_agent_secret_path =
+            CanonicalAgentSecretPath::from_path_in_unknown_casing(&key);
+
+        match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
                 if agent_secret.secret_type != shared_config_declaration.value {
                     return Err(WorkerExecutorError::invalid_request(format!(

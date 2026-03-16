@@ -20,6 +20,7 @@ use crate::repo::model::agent_secrets::{
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
@@ -34,8 +35,8 @@ use std::sync::Arc;
 pub enum AgentSecretError {
     #[error("Agent secret value does not match type: [{rendered_errors}]", rendered_errors = errors.join(", "))]
     AgentSecretValueDoesNotMatchType { errors: Vec<String> },
-    #[error("Agent secret for path {rendered_path} already exists in environment", rendered_path = path.join("."))]
-    AgentSecretForPathAlreadyExists { path: Vec<String> },
+    #[error("Agent secret for path {rendered_path} already exists in environment", rendered_path = path.0.join("."))]
+    AgentSecretForPathAlreadyExists { path: CanonicalAgentSecretPath },
     #[error("Environment {0} not found")]
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Agent secret {0} not found")]
@@ -112,12 +113,14 @@ impl AgentSecretService {
 
         let id = AgentSecretId::new();
 
+        let agent_secret_path: CanonicalAgentSecretPath = data.path.into();
+
         let result = self
             .agent_secret_repo
             .create(AgentSecretCreationRecord::new(
                 id,
                 environment_id,
-                data.path.clone(),
+                agent_secret_path.clone(),
                 data.secret_type,
                 secret_value,
                 auth.account_id(),
@@ -127,7 +130,9 @@ impl AgentSecretService {
         match result {
             Ok(record) => Ok(record.try_into()?),
             Err(AgentSecretRepoError::SecretViolatesUniqueness) => {
-                Err(AgentSecretError::AgentSecretForPathAlreadyExists { path: data.path })
+                Err(AgentSecretError::AgentSecretForPathAlreadyExists {
+                    path: agent_secret_path,
+                })
             }
             Err(other) => Err(other.into()),
         }
@@ -198,7 +203,7 @@ impl AgentSecretService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteShare,
+            EnvironmentAction::DeleteAgentSecret,
         )?;
 
         if agent_secret.revision != current_revision {
