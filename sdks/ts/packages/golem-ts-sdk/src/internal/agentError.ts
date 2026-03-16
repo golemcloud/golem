@@ -13,16 +13,15 @@
 // limitations under the License.
 
 import { AgentError } from 'golem:agent/common@1.5.0';
-import * as Value from './mapping/values/Value';
+import { WitNodeBuilder } from './mapping/values/WitNodeBuilder';
 
 export function createCustomError(error: string): AgentError {
+  const builder = new WitNodeBuilder();
+  builder.string(error);
   return {
     tag: 'custom-error',
     val: {
-      value: Value.toWitValue({
-        kind: 'string',
-        value: error,
-      }),
+      value: builder.build(),
       typ: {
         nodes: [
           {

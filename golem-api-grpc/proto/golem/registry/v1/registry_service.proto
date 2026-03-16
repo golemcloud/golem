@@ -308,6 +308,7 @@ message ResolveAgentTypeByNamesResponse {
 
 message ResolveAgentTypeByNamesSuccessResponse {
   RegisteredAgentType agent_type = 1;
+  golem.common.EnvironmentId environment_id = 2;
 }
 
 message GetActiveRoutesForDomainRequest {

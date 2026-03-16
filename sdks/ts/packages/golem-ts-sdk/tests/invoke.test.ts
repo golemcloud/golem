@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import * as Either from '../src/newTypes/either';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect } from 'vitest';
 import { BarAgentClassName, BarAgentCustomClassName, FooAgentClassName } from './testUtils';
@@ -49,7 +48,6 @@ import {
   unstructuredTextWithLCArb,
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import * as Value from '../src/internal/mapping/values/Value';
 import { BinaryReference, DataValue, ElementValue, TextReference } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
@@ -142,24 +140,15 @@ test('BarAgent can be successfully initiated', () => {
           throw new Error('Test failure: unresolved type in BarAgent constructor');
         }
 
-        const interfaceWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(interfaceValue, arg0.val),
-          (error) => new Error(error),
-        );
+        const interfaceWit = WitValue.fromTsValueDefault(interfaceValue, arg0.val);
 
-        const optionalStringWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(stringValue, arg1.val),
-          (error) => new Error(error),
-        );
+        const optionalStringWit = WitValue.fromTsValueDefault(stringValue, arg1.val);
 
-        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
+        expect(optionalStringWit.nodes[0].tag).toEqual('option-value');
 
-        const optionalUnionWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(unionValue, arg2.val),
-          (error) => new Error(error),
-        );
+        const optionalUnionWit = WitValue.fromTsValueDefault(unionValue, arg2.val);
 
-        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
+        expect(optionalUnionWit.nodes[0].tag).toEqual('option-value');
 
         const textReference: TextReference = {
           tag: 'url',
@@ -816,9 +805,9 @@ function initiateFooAgent(constructorParam: string, simpleAgentClassMeta: ClassM
     );
   }
 
-  const constructorParams = Either.getOrThrowWith(
-    serializeToDataValue(constructorParam, constructorParamTypeInfoInternal),
-    (error) => new Error(error),
+  const constructorParams = serializeToDataValue(
+    constructorParam,
+    constructorParamTypeInfoInternal,
   );
 
   const agentInitiator = AgentInitiatorRegistry.lookup(FooAgentClassName.value);
@@ -868,7 +857,7 @@ function testInvoke(
     // we deserialize and assert if the input is same as output.
     const result = deserializeReturnValue(methodName, resultDataValue);
 
-    expect(result).toEqual(Either.right(expectedOutput));
+    expect(result).toEqual(expectedOutput);
   });
 }
 
@@ -899,9 +888,7 @@ function createInputDataValue(
       );
     }
 
-    const result = serializeToDataValue(value, paramAnalysedType);
-
-    return Either.getOrThrowWith(result, (error) => new Error(error));
+    return serializeToDataValue(value, paramAnalysedType);
   }
 
   const elementValues: ElementValue[] = parameterNameAndValues.map(([paramName, value]) => {
@@ -917,10 +904,7 @@ function createInputDataValue(
 
     switch (paramAnalysedType.tag) {
       case 'analysed':
-        const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(value, paramAnalysedType.val),
-          (error) => new Error(error),
-        );
+        const witValue = WitValue.fromTsValueDefault(value, paramAnalysedType.val);
         return {
           tag: 'component-model',
           val: witValue,
@@ -962,10 +946,7 @@ function createInputDataValue(
 // a typescript value. This functionality will help ensure
 // the `DataValue` returned by invoke is a properly serialised version
 // of the typescript method result.
-function deserializeReturnValue(
-  methodName: string,
-  returnValue: DataValue,
-): Either.Either<any, string> {
+function deserializeReturnValue(methodName: string, returnValue: DataValue): any {
   const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(methodName)?.returnType;
 
   if (!returnType) {
@@ -993,7 +974,7 @@ function deserializeReturnValue(
 
   // typescript compiles even if you don't index it by 0
   // any[] === any
-  return Either.map(result, (r) => r[0]);
+  return result[0];
 }
 
 function overrideSelfAgentId(agentId: AgentId) {

@@ -1967,6 +1967,9 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
+        componentRevision:
+          type: integer
+          format: uint64
     AgentMetadataDto:
       type: object
       title: AgentMetadataDto
