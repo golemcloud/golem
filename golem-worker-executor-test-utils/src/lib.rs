@@ -89,8 +89,8 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
     EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
     IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
+    OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig, ShardManagerServiceConfig,
+    ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -1343,11 +1343,9 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         &self,
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>> {
-        Arc::new(
-            ActiveWorkers::<golem_worker_executor::workerctx::default::Context>::new(
-                &golem_config.memory,
-            ),
-        )
+        Arc::new(ActiveWorkers::<
+            golem_worker_executor::workerctx::default::Context,
+        >::new(&golem_config.memory))
     }
 
     fn create_environment_state_service(
@@ -1374,9 +1372,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
 
     async fn create_services(
         &self,
-        active_workers: Arc<
-            ActiveWorkers<golem_worker_executor::workerctx::default::Context>,
-        >,
+        active_workers: Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<
             wasmtime::component::Linker<golem_worker_executor::workerctx::default::Context>,
@@ -1538,22 +1534,22 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     > {
         use golem_worker_executor::workerctx::default::Context;
         let mut linker = create_linker(engine, get_durable_ctx_from_context)?;
-        golem_api_1_x::host::add_to_linker::<_, wasmtime::component::HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            get_durable_ctx_from_context,
-        )?;
-        golem_api_1_x::oplog::add_to_linker::<_, wasmtime::component::HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            get_durable_ctx_from_context,
-        )?;
-        golem_api_1_x::context::add_to_linker::<_, wasmtime::component::HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            get_durable_ctx_from_context,
-        )?;
-        durability::durability::add_to_linker::<_, wasmtime::component::HasSelf<DurableWorkerCtx<Context>>>(
-            &mut linker,
-            get_durable_ctx_from_context,
-        )?;
+        golem_api_1_x::host::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
+        >(&mut linker, get_durable_ctx_from_context)?;
+        golem_api_1_x::oplog::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
+        >(&mut linker, get_durable_ctx_from_context)?;
+        golem_api_1_x::context::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
+        >(&mut linker, get_durable_ctx_from_context)?;
+        durability::durability::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
+        >(&mut linker, get_durable_ctx_from_context)?;
         golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
             _,
             wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
@@ -1628,12 +1624,11 @@ pub async fn start_with_fuel_tracking(
 
     let start = std::time::Instant::now();
     loop {
-        let channel = tonic::transport::Channel::from_shared(format!(
-            "http://127.0.0.1:{grpc_port}"
-        ))
-        .expect("Valid URI")
-        .connect()
-        .await;
+        let channel =
+            tonic::transport::Channel::from_shared(format!("http://127.0.0.1:{grpc_port}"))
+                .expect("Valid URI")
+                .connect()
+                .await;
 
         if let Ok(channel) = channel {
             use tower::ServiceBuilder;
@@ -1650,7 +1645,9 @@ pub async fn start_with_fuel_tracking(
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
-            return Err(anyhow::anyhow!("Timeout waiting for fuel-aware server to start"));
+            return Err(anyhow::anyhow!(
+                "Timeout waiting for fuel-aware server to start"
+            ));
         }
     }
 }
