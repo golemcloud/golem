@@ -7,6 +7,8 @@ import { AgentDriver } from './driver/base.js';
 import { SkillWatcher } from './watcher.js';
 import { evaluate, ExpectSchema, type AssertionContext } from './assertions.js';
 
+export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
+
 // --- Schemas ---
 
 const InvokeSchema = z.object({
@@ -231,7 +233,7 @@ export class ScenarioExecutor {
         const stepTimeoutSeconds = step.timeout
           ?? spec.settings?.timeout_per_subprompt
           ?? this.options.globalTimeoutSeconds
-          ?? 300;
+          ?? DEFAULT_STEP_TIMEOUT_SECONDS;
         const stepBaseline = this.watcher.markBaseline();
         await this.watcher.snapshotAtimes();
         console.log(`Step ${step.id ?? '(unnamed)'}: starting (timeout=${stepTimeoutSeconds}s)`);

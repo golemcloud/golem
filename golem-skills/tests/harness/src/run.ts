@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { ScenarioLoader, ScenarioExecutor, type ScenarioRunResult } from './executor.js';
+import { ScenarioLoader, ScenarioExecutor, DEFAULT_STEP_TIMEOUT_SECONDS, type ScenarioRunResult } from './executor.js';
 import { ClaudeAgentDriver } from './driver/claude.js';
 import { GeminiAgentDriver } from './driver/gemini.js';
 import { OpenCodeAgentDriver } from './driver/opencode.js';
@@ -66,7 +66,7 @@ Options:
   --scenario <name>     Run only the named scenario
   --scenarios <dir>     Path to scenario YAML files (default: ./scenarios)
   --output <dir>        Results output directory (default: ./results)
-  --timeout <seconds>   Global timeout per scenario step in seconds (default: 300)
+  --timeout <seconds>   Global timeout per scenario step in seconds (default: ${DEFAULT_STEP_TIMEOUT_SECONDS})
   --skills <dir>        Path to skills directory (default: ../../skills)
   -h, --help            Show this help message
 `.trim();
