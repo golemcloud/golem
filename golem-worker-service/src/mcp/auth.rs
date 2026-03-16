@@ -34,6 +34,18 @@ const MCP_OAUTH_CALLBACK_PATH: &str = "/mcp/oauth/callback";
 /// How long a successfully validated token is cached before re-validation.
 const TOKEN_CACHE_TTL: Duration = Duration::from_secs(60);
 
+/// Hash of a Bearer token, used as a cache key to avoid re-validating
+/// the same token against the identity provider on every request.
+type TokenHash = u64;
+
+/// When a cached token validation expires and must be re-checked.
+type ValidationExpiry = Instant;
+
+/// Per-instance cache of successfully validated tokens.
+/// Each instance maintains its own cache independently; a cache miss
+/// simply triggers a fresh validation against the identity provider.
+type ValidatedTokenCache = Arc<DashMap<TokenHash, ValidationExpiry>>;
+
 /// Poem middleware that validates Bearer JWT tokens on MCP requests.
 ///
 /// Per the MCP spec (2025-06-18), authorization MUST be included in every HTTP
@@ -42,9 +54,7 @@ const TOKEN_CACHE_TTL: Duration = Duration::from_secs(60);
 pub struct McpBearerAuth {
     mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
     identity_provider: Arc<dyn IdentityProvider>,
-    /// Cache of validated tokens: token hash → expiry instant.
-    /// Local per-instance; each instance warms independently.
-    validated_tokens: Arc<DashMap<u64, Instant>>,
+    validated_tokens: ValidatedTokenCache,
 }
 
 impl McpBearerAuth {
@@ -55,7 +65,7 @@ impl McpBearerAuth {
         Self {
             mcp_capability_lookup,
             identity_provider,
-            validated_tokens: Arc::new(DashMap::new()),
+            validated_tokens: ValidatedTokenCache::default(),
         }
     }
 
@@ -84,7 +94,7 @@ pub struct McpBearerAuthEndpoint<E> {
     inner: E,
     mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
     identity_provider: Arc<dyn IdentityProvider>,
-    validated_tokens: Arc<DashMap<u64, Instant>>,
+    validated_tokens: ValidatedTokenCache,
 }
 
 impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
