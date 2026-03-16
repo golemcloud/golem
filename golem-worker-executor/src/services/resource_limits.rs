@@ -179,19 +179,7 @@ impl ResourceLimitsGrpc {
                         }
                     };
 
-                    // Step 1: report active consumption
-                    let active_updates = svc_arc.take_fuel_updates().await;
-                    if !active_updates.is_empty() {
-                        svc_arc.send_batch_updates(active_updates.clone()).await;
-                    }
-
-                    // Step 2: refresh stale idle accounts
-                    let stale = svc_arc
-                        .collect_stale_idle_accounts(&active_updates, refresh_threshold_secs)
-                        .await;
-                    if !stale.is_empty() {
-                        svc_arc.refresh_idle_accounts(stale).await;
-                    }
+                    svc_arc.send_batch(refresh_threshold_secs).await;
                 }
             }
             .instrument(span!(parent: None, Level::INFO, "Resource limits batch updates")),
@@ -220,8 +208,16 @@ impl ResourceLimitsGrpc {
         Ok(last_known_limits)
     }
 
-    async fn take_fuel_updates(&self) -> HashMap<AccountId, i64> {
-        let mut updates = HashMap::new();
+    /// Builds and sends a single batch to the registry covering both active
+    /// accounts (non-zero fuel delta) and stale idle accounts (zero delta for
+    /// a limit refresh). On success, updates all entries via
+    /// `update_last_known_limits`. On failure, resets `in_flight_delta` for
+    /// active accounts (so their deltas are not double-counted next cycle) and
+    /// leaves `last_refresh_secs` unchanged for stale idle accounts (so they
+    /// are retried next tick).
+    async fn send_batch(&self, refresh_threshold_secs: i64) {
+        // Collect active updates (non-zero delta) and move delta → in_flight.
+        let mut updates: HashMap<AccountId, i64> = HashMap::new();
 
         self.entries
             .iter_async(|k, cell| {
@@ -235,13 +231,47 @@ impl ResourceLimitsGrpc {
                             })
                             .ok();
                         updates.insert(*k, delta);
+                    } else if entry.secs_since_last_refresh() >= refresh_threshold_secs {
+                        // Stale idle account: include with zero delta to fetch
+                        // updated limits without reporting any consumption.
+                        updates.insert(*k, 0);
                     }
                 }
                 true
             })
             .await;
 
-        updates
+        if updates.is_empty() {
+            return;
+        }
+
+        tracing::debug!(
+            "Sending batch: {} active, {} stale idle account(s)",
+            updates.values().filter(|&&d| d != 0).count(),
+            updates.values().filter(|&&d| d == 0).count(),
+        );
+
+        match self.client.batch_update_fuel_usage(updates.clone()).await {
+            Ok(updated_limits) => {
+                for (account_id, resource_limits) in updated_limits.0 {
+                    self.update_last_known_limits(account_id, resource_limits)
+                        .await;
+                }
+            }
+            Err(err) => {
+                error!("Failed to send batched resource usage updates: {}", err);
+                // Reset in_flight_delta only for active accounts — their deltas
+                // were swapped out and must not be double-counted next cycle.
+                // Stale idle accounts had delta=0 so nothing to reset; their
+                // last_refresh_secs stays unchanged and they will be retried.
+                for (account_id, delta) in &updates {
+                    if *delta != 0 {
+                        error!("Lost fuel updates for account {account_id}: {delta}");
+                        self.reset_in_flight_delta(*account_id).await;
+                    }
+                }
+            }
+        }
     }
 
     async fn update_last_known_limits(
@@ -270,78 +300,6 @@ impl ResourceLimitsGrpc {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await {
             if let Some(entry) = cell.get() {
                 entry.in_flight_delta.swap(0, Ordering::AcqRel);
-            }
-        }
-    }
-
-    /// Returns account IDs whose cached limits are stale (older than
-    /// `threshold_secs`) and that were not included in the current active batch
-    /// (i.e. had zero delta — no fuel was consumed since the last refresh).
-    async fn collect_stale_idle_accounts(
-        &self,
-        active_accounts: &HashMap<AccountId, i64>,
-        threshold_secs: i64,
-    ) -> Vec<AccountId> {
-        let mut stale = Vec::new();
-
-        self.entries
-            .iter_async(|k, cell| {
-                if !active_accounts.contains_key(k) {
-                    if let Some(entry) = cell.get() {
-                        if entry.secs_since_last_refresh() >= threshold_secs {
-                            stale.push(*k);
-                        }
-                    }
-                }
-                true
-            })
-            .await;
-
-        stale
-    }
-
-    async fn refresh_idle_accounts(&self, account_ids: Vec<AccountId>) {
-        let zero_updates: HashMap<AccountId, i64> = account_ids.iter().map(|id| (*id, 0)).collect();
-
-        tracing::debug!(
-            "Refreshing stale resource limits for {} idle account(s)",
-            account_ids.len()
-        );
-
-        match self.client.batch_update_fuel_usage(zero_updates).await {
-            Ok(updated_limits) => {
-                for (account_id, resource_limits) in updated_limits.0 {
-                    self.update_last_known_limits(account_id, resource_limits)
-                        .await;
-                }
-            }
-            Err(err) => {
-                error!(
-                    "Failed to refresh stale resource limits for idle accounts: {}",
-                    err
-                );
-            }
-        }
-    }
-
-    async fn send_batch_updates(&self, updates: HashMap<AccountId, i64>) {
-        tracing::debug!("Sending batch fuel updates");
-
-        let update_limits_result = self.client.batch_update_fuel_usage(updates.clone()).await;
-
-        match update_limits_result {
-            Ok(updated_limits) => {
-                for (account_id, resource_limits) in updated_limits.0 {
-                    self.update_last_known_limits(account_id, resource_limits)
-                        .await;
-                }
-            }
-            Err(err) => {
-                error!("Failed to send batched resource usage updates: {}", err);
-                error!("Lost fuel updates: {:?}", updates);
-                for account_id in updates.keys() {
-                    self.reset_in_flight_delta(*account_id).await;
-                }
             }
         }
     }
@@ -751,12 +709,16 @@ mod tests {
         AccountId(Uuid::new_v4())
     }
 
+    // Threshold used in tests that want stale idle accounts to be picked up.
+    const STALE_THRESHOLD_SECS: i64 = 300;
+    // Threshold used in tests that want idle accounts to never be picked up.
+    const NO_IDLE_REFRESH_THRESHOLD_SECS: i64 = i64::MAX;
+
     fn make_grpc(mock: Arc<MockRegistryService>) -> Arc<ResourceLimitsGrpc> {
         // Pass an already-cancelled token so the background batch task exits
-        // immediately in its first select! — before it can call take_fuel_updates.
-        // Tests drive the batch cycle manually via take_fuel_updates /
-        // send_batch_updates / collect_stale_idle_accounts / refresh_idle_accounts
-        // for deterministic, race-free control.
+        // immediately in its first select! — before it can call send_batch.
+        // Tests drive the batch cycle manually via send_batch for deterministic,
+        // race-free control.
         let token = CancellationToken::new();
         token.cancel();
         ResourceLimitsGrpc::new(
@@ -814,69 +776,55 @@ mod tests {
     }
 
     #[test]
-    async fn take_fuel_updates_returns_empty_when_no_consumption() {
+    async fn send_batch_does_nothing_when_no_consumption_and_no_stale_accounts() {
+        // No borrows, entry is freshly initialised (last_refresh_secs = now).
+        // send_batch with a large threshold should produce no server call.
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let svc = make_grpc(mock);
         let id = account_id();
 
         let _ = svc.initialize_account(id).await.unwrap();
-        let updates = svc.take_fuel_updates().await;
+        // Large threshold → not stale; no delta → not active.
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
-        assert!(updates.is_empty());
+        // Nothing changed — no panic, no server call expected.
     }
 
     #[test]
-    async fn take_fuel_updates_captures_positive_delta_and_zeroes_it() {
+    async fn send_batch_captures_active_delta_and_zeroes_it() {
         // After borrow_fuel(300): delta = +300.
-        // take_fuel_updates must capture that value and zero delta.
+        // send_batch must swap delta to 0 and include the 300 in the batch.
+        // We verify that delta is zeroed; in_flight is cleared only if the server
+        // returns a limit update for the account.
         let mock = Arc::new(MockRegistryService::new(1000, 512));
-        let svc = make_grpc(mock);
         let id = account_id();
 
+        // Server returns updated limits for the account so in_flight is also cleared.
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 700,
+                max_memory_per_worker: 512,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+
+        let svc = make_grpc(mock);
         let entry = svc.initialize_account(id).await.unwrap();
         entry.borrow_fuel(300);
 
-        let updates = svc.take_fuel_updates().await;
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
-        assert_eq!(updates.get(&id).copied(), Some(300));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
+        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
     }
 
     #[test]
-    async fn take_fuel_updates_moves_delta_to_in_flight() {
-        // After take: in_flight_delta = captured delta; delta = 0.
-        let mock = Arc::new(MockRegistryService::new(1000, 512));
-        let svc = make_grpc(mock);
-        let id = account_id();
-
-        let entry = svc.initialize_account(id).await.unwrap();
-        entry.borrow_fuel(400);
-
-        let _ = svc.take_fuel_updates().await;
-
-        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 400);
-        assert_eq!(entry.delta.load(Ordering::Acquire), 0);
-    }
-
-    #[test]
-    async fn take_fuel_updates_skips_zero_delta_entries() {
-        // An initialised account with no borrows must not appear in the map
-        let mock = Arc::new(MockRegistryService::new(1000, 512));
-        let svc = make_grpc(mock);
-        let id = account_id();
-
-        let _ = svc.initialize_account(id).await.unwrap();
-        let updates = svc.take_fuel_updates().await;
-
-        assert!(!updates.contains_key(&id));
-    }
-
-    #[test]
-    async fn send_batch_updates_success_refreshes_fuel_and_clears_in_flight() {
+    async fn send_batch_success_refreshes_fuel_and_clears_in_flight() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let id = account_id();
 
-        // Server reports 600 remaining after the batch
         let mut updated = HashMap::new();
         updated.insert(
             id,
@@ -891,8 +839,7 @@ mod tests {
         let entry = svc.initialize_account(id).await.unwrap();
         entry.borrow_fuel(400);
 
-        let updates = svc.take_fuel_updates().await;
-        svc.send_batch_updates(updates).await;
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
         assert_eq!(entry.fuel.load(Ordering::Acquire), 600);
         assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
@@ -900,9 +847,7 @@ mod tests {
     }
 
     #[test]
-    async fn send_batch_updates_success_effective_fuel_reflects_server_value() {
-        // After a successful batch, effective_fuel should equal the server-returned value
-        // (since in_flight and delta are both 0 at that moment).
+    async fn send_batch_success_effective_fuel_reflects_server_value() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let id = account_id();
 
@@ -918,17 +863,15 @@ mod tests {
 
         let svc = make_grpc(mock);
         let entry = svc.initialize_account(id).await.unwrap();
-        entry.borrow_fuel(200); // source of truth is the server's available_fuel - delta is 200 on this executor, other executors also have a delta
+        entry.borrow_fuel(200);
 
-        let updates = svc.take_fuel_updates().await;
-        svc.send_batch_updates(updates).await;
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
         assert_eq!(entry.effective_fuel(), 700);
     }
 
-    // TODO: is this correct behavior?
     #[test]
-    async fn send_batch_updates_failure_clears_in_flight_without_updating_fuel() {
+    async fn send_batch_failure_clears_in_flight_without_updating_fuel() {
         // On failure: in_flight_delta is zeroed; fuel stays at the old value.
         // The consumed fuel for this interval is lost (not retried).
         let mock = Arc::new(MockRegistryService::new(1000, 512));
@@ -939,46 +882,31 @@ mod tests {
         let entry = svc.initialize_account(id).await.unwrap();
         entry.borrow_fuel(300);
 
-        let updates = svc.take_fuel_updates().await;
-        assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 300);
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
-        svc.send_batch_updates(updates).await;
-
-        // in_flight zeroed so it is not double-counted next cycle
         assert_eq!(entry.in_flight_delta.load(Ordering::Acquire), 0);
-        // fuel NOT updated — old server value retained
         assert_eq!(entry.fuel.load(Ordering::Acquire), 1000);
     }
 
-    // TODO: is this correct behavior?
     #[test]
-    async fn send_batch_updates_failure_does_not_double_count_on_next_cycle() {
-        // After a failed batch, the next cycle must only report newly accumulated
-        // borrows — not the lost interval's amount.
+    async fn send_batch_failure_does_not_double_count_on_next_cycle() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         mock.set_batch_update_error();
         let svc = make_grpc(mock.clone());
         let id = account_id();
 
         let entry = svc.initialize_account(id).await.unwrap();
-        entry.borrow_fuel(300); // first interval
+        entry.borrow_fuel(300);
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await; // fails; 300 is lost
 
-        let updates1 = svc.take_fuel_updates().await;
-        svc.send_batch_updates(updates1).await; // fails; 300 is lost
-
-        // new borrows in the second interval
+        // New borrows in the second interval
         entry.borrow_fuel(200);
-
-        let updates2 = svc.take_fuel_updates().await;
-        // Must only contain the 200 from this interval, not 300 + 200
-        assert_eq!(updates2.get(&id).copied(), Some(200));
+        // delta must only contain the 200, not 300 + 200
+        assert_eq!(entry.delta.load(Ordering::Acquire), 200);
     }
 
-    // TODO: is this correct behavior?
     #[test]
     async fn connectivity_outage_keeps_fuel_non_zero_and_allows_borrowing() {
-        // During a sustained connectivity outage, fuel is never refreshed
-        // downward. Workers must not be prematurely suspended.
         let mock = Arc::new(MockRegistryService::new(500, 512));
         mock.set_batch_update_error();
         let svc = make_grpc(mock);
@@ -986,23 +914,17 @@ mod tests {
 
         let entry = svc.initialize_account(id).await.unwrap();
 
-        // Simulate three failed batch cycles
         for _ in 0..3 {
             entry.borrow_fuel(100);
-            let updates = svc.take_fuel_updates().await;
-            svc.send_batch_updates(updates).await;
+            svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
         }
 
-        // fuel is still the original server value; effective_fuel > 0
         assert_eq!(entry.fuel.load(Ordering::Acquire), 500);
-        // A further borrow should still succeed (not prematurely suspended)
         assert!(entry.borrow_fuel(1));
     }
 
     #[test]
     async fn in_flight_not_double_counted_after_successful_cycle() {
-        // After a successful batch update, in_flight is cleared.
-        // Subsequent borrows see only the freshly server-confirmed fuel.
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let id = account_id();
 
@@ -1020,10 +942,8 @@ mod tests {
         let entry = svc.initialize_account(id).await.unwrap();
         entry.borrow_fuel(300);
 
-        let updates = svc.take_fuel_updates().await;
-        svc.send_batch_updates(updates).await; // fuel = 700, in_flight = 0
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
-        // Should be able to borrow exactly 700 from the refreshed balance
         assert!(entry.borrow_fuel(700));
     }
 
@@ -1044,14 +964,11 @@ mod tests {
 
         let svc = make_grpc(mock);
         let entry = svc.initialize_account(id).await.unwrap();
-
-        // Force last_refresh_secs to a clearly old value
         entry.last_refresh_secs.store(0, Ordering::Release);
 
         let before = Utc::now().timestamp();
         entry.borrow_fuel(200);
-        let updates = svc.take_fuel_updates().await;
-        svc.send_batch_updates(updates).await;
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
         let after = Utc::now().timestamp();
 
         let stored = entry.last_refresh_secs.load(Ordering::Acquire);
@@ -1070,79 +987,19 @@ mod tests {
         let id = account_id();
 
         let entry = svc.initialize_account(id).await.unwrap();
-
-        // Force a known old timestamp
         let old_ts = 0i64;
         entry.last_refresh_secs.store(old_ts, Ordering::Release);
 
         entry.borrow_fuel(200);
-        let updates = svc.take_fuel_updates().await;
-        svc.send_batch_updates(updates).await;
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
-        // last_refresh_secs must remain unchanged after failure
         assert_eq!(entry.last_refresh_secs.load(Ordering::Acquire), old_ts);
     }
 
     #[test]
-    async fn collect_stale_idle_accounts_excludes_active_accounts() {
-        let mock = Arc::new(MockRegistryService::new(1000, 512));
-        let svc = make_grpc(mock);
-        let id = account_id();
-
-        let entry = svc.initialize_account(id).await.unwrap();
-        // Force stale timestamp
-        entry.last_refresh_secs.store(0, Ordering::Release);
-
-        let mut active = HashMap::new();
-        active.insert(id, 100i64);
-
-        let stale = svc.collect_stale_idle_accounts(&active, 300).await;
-        assert!(
-            !stale.contains(&id),
-            "active accounts must not appear as stale"
-        );
-    }
-
-    #[test]
-    async fn collect_stale_idle_accounts_includes_stale_idle_accounts() {
-        let mock = Arc::new(MockRegistryService::new(1000, 512));
-        let svc = make_grpc(mock);
-        let id = account_id();
-
-        let entry = svc.initialize_account(id).await.unwrap();
-        // Force a very old timestamp so the account is definitely stale
-        entry.last_refresh_secs.store(0, Ordering::Release);
-
-        // No active consumption
-        let active: HashMap<AccountId, i64> = HashMap::new();
-
-        let stale = svc.collect_stale_idle_accounts(&active, 300).await;
-        assert!(stale.contains(&id), "idle stale account must be collected");
-    }
-
-    #[test]
-    async fn collect_stale_idle_accounts_excludes_recently_refreshed() {
-        let mock = Arc::new(MockRegistryService::new(1000, 512));
-        let svc = make_grpc(mock);
-        let id = account_id();
-
-        let entry = svc.initialize_account(id).await.unwrap();
-        // Set last_refresh_secs to now — well within any threshold
-        entry
-            .last_refresh_secs
-            .store(Utc::now().timestamp(), Ordering::Release);
-
-        let active: HashMap<AccountId, i64> = HashMap::new();
-
-        let stale = svc.collect_stale_idle_accounts(&active, 300).await;
-        assert!(
-            !stale.contains(&id),
-            "recently refreshed account must not be stale"
-        );
-    }
-
-    #[test]
-    async fn refresh_idle_accounts_updates_fuel_and_last_refresh() {
+    async fn send_batch_active_account_not_included_in_idle_refresh() {
+        // An account with non-zero delta is active — even if stale, it is sent
+        // with its real delta (not zero) and must not be double-counted.
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         let id = account_id();
 
@@ -1150,29 +1007,78 @@ mod tests {
         updated.insert(
             id,
             ServiceResourceLimits {
-                available_fuel: 9000,
-                max_memory_per_worker: 2048,
+                available_fuel: 900,
+                max_memory_per_worker: 512,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
 
         let svc = make_grpc(mock);
         let entry = svc.initialize_account(id).await.unwrap();
-        entry.last_refresh_secs.store(0, Ordering::Release);
+        entry.last_refresh_secs.store(0, Ordering::Release); // stale
+        entry.borrow_fuel(100); // also active
+
+        // With threshold=0 every account is stale, but active accounts take
+        // precedence with their real delta.
+        svc.send_batch(0).await;
+
+        // Server returned 900 — entry must reflect that, not be zeroed.
+        assert_eq!(entry.fuel.load(Ordering::Acquire), 900);
+        assert_eq!(entry.delta.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    async fn send_batch_idle_stale_account_is_refreshed() {
+        // An idle account (delta=0) that is stale must have its limits refreshed
+        // via a zero-delta update in the same batch.
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let id = account_id();
+
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 5000,
+                max_memory_per_worker: 512,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+
+        let svc = make_grpc(mock);
+        let entry = svc.initialize_account(id).await.unwrap();
+        entry.last_refresh_secs.store(0, Ordering::Release); // stale, no borrows
 
         let before = Utc::now().timestamp();
-        svc.refresh_idle_accounts(vec![id]).await;
+        svc.send_batch(STALE_THRESHOLD_SECS).await;
         let after = Utc::now().timestamp();
 
-        assert_eq!(entry.fuel.load(Ordering::Acquire), 9000);
-        assert_eq!(entry.max_memory.load(Ordering::Acquire), 2048);
+        assert_eq!(entry.fuel.load(Ordering::Acquire), 5000);
         let stored = entry.last_refresh_secs.load(Ordering::Acquire);
         assert!(stored >= before);
         assert!(stored <= after);
     }
 
     #[test]
-    async fn refresh_idle_accounts_on_failure_does_not_update_last_refresh() {
+    async fn send_batch_recently_refreshed_idle_account_is_skipped() {
+        // An idle account whose last_refresh_secs is recent must not be included.
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let svc = make_grpc(mock);
+        let id = account_id();
+
+        let entry = svc.initialize_account(id).await.unwrap();
+        // last_refresh_secs is already set to now by new()
+
+        // Large threshold → not stale, no delta → send_batch does nothing.
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        // fuel unchanged (no server call)
+        assert_eq!(entry.fuel.load(Ordering::Acquire), 1000);
+    }
+
+    #[test]
+    async fn send_batch_idle_failure_does_not_update_last_refresh() {
+        // On batch failure, stale idle accounts must retain old last_refresh_secs
+        // so they are retried on the next tick.
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         mock.set_batch_update_error();
         let svc = make_grpc(mock);
@@ -1182,11 +1088,9 @@ mod tests {
         let old_ts = 0i64;
         entry.last_refresh_secs.store(old_ts, Ordering::Release);
 
-        svc.refresh_idle_accounts(vec![id]).await;
+        svc.send_batch(STALE_THRESHOLD_SECS).await;
 
-        // last_refresh_secs must remain unchanged so the account is retried
         assert_eq!(entry.last_refresh_secs.load(Ordering::Acquire), old_ts);
-        // fuel also unchanged
         assert_eq!(entry.fuel.load(Ordering::Acquire), 1000);
     }
 
@@ -1210,14 +1114,7 @@ mod tests {
 
         entry.last_refresh_secs.store(0, Ordering::Release);
 
-        // Drive one full batch cycle manually as the background task would
-        let active = svc.take_fuel_updates().await;
-        assert!(active.is_empty(), "no consumption → active batch is empty");
-
-        let stale = svc.collect_stale_idle_accounts(&active, 300).await;
-        assert!(stale.contains(&id));
-
-        svc.refresh_idle_accounts(stale).await;
+        svc.send_batch(STALE_THRESHOLD_SECS).await;
 
         // Fuel should now reflect the server-returned value
         assert_eq!(entry.fuel.load(Ordering::Acquire), 5000);
