@@ -1,7 +1,3 @@
 components:
   oplog:processor:
     templates: rust, rust-test-component
-
-customCommands:
-  copy:
-    - command: cp ../../golem-temp/agents/oplog_processor_release.wasm ../../../oplog-processor.wasm
