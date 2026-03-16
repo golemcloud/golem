@@ -3,12 +3,10 @@ name: Skills Test Harness
 on:
   push:
     paths:
-      - 'skills/**'
-      - 'tests/harness/**'
+      - 'golem-skills/**'
   pull_request:
     paths:
-      - 'skills/**'
-      - 'tests/harness/**'
+      - 'golem-skills/**'
   schedule:
     - cron: '0 6 * * 1' # Weekly Monday 6am UTC
   workflow_dispatch:
@@ -30,17 +28,17 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: tests/harness/package.json
+          cache-dependency-path: golem-skills/tests/harness/package.json
 
       - name: Install and Build
         run: |
-          cd tests/harness
+          cd golem-skills/tests/harness
           npm install
           npm run build
 
       - name: Run Unit Tests
         run: |
-          cd tests/harness
+          cd golem-skills/tests/harness
           npm test
 
   integration-test:
@@ -63,7 +61,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: tests/harness/package.json
+          cache-dependency-path: golem-skills/tests/harness/package.json
 
       - name: Install Rust (with wasm32-wasip2)
         uses: dtolnay/rust-toolchain@stable
@@ -115,7 +113,7 @@ jobs:
 
       - name: Install Harness Dependencies
         run: |
-          cd tests/harness
+          cd golem-skills/tests/harness
           npm install
           npm run build
           npm install -g tsx
@@ -123,13 +121,13 @@ jobs:
       - name: Setup isolated test directory
         run: |
           mkdir -p /tmp/harness-run
-          cp -r tests/harness/dist /tmp/harness-run/dist
-          cp -r tests/harness/node_modules /tmp/harness-run/node_modules
-          cp -r tests/harness/src /tmp/harness-run/src
-          cp -r tests/harness/scenarios /tmp/harness-run/scenarios
-          cp tests/harness/package.json /tmp/harness-run/
-          cp tests/harness/tsconfig.json /tmp/harness-run/
-          cp -r skills /tmp/harness-run/skills
+          cp -r golem-skills/tests/harness/dist /tmp/harness-run/dist
+          cp -r golem-skills/tests/harness/node_modules /tmp/harness-run/node_modules
+          cp -r golem-skills/tests/harness/src /tmp/harness-run/src
+          cp -r golem-skills/tests/harness/scenarios /tmp/harness-run/scenarios
+          cp golem-skills/tests/harness/package.json /tmp/harness-run/
+          cp golem-skills/tests/harness/tsconfig.json /tmp/harness-run/
+          cp -r golem-skills/skills /tmp/harness-run/skills
           cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"
 
       - name: Run Skill Tests
