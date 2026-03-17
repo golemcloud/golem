@@ -18,7 +18,9 @@ use super::model::security_scheme::{
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::security_scheme::SecuritySchemeRecord;
-use crate::repo::registry_change::{ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent};
+use crate::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -245,20 +247,6 @@ impl<DBP: Pool> DbSecuritySchemeRepo<DBP> {
     }
 }
 
-impl DbSecuritySchemeRepo<PostgresPool> {
-    async fn pg_notify_change_event(&self, event_id: ChangeEventId) {
-        let _ = self
-            .db_pool
-            .with_rw(METRICS_SVC_NAME, "pg_notify")
-            .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
-            .await;
-    }
-}
-
-impl DbSecuritySchemeRepo<SqlitePool> {
-    async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
-}
-
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbSecuritySchemeRepo<PostgresPool> {
     async fn insert_revision(
@@ -446,7 +434,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        self.pg_notify_change_event(result.1).await;
+        self.db_pool.notify_change_event(result.1).await;
 
         Ok(result)
     }
@@ -499,7 +487,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        self.pg_notify_change_event(result.1).await;
+        self.db_pool.notify_change_event(result.1).await;
 
         Ok(result)
     }
@@ -552,7 +540,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        self.pg_notify_change_event(result.1).await;
+        self.db_pool.notify_change_event(result.1).await;
 
         Ok(result)
     }

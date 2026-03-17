@@ -16,7 +16,7 @@ use super::model::domain_registration::{DomainRegistrationRecord, DomainRegistra
 use crate::repo::model::BindFields;
 use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -217,20 +217,6 @@ impl<DBP: Pool> DbDomainRegistrationRepo<DBP> {
     }
 }
 
-impl DbDomainRegistrationRepo<PostgresPool> {
-    async fn pg_notify_change_event(&self, event_id: ChangeEventId) {
-        let _ = self
-            .db_pool
-            .with_rw(METRICS_SVC_NAME, "pg_notify")
-            .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
-            .await;
-    }
-}
-
-impl DbDomainRegistrationRepo<SqlitePool> {
-    async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
-}
-
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
@@ -309,7 +295,7 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
             })
             .await?;
 
-        self.pg_notify_change_event(result.1).await;
+        self.db_pool.notify_change_event(result.1).await;
 
         Ok(result)
     }
@@ -397,7 +383,7 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
             .await?;
 
         if let Some((_, event_id)) = &result {
-            self.pg_notify_change_event(*event_id).await;
+            self.db_pool.notify_change_event(*event_id).await;
         }
 
         Ok(result)

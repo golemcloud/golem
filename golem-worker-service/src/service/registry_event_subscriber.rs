@@ -145,7 +145,9 @@ async fn dispatch_event(
                 environment_id = %environment_id,
                 "Received security scheme changed event, invalidating route cache"
             );
-            route_resolver.clear_all().await;
+            route_resolver
+                .invalidate_domains_for_environment(*environment_id)
+                .await;
         }
     }
 }
