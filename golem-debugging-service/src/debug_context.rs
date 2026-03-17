@@ -96,7 +96,7 @@ impl DurableWorkerCtxView<DebugContext> for DebugContext {
 
 #[async_trait]
 impl FuelManagement for DebugContext {
-    fn borrow_fuel(&mut self, _current_level: u64) -> bool {
+    fn ensure_fuel(&mut self, _current_level: u64) -> bool {
         true
     }
 
