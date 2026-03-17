@@ -65,11 +65,10 @@ async fn table_within_limit_succeeds(
 
 /// The `it_agent_counters_release` component has a static function table with
 /// 275 entries. Setting the limit below that (100) causes worker creation to
-/// fail because wasmtime calls `table_growing` during component instantiation,
-/// which triggers the limit check before any function is invoked.
-///
-/// The expected outcome is that `start_agent` (which instantiates the component)
-/// returns an error containing the ExceededTableLimit message.
+/// fail because `create_worker` calls `start_if_needed` and waits for the
+/// `WorkerLoaded` event synchronously. Wasmtime calls `table_growing` during
+/// component instantiation, which triggers the limit check and propagates the
+/// error back to `start_agent`.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -80,7 +79,7 @@ async fn table_exceeding_limit_fails_at_instantiation(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // Limit is 100, component table is 275 — should fail during instantiation.
+    // Limit is 100, component table is 275 — fails during synchronous instantiation.
     let executor = start_with_table_limit(deps, &context, 100).await?;
 
     let component = executor
@@ -90,35 +89,19 @@ async fn table_exceeding_limit_fails_at_instantiation(
 
     let agent_id = agent_id!("Counter", "table-limit-exceeded-1");
 
-    // start_agent triggers component instantiation, which calls table_growing.
-    // With a limit of 100 and a component table of 275, this must fail.
+    // create_worker calls start_if_needed and waits for WorkerLoaded, so the
+    // table_growing limit error propagates synchronously here.
     let create_result = executor.start_agent(&component.id, agent_id.clone()).await;
 
-    match create_result {
-        Err(err) => {
-            let err_str = format!("{err:?}");
-            assert!(
-                err_str.contains("function table") || err_str.contains("ExceededTableLimit"),
-                "expected ExceededTableLimit error when starting agent, got: {err_str}"
-            );
-        }
-        Ok(_) => {
-            // If start_agent succeeded unexpectedly, the invoke should fail.
-            // This handles a hypothetical race where instantiation is deferred.
-            let invoke_result = executor
-                .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
-                .await;
-            assert!(
-                invoke_result.is_err(),
-                "expected invocation to fail with ExceededTableLimit"
-            );
-            let err_str = format!("{invoke_result:?}");
-            assert!(
-                err_str.contains("function table") || err_str.contains("ExceededTableLimit"),
-                "expected ExceededTableLimit error, got: {err_str}"
-            );
-        }
-    }
+    assert!(
+        create_result.is_err(),
+        "expected start_agent to fail with ExceededTableLimit"
+    );
+    let err_str = format!("{create_result:?}");
+    assert!(
+        err_str.contains("function table") || err_str.contains("ExceededTableLimit"),
+        "expected ExceededTableLimit error when starting agent, got: {err_str}"
+    );
 
     Ok(())
 }
