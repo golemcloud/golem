@@ -300,6 +300,7 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                             Transform::ApplicationName,
                         ]
                     }
+                    (false, "Cargo.toml") => vec![Transform::RustSdk],
                     (false, _) => vec![Transform::ComponentName],
                 };
 

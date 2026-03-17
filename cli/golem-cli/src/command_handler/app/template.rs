@@ -166,7 +166,10 @@ impl TemplateHandler {
         self.log_new_template_plan(&safe_template_plan);
 
         if !safe_template_plan.is_empty()
-            && !self.ctx.interactive_handler().confirm_template_plan_apply()?
+            && !self
+                .ctx
+                .interactive_handler()
+                .confirm_template_plan_apply()?
         {
             bail!(NonSuccessfulExit);
         }
@@ -527,7 +530,6 @@ impl TemplateHandler {
                         let component_template =
                             app_template_repo.component_template(component.language)?;
                         let upgrade_plan = self.build_multi_component_layout_upgrade_plan(
-                            component_name,
                             component,
                             app_dir,
                             &new_component_dir,
@@ -664,7 +666,6 @@ impl TemplateHandler {
 
     fn build_multi_component_layout_upgrade_plan(
         &self,
-        component_name: &ComponentName,
         component: &ExistingComponent,
         app_dir: &Path,
         new_component_dir: &Path,
@@ -686,11 +687,16 @@ impl TemplateHandler {
                 });
             }
             GuestLanguage::Rust => {
-                // TODO: FCL
-                todo!(
-                    "implement rust multi-component layout upgrade for component {}",
-                    component_name.as_str()
-                )
+                let target_root = app_dir.join(new_component_dir);
+
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: app_dir.join("Cargo.toml"),
+                    target: target_root.join("Cargo.toml"),
+                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: app_dir.join("src"),
+                    target: target_root.join("src"),
+                });
             }
         }
 
@@ -710,7 +716,7 @@ impl TemplateHandler {
         log_action(
             "Planned",
             format!(
-                "multi-component layout upgrade steps for component {}",
+                "multi-component layout upgrade steps for component {}, which is required before adding the selected template(s)",
                 component_name.as_str().log_color_highlight()
             ),
         );
@@ -720,7 +726,7 @@ impl TemplateHandler {
             match step {
                 MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
                     logln(format!(
-                        "- {} {} -> {}",
+                        "- {} {} to {}",
                         "move".yellow(),
                         source.display().to_string().log_color_highlight(),
                         target.display().to_string().log_color_highlight()
@@ -746,7 +752,7 @@ impl TemplateHandler {
                 MultiComponentLayoutUpgradePlanStep::Move { target, .. } => {
                     if !targets.insert(target.clone()) {
                         validation_errors.push(format!(
-                            "Duplicate move target in plan: {}",
+                            "Duplicate target in plan: {}",
                             target.display().to_string().log_color_error_highlight()
                         ));
                     }
