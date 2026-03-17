@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agents_md;
 pub mod cargo_toml;
 pub mod gitignore;
 pub mod golem_yaml;

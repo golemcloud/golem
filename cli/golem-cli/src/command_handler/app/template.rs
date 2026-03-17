@@ -697,6 +697,14 @@ impl TemplateHandler {
                     source: app_dir.join("src"),
                     target: target_root.join("src"),
                 });
+
+                let cargo_target_dir = app_dir.join("target");
+                if cargo_target_dir.exists() {
+                    upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                        source: cargo_target_dir,
+                        target: target_root.join("target"),
+                    });
+                }
             }
         }
 

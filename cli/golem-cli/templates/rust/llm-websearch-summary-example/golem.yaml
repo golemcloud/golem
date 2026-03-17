@@ -9,9 +9,6 @@ httpApi:
 
 components:
   componentname:
-    templates: rust
-
-    # golem-app-manifest-env-doc
     env:
       # Local ollama llm model to use
       LLM_MODEL: hf.co/unsloth/gpt-oss-20b-GGUF:Q8_0

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use anyhow::anyhow;
+use std::collections::BTreeSet;
 use tree_sitter::{Parser, Tree};
 
 pub fn add_import_and_export(
@@ -38,6 +39,87 @@ pub fn add_import_and_export(
     }
     output.push_str(&source[insert_at..]);
     Ok(output)
+}
+
+pub fn validate(source: &str) -> anyhow::Result<()> {
+    let _ = parse_rust(source)?;
+    Ok(())
+}
+
+pub fn merge_reexports(current: &str, update: &str) -> anyhow::Result<String> {
+    let _ = parse_rust(current)?;
+    let _ = parse_rust(update)?;
+
+    let mut known = collect_reexport_declarations(current)
+        .into_iter()
+        .map(|line| line.trim().to_string())
+        .collect::<BTreeSet<_>>();
+
+    let mut has_additions = false;
+    for line in collect_reexport_declarations(update) {
+        let normalized = line.trim().to_string();
+        if known.insert(normalized) {
+            has_additions = true;
+        }
+    }
+
+    if !has_additions {
+        return Ok(current.to_string());
+    }
+
+    let merged_mods = merge_declaration_kind(current, update, is_mod_declaration);
+    let merged_pub_uses = merge_declaration_kind(current, update, is_pub_use_declaration);
+
+    let mut declaration_block = Vec::new();
+    declaration_block.extend(merged_mods);
+    if !declaration_block.is_empty() && !merged_pub_uses.is_empty() {
+        declaration_block.push(String::new());
+    }
+    declaration_block.extend(merged_pub_uses);
+
+    if declaration_block.is_empty() {
+        return Ok(current.to_string());
+    }
+
+    let mut output_lines = Vec::new();
+    let mut inserted = false;
+    for line in current.lines() {
+        if is_reexport_declaration(line) {
+            if !inserted {
+                output_lines.extend(declaration_block.iter().cloned());
+                inserted = true;
+            }
+            continue;
+        }
+        output_lines.push(line.to_string());
+    }
+
+    if !inserted {
+        output_lines.splice(0..0, declaration_block);
+    }
+
+    let mut output = output_lines.join("\n");
+    if current.ends_with('\n') {
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
+fn merge_declaration_kind(current: &str, update: &str, predicate: fn(&str) -> bool) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut merged = Vec::new();
+
+    for source in [current, update] {
+        for line in source.lines() {
+            let normalized = line.trim();
+            if predicate(normalized) && seen.insert(normalized.to_string()) {
+                merged.push(normalized.to_string());
+            }
+        }
+    }
+
+    merged
 }
 
 fn parse_rust(source: &str) -> anyhow::Result<Tree> {
@@ -70,6 +152,32 @@ fn last_use_end(source: &str, tree: &Tree) -> usize {
         return line_end_at(source, end);
     }
     0
+}
+
+fn is_mod_declaration(line: &str) -> bool {
+    line.starts_with("mod ") && line.ends_with(';')
+}
+
+fn is_pub_use_declaration(line: &str) -> bool {
+    line.starts_with("pub use ") && line.ends_with(';')
+}
+
+fn is_reexport_declaration(line: &str) -> bool {
+    let line = line.trim();
+    !line.starts_with("//") && (is_mod_declaration(line) || is_pub_use_declaration(line))
+}
+
+fn collect_reexport_declarations(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            (line.starts_with("mod ") || line.starts_with("pub use "))
+                && line.ends_with(';')
+                && !line.starts_with("//")
+        })
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn line_end_at(source: &str, pos: usize) -> usize {

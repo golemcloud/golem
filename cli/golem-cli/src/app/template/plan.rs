@@ -336,6 +336,12 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
     fn merge(file_name: &str, current: &str, new: &str) -> anyhow::Result<Option<String>> {
         Ok(match file_name {
             ".gitignore" => Some(edit::gitignore::merge(current, new)),
+            "AGENTS.md" => Some(merge_with_validation(
+                current,
+                new,
+                edit::agents_md::validate,
+                edit::agents_md::merge_guides,
+            )?),
             "golem.yaml" => Some(merge_with_validation(
                 current,
                 new,
@@ -348,11 +354,23 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 edit::main_ts::validate,
                 edit::main_ts::merge_reexports,
             )?),
+            "lib.rs" => Some(merge_with_validation(
+                current,
+                new,
+                edit::main_rs::validate,
+                edit::main_rs::merge_reexports,
+            )?),
             "package.json" => Some(merge_with_validation(
                 current,
                 new,
                 validate_json,
                 edit::json::merge_object,
+            )?),
+            "Cargo.toml" => Some(merge_with_validation(
+                current,
+                new,
+                validate_toml,
+                edit::cargo_toml::merge_documents,
             )?),
             "tsconfig.json" => Some(merge_with_validation(
                 current,
@@ -397,6 +415,11 @@ fn merge_with_validation(
 
 fn validate_json(source: &str) -> anyhow::Result<()> {
     serde_json::from_str::<JsonValue>(source)?;
+    Ok(())
+}
+
+fn validate_toml(source: &str) -> anyhow::Result<()> {
+    source.parse::<toml_edit::DocumentMut>()?;
     Ok(())
 }
 

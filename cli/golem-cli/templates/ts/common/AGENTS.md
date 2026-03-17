@@ -1,3 +1,5 @@
+<!-- golem-managed:guide:ts:start -->
+
 # Golem Application Development Guide (TypeScript)
 
 ## Overview
@@ -427,3 +429,5 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 - Name mapping: https://learn.golem.cloud/name-mapping
 - Type mapping: https://learn.golem.cloud/type-mapping
 - Full docs: https://learn.golem.cloud
+
+<!-- golem-managed:guide:ts:end -->

@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::edit::{cargo_toml, golem_yaml, main_rs, main_ts, package_json, tsconfig_json};
+use crate::app::edit::{
+    agents_md, cargo_toml, golem_yaml, main_rs, main_ts, package_json, tsconfig_json,
+};
+use crate::model::GuestLanguage;
 use test_r::test;
 
 #[test]
@@ -280,6 +283,57 @@ fn main() {}
 }
 
 #[test]
+fn main_rs_merge_reexports_adds_new() {
+    let current = r#"mod counter_agent;
+pub use counter_agent::*;
+"#;
+    let update = r#"mod human_agent;
+pub use human_agent::*;
+"#;
+
+    let merged = main_rs::merge_reexports(current, update).unwrap();
+    let expected = r#"mod counter_agent;
+mod human_agent;
+
+pub use counter_agent::*;
+pub use human_agent::*;
+"#;
+    assert_eq!(merged, expected);
+}
+
+#[test]
+fn main_rs_merge_reexports_groups_mixed_declarations() {
+    let current = r#"pub use counter_agent::*;
+mod counter_agent;
+"#;
+    let update = r#"mod human_agent;
+pub use human_agent::*;
+"#;
+
+    let merged = main_rs::merge_reexports(current, update).unwrap();
+    let expected = r#"mod counter_agent;
+mod human_agent;
+
+pub use counter_agent::*;
+pub use human_agent::*;
+"#;
+    assert_eq!(merged, expected);
+}
+
+#[test]
+fn main_rs_merge_reexports_skips_existing() {
+    let current = r#"mod counter_agent;
+pub use counter_agent::*;
+"#;
+    let update = r#"mod counter_agent;
+pub use counter_agent::*;
+"#;
+
+    let merged = main_rs::merge_reexports(current, update).unwrap();
+    assert_eq!(merged, current);
+}
+
+#[test]
 fn main_ts_preserves_formatting() {
     let source = "export  {a}  from \"./a\";\n\nexport{b}from \"./b\";\n";
     let updated = main_ts::add_reexport(source, "export { c } from \"./c\";").unwrap();
@@ -357,6 +411,88 @@ foo={version="1.0", features=["a"]}
 
     assert!(updated.contains("untouched  =  \"0.1\""));
     assert!(updated.contains("serde  = \"1.1.0\""));
+}
+
+#[test]
+fn cargo_toml_merge_documents_merges_dependency_features() {
+    let base = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { version = "1.2.3", features = ["export_golem_agentic"] }
+serde = { version = "1", features = ["derive"] }
+"#;
+
+    let update = r#"[dependencies]
+golem-rust = { features = ["chrono"] }
+chrono = "0.4.42"
+"#;
+
+    let merged = cargo_toml::merge_documents(base, update).unwrap();
+    let doc: toml_edit::DocumentMut = merged.parse().unwrap();
+
+    let deps = doc
+        .get("dependencies")
+        .and_then(|item| item.as_table())
+        .unwrap();
+
+    let golem_rust_item = deps.get("golem-rust").unwrap();
+    let golem_rust = table_like(golem_rust_item);
+
+    assert_eq!(
+        golem_rust.get("version").and_then(|item| item.as_str()),
+        Some("1.2.3")
+    );
+
+    let features = golem_rust
+        .get("features")
+        .and_then(|item| item.as_array())
+        .unwrap()
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(features, vec!["export_golem_agentic", "chrono"]);
+
+    assert_eq!(
+        deps.get("chrono").and_then(|item| item.as_str()),
+        Some("0.4.42")
+    );
+}
+
+#[test]
+fn cargo_toml_merge_documents_keeps_base_sections() {
+    let base = r#"[package]
+name = "component_name"
+version = "0.0.1"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+"#;
+
+    let update = r#"[dependencies]
+uuid = { version = "1.15.1", features = ["v4"] }
+"#;
+
+    let merged = cargo_toml::merge_documents(base, update).unwrap();
+    let doc: toml_edit::DocumentMut = merged.parse().unwrap();
+
+    assert_eq!(
+        doc.get("package")
+            .and_then(|item| item.get("name"))
+            .and_then(|item| item.as_str()),
+        Some("component_name")
+    );
+    assert_eq!(
+        doc.get("lib")
+            .and_then(|item| item.get("path"))
+            .and_then(|item| item.as_str()),
+        Some("src/lib.rs")
+    );
+    assert!(doc
+        .get("dependencies")
+        .and_then(|item| item.get("uuid"))
+        .is_some());
 }
 
 #[test]
@@ -500,4 +636,47 @@ components:
     assert!(merged.contains("environments:"));
     assert!(merged.contains("httpApi:"));
     assert!(merged.contains("components:"));
+}
+
+#[test]
+fn agents_md_merge_guides_preserves_user_content() {
+    let rust_guide = make_managed_guide(GuestLanguage::Rust, "# Rust guide\nRust body");
+    let ts_guide = make_managed_guide(GuestLanguage::TypeScript, "# TS guide\nTS body");
+
+    let current = format!("# My Notes\nPlease keep this\n\n{}", rust_guide);
+
+    let merged = agents_md::merge_guides(&current, &ts_guide).unwrap();
+
+    assert!(merged.contains("# My Notes"));
+    assert!(merged.contains("Please keep this"));
+    assert!(merged.contains("<!-- golem-managed:guide:rust:start -->"));
+    assert!(merged.contains("<!-- golem-managed:guide:ts:start -->"));
+    assert!(merged.contains("Rust body"));
+    assert!(merged.contains("TS body"));
+}
+
+#[test]
+fn agents_md_merge_guides_updates_same_language_section() {
+    let rust_guide_v1 = make_managed_guide(GuestLanguage::Rust, "# Rust guide\nV1");
+    let rust_guide_v2 = make_managed_guide(GuestLanguage::Rust, "# Rust guide\nV2");
+
+    let current = rust_guide_v1;
+
+    let merged = agents_md::merge_guides(&current, &rust_guide_v2).unwrap();
+
+    assert!(merged.contains("V2"));
+    assert!(!merged.contains("V1"));
+    assert_eq!(
+        merged
+            .matches("<!-- golem-managed:guide:rust:start -->")
+            .count(),
+        1
+    );
+}
+
+fn make_managed_guide(language: GuestLanguage, content: &str) -> String {
+    let key = language.id();
+    format!(
+        "<!-- golem-managed:guide:{key}:start -->\n{content}\n<!-- golem-managed:guide:{key}:end -->\n"
+    )
 }

@@ -21,11 +21,3 @@
 #       - domain: app-name.localhost:9006
 #         definitions:
 #           - component-name-api
-
-components:
-  componentname:
-    templates: rust
-
-    # golem-app-manifest-env-doc
-    env:
-    # golem-app-manifest-dep-env-vars-doc

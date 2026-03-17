@@ -6,11 +6,3 @@ httpApi:
     - domain: app-name.localhost:9006
       agents:
         CounterAgent: {}
-
-components:
-  componentname:
-    templates: rust
-
-    # golem-app-manifest-env-doc
-    env:
-    # golem-app-manifest-dep-env-vars-doc

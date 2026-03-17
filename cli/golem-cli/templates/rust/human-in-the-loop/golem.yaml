@@ -7,11 +7,3 @@ httpApi:
       agents:
         WorkflowAgent: {}
         HumanAgent: {}
-
-components:
-  componentname:
-    templates: rust
-
-    # golem-app-manifest-env-doc
-    env:
-    # golem-app-manifest-dep-env-vars-doc

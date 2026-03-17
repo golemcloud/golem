@@ -1,3 +1,5 @@
+<!-- golem-managed:guide:rust:start -->
+
 # Golem Application Development Guide (Rust)
 
 ## Overview
@@ -424,3 +426,5 @@ cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
 - App manifest reference: https://learn.golem.cloud/app-manifest
 - Full docs: https://learn.golem.cloud
 - golem-rust SDK: https://docs.rs/golem-rust
+
+<!-- golem-managed:guide:rust:end -->

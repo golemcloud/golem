@@ -15,6 +15,15 @@
 use anyhow::anyhow;
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
+pub fn merge_documents(base_source: &str, update_source: &str) -> anyhow::Result<String> {
+    let mut base: DocumentMut = base_source.parse().map_err(|e| anyhow!("{e}"))?;
+    let update: DocumentMut = update_source.parse().map_err(|e| anyhow!("{e}"))?;
+
+    merge_tables(base.as_table_mut(), update.as_table());
+
+    Ok(base.to_string())
+}
+
 pub fn merge_dependencies(
     source: &str,
     dependencies: &[(String, String)],
@@ -128,6 +137,49 @@ fn has_dependency(doc: &DocumentMut, name: &str) -> bool {
             .and_then(|table| table.get("dependencies"))
             .and_then(|table| table.get(name))
             .is_some()
+}
+
+fn merge_tables(base: &mut Table, update: &Table) {
+    for (key, update_item) in update {
+        if let Some(base_item) = base.get_mut(key) {
+            merge_items(base_item, update_item);
+        } else {
+            base.insert(key, update_item.clone());
+        }
+    }
+}
+
+fn merge_items(base: &mut Item, update: &Item) {
+    if let (Some(base_table), Some(update_table)) =
+        (base.as_table_like_mut(), update.as_table_like())
+    {
+        for (key, update_item) in update_table.iter() {
+            if key == "features" {
+                if let (Some(base_features), Some(update_features)) = (
+                    base_table
+                        .get_mut("features")
+                        .and_then(|it| it.as_array_mut()),
+                    update_item.as_array(),
+                ) {
+                    for feature in update_features.iter().filter_map(|v| v.as_str()) {
+                        if !base_features.iter().any(|v| v.as_str() == Some(feature)) {
+                            base_features.push(feature);
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            if let Some(base_item) = base_table.get_mut(key) {
+                merge_items(base_item, update_item);
+            } else {
+                base_table.insert(key, update_item.clone());
+            }
+        }
+        return;
+    }
+
+    *base = update.clone();
 }
 
 #[derive(Debug)]
