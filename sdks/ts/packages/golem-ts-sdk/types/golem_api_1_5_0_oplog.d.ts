@@ -408,6 +408,9 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'internal-error'
     val: string
+  } |
+  {
+    tag: 'exceeded-table-limit'
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
