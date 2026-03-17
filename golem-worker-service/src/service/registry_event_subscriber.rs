@@ -89,18 +89,27 @@ async fn dispatch_event(
         RegistryInvalidationEvent::DeploymentChanged {
             environment_id,
             deployment_revision,
-            domains,
             ..
         } => {
             debug!(
                 environment_id = %environment_id,
                 deployment_revision = deployment_revision,
-                domains = ?domains,
                 "Received deployment changed event"
             );
             if let Ok(rev) = DeploymentRevision::new(*deployment_revision) {
                 agent_resolution_cache.update_latest_revision(*environment_id, rev);
             }
+        }
+        RegistryInvalidationEvent::DomainRegistrationChanged {
+            environment_id,
+            domains,
+            ..
+        } => {
+            debug!(
+                environment_id = %environment_id,
+                domains = ?domains,
+                "Received domain registration changed event"
+            );
             for domain_str in domains {
                 let domain = Domain(domain_str.clone());
                 route_resolver.invalidate_domain(&domain).await;

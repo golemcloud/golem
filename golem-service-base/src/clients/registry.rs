@@ -957,7 +957,24 @@ fn proto_registry_event_to_model(
                     event_id,
                     environment_id,
                     deployment_revision: dc.deployment_revision,
-                    domains: dc.domains,
+                },
+            )
+        }
+        Some(Payload::DomainRegistrationChanged(drc)) => {
+            let environment_id = drc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in DomainRegistrationChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::DomainRegistrationChanged {
+                    event_id,
+                    environment_id,
+                    domains: drc.domains,
                 },
             )
         }

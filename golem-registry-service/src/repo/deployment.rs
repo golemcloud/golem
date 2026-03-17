@@ -90,19 +90,12 @@ pub trait DeploymentRepo: Send + Sync {
     ) -> RepoResult<Option<DeployedDeploymentIdentity>>;
 
     /// Deploy and record a change event in the same transaction.
-    /// Returns the deployment record, the outbox event_id, and the domains for the environment.
+    /// Returns the deployment record and the outbox event_id.
     async fn deploy(
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<
-        (
-            CurrentDeploymentExtRevisionRecord,
-            ChangeEventId,
-            Vec<String>,
-        ),
-        DeployRepoError,
-    >;
+    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError>;
 
     async fn list_active_compiled_routes_for_domain(
         &self,
@@ -171,13 +164,13 @@ pub trait DeploymentRepo: Send + Sync {
     ) -> RepoResult<Option<ResolvedAgentTypeRecord>>;
 
     /// Set the current deployment and record a change event in the same transaction.
-    /// Returns the deployment record, the outbox event_id, and the domains for the environment.
+    /// Returns the deployment record and the outbox event_id.
     async fn set_current_deployment(
         &self,
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError>;
+    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -309,14 +302,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<
-        (
-            CurrentDeploymentExtRevisionRecord,
-            ChangeEventId,
-            Vec<String>,
-        ),
-        DeployRepoError,
-    > {
+    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError> {
         let span = Self::span_user_and_env(
             deployment_creation.user_account_id,
             deployment_creation.environment_id,
@@ -505,8 +491,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError>
-    {
+    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError> {
         self.repo
             .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
             .instrument(info_span!(
@@ -566,31 +551,14 @@ impl DbDeploymentRepo<PostgresPool> {
             .await;
     }
 
-    async fn query_domains_for_environment(
-        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        environment_id: Uuid,
-    ) -> RepoResult<Vec<String>> {
-        let rows = tx
-            .fetch_all(
-                sqlx::query("SELECT domain FROM domain_registrations WHERE environment_id = $1 AND deleted_at IS NULL ORDER BY domain")
-                    .bind(environment_id),
-            )
-            .await?;
-        rows.into_iter()
-            .map(|row| row.try_get::<String, _>("domain").map_err(RepoError::from))
-            .collect()
-    }
-
     async fn insert_change_event(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         environment_id: Uuid,
         deployment_revision_id: i64,
-        domains: Vec<String>,
     ) -> RepoResult<ChangeEventId> {
         let event = NewRegistryChangeEvent::deployment_changed(
             environment_id,
             deployment_revision_id,
-            domains,
         );
         crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event).await
     }
@@ -600,31 +568,14 @@ impl DbDeploymentRepo<SqlitePool> {
     /// No-op on SQLite — in-process broadcast is sufficient for single-node.
     async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
 
-    async fn query_domains_for_environment(
-        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        environment_id: Uuid,
-    ) -> RepoResult<Vec<String>> {
-        let rows = tx
-            .fetch_all(
-                sqlx::query("SELECT domain FROM domain_registrations WHERE environment_id = $1 AND deleted_at IS NULL ORDER BY domain")
-                    .bind(environment_id),
-            )
-            .await?;
-        rows.into_iter()
-            .map(|row| row.try_get::<String, _>("domain").map_err(RepoError::from))
-            .collect()
-    }
-
     async fn insert_change_event(
         tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         environment_id: Uuid,
         deployment_revision_id: i64,
-        domains: Vec<String>,
     ) -> RepoResult<ChangeEventId> {
         let event = NewRegistryChangeEvent::deployment_changed(
             environment_id,
             deployment_revision_id,
-            domains,
         );
         crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event).await
     }
@@ -789,14 +740,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<
-        (
-            CurrentDeploymentExtRevisionRecord,
-            ChangeEventId,
-            Vec<String>,
-        ),
-        DeployRepoError,
-    > {
+    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError> {
         if version_check
             && self
                 .version_exists(
@@ -899,13 +843,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     )
                     .await?;
 
-                    // Query domains and record registry change event in the same transaction
-                    let domains = Self::query_domains_for_environment(tx, environment_id).await?;
                     let change_event_id = Self::insert_change_event(
                         tx,
                         environment_id,
                         deployment_revision_id,
-                        domains.clone(),
                     )
                     .await?;
 
@@ -915,7 +856,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         deployment_hash: deployment_revision.hash,
                     };
 
-                    Ok::<_, DeployRepoError>((ext_revision, change_event_id, domains))
+                    Ok::<_, DeployRepoError>((ext_revision, change_event_id))
                 }
                 .boxed()
             })
@@ -1314,8 +1255,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError>
-    {
+    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError> {
         let result = self
             .with_tx_err("set_current_deployment", |tx| {
                 Box::pin(async move {
@@ -1327,17 +1267,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     )
                     .await?;
 
-                    // Query domains and record registry change event in the same transaction
-                    let domains = Self::query_domains_for_environment(tx, environment_id).await?;
                     let change_event_id = Self::insert_change_event(
                         tx,
                         environment_id,
                         deployment_revision_id,
-                        domains.clone(),
                     )
                     .await?;
 
-                    Ok::<_, DeployRepoError>((revision, change_event_id, domains))
+                    Ok::<_, DeployRepoError>((revision, change_event_id))
                 })
             })
             .await?;

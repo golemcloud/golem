@@ -33,6 +33,7 @@ pub enum RegistryEventType {
     DeploymentChanged = 0,
     AccountTokensInvalidated = 1,
     EnvironmentPermissionsChanged = 2,
+    DomainRegistrationChanged = 3,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -43,6 +44,7 @@ impl TryFrom<i16> for RegistryEventType {
             0 => Ok(RegistryEventType::DeploymentChanged),
             1 => Ok(RegistryEventType::AccountTokensInvalidated),
             2 => Ok(RegistryEventType::EnvironmentPermissionsChanged),
+            3 => Ok(RegistryEventType::DomainRegistrationChanged),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -83,12 +85,22 @@ impl NewRegistryChangeEvent {
     pub fn deployment_changed(
         environment_id: Uuid,
         deployment_revision_id: i64,
-        domains: Vec<String>,
     ) -> Self {
         Self {
             event_type: RegistryEventType::DeploymentChanged,
             environment_id: Some(environment_id),
             deployment_revision_id: Some(deployment_revision_id),
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+        }
+    }
+
+    pub fn domain_registration_changed(environment_id: Uuid, domains: Vec<String>) -> Self {
+        Self {
+            event_type: RegistryEventType::DomainRegistrationChanged,
+            environment_id: Some(environment_id),
+            deployment_revision_id: None,
             account_id: None,
             grantee_account_id: None,
             domains,

@@ -128,6 +128,11 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
         deployment_revision: u64,
+    },
+    /// Domain registrations changed (created/deleted).
+    DomainRegistrationChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
         domains: Vec<String>,
     },
     /// An account's tokens were invalidated.
@@ -148,6 +153,7 @@ impl RegistryInvalidationEvent {
         match self {
             Self::CursorExpired { event_id } => *event_id,
             Self::DeploymentChanged { event_id, .. } => *event_id,
+            Self::DomainRegistrationChanged { event_id, .. } => *event_id,
             Self::AccountTokensInvalidated { event_id, .. } => *event_id,
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
         }

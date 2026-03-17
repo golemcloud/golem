@@ -389,7 +389,7 @@ impl DeploymentWriteService {
             auth.account_id(),
         )?;
 
-        let (ext_revision, change_event_id, domains) = self
+        let (ext_revision, change_event_id) = self
             .deployment_repo
             .deploy(record, deployment_context.environment.version_check)
             .await
@@ -420,7 +420,7 @@ impl DeploymentWriteService {
             deployment_revision_id: Some(deployment.revision.into()),
             account_id: None,
             grantee_account_id: None,
-            domains,
+            domains: Vec::new(),
         });
 
         Ok(deployment)
@@ -471,7 +471,7 @@ impl DeploymentWriteService {
             ))?
             .try_into()?;
 
-        let (revision_record, change_event_id, domains) = self
+        let (revision_record, change_event_id) = self
             .deployment_repo
             .set_current_deployment(
                 auth.account_id().0,
@@ -497,7 +497,7 @@ impl DeploymentWriteService {
             deployment_revision_id: Some(payload.deployment_revision.into()),
             account_id: None,
             grantee_account_id: None,
-            domains,
+            domains: Vec::new(),
         });
 
         Ok(current_deployment)

@@ -116,6 +116,12 @@ async fn dispatch_event(
                 .invalidate_environment(*environment_id)
                 .await;
         }
+        RegistryInvalidationEvent::DomainRegistrationChanged { environment_id, .. } => {
+            debug!(
+                environment_id = %environment_id,
+                "Received domain registration changed event, ignoring"
+            );
+        }
         RegistryInvalidationEvent::AccountTokensInvalidated { account_id, .. } => {
             debug!(
                 account_id = %account_id,

@@ -412,7 +412,6 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id,
             42,
-            vec![],
         ))
         .await
         .unwrap();

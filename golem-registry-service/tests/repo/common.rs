@@ -1695,7 +1695,6 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id1,
             1,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1707,7 +1706,6 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id2,
             2,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1719,7 +1717,6 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id1,
             3,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1779,7 +1776,6 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id,
             10,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1788,7 +1784,6 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id,
             20,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1816,7 +1811,6 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id,
             30,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1859,7 +1853,6 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id,
             10,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1868,7 +1861,6 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id,
             20,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1932,7 +1924,6 @@ pub async fn test_registry_change_cleanup(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id,
             1,
-            vec![],
         ))
         .await
         .unwrap();
@@ -1975,7 +1966,6 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
         .record_change_event(&NewRegistryChangeEvent::deployment_changed(
             env_id,
             1,
-            vec!["example.com".to_string()],
         ))
         .await
         .unwrap();
@@ -2014,7 +2004,7 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
     );
     assert_eq!(our_events[0].environment_id, Some(env_id));
     assert_eq!(our_events[0].deployment_revision_id, Some(1));
-    assert_eq!(our_events[0].domains, vec!["example.com".to_string()]);
+    assert!(our_events[0].domains.is_empty());
 
     // Verify account tokens event
     assert_eq!(

@@ -378,6 +378,7 @@ message RegistryInvalidationEvent {
     DeploymentChangedEvent deployment_changed = 3;
     AccountTokensInvalidatedEvent account_tokens_invalidated = 4;
     EnvironmentPermissionsChangedEvent permissions_changed = 5;
+    DomainRegistrationChangedEvent domain_registration_changed = 6;
   }
 }
 
@@ -389,8 +390,12 @@ message CursorExpiredEvent {}
 message DeploymentChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
   uint64 deployment_revision = 2;
-  // Union of old and new domains — includes removed domains for cache invalidation.
-  repeated string domains = 3;
+}
+
+// Sent when domain registrations change (create/delete).
+message DomainRegistrationChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  repeated string domains = 2;
 }
 
 // Sent when an account's tokens are invalidated (token deleted or account soft-deleted).

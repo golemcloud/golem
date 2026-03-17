@@ -284,7 +284,6 @@ impl Services {
             repos.domain_registration_repo.clone(),
             environment_service.clone(),
             domain_provisioner.clone(),
-            repos.registry_change_repo.clone(),
             registry_change_notifier.clone(),
         ));
 
