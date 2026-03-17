@@ -896,6 +896,30 @@ impl TextView for PublicOplogEntry {
                     }
                 }
             }
+            PublicOplogEntry::OplogProcessorCheckpoint(params) => {
+                logln(format_message_highlight("OPLOG PROCESSOR CHECKPOINT"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}plugin:            {} v{}",
+                    format_id(&params.plugin.plugin_name),
+                    format_id(&params.plugin.plugin_version)
+                ));
+                logln(format!(
+                    "{pad}target:            {}",
+                    format_id(&params.target_agent_id)
+                ));
+                logln(format!(
+                    "{pad}confirmed up to:   {}",
+                    format_id(&params.confirmed_up_to)
+                ));
+                logln(format!(
+                    "{pad}sending up to:     {}",
+                    format_id(&params.sending_up_to)
+                ));
+            }
         }
     }
 }

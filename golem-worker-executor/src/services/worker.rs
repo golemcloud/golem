@@ -159,7 +159,7 @@ impl WorkerService for DefaultWorkerService {
                         panic!("failed to get component metadata for {owned_agent_id}: {err}")
                     });
 
-                let local_agent_config = local_agent_config
+                let agent_config = local_agent_config
                     .into_iter()
                     .map(|lac| {
                         lac.enrich_with_type(&component_metadata.metadata, agent_type_name.as_ref())
@@ -173,7 +173,7 @@ impl WorkerService for DefaultWorkerService {
                     agent_id,
                     env,
                     config_vars,
-                    local_agent_config,
+                    agent_config,
                     environment_id,
                     created_by,
                     created_at: timestamp,

@@ -27,11 +27,11 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
-use golem_common::model::diff::{self, Hashable};
+use golem_common::model::diff::{self, Hashable, VecDiffable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
-use golem_service_base::model::component::{Component, LocalAgentConfigEntry};
+use golem_service_base::model::component::{AgentConfigEntry, Component};
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use golem_service_base::repo::numeric::NumericU64;
@@ -162,7 +162,7 @@ pub struct ComponentRevisionRecord {
     pub metadata: Blob<ComponentMetadata>,
     pub env: Json<BTreeMap<String, String>>,
     pub config_vars: Json<BTreeMap<String, String>>,
-    pub local_agent_config: Blob<Vec<LocalAgentConfigEntry>>,
+    pub agent_config: Blob<Vec<AgentConfigEntry>>,
     pub object_store_key: String,
     pub binary_hash: SqlBlake3Hash, // NOTE: expected to be provided by service-layer
 
@@ -205,7 +205,7 @@ impl ComponentRevisionRecord {
         installed_plugins: Vec<InstalledPlugin>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<LocalAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntry>,
         wasm_hash: diff::Hash,
         object_store_key: String,
         actor: AccountId,
@@ -237,7 +237,7 @@ impl ComponentRevisionRecord {
             metadata: Blob::new(metadata),
             env: Json(env),
             config_vars: Json(config_vars),
-            local_agent_config: Blob::new(local_agent_config),
+            agent_config: Blob::new(agent_config),
             object_store_key,
             binary_hash: wasm_hash.into(),
         }
@@ -272,7 +272,7 @@ impl ComponentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             env: Json(value.env),
             config_vars: Json(value.config_vars),
-            local_agent_config: Blob::new(value.local_agent_config),
+            agent_config: Blob::new(value.agent_config),
             audit: DeletableRevisionAuditFields::new(actor.0),
             object_store_key: value.object_store_key,
             binary_hash: value.wasm_hash.into(),
@@ -289,7 +289,7 @@ impl ComponentRevisionRecord {
             metadata: Blob::new(ComponentMetadata::default()),
             env: Default::default(),
             config_vars: Default::default(),
-            local_agent_config: Blob::new(Vec::new()),
+            agent_config: Blob::new(Vec::new()),
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
             plugins: vec![],
@@ -349,19 +349,23 @@ impl ComponentRevisionRecord {
                     )
                 })
                 .collect(),
-            local_agent_config_ordered_by_agent_and_key: self
-                .local_agent_config
+            ordered_agent_config: self
+                .agent_config
                 .value()
                 .iter()
-                .map(|lac| diff::LocalAgentConfigEntry {
-                    agent: lac.agent.0.clone(),
-                    key: lac.key.clone(),
-                    value: lac
+                .map(|lac| {
+                    let value = lac
                         .value
                         .to_json_value()
-                        .expect("ValueAndType produced by service must be valid JSON"),
+                        .expect("ValueAndType produced by service must be valid JSON");
+
+                    diff::AgentConfigEntry {
+                        agent: lac.agent.0.clone(),
+                        path: lac.path.clone(),
+                        value: diff::into_normalized_json(value),
+                    }
                 })
-                .sorted_by_key(|lac| (lac.agent.clone(), lac.key.clone()))
+                .sorted_by(|v1, v2| v1.ordering_key().cmp(&v2.ordering_key()))
                 .collect(),
         }
     }
@@ -414,7 +418,7 @@ impl ComponentExtRevisionRecord {
                 .collect::<Result<_, _>>()?,
             env: self.revision.env.0,
             config_vars: self.revision.config_vars.0,
-            local_agent_config: self.revision.local_agent_config.into_value(),
+            agent_config: self.revision.agent_config.into_value(),
             object_store_key: self.revision.object_store_key,
             wasm_hash: self.revision.binary_hash.into(),
             hash: self.revision.hash.into(),

@@ -26,6 +26,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod agent_id_display;
 pub mod app;
+pub mod args;
 pub mod auth;
 pub mod bridge_gen;
 pub mod client;

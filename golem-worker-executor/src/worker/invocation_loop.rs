@@ -658,6 +658,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let output = AgentInvocationOutput {
             result: invocation_result,
             consumed_fuel: Some(consumed_fuel),
+            invocation_status: None,
             component_revision: Some(component_revision),
         };
         match self

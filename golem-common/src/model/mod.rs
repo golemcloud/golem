@@ -49,11 +49,12 @@ pub mod worker;
 pub use crate::base_model::*;
 
 use self::component::ComponentId;
-use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
+use self::component::{ComponentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
-use self::worker::ParsedWorkerCreationLocalAgentConfigEntry;
+use self::worker::ParsedWorkerAgentConfigEntry;
 use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::account::AccountId;
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
@@ -79,6 +80,17 @@ use std::ops::Add;
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
+
+/// Status of an idempotency key lookup on a worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationStatus {
+    /// The idempotency key is not known (never seen or expired).
+    Unknown,
+    /// The invocation is queued or currently executing.
+    Pending,
+    /// The invocation has completed (successfully or with an error).
+    Complete,
+}
 
 impl AgentId {
     const AGENT_ID_MAX_LENGTH: usize = 512;
@@ -486,7 +498,7 @@ pub struct AgentMetadata {
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub config_vars: BTreeMap<String, String>,
-    pub local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+    pub agent_config: Vec<ParsedWorkerAgentConfigEntry>,
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
@@ -505,7 +517,7 @@ impl AgentMetadata {
             environment_id,
             created_by,
             config_vars: BTreeMap::new(),
-            local_agent_config: Vec::new(),
+            agent_config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: AgentStatusRecord::default(),
@@ -688,7 +700,9 @@ pub struct AgentStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
-    pub active_plugins: HashSet<PluginPriority>,
+    pub active_plugins: HashSet<EnvironmentPluginGrantId>,
+    pub oplog_processor_checkpoints:
+        HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
@@ -723,6 +737,7 @@ impl Default for AgentStatusRecord {
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
+            oplog_processor_checkpoints: HashMap::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_count: HashMap::new(),
@@ -745,6 +760,15 @@ pub struct FailedUpdateRecord {
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct OplogProcessorCheckpointState {
+    pub target_agent_id: Option<AgentId>,
+    pub confirmed_up_to: OplogIndex,
+    pub sending_up_to: OplogIndex,
+    pub last_batch_start: OplogIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -837,6 +861,7 @@ pub enum AgentInvocationResult {
 pub struct AgentInvocationOutput {
     pub result: AgentInvocationResult,
     pub consumed_fuel: Option<u64>,
+    pub invocation_status: Option<InvocationStatus>,
     pub component_revision: Option<ComponentRevision>,
 }
 
@@ -983,14 +1008,14 @@ impl AgentInvocation {
                 config,
                 metadata,
                 first_entry_index,
-                ..
+                entries,
             } => Self::ProcessOplogEntries {
                 idempotency_key,
                 account_id,
                 config,
                 metadata,
                 first_entry_index,
-                entries: Vec::new(), // Entries are pre-converted to PublicOplogEntry before enqueuing; replay does not reconstruct them
+                entries,
             },
         }
     }
@@ -1068,15 +1093,7 @@ impl AgentInvocation {
     }
 
     pub fn has_idempotency_key(&self, key: &IdempotencyKey) -> bool {
-        match self {
-            Self::AgentMethod {
-                idempotency_key, ..
-            } => idempotency_key == key,
-            Self::AgentInitialization {
-                idempotency_key, ..
-            } => idempotency_key == key,
-            _ => false,
-        }
+        self.idempotency_key() == Some(key)
     }
 
     pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
@@ -1085,6 +1102,13 @@ impl AgentInvocation {
                 idempotency_key, ..
             } => Some(idempotency_key),
             Self::AgentInitialization {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            Self::ProcessOplogEntries {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            Self::SaveSnapshot { idempotency_key } => Some(idempotency_key),
+            Self::LoadSnapshot {
                 idempotency_key, ..
             } => Some(idempotency_key),
             _ => None,

@@ -612,7 +612,7 @@ pub async fn test_component_stage(deps: &Deps) {
         )),
         env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
         config_vars: BTreeMap::from([("WC".to_string(), "value".to_string())]).into(),
-        local_agent_config: Blob::new(Vec::new()),
+        agent_config: Blob::new(Vec::new()),
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
         plugins: vec![],
@@ -1103,7 +1103,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     )),
                     env: Default::default(),
                     config_vars: Default::default(),
-                    local_agent_config: Blob::new(Vec::new()),
+                    agent_config: Blob::new(Vec::new()),
                     object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),
                     plugins: vec![],
@@ -1236,7 +1236,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                 binary_hash: SqlBlake3Hash::empty(),
                 plugins: vec![],
                 files: vec![],
-                local_agent_config: Blob::new(vec![]),
+                agent_config: Blob::new(vec![]),
             },
         )
         .await

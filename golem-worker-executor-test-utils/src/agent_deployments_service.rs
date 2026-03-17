@@ -14,6 +14,7 @@
 
 use async_trait::async_trait;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -36,7 +37,7 @@ impl EnvironmentStateService for DisabledEnvironmentStateService {
     async fn get_agent_secrets(
         &self,
         _environment_id: EnvironmentId,
-    ) -> Result<HashMap<Vec<String>, AgentSecret>, WorkerExecutorError> {
+    ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
         Ok(HashMap::new())
     }
 }
