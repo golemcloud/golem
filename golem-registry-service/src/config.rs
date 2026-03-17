@@ -373,6 +373,7 @@ pub struct BuiltinPluginsConfig {
     pub enabled: bool,
     #[serde(skip)]
     pub otlp_exporter_wasm: Option<Arc<[u8]>>,
+    pub otlp_exporter_wasm_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

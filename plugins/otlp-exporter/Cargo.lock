@@ -403,6 +403,7 @@ dependencies = [
  "golem-rust",
  "serde",
  "serde_json",
+ "uuid",
  "wstd",
 ]
 

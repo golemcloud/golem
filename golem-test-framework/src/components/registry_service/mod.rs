@@ -25,6 +25,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
@@ -87,6 +88,7 @@ async fn env_vars(
     default_plan_id: &PlanId,
     low_fuel_plan_id: &PlanId,
     otlp: bool,
+    otlp_wasm_path: Option<&Path>,
 ) -> HashMap<String, String> {
     let builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -111,7 +113,7 @@ async fn env_vars(
         _ => builder.with_str("GOLEM__COMPONENT_COMPILATION__TYPE", "Disabled"),
     };
 
-    builder
+    let builder = builder
         // users
         .with(
             "GOLEM__INITIAL_ACCOUNTS__ROOT__ID",
@@ -230,6 +232,18 @@ async fn env_vars(
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_all(rdb.info().env("golem_registry", rdb_private_connection))
-        .with_optional_otlp("registry_service", otlp)
-        .build()
+        .with_optional_otlp("registry_service", otlp);
+
+    let builder = if let Some(wasm_path) = otlp_wasm_path {
+        builder
+            .with_str("GOLEM__BUILTIN_PLUGINS__ENABLED", "true")
+            .with(
+                "GOLEM__BUILTIN_PLUGINS__OTLP_EXPORTER_WASM_PATH",
+                wasm_path.to_string_lossy().to_string(),
+            )
+    } else {
+        builder
+    };
+
+    builder.build()
 }

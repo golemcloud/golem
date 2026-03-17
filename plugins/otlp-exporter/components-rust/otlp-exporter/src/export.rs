@@ -117,7 +117,12 @@ pub(crate) fn send_spans(
     let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
 
     block_on(async {
-        let mut builder = Request::post(&config.endpoint)
+        let url = format!(
+            "{}/v1/traces",
+            config.endpoint.trim_end_matches('/')
+        );
+
+        let mut builder = Request::post(&url)
             .header("Content-Type", "application/json");
 
         for (key, value) in &config.headers {

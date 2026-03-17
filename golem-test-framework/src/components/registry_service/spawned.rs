@@ -69,6 +69,13 @@ impl SpawnedRegistryService {
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
         let low_fuel_plan_id = PlanId(uuid!("301fd75c-dcc5-48e3-967e-e7c33df52493"));
 
+        let otlp_wasm = working_directory.join("../plugins/otlp-exporter.wasm");
+        let otlp_wasm_path = if otlp_wasm.exists() {
+            Some(otlp_wasm.as_path())
+        } else {
+            None
+        };
+
         let mut child = Command::new(executable)
             .current_dir(working_directory)
             .envs(
@@ -86,6 +93,7 @@ impl SpawnedRegistryService {
                     &default_plan_id,
                     &low_fuel_plan_id,
                     otlp,
+                    otlp_wasm_path,
                 )
                 .await,
             )

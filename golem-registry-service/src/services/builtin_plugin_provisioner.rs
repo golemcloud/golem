@@ -20,11 +20,13 @@ use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
+use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentCreation, ComponentName};
+use golem_common::model::deployment::{DeploymentCreation, DeploymentVersion};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
@@ -33,10 +35,11 @@ use golem_common::model::plugin_registration::{
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use uuid::Uuid;
 
 const SYSTEM_APP_NAME: &str = "golem-system";
 const SYSTEM_ENV_NAME: &str = "builtin-plugins";
-const OTLP_COMPONENT_NAME: &str = "otlp-exporter";
+const OTLP_COMPONENT_NAME: &str = "otlp:exporter";
 const OTLP_PLUGIN_NAME: &str = "golem-otlp-exporter";
 const OTLP_PLUGIN_VERSION: &str = "1.5.0";
 
@@ -48,6 +51,8 @@ pub async fn provision_builtin_plugins(
     environment_service: &Arc<EnvironmentService>,
     component_service: &Arc<ComponentService>,
     component_write_service: &Arc<ComponentWriteService>,
+    deployment_service: &Arc<DeploymentService>,
+    deployment_write_service: &Arc<DeploymentWriteService>,
     plugin_registration_service: &Arc<PluginRegistrationService>,
     environment_plugin_grant_service: &Arc<EnvironmentPluginGrantService>,
 ) -> anyhow::Result<()> {
@@ -167,6 +172,32 @@ pub async fn provision_builtin_plugins(
             return Err(anyhow::anyhow!("Failed to create OTLP component: {other}"));
         }
     };
+
+    // 3b. Deploy the "builtin-plugins" environment so the component is available as deployed
+    let plan = deployment_service
+        .get_current_deployment_plan(env.id, &auth)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get deployment plan: {e}"))?;
+    match deployment_write_service
+        .create_deployment(
+            env.id,
+            DeploymentCreation {
+                current_revision: plan.current_revision,
+                expected_deployment_hash: plan.deployment_hash,
+                version: DeploymentVersion(Uuid::new_v4().to_string()),
+                agent_secret_defaults: Vec::new(),
+            },
+            &auth,
+        )
+        .await
+    {
+        Ok(_) => {
+            tracing::info!("Deployed builtin-plugins environment");
+        }
+        Err(e) => {
+            tracing::warn!("Failed to deploy builtin-plugins environment (may already be deployed): {e}");
+        }
+    }
 
     // 4. Register "golem-otlp-exporter" plugin if not exists
     let plugin = match plugin_registration_service

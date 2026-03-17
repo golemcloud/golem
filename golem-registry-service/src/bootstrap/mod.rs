@@ -315,21 +315,48 @@ impl Services {
             agent_secret_service.clone(),
         ));
 
-        if config.builtin_plugins.enabled
-            && let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
-                &config.builtin_plugins,
-                root_account_id,
-                &repos.plugin_repo,
-                &application_service,
-                &environment_service,
-                &component_service,
-                &component_write_service,
-                &plugin_registration_service,
-                &environment_plugin_grant_service,
-            )
-            .await
-        {
-            tracing::warn!("Failed to provision built-in plugins: {e}");
+        if config.builtin_plugins.enabled {
+            let mut builtin_plugins = config.builtin_plugins.clone();
+
+            // Load WASM from file path if not already embedded
+            if builtin_plugins.otlp_exporter_wasm.is_none() {
+                if let Some(ref path) = builtin_plugins.otlp_exporter_wasm_path {
+                    match std::fs::read(path) {
+                        Ok(bytes) => {
+                            tracing::info!(
+                                "Loaded OTLP exporter WASM from {}",
+                                path.display()
+                            );
+                            builtin_plugins.otlp_exporter_wasm = Some(Arc::from(bytes));
+                        }
+                        Err(e) => {
+                            return Err(anyhow!(
+                                "Failed to read OTLP exporter WASM from {}: {e}",
+                                path.display()
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if let Err(e) =
+                crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+                    &builtin_plugins,
+                    root_account_id,
+                    &repos.plugin_repo,
+                    &application_service,
+                    &environment_service,
+                    &component_service,
+                    &component_write_service,
+                    &deployment_service,
+                    &deployment_write_service,
+                    &plugin_registration_service,
+                    &environment_plugin_grant_service,
+                )
+                .await
+            {
+                tracing::warn!("Failed to provision built-in plugins: {e}");
+            }
         }
 
         Ok(Self {

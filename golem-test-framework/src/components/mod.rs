@@ -31,6 +31,7 @@ pub mod blob_storage;
 pub mod component_compilation_service;
 mod docker;
 mod dynamic_span;
+pub mod jaeger;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
