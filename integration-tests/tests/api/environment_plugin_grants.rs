@@ -330,7 +330,10 @@ async fn cannot_grant_deleted_plugin(deps: &EnvBasedTestDependencies) -> anyhow:
     let client = user.registry_service_client().await;
 
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin = client
         .create_plugin(
@@ -571,7 +574,10 @@ async fn environment_owner_can_fetch_deleted_grant_with_include_deleted(
     let client_owner = owner.registry_service_client().await;
 
     let (_, env) = owner.app_and_env().await?;
-    let component = owner.component(&env.id, "oplog_processor_release").store().await?;
+    let component = owner
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin = client_owner
         .create_plugin(
@@ -627,7 +633,10 @@ async fn shared_user_can_fetch_deleted_grant_with_include_deleted(
         .share_environment(&env.id, &shared.account_id, &[EnvironmentRole::Admin])
         .await?;
 
-    let component = owner.component(&env.id, "oplog_processor_release").store().await?;
+    let component = owner
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let plugin = client_owner
         .create_plugin(
             &owner.account_id.0,
@@ -675,7 +684,10 @@ async fn fetch_deleted_grant_with_deleted_plugin_and_account(
     let client_owner = owner.registry_service_client().await;
 
     let (_, env) = owner.app_and_env().await?;
-    let component = owner.component(&env.id, "oplog_processor_release").store().await?;
+    let component = owner
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin = client_owner
         .create_plugin(
@@ -730,7 +742,10 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
         .share_environment(&env.id, &revoked_user.account_id, &[EnvironmentRole::Admin])
         .await?;
 
-    let component = owner.component(&env.id, "oplog_processor_release").store().await?;
+    let component = owner
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let plugin = client_owner
         .create_plugin(
             &owner.account_id.0,

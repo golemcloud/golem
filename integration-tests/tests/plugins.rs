@@ -289,7 +289,10 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let oplog_processor_plugin = client
         .create_plugin(
@@ -485,7 +488,10 @@ async fn oplog_processor_crash_after_confirmed_flush(
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let oplog_processor_plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -624,7 +630,10 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let oplog_processor_plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -837,7 +846,10 @@ async fn oplog_processor_no_duplicates_after_crash(
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let oplog_processor_plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -947,7 +959,10 @@ async fn oplog_processor_multiple_plugins_independent(
     let (callback_url_a, received_a, _server_a) = start_callback_server().await;
     let (callback_url_b, received_b, _server_b) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     // Register plugin A
     let plugin_a = client
@@ -1066,7 +1081,10 @@ async fn oplog_processor_partial_plugin_failure(
     // Plugin A: working callback
     let (callback_url_a, received_a, _server_a) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin_a = client
         .create_plugin(
@@ -1220,7 +1238,10 @@ async fn oplog_processor_activation_mid_stream(
     .await?;
 
     // Now register plugin and add it to the component
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let oplog_processor_plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -1316,7 +1337,10 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let oplog_processor_plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -1449,7 +1473,10 @@ async fn oplog_processor_idle_worker_timer_flush(
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let oplog_processor_plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -1531,7 +1558,10 @@ async fn oplog_processor_rapid_invocations(deps: &EnvBasedTestDependencies) -> a
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let oplog_processor_plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -1629,7 +1659,10 @@ async fn oplog_processor_no_resend_after_confirmed(
 
     let (callback_url, received_batches, _http_server) = start_callback_server().await;
 
-    let plugin_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let plugin_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     let oplog_processor_plugin = client
         .create_plugin(
             &user.account_id.0,

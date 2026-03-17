@@ -367,8 +367,8 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
 
     // Registering the plugin
 
-    let oplog_processor_component_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-components/oplog_processor_release.wasm");
+    let oplog_processor_component_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-components/oplog_processor_release.wasm");
 
     let plugin_manifest_path = "plugin.yaml";
     fs::write_str(

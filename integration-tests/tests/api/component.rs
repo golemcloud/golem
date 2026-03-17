@@ -264,7 +264,10 @@ async fn create_component_with_plugins_and_update_installations(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let oplog_plugin = client
         .create_plugin(
@@ -368,7 +371,10 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let oplog_plugin = client
         .create_plugin(
@@ -622,7 +628,10 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin_1 = client
         .create_plugin(
@@ -727,7 +736,10 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin = client
         .create_plugin(
@@ -806,7 +818,10 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin_1 = client
         .create_plugin(
@@ -913,7 +928,10 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog_processor_release").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin = client
         .create_plugin(
