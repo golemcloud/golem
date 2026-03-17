@@ -302,17 +302,29 @@ pub async fn protected_resource_metadata(
 ///
 /// Returns the pre-configured `client_id` and `client_secret` from the security scheme,
 /// allowing MCP clients to discover credentials without manual configuration.
+/// Echoes back the client's requested `redirect_uris` so tools like `mcp-remote`
+/// can find their localhost callback URI in the response.
 pub async fn oauth_register(
-    req: &Request,
+    mut req: Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
 ) -> Response {
     let host = req
         .headers()
         .get("host")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
+        .unwrap_or("localhost")
+        .to_string();
 
-    let domain = Domain(host.to_string());
+    let domain = Domain(host);
+
+    // Parse the client's registration request to extract redirect_uris
+    let client_redirect_uris: serde_json::Value = match req.take_body().into_bytes().await {
+        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|v| v.get("redirect_uris").cloned())
+            .unwrap_or(serde_json::json!([])),
+        Err(_) => serde_json::json!([]),
+    };
 
     let security_scheme = match mcp_capability_lookup.get(&domain).await {
         Ok(compiled_mcp) => compiled_mcp.security_scheme,
@@ -326,7 +338,7 @@ pub async fn oauth_register(
                 "client_secret": scheme.client_secret.secret(),
                 "client_id_issued_at": 0,
                 "client_secret_expires_at": 0,
-                "redirect_uris": [],
+                "redirect_uris": client_redirect_uris,
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
                 "token_endpoint_auth_method": "client_secret_post",
@@ -714,7 +726,7 @@ pub fn oauth_proxy_routes(
             "/mcp/oauth/register",
             poem::endpoint::make(move |req: Request| {
                 let lookup = lookup_register.clone();
-                async move { oauth_register(&req, lookup.as_ref()).await }
+                async move { oauth_register(req, lookup.as_ref()).await }
             }),
         )
         .at(
