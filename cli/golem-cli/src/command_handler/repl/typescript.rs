@@ -86,11 +86,10 @@ impl TypeScriptRepl {
         let package_json_path = args.repl_root_dir.join("package.json");
         let tsconfig_json_path = args.repl_root_dir.join("tsconfig.json");
         let repl_ts_path = args.repl_root_dir.join("repl.ts");
-        let relative_bridge_sdk_unix_path = fs::path_to_str(fs::strip_prefix_or_err(
+        let relative_bridge_sdk_unix_path = fs::path_to_unix_str(fs::strip_prefix_or_err(
             &args.repl_root_bridge_sdk_dir,
             &args.repl_root_dir,
-        )?)?
-        .replace("\\", "/");
+        )?)?;
 
         let build_config = BuildConfig::new();
         let build_ctx = BuildContext::new(app_ctx, &build_config);

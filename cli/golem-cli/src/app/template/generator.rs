@@ -360,7 +360,9 @@ fn transform(
 
     let transform_component_dir = |str: &str| -> anyhow::Result<String> {
         Ok(match &ctx.component_dir {
-            Some(component_dir) => str.replace("componentDir", fs::path_to_str(component_dir)?),
+            Some(component_dir) => {
+                str.replace("componentDir", &fs::path_to_unix_str(component_dir)?)
+            }
             None => str.to_string(),
         })
     };
@@ -437,23 +439,61 @@ fn transform_target_file_path(
     match ctx.component_dir {
         Some(component_dir) => {
             let relative_target_path = fs::strip_prefix_or_err(target_path, ctx.application_dir)?;
-            let transformed_relative_target_path = {
-                if component_dir == Path::new(".") {
-                    fs::path_to_str(relative_target_path)?.replace("component-dir", "")
-                } else {
-                    fs::path_to_str(relative_target_path)?
-                        .replace("component-dir", fs::path_to_str(component_dir)?)
-                }
-            };
+            let transformed_relative_target_path =
+                replace_component_dir_in_relative_path(relative_target_path, component_dir)?;
 
-            Ok(PathBuf::from(format!(
-                "{}/{}",
-                fs::path_to_str(ctx.application_dir)?,
-                transformed_relative_target_path
-            )))
+            Ok(ctx.application_dir.join(transformed_relative_target_path))
         }
         None => Ok(target_path.to_path_buf()),
     }
+}
+
+fn replace_component_dir_in_relative_path(
+    relative_target_path: &Path,
+    component_dir: &Path,
+) -> anyhow::Result<PathBuf> {
+    let mut transformed = PathBuf::new();
+
+    for component in relative_target_path.components() {
+        match component {
+            std::path::Component::Normal(name) if name == "component-dir" => {
+                push_component_dir_segments(&mut transformed, component_dir)?;
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                bail!(
+                    "Expected relative path while transforming template target path: {}",
+                    relative_target_path.display()
+                );
+            }
+            other => transformed.push(other.as_os_str()),
+        }
+    }
+
+    Ok(transformed)
+}
+
+fn push_component_dir_segments(target: &mut PathBuf, component_dir: &Path) -> anyhow::Result<()> {
+    for component in component_dir.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(name) => target.push(name),
+            std::path::Component::ParentDir => {
+                bail!(
+                    "Component directory must not contain parent segments: {}",
+                    component_dir.display()
+                );
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                bail!(
+                    "Component directory must be relative: {}",
+                    component_dir.display()
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn get_contents<'a>(dir: &Dir<'a>, source: &'a Path) -> anyhow::Result<&'a str> {
@@ -461,4 +501,32 @@ fn get_contents<'a>(dir: &Dir<'a>, source: &'a Path) -> anyhow::Result<&'a str> 
         .ok_or_else(|| anyhow!("Could not find entry {}", source.display()))?
         .contents_utf8()
         .ok_or_else(|| anyhow!("File contents are not valid UTF-8: {}", source.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use test_r::test;
+
+    #[test]
+    fn replace_component_dir_path_strips_placeholder_for_dot() {
+        let transformed = super::replace_component_dir_in_relative_path(
+            Path::new("component-dir/src/main.ts"),
+            Path::new("."),
+        )
+        .unwrap();
+
+        assert_eq!(transformed, PathBuf::from("src/main.ts"));
+    }
+
+    #[test]
+    fn replace_component_dir_path_supports_multi_segment_component_dir() {
+        let transformed = super::replace_component_dir_in_relative_path(
+            Path::new("component-dir/src/main.ts"),
+            Path::new("services/agent-a"),
+        )
+        .unwrap();
+
+        assert_eq!(transformed, PathBuf::from("services/agent-a/src/main.ts"));
+    }
 }

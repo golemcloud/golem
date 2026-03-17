@@ -44,6 +44,10 @@ pub fn path_to_str(path: &Path) -> anyhow::Result<&str> {
         .ok_or_else(|| anyhow!("Path {} cannot be converted to string", path.display()))
 }
 
+pub fn path_to_unix_str(path: &Path) -> anyhow::Result<String> {
+    Ok(normalize_str_path_as_unix(path_to_str(path)?))
+}
+
 pub fn file_name_to_str(path: &Path) -> anyhow::Result<&str> {
     path.file_name()
         .ok_or_else(|| anyhow!("Path {} has no filename", path.display()))?
@@ -599,7 +603,7 @@ fn compile_glob_spec(
         resolve_relative_glob(root_dir_for_relative_globs, pattern)?
     };
 
-    let normalized_pattern = normalize_pattern(&resolved_pattern);
+    let normalized_pattern = normalize_str_path_as_unix(&resolved_pattern);
     let glob = Glob::new(&normalized_pattern)
         .with_context(|| anyhow!("Failed to compile glob expression: {}", resolved_pattern))?
         .into_owned();
@@ -664,12 +668,12 @@ fn read_tsconfig_include_patterns(path: &Path) -> Vec<String> {
 }
 
 #[cfg(not(windows))]
-fn normalize_pattern(pattern: &str) -> String {
+fn normalize_str_path_as_unix(pattern: &str) -> String {
     pattern.to_string()
 }
 
 #[cfg(windows)]
-fn normalize_pattern(pattern: &str) -> String {
+fn normalize_str_path(pattern: &str) -> String {
     // Replacing \ with / to make it work as a glob pattern
     pattern.replace('\\', "/")
 }
