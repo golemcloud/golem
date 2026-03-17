@@ -15,7 +15,7 @@
 use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
-use crate::repo::registry_change::{RegistryChangeEvent, RegistryEventType};
+use crate::repo::registry_change::RegistryChangeEvent;
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::route_compilation::render_http_method;
@@ -413,15 +413,12 @@ impl DeploymentWriteService {
         let deployment: CurrentDeployment = ext_revision.try_into()?;
 
         // Notify subscribers (event was already recorded in the deploy transaction)
-        self.registry_change_notifier.notify(RegistryChangeEvent {
-            event_id: change_event_id,
-            event_type: RegistryEventType::DeploymentChanged,
-            environment_id: Some(environment_id.0),
-            deployment_revision_id: Some(deployment.revision.into()),
-            account_id: None,
-            grantee_account_id: None,
-            domains: Vec::new(),
-        });
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::DeploymentChanged {
+                event_id: change_event_id,
+                environment_id: environment_id.0,
+                deployment_revision_id: deployment.revision.into(),
+            });
 
         Ok(deployment)
     }
@@ -490,14 +487,11 @@ impl DeploymentWriteService {
             .into_model(target_deployment.version, target_deployment.deployment_hash)?;
 
         // Notify subscribers (event was already recorded in the rollback transaction)
-        self.registry_change_notifier.notify(RegistryChangeEvent {
-            event_id: change_event_id,
-            event_type: RegistryEventType::DeploymentChanged,
-            environment_id: Some(environment_id.0),
-            deployment_revision_id: Some(payload.deployment_revision.into()),
-            account_id: None,
-            grantee_account_id: None,
-            domains: Vec::new(),
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::DeploymentChanged {
+                event_id: change_event_id,
+                environment_id: environment_id.0,
+                deployment_revision_id: payload.deployment_revision.into(),
         });
 
         Ok(current_deployment)

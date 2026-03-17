@@ -56,7 +56,7 @@ use golem_registry_service::repo::model::mcp_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_registry_service::repo::registry_change::{
-    ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent, RegistryEventType,
+    ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
 };
 use golem_registry_service::services::registry_change_notifier::{
     LocalRegistryChangeNotifier, RegistryChangeNotifier,
@@ -1738,15 +1738,21 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
         .unwrap();
     assert!(events.len() >= 3);
     // Find our events by id
-    let our_events: Vec<_> = events.iter().filter(|e| e.event_id >= id1).collect();
+    let our_events: Vec<_> = events.iter().filter(|e| e.event_id() >= id1).collect();
     assert!(our_events.len() == 3);
-    assert!(our_events[0].event_id == id1);
-    assert!(our_events[0].environment_id.unwrap() == env_id1);
-    assert!(our_events[0].deployment_revision_id.unwrap() == 1);
-    assert!(our_events[1].event_id == id2);
-    assert!(our_events[1].environment_id.unwrap() == env_id2);
-    assert!(our_events[1].deployment_revision_id.unwrap() == 2);
-    assert!(our_events[2].event_id == id3);
+    assert!(our_events[0].event_id() == id1);
+    assert!(matches!(
+        &our_events[0],
+        RegistryChangeEvent::DeploymentChanged { environment_id, deployment_revision_id: 1, .. }
+        if *environment_id == env_id1
+    ));
+    assert!(our_events[1].event_id() == id2);
+    assert!(matches!(
+        &our_events[1],
+        RegistryChangeEvent::DeploymentChanged { environment_id, deployment_revision_id: 2, .. }
+        if *environment_id == env_id2
+    ));
+    assert!(our_events[2].event_id() == id3);
 
     // get_events_since with cursor at id2 returns only id3
     let events = deps
@@ -1755,7 +1761,7 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
         .await
         .unwrap();
     assert!(events.len() == 1);
-    assert!(events[0].event_id == id3);
+    assert!(events[0].event_id() == id3);
 
     // get_events_since with cursor at latest returns empty
     let events = deps
@@ -1796,11 +1802,17 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .unwrap();
     let our_events: Vec<_> = replayed
         .iter()
-        .filter(|e| e.environment_id == Some(env_id))
+        .filter(|e| matches!(e, RegistryChangeEvent::DeploymentChanged { environment_id, .. } if *environment_id == env_id))
         .collect();
     assert!(our_events.len() == 2);
-    assert!(our_events[0].deployment_revision_id.unwrap() == 10);
-    assert!(our_events[1].deployment_revision_id.unwrap() == 20);
+    assert!(matches!(
+        &our_events[0],
+        RegistryChangeEvent::DeploymentChanged { deployment_revision_id: 10, .. }
+    ));
+    assert!(matches!(
+        &our_events[1],
+        RegistryChangeEvent::DeploymentChanged { deployment_revision_id: 20, .. }
+    ));
 
     // Subscribe to broadcast for live events
     let mut rx = notifier.subscribe();
@@ -1814,21 +1826,20 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         ))
         .await
         .unwrap();
-    notifier.notify(RegistryChangeEvent {
+    notifier.notify(RegistryChangeEvent::DeploymentChanged {
         event_id: id3,
-        event_type: RegistryEventType::DeploymentChanged,
-        environment_id: Some(env_id),
-        deployment_revision_id: Some(30),
-        account_id: None,
-        grantee_account_id: None,
-        domains: vec![],
+        environment_id: env_id,
+        deployment_revision_id: 30,
     });
 
     // Verify we receive the live event
     let received = rx.recv().await.unwrap();
-    assert!(received.event_id == id3);
-    assert!(received.environment_id.unwrap() == env_id);
-    assert!(received.deployment_revision_id.unwrap() == 30);
+    assert!(received.event_id() == id3);
+    assert!(matches!(
+        received,
+        RegistryChangeEvent::DeploymentChanged { environment_id, deployment_revision_id: 30, .. }
+        if environment_id == env_id
+    ));
 
     // Verify cursor-based replay from id2 only returns id3
     let replayed_from_id2 = deps
@@ -1838,10 +1849,10 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .unwrap();
     let our_events: Vec<_> = replayed_from_id2
         .iter()
-        .filter(|e| e.environment_id == Some(env_id))
+        .filter(|e| matches!(e, RegistryChangeEvent::DeploymentChanged { environment_id, .. } if *environment_id == env_id))
         .collect();
     assert!(our_events.len() == 1);
-    assert!(our_events[0].event_id == id3);
+    assert!(our_events[0].event_id() == id3);
 }
 
 pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
@@ -1873,7 +1884,7 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
         .unwrap();
     let our_events: Vec<_> = events
         .iter()
-        .filter(|e| e.environment_id == Some(env_id))
+        .filter(|e| matches!(e, RegistryChangeEvent::DeploymentChanged { environment_id, .. } if *environment_id == env_id))
         .collect();
     assert!(!our_events.is_empty());
 
@@ -1885,7 +1896,7 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
         .unwrap();
     let our_events: Vec<_> = events_after_latest
         .iter()
-        .filter(|e| e.environment_id == Some(env_id))
+        .filter(|e| matches!(e, RegistryChangeEvent::DeploymentChanged { environment_id, .. } if *environment_id == env_id))
         .collect();
     assert!(our_events.is_empty());
 
@@ -1943,7 +1954,7 @@ pub async fn test_registry_change_cleanup(deps: &Deps) {
         .await
         .unwrap();
     assert!(
-        events.iter().any(|e| e.event_id == id),
+        events.iter().any(|e| e.event_id() == id),
         "our event should still exist after cleanup with large retention"
     );
 }
@@ -1994,31 +2005,27 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
         .get_events_since(baseline)
         .await
         .unwrap();
-    let our_events: Vec<_> = events.iter().filter(|e| e.event_id >= id1).collect();
+    let our_events: Vec<_> = events.iter().filter(|e| e.event_id() >= id1).collect();
     assert_eq!(our_events.len(), 3);
 
     // Verify deployment event
-    assert_eq!(
-        our_events[0].event_type,
-        RegistryEventType::DeploymentChanged
-    );
-    assert_eq!(our_events[0].environment_id, Some(env_id));
-    assert_eq!(our_events[0].deployment_revision_id, Some(1));
-    assert!(our_events[0].domains.is_empty());
+    assert!(matches!(
+        &our_events[0],
+        RegistryChangeEvent::DeploymentChanged { environment_id, deployment_revision_id: 1, .. }
+        if *environment_id == env_id
+    ));
 
     // Verify account tokens event
-    assert_eq!(
-        our_events[1].event_type,
-        RegistryEventType::AccountTokensInvalidated
-    );
-    assert_eq!(our_events[1].account_id, Some(account_id));
-    assert!(our_events[1].environment_id.is_none());
+    assert!(matches!(
+        &our_events[1],
+        RegistryChangeEvent::AccountTokensInvalidated { account_id: aid, .. }
+        if *aid == account_id
+    ));
 
     // Verify permissions event
-    assert_eq!(
-        our_events[2].event_type,
-        RegistryEventType::EnvironmentPermissionsChanged
-    );
-    assert_eq!(our_events[2].environment_id, Some(env_id));
-    assert_eq!(our_events[2].grantee_account_id, Some(grantee_id));
+    assert!(matches!(
+        &our_events[2],
+        RegistryChangeEvent::EnvironmentPermissionsChanged { environment_id, grantee_account_id, .. }
+        if *environment_id == env_id && *grantee_account_id == grantee_id
+    ));
 }

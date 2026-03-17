@@ -14,7 +14,7 @@
 
 use super::account::{AccountError, AccountService};
 use crate::repo::model::token::TokenRecord;
-use crate::repo::registry_change::{RegistryChangeEvent, RegistryEventType};
+use crate::repo::registry_change::RegistryChangeEvent;
 use crate::repo::token::TokenRepo;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use chrono::{DateTime, Utc};
@@ -236,15 +236,11 @@ impl TokenService {
             .delete_and_record_invalidation(token_id.0, token.account_id.0)
             .await?
         {
-            self.registry_change_notifier.notify(RegistryChangeEvent {
-                event_id,
-                event_type: RegistryEventType::AccountTokensInvalidated,
-                environment_id: None,
-                deployment_revision_id: None,
-                account_id: Some(token.account_id.0),
-                grantee_account_id: None,
-                domains: vec![],
-            });
+            self.registry_change_notifier
+                .notify(RegistryChangeEvent::AccountTokensInvalidated {
+                    event_id,
+                    account_id: token.account_id.0,
+                });
         }
 
         Ok(())

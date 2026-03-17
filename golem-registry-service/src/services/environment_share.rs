@@ -18,7 +18,7 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment_share::{
     EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
-use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent, RegistryEventType};
+use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent};
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -96,15 +96,12 @@ impl EnvironmentShareService {
         environment_id: Uuid,
         grantee_account_id: Uuid,
     ) {
-        self.registry_change_notifier.notify(RegistryChangeEvent {
-            event_id: change_event_id,
-            event_type: RegistryEventType::EnvironmentPermissionsChanged,
-            environment_id: Some(environment_id),
-            deployment_revision_id: None,
-            account_id: None,
-            grantee_account_id: Some(grantee_account_id),
-            domains: vec![],
-        });
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::EnvironmentPermissionsChanged {
+                event_id: change_event_id,
+                environment_id,
+                grantee_account_id,
+            });
     }
 
     pub async fn create(

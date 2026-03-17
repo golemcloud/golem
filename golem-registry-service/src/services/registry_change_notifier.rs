@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::registry_change::{
-    ChangeEventId, RegistryChangeEvent, RegistryChangeRepo, RegistryEventType,
-};
+use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent, RegistryChangeRepo};
 use golem_api_grpc::proto::golem::registry::v1::{
     AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
     DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent,
@@ -142,7 +140,7 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
                         match repo.get_events_since(last_processed_event_id).await {
                             Ok(events) => {
                                 for event in events {
-                                    last_processed_event_id = event.event_id;
+                                    last_processed_event_id = event.event_id();
                                     let _ = sender.send(event);
                                 }
                             }
@@ -162,7 +160,7 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
                                     match repo.get_events_since(last_processed_event_id).await {
                                         Ok(events) => {
                                             for event in events {
-                                                last_processed_event_id = event.event_id;
+                                                last_processed_event_id = event.event_id();
                                                 let _ = sender.send(event);
                                             }
                                         }
@@ -208,33 +206,52 @@ enum ReplayError {
 }
 
 fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvalidationEvent {
-    let payload = match event.event_type {
-        RegistryEventType::DeploymentChanged => {
+    let (event_id, payload) = match event {
+        RegistryChangeEvent::DeploymentChanged {
+            event_id,
+            environment_id,
+            deployment_revision_id,
+        } => (
+            *event_id,
             Payload::DeploymentChanged(DeploymentChangedEvent {
-                environment_id: event.environment_id.map(|id| EnvironmentId(id).into()),
-                deployment_revision: event.deployment_revision_id.unwrap_or(0) as u64,
-            })
-        }
-        RegistryEventType::DomainRegistrationChanged => {
+                environment_id: Some(EnvironmentId(*environment_id).into()),
+                deployment_revision: *deployment_revision_id as u64,
+            }),
+        ),
+        RegistryChangeEvent::DomainRegistrationChanged {
+            event_id,
+            environment_id,
+            domains,
+        } => (
+            *event_id,
             Payload::DomainRegistrationChanged(DomainRegistrationChangedEvent {
-                environment_id: event.environment_id.map(|id| EnvironmentId(id).into()),
-                domains: event.domains.clone(),
-            })
-        }
-        RegistryEventType::AccountTokensInvalidated => {
+                environment_id: Some(EnvironmentId(*environment_id).into()),
+                domains: domains.clone(),
+            }),
+        ),
+        RegistryChangeEvent::AccountTokensInvalidated {
+            event_id,
+            account_id,
+        } => (
+            *event_id,
             Payload::AccountTokensInvalidated(AccountTokensInvalidatedEvent {
-                account_id: event.account_id.map(|id| AccountId(id).into()),
-            })
-        }
-        RegistryEventType::EnvironmentPermissionsChanged => {
+                account_id: Some(AccountId(*account_id).into()),
+            }),
+        ),
+        RegistryChangeEvent::EnvironmentPermissionsChanged {
+            event_id,
+            environment_id,
+            grantee_account_id,
+        } => (
+            *event_id,
             Payload::PermissionsChanged(EnvironmentPermissionsChangedEvent {
-                environment_id: event.environment_id.map(|id| EnvironmentId(id).into()),
-                grantee_account_id: event.grantee_account_id.map(|id| AccountId(id).into()),
-            })
-        }
+                environment_id: Some(EnvironmentId(*environment_id).into()),
+                grantee_account_id: Some(AccountId(*grantee_account_id).into()),
+            }),
+        ),
     };
     RegistryInvalidationEvent {
-        event_id: event.event_id.0 as u64,
+        event_id: event_id.0 as u64,
         payload: Some(payload),
     }
 }
@@ -266,10 +283,10 @@ async fn replay_from_cursor(
         Ok(events) if !events.is_empty() => {
             let mut cursor = cursor;
             // Gap detection: if first event is not cursor+1, cursor has expired
-            if events[0].event_id.0 > cursor.0 + 1
+            if events[0].event_id().0 > cursor.0 + 1
                 && tx
                     .send(Ok(RegistryInvalidationEvent {
-                        event_id: events[0].event_id.0 as u64,
+                        event_id: events[0].event_id().0 as u64,
                         payload: Some(Payload::CursorExpired(CursorExpiredEvent {})),
                     }))
                     .await
@@ -278,7 +295,7 @@ async fn replay_from_cursor(
                 return Err(ReplayError::Disconnected);
             }
             for event in &events {
-                cursor = event.event_id;
+                cursor = event.event_id();
                 if tx
                     .send(Ok(to_registry_invalidation_event(event)))
                     .await
@@ -326,8 +343,8 @@ pub fn subscribe_registry_invalidations(
         loop {
             match broadcast_rx.recv().await {
                 Ok(event) => {
-                    if event.event_id > cursor {
-                        cursor = event.event_id;
+                    if event.event_id() > cursor {
+                        cursor = event.event_id();
                         if tx
                             .send(Ok(to_registry_invalidation_event(&event)))
                             .await
@@ -359,14 +376,10 @@ mod tests {
     use uuid::Uuid;
 
     fn make_deployment_change_event(id: i64) -> RegistryChangeEvent {
-        RegistryChangeEvent {
+        RegistryChangeEvent::DeploymentChanged {
             event_id: ChangeEventId(id),
-            event_type: RegistryEventType::DeploymentChanged,
-            environment_id: Some(Uuid::new_v4()),
-            deployment_revision_id: Some(id * 10),
-            account_id: None,
-            grantee_account_id: None,
-            domains: vec![],
+            environment_id: Uuid::new_v4(),
+            deployment_revision_id: id * 10,
         }
     }
 
@@ -376,20 +389,22 @@ mod tests {
         let mut rx = notifier.subscribe();
 
         let env_id = Uuid::new_v4();
-        notifier.notify(RegistryChangeEvent {
+        notifier.notify(RegistryChangeEvent::DeploymentChanged {
             event_id: ChangeEventId(1),
-            event_type: RegistryEventType::DeploymentChanged,
-            environment_id: Some(env_id),
-            deployment_revision_id: Some(42),
-            account_id: None,
-            grantee_account_id: None,
-            domains: vec![],
+            environment_id: env_id,
+            deployment_revision_id: 42,
         });
 
         let event = rx.recv().await.unwrap();
-        assert_eq!(event.event_id, ChangeEventId(1));
-        assert_eq!(event.environment_id, Some(env_id));
-        assert_eq!(event.deployment_revision_id, Some(42));
+        assert_eq!(event.event_id(), ChangeEventId(1));
+        assert!(matches!(
+            event,
+            RegistryChangeEvent::DeploymentChanged {
+                environment_id,
+                deployment_revision_id: 42,
+                ..
+            } if environment_id == env_id
+        ));
     }
 
     #[test]
@@ -399,40 +414,43 @@ mod tests {
         let mut rx2 = notifier.subscribe();
 
         let env_id = Uuid::new_v4();
-        notifier.notify(RegistryChangeEvent {
+        notifier.notify(RegistryChangeEvent::DeploymentChanged {
             event_id: ChangeEventId(5),
-            event_type: RegistryEventType::DeploymentChanged,
-            environment_id: Some(env_id),
-            deployment_revision_id: Some(99),
-            account_id: None,
-            grantee_account_id: None,
-            domains: vec![],
+            environment_id: env_id,
+            deployment_revision_id: 99,
         });
 
         let e1 = rx1.recv().await.unwrap();
         let e2 = rx2.recv().await.unwrap();
 
-        assert_eq!(e1.event_id, ChangeEventId(5));
-        assert_eq!(e1.environment_id, Some(env_id));
-        assert_eq!(e1.deployment_revision_id, Some(99));
-
-        assert_eq!(e2.event_id, ChangeEventId(5));
-        assert_eq!(e2.environment_id, Some(env_id));
-        assert_eq!(e2.deployment_revision_id, Some(99));
+        assert_eq!(e1.event_id(), ChangeEventId(5));
+        assert_eq!(e2.event_id(), ChangeEventId(5));
+        assert!(matches!(
+            e1,
+            RegistryChangeEvent::DeploymentChanged {
+                environment_id,
+                deployment_revision_id: 99,
+                ..
+            } if environment_id == env_id
+        ));
+        assert!(matches!(
+            e2,
+            RegistryChangeEvent::DeploymentChanged {
+                environment_id,
+                deployment_revision_id: 99,
+                ..
+            } if environment_id == env_id
+        ));
     }
 
     #[test]
     fn test_notify_no_receivers() {
         let notifier = LocalRegistryChangeNotifier::new(16);
         // Should not panic even with no subscribers
-        notifier.notify(RegistryChangeEvent {
+        notifier.notify(RegistryChangeEvent::DeploymentChanged {
             event_id: ChangeEventId(10),
-            event_type: RegistryEventType::DeploymentChanged,
-            environment_id: Some(Uuid::new_v4()),
-            deployment_revision_id: Some(7),
-            account_id: None,
-            grantee_account_id: None,
-            domains: vec![],
+            environment_id: Uuid::new_v4(),
+            deployment_revision_id: 7,
         });
     }
 
@@ -440,14 +458,10 @@ mod tests {
     fn test_subscribe_after_notify() {
         let notifier = LocalRegistryChangeNotifier::new(16);
 
-        notifier.notify(RegistryChangeEvent {
+        notifier.notify(RegistryChangeEvent::DeploymentChanged {
             event_id: ChangeEventId(20),
-            event_type: RegistryEventType::DeploymentChanged,
-            environment_id: Some(Uuid::new_v4()),
-            deployment_revision_id: Some(100),
-            account_id: None,
-            grantee_account_id: None,
-            domains: vec![],
+            environment_id: Uuid::new_v4(),
+            deployment_revision_id: 100,
         });
 
         // Subscribe after the event was sent
@@ -490,17 +504,37 @@ mod tests {
             &self,
             event: &crate::repo::registry_change::NewRegistryChangeEvent,
         ) -> golem_service_base::repo::RepoResult<ChangeEventId> {
+            use crate::repo::registry_change::RegistryEventType;
             let mut events = self.events.lock().unwrap();
             let id = ChangeEventId(events.len() as i64 + 1);
-            events.push(RegistryChangeEvent {
-                event_id: id,
-                event_type: event.event_type,
-                environment_id: event.environment_id,
-                deployment_revision_id: event.deployment_revision_id,
-                account_id: event.account_id,
-                grantee_account_id: event.grantee_account_id,
-                domains: event.domains.clone(),
-            });
+            let change_event = match event.event_type {
+                RegistryEventType::DeploymentChanged => RegistryChangeEvent::DeploymentChanged {
+                    event_id: id,
+                    environment_id: event.environment_id.unwrap_or_default(),
+                    deployment_revision_id: event.deployment_revision_id.unwrap_or_default(),
+                },
+                RegistryEventType::AccountTokensInvalidated => {
+                    RegistryChangeEvent::AccountTokensInvalidated {
+                        event_id: id,
+                        account_id: event.account_id.unwrap_or_default(),
+                    }
+                }
+                RegistryEventType::EnvironmentPermissionsChanged => {
+                    RegistryChangeEvent::EnvironmentPermissionsChanged {
+                        event_id: id,
+                        environment_id: event.environment_id.unwrap_or_default(),
+                        grantee_account_id: event.grantee_account_id.unwrap_or_default(),
+                    }
+                }
+                RegistryEventType::DomainRegistrationChanged => {
+                    RegistryChangeEvent::DomainRegistrationChanged {
+                        event_id: id,
+                        environment_id: event.environment_id.unwrap_or_default(),
+                        domains: event.domains.clone(),
+                    }
+                }
+            };
+            events.push(change_event);
             Ok(id)
         }
 
@@ -511,7 +545,7 @@ mod tests {
             let events = self.events.lock().unwrap();
             Ok(events
                 .iter()
-                .filter(|e| e.event_id > last_seen_event_id)
+                .filter(|e| e.event_id() > last_seen_event_id)
                 .cloned()
                 .collect())
         }
@@ -523,7 +557,7 @@ mod tests {
                 return Ok(Some(id));
             }
             let events = self.events.lock().unwrap();
-            Ok(events.last().map(|e| e.event_id))
+            Ok(events.last().map(|e| e.event_id()))
         }
 
         async fn cleanup_old_events(
@@ -690,14 +724,10 @@ mod tests {
 
         // Send 3 events to overflow the capacity-2 buffer
         for i in 1..=3 {
-            notifier.notify(RegistryChangeEvent {
+            notifier.notify(RegistryChangeEvent::DeploymentChanged {
                 event_id: ChangeEventId(i),
-                event_type: RegistryEventType::DeploymentChanged,
-                environment_id: Some(Uuid::new_v4()),
-                deployment_revision_id: Some(i * 10),
-                account_id: None,
-                grantee_account_id: None,
-                domains: vec![],
+                environment_id: Uuid::new_v4(),
+                deployment_revision_id: i * 10,
             });
         }
 
@@ -712,9 +742,9 @@ mod tests {
         let event = rx.recv().await.unwrap();
         // With capacity=2, after lag recovery we get the oldest surviving event
         assert!(
-            event.event_id >= ChangeEventId(2),
+            event.event_id() >= ChangeEventId(2),
             "expected surviving event, got {}",
-            event.event_id.0
+            event.event_id().0
         );
     }
 }

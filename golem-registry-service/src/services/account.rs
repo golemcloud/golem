@@ -18,7 +18,7 @@ use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::registry_change::{
-    NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo, RegistryEventType,
+    NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
 };
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use anyhow::anyhow;
@@ -242,15 +242,12 @@ impl AccountService {
                 let event = NewRegistryChangeEvent::account_tokens_invalidated(account_id.0);
                 match self.registry_change_repo.record_change_event(&event).await {
                     Ok(event_id) => {
-                        self.registry_change_notifier.notify(RegistryChangeEvent {
-                            event_id,
-                            event_type: RegistryEventType::AccountTokensInvalidated,
-                            environment_id: None,
-                            deployment_revision_id: None,
-                            account_id: Some(account_id.0),
-                            grantee_account_id: None,
-                            domains: vec![],
-                        });
+                        self.registry_change_notifier.notify(
+                            RegistryChangeEvent::AccountTokensInvalidated {
+                                event_id,
+                                account_id: account_id.0,
+                            },
+                        );
                     }
                     Err(e) => {
                         tracing::warn!(

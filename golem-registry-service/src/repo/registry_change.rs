@@ -58,16 +58,116 @@ impl From<RegistryEventType> for i16 {
     }
 }
 
-/// A generalized registry change event.
+/// A registry change event with a typed payload.
 #[derive(Debug, Clone)]
-pub struct RegistryChangeEvent {
-    pub event_id: ChangeEventId,
-    pub event_type: RegistryEventType,
-    pub environment_id: Option<Uuid>,
-    pub deployment_revision_id: Option<i64>,
-    pub account_id: Option<Uuid>,
-    pub grantee_account_id: Option<Uuid>,
-    pub domains: Vec<String>,
+pub enum RegistryChangeEvent {
+    DeploymentChanged {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    },
+    AccountTokensInvalidated {
+        event_id: ChangeEventId,
+        account_id: Uuid,
+    },
+    EnvironmentPermissionsChanged {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+        grantee_account_id: Uuid,
+    },
+    DomainRegistrationChanged {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+        domains: Vec<String>,
+    },
+}
+
+impl RegistryChangeEvent {
+    pub fn event_id(&self) -> ChangeEventId {
+        match self {
+            Self::DeploymentChanged { event_id, .. } => *event_id,
+            Self::AccountTokensInvalidated { event_id, .. } => *event_id,
+            Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
+            Self::DomainRegistrationChanged { event_id, .. } => *event_id,
+        }
+    }
+}
+
+/// Flat row representation matching the DB schema, used only for deserialization.
+struct RegistryChangeEventRow {
+    event_id: ChangeEventId,
+    event_type: RegistryEventType,
+    environment_id: Option<Uuid>,
+    deployment_revision_id: Option<i64>,
+    account_id: Option<Uuid>,
+    grantee_account_id: Option<Uuid>,
+    domains: Vec<String>,
+}
+
+impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
+    type Error = RepoError;
+
+    fn try_from(row: RegistryChangeEventRow) -> Result<Self, Self::Error> {
+        match row.event_type {
+            RegistryEventType::DeploymentChanged => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "DeploymentChanged event missing environment_id"
+                    ))
+                })?;
+                let deployment_revision_id = row.deployment_revision_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "DeploymentChanged event missing deployment_revision_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::DeploymentChanged {
+                    event_id: row.event_id,
+                    environment_id,
+                    deployment_revision_id,
+                })
+            }
+            RegistryEventType::AccountTokensInvalidated => {
+                let account_id = row.account_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "AccountTokensInvalidated event missing account_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::AccountTokensInvalidated {
+                    event_id: row.event_id,
+                    account_id,
+                })
+            }
+            RegistryEventType::EnvironmentPermissionsChanged => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "EnvironmentPermissionsChanged event missing environment_id"
+                    ))
+                })?;
+                let grantee_account_id = row.grantee_account_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "EnvironmentPermissionsChanged event missing grantee_account_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::EnvironmentPermissionsChanged {
+                    event_id: row.event_id,
+                    environment_id,
+                    grantee_account_id,
+                })
+            }
+            RegistryEventType::DomainRegistrationChanged => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "DomainRegistrationChanged event missing environment_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::DomainRegistrationChanged {
+                    event_id: row.event_id,
+                    environment_id,
+                    domains: row.domains,
+                })
+            }
+        }
+    }
 }
 
 /// Data for inserting a new registry change event (no event_id yet).
@@ -234,7 +334,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                 let event_type_raw: i16 = row.try_get("event_type").map_err(RepoError::from)?;
                 let domains: Option<Vec<String>> =
                     row.try_get("domains").map_err(RepoError::from)?;
-                Ok(RegistryChangeEvent {
+                RegistryChangeEventRow {
                     event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
                     event_type: RegistryEventType::try_from(event_type_raw)?,
                     environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
@@ -246,7 +346,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                         .try_get("grantee_account_id")
                         .map_err(RepoError::from)?,
                     domains: domains.unwrap_or_default(),
-                })
+                }
+                .try_into()
             })
             .collect()
     }
@@ -356,7 +457,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                     })?,
                     _ => Vec::new(),
                 };
-                Ok(RegistryChangeEvent {
+                RegistryChangeEventRow {
                     event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
                     event_type: RegistryEventType::try_from(event_type_raw)?,
                     environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
@@ -368,7 +469,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                         .try_get("grantee_account_id")
                         .map_err(RepoError::from)?,
                     domains,
-                })
+                }
+                .try_into()
             })
             .collect()
     }

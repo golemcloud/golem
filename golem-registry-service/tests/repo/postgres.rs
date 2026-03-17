@@ -27,7 +27,7 @@ use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
-    DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
 };
 use golem_registry_service::services::registry_change_notifier::{
     PostgresRegistryChangeNotifier, RegistryChangeNotifier,
@@ -423,9 +423,15 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
         .expect("timed out waiting for event via PgListener")
         .expect("broadcast channel closed");
 
-    assert_eq!(received.event_id, event_id);
-    assert_eq!(received.environment_id.unwrap(), env_id);
-    assert_eq!(received.deployment_revision_id.unwrap(), 42);
+    assert_eq!(received.event_id(), event_id);
+    assert!(matches!(
+        received,
+        RegistryChangeEvent::DeploymentChanged {
+            environment_id,
+            deployment_revision_id: 42,
+            ..
+        } if environment_id == env_id
+    ));
 
     join_set.abort_all();
 }

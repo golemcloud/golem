@@ -24,7 +24,7 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::domain_registration::{
     DomainRegistrationRecord, DomainRegistrationRepoError,
 };
-use crate::repo::registry_change::{RegistryChangeEvent, RegistryEventType};
+use crate::repo::registry_change::RegistryChangeEvent;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
@@ -152,15 +152,12 @@ impl DomainRegistrationService {
 
         let created: DomainRegistration = created_record.into();
 
-        self.registry_change_notifier.notify(RegistryChangeEvent {
-            event_id,
-            event_type: RegistryEventType::DomainRegistrationChanged,
-            environment_id: Some(environment_id.0),
-            deployment_revision_id: None,
-            account_id: None,
-            grantee_account_id: None,
-            domains: vec![created.domain.0.clone()],
-        });
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::DomainRegistrationChanged {
+                event_id,
+                environment_id: environment_id.0,
+                domains: vec![created.domain.0.clone()],
+            });
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
         self.domain_provisioner
@@ -195,15 +192,12 @@ impl DomainRegistrationService {
 
         let deleted: DomainRegistration = deleted_record.into();
 
-        self.registry_change_notifier.notify(RegistryChangeEvent {
-            event_id,
-            event_type: RegistryEventType::DomainRegistrationChanged,
-            environment_id: Some(deleted.environment_id.0),
-            deployment_revision_id: None,
-            account_id: None,
-            grantee_account_id: None,
-            domains: vec![deleted.domain.0.clone()],
-        });
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::DomainRegistrationChanged {
+                event_id,
+                environment_id: deleted.environment_id.0,
+                domains: vec![deleted.domain.0.clone()],
+            });
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
         self.domain_provisioner
