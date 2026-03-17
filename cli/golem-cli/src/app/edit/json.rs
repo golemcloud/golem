@@ -106,9 +106,31 @@ fn parse_json(source: &str) -> anyhow::Result<Tree> {
     parser
         .set_language(&tree_sitter_json::LANGUAGE.into())
         .map_err(|_| anyhow!("Failed to load tree-sitter-json"))?;
-    parser
+    let tree = parser
         .parse(source, None)
-        .ok_or_else(|| anyhow!("Failed to parse JSON"))
+        .ok_or_else(|| anyhow!("Failed to parse JSON"))?;
+    if tree.root_node().has_error() {
+        return Err(anyhow!("Invalid JSON"));
+    }
+    if contains_comment(tree.root_node()) {
+        return Err(anyhow!("Comments are not allowed in JSON"));
+    }
+    Ok(tree)
+}
+
+fn contains_comment(root: Node<'_>) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "comment" {
+            return true;
+        }
+        for idx in 0..node.child_count() {
+            if let Some(child) = node.child(idx as u32) {
+                stack.push(child);
+            }
+        }
+    }
+    false
 }
 
 fn root_object<'a>(tree: &'a Tree, _source: &str) -> anyhow::Result<Node<'a>> {

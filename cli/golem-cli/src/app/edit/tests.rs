@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::edit::{
-    agents_md, cargo_toml, golem_yaml, main_rs, main_ts, package_json, tsconfig_json,
+    agents_md, cargo_toml, gitignore, golem_yaml, main_rs, main_ts, package_json, tsconfig_json,
 };
 use crate::model::GuestLanguage;
 use test_r::test;
@@ -21,7 +21,6 @@ use test_r::test;
 #[test]
 fn package_json_merge_and_collect() {
     let source = r#"{
-  // comment
   "name": "demo",
   "dependencies": {
     "foo": "1.0.0"
@@ -42,7 +41,6 @@ fn package_json_merge_and_collect() {
     .unwrap();
 
     let expected = r#"{
-  // comment
   "name": "demo",
   "dependencies": {
     "foo": "1.2.0",
@@ -65,7 +63,6 @@ fn package_json_merge_and_collect() {
 #[test]
 fn tsconfig_merge_and_check() {
     let base = r#"{
-  // base
   "compilerOptions": {
     "target": "ES2020",
     "module": "CommonJS"
@@ -81,7 +78,6 @@ fn tsconfig_merge_and_check() {
 
     let merged = tsconfig_json::merge_with_newer(base, update).unwrap();
     let expected = r#"{
-  // base
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",
@@ -708,6 +704,69 @@ fn agents_md_merge_guides_updates_same_language_section() {
             .count(),
         1
     );
+}
+
+#[test]
+fn package_json_rejects_json_comments() {
+    let source = r#"{
+  // comment
+  "dependencies": {
+    "foo": "1.0.0"
+  }
+}"#;
+
+    let result =
+        package_json::merge_dependencies(source, &[("foo".to_string(), "1.2.0".to_string())], &[]);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn tsconfig_rejects_json_comments() {
+    let base = r#"{
+  "compilerOptions": {
+    "target": "ES2020"
+  }
+}"#;
+    let update = r#"{
+  /* comment */
+  "compilerOptions": {
+    "module": "ESNext"
+  }
+}"#;
+
+    let result = tsconfig_json::merge_with_newer(base, update);
+    assert!(result.is_err());
+}
+
+#[test]
+fn gitignore_merge_keeps_conflicting_rules_ordered() {
+    let source = "target/\n!target/\n";
+    let additional = "!target/\ntarget/\n";
+
+    let merged = gitignore::merge(source, additional);
+    let expected = "target/\n!target/";
+    assert_eq!(merged, expected);
+}
+
+#[test]
+fn gitignore_merge_sorts_and_dedups_non_conflicting_rules() {
+    let source = "b/\na/\na/\n";
+    let additional = "c/\nb/\n";
+
+    let merged = gitignore::merge(source, additional);
+    let expected = "a/\nb/\nc/";
+    assert_eq!(merged, expected);
+}
+
+#[test]
+fn gitignore_merge_keeps_comments_in_ordered_bucket() {
+    let source = "# keep me\nfoo/\n";
+    let additional = "bar/\n";
+
+    let merged = gitignore::merge(source, additional);
+    let expected = "# keep me\nbar/\nfoo/";
+    assert_eq!(merged, expected);
 }
 
 fn make_managed_guide(language: GuestLanguage, content: &str) -> String {

@@ -127,9 +127,13 @@ fn parse_rust(source: &str) -> anyhow::Result<Tree> {
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .map_err(|_| anyhow!("Failed to load tree-sitter-rust"))?;
-    parser
+    let tree = parser
         .parse(source, None)
-        .ok_or_else(|| anyhow!("Failed to parse Rust"))
+        .ok_or_else(|| anyhow!("Failed to parse Rust"))?;
+    if tree.root_node().has_error() {
+        return Err(anyhow!("Invalid Rust"));
+    }
+    Ok(tree)
 }
 
 fn last_use_end(source: &str, tree: &Tree) -> usize {

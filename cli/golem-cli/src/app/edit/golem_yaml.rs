@@ -130,7 +130,7 @@ pub fn set_scalar(source: &str, path: &[&str], value_literal: &str) -> anyhow::R
     let tree = parse_yaml(source)?;
     let root = root_mapping(&tree, source)?;
     let pair = find_pair_by_path(source, root, path)?;
-    let (pair_node, value_node) = if let Some(pair) = pair {
+    let (_, value_node) = if let Some(pair) = pair {
         pair
     } else if path.len() == 1 {
         find_pair_anywhere(source, tree.root_node(), path[0])?
@@ -144,9 +144,6 @@ pub fn set_scalar(source: &str, path: &[&str], value_literal: &str) -> anyhow::R
         replacement_range.end,
         value_literal,
     )];
-    if source[replacement_range.end..pair_node.end_byte()].starts_with('\n') {
-        // keep newline if present
-    }
     apply_edits(source, edits)
 }
 
@@ -173,9 +170,13 @@ fn parse_yaml(source: &str) -> anyhow::Result<Tree> {
     parser
         .set_language(&tree_sitter_yaml::LANGUAGE.into())
         .map_err(|_| anyhow!("Failed to load tree-sitter-yaml"))?;
-    parser
+    let tree = parser
         .parse(source, None)
-        .ok_or_else(|| anyhow!("Failed to parse YAML"))
+        .ok_or_else(|| anyhow!("Failed to parse YAML"))?;
+    if tree.root_node().has_error() {
+        return Err(anyhow!("Invalid YAML"));
+    }
+    Ok(tree)
 }
 
 fn root_mapping<'a>(tree: &'a Tree, source: &str) -> anyhow::Result<Node<'a>> {
@@ -531,11 +532,7 @@ fn merge_sequence_nodes(
         }
         existing.insert(text);
         let reindented = reindent_block(update_source, item.start_byte(), item.end_byte(), indent);
-        if !inserts.is_empty() || base_source[..insert_pos].ends_with('\n') {
-            inserts.push('\n');
-        } else {
-            inserts.push('\n');
-        }
+        inserts.push('\n');
         inserts.push_str(&reindented);
     }
 

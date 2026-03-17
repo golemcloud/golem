@@ -62,9 +62,13 @@ fn parse_ts(source: &str) -> anyhow::Result<Tree> {
     parser
         .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
         .map_err(|_| anyhow!("Failed to load tree-sitter-typescript"))?;
-    parser
+    let tree = parser
         .parse(source, None)
-        .ok_or_else(|| anyhow!("Failed to parse TypeScript"))
+        .ok_or_else(|| anyhow!("Failed to parse TypeScript"))?;
+    if tree.root_node().has_error() {
+        return Err(anyhow!("Invalid TypeScript"));
+    }
+    Ok(tree)
 }
 
 fn export_statements(source: &str) -> anyhow::Result<Vec<String>> {
