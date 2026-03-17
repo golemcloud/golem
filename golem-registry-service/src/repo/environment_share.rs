@@ -18,6 +18,7 @@ use super::model::environment_share::{
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::environment_share::EnvironmentShareRecord;
+use crate::repo::registry_change::{ChangeEventId, NewRegistryChangeEvent};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -36,17 +37,17 @@ pub trait EnvironmentShareRepo: Send + Sync {
         environment_id: Uuid,
         revision: EnvironmentShareRevisionRecord,
         grantee_account_id: Uuid,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>;
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError>;
 
     async fn update(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>;
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError>;
 
     async fn delete(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError>;
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError>;
 
     async fn get_by_id(
         &self,
@@ -92,7 +93,7 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
         environment_id: Uuid,
         revision: EnvironmentShareRevisionRecord,
         grantee_account_id: Uuid,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError> {
         let span = Self::span_environment_id(environment_id);
         self.repo
             .create(environment_id, revision, grantee_account_id)
@@ -103,7 +104,7 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
     async fn update(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError> {
         let span = Self::span_environment_share_id(revision.environment_share_id);
         self.repo.update(revision).instrument(span).await
     }
@@ -111,7 +112,7 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
     async fn delete(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError> {
         let span = Self::span_environment_share_id(revision.environment_share_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -171,6 +172,46 @@ impl<DBP: Pool> DbEnvironmentShareRepo<DBP> {
     }
 }
 
+impl DbEnvironmentShareRepo<PostgresPool> {
+    async fn insert_permissions_change_event(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        environment_id: Uuid,
+        grantee_account_id: Uuid,
+    ) -> Result<ChangeEventId, EnvironmentShareRepoError> {
+        let event =
+            NewRegistryChangeEvent::environment_permissions_changed(environment_id, grantee_account_id);
+        crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event)
+            .await
+            .map_err(EnvironmentShareRepoError::from)
+    }
+
+    async fn pg_notify_change_event(&self, event_id: ChangeEventId) {
+        let _ = self
+            .db_pool
+            .with_rw(METRICS_SVC_NAME, "pg_notify")
+            .execute(
+                sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0),
+            )
+            .await;
+    }
+}
+
+impl DbEnvironmentShareRepo<SqlitePool> {
+    async fn insert_permissions_change_event(
+        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        environment_id: Uuid,
+        grantee_account_id: Uuid,
+    ) -> Result<ChangeEventId, EnvironmentShareRepoError> {
+        let event =
+            NewRegistryChangeEvent::environment_permissions_changed(environment_id, grantee_account_id);
+        crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event)
+            .await
+            .map_err(EnvironmentShareRepoError::from)
+    }
+
+    async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
+}
+
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbEnvironmentShareRepo<PostgresPool> {
     async fn insert_revision(
@@ -205,8 +246,8 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         environment_id: Uuid,
         revision: EnvironmentShareRevisionRecord,
         grantee_account_id: Uuid,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError> {
+        let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
             async move {
                 let environment_share_record: EnvironmentShareRecord = tx
                     .fetch_one_as(
@@ -227,21 +268,27 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
 
                 let revision_record = Self::insert_revision(tx, revision).await?;
 
-                Ok(EnvironmentShareExtRevisionRecord {
+                let change_event_id = Self::insert_permissions_change_event(tx, environment_id, grantee_account_id).await?;
+
+                Ok::<_, EnvironmentShareRepoError>((EnvironmentShareExtRevisionRecord {
                     environment_id: environment_share_record.environment_id,
                     grantee_account_id: environment_share_record.grantee_account_id,
                     entity_created_at: environment_share_record.audit.created_at,
                     revision: revision_record
-                })
+                }, change_event_id))
             }.boxed()
-        }).await
+        }).await?;
+
+        self.pg_notify_change_event(result.1).await;
+
+        Ok(result)
     }
 
     async fn update(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError> {
+        let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
 
@@ -260,21 +307,31 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                     ).await?
                     .ok_or(EnvironmentShareRepoError::ConcurrentModification)?;
 
-                Ok(EnvironmentShareExtRevisionRecord {
+                let change_event_id = Self::insert_permissions_change_event(
+                    tx,
+                    environment_share_record.environment_id,
+                    environment_share_record.grantee_account_id,
+                ).await?;
+
+                Ok::<_, EnvironmentShareRepoError>((EnvironmentShareExtRevisionRecord {
                     environment_id: environment_share_record.environment_id,
                     grantee_account_id: environment_share_record.grantee_account_id,
                     entity_created_at: environment_share_record.audit.created_at,
                     revision
-                })
+                }, change_event_id))
             }.boxed()
-        }).await
+        }).await?;
+
+        self.pg_notify_change_event(result.1).await;
+
+        Ok(result)
     }
 
     async fn delete(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
+    ) -> Result<(EnvironmentShareExtRevisionRecord, ChangeEventId), EnvironmentShareRepoError> {
+        let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision.clone()).await?;
 
@@ -293,14 +350,24 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                     ).await?
                     .ok_or(EnvironmentShareRepoError::ConcurrentModification)?;
 
-                Ok(EnvironmentShareExtRevisionRecord {
+                let change_event_id = Self::insert_permissions_change_event(
+                    tx,
+                    environment_share_record.environment_id,
+                    environment_share_record.grantee_account_id,
+                ).await?;
+
+                Ok::<_, EnvironmentShareRepoError>((EnvironmentShareExtRevisionRecord {
                     environment_id: environment_share_record.environment_id,
                     grantee_account_id: environment_share_record.grantee_account_id,
                     entity_created_at: environment_share_record.audit.created_at,
                     revision: revision_record
-                })
+                }, change_event_id))
             }.boxed()
-        }).await
+        }).await?;
+
+        self.pg_notify_change_event(result.1).await;
+
+        Ok(result)
     }
 
     async fn get_by_id(

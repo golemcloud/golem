@@ -21,7 +21,7 @@ use golem_service_base::clients::registry::{RegistryService, RegistryServiceErro
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info, warn};
+
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct AgentResolutionCacheKey {
@@ -146,67 +146,6 @@ impl AgentResolutionCache {
             self.cache.remove(&key).await;
         }
         self.latest_revisions.retain_sync(|_, _| false);
-    }
-}
-
-pub async fn run_invalidation_subscriber(
-    registry_service: Arc<dyn RegistryService>,
-    cache: Arc<AgentResolutionCache>,
-) {
-    use futures::StreamExt;
-
-    let mut last_seen_event_id: Option<u64> = None;
-    let mut backoff = Duration::from_millis(100);
-    let max_backoff = Duration::from_secs(30);
-
-    loop {
-        match registry_service
-            .subscribe_deployment_invalidations(last_seen_event_id)
-            .await
-        {
-            Ok(mut stream) => {
-                info!("Connected to deployment invalidation stream");
-                backoff = Duration::from_millis(100);
-
-                while let Some(result) = stream.next().await {
-                    match result {
-                        Ok(event) => {
-                            if event.cursor_expired {
-                                warn!("Deployment invalidation cursor expired, flushing cache");
-                                cache.clear().await;
-                            } else if let Some(env_id) = event.environment_id {
-                                if let Ok(rev) =
-                                    DeploymentRevision::new(event.deployment_revision)
-                                {
-                                    debug!(
-                                        environment_id = %env_id,
-                                        deployment_revision = event.deployment_revision,
-                                        "Received deployment invalidation event"
-                                    );
-                                    cache.update_latest_revision(env_id, rev);
-                                }
-                            } else {
-                                warn!(
-                                    event_id = event.event_id,
-                                    "Received invalidation event with no environment_id and cursor_expired=false, ignoring"
-                                );
-                            }
-                            last_seen_event_id = Some(event.event_id);
-                        }
-                        Err(e) => {
-                            warn!("Error receiving invalidation event: {e}, reconnecting");
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to connect to invalidation stream: {e}");
-            }
-        }
-
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(max_backoff);
     }
 }
 
@@ -434,7 +373,7 @@ mod tests {
         {
             unimplemented!()
         }
-        async fn subscribe_deployment_invalidations(
+        async fn subscribe_registry_invalidations(
             &self,
             _: Option<u64>,
         ) -> Result<
@@ -442,7 +381,7 @@ mod tests {
                 Box<
                     dyn futures::Stream<
                             Item = Result<
-                                golem_common::model::agent::DeploymentInvalidationEvent,
+                                golem_common::model::agent::RegistryInvalidationEvent,
                                 RegistryServiceError,
                             >,
                         > + Send,

@@ -62,8 +62,8 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{
-    rdbms, shard_manager, All, HasActiveWorkers, HasComponentService, HasConfig, HasOplogService,
-    HasWorkerActivator, HasWorkerService,
+    rdbms, shard_manager, All, HasActiveWorkers, HasAgentTypesService, HasComponentService,
+    HasConfig, HasEnvironmentStateService, HasOplogService, HasWorkerActivator, HasWorkerService,
 };
 use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use crate::storage::indexed::postgres::PostgresIndexedStorage;
@@ -306,7 +306,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
         let shutdown = services::shutdown::Shutdown::new();
 
-        let (worker_executor_impl, epoch_thread, epoch_stop) =
+        let (worker_executor_impl, epoch_thread, epoch_stop, registry_service) =
             create_worker_executor_impl::<Ctx, Self>(
                 golem_config.clone(),
                 self,
@@ -315,6 +315,23 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 shutdown.token(),
             )
             .await?;
+
+        {
+            let registry_service = registry_service.clone();
+            let environment_state_service = worker_executor_impl.environment_state_service();
+            let agent_types_service = worker_executor_impl.agent_types();
+            let shutdown_token = shutdown.token();
+            join_set.spawn(async move {
+                services::registry_event_subscriber::run_registry_event_subscriber(
+                    registry_service,
+                    environment_state_service,
+                    agent_types_service,
+                    shutdown_token,
+                )
+                .await;
+                Ok(())
+            });
+        }
 
         let leak_detector = worker_executor_impl.leak_detector();
 
@@ -347,7 +364,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
     shutdown_token: tokio_util::sync::CancellationToken,
-) -> Result<(All<Ctx>, std::thread::JoinHandle<()>, Arc<AtomicBool>), anyhow::Error> {
+) -> Result<(All<Ctx>, std::thread::JoinHandle<()>, Arc<AtomicBool>, Arc<dyn RegistryService>), anyhow::Error> {
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -703,7 +720,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             agent_type_service,
             environment_state_service,
             agent_webhooks_service,
-            registry_service,
+            registry_service.clone(),
             shutdown_token,
             http_connection_pool,
             leak_sentinel,
@@ -726,7 +743,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         ))
         .await;
 
-    Ok((all, epoch_thread, epoch_stop))
+    Ok((all, epoch_thread, epoch_stop, registry_service))
 }
 
 async fn build_inner_key_value_storage(

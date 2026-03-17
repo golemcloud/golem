@@ -118,13 +118,40 @@ pub struct ResolvedAgentType {
     pub deployment_revision: DeploymentRevision,
 }
 
-/// Event received from the registry service when a deployment changes.
+/// Event received from the registry service when any registry state changes.
 #[derive(Debug, Clone)]
-pub struct DeploymentInvalidationEvent {
-    pub event_id: u64,
-    pub environment_id: Option<EnvironmentId>,
-    pub deployment_revision: u64,
-    pub cursor_expired: bool,
+pub enum RegistryInvalidationEvent {
+    /// The client's cursor is older than the server's retention window.
+    CursorExpired { event_id: u64 },
+    /// A deployment changed for an environment.
+    DeploymentChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        deployment_revision: u64,
+        domains: Vec<String>,
+    },
+    /// An account's tokens were invalidated.
+    AccountTokensInvalidated {
+        event_id: u64,
+        account_id: AccountId,
+    },
+    /// Environment sharing permissions changed.
+    EnvironmentPermissionsChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        grantee_account_id: AccountId,
+    },
+}
+
+impl RegistryInvalidationEvent {
+    pub fn event_id(&self) -> u64 {
+        match self {
+            Self::CursorExpired { event_id } => *event_id,
+            Self::DeploymentChanged { event_id, .. } => *event_id,
+            Self::AccountTokensInvalidated { event_id, .. } => *event_id,
+            Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]

@@ -81,7 +81,7 @@ impl RegistryService {
         let grpc_port = self.start_grpc_server(join_set).await?;
         self.start_cleanup_task(join_set);
         self.services
-            .deployment_change_notifier
+            .registry_change_notifier
             .start_background_tasks(join_set);
 
         Ok(RunDetails {
@@ -98,7 +98,7 @@ impl RegistryService {
         let grpc_port = self.start_grpc_server(join_set).await?;
         self.start_cleanup_task(join_set);
         self.services
-            .deployment_change_notifier
+            .registry_change_notifier
             .start_background_tasks(join_set);
         let endpoint = api::make_open_api_service(&self.services).boxed();
 
@@ -116,7 +116,7 @@ impl RegistryService {
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) {
-        let repo = self.services.deployment_change_repo.clone();
+        let repo = self.services.registry_change_repo.clone();
         let retention = self.config.deployment_events.retention;
         let interval = self.config.deployment_events.cleanup_interval;
 

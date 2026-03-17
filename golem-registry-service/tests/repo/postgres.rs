@@ -26,9 +26,9 @@ use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
-use golem_registry_service::repo::deployment_change::{DbDeploymentChangeRepo, DeploymentChangeRepo};
-use golem_registry_service::services::deployment_change_notifier::{
-    DeploymentChangeNotifier, PostgresDeploymentChangeNotifier,
+use golem_registry_service::repo::registry_change::{DbRegistryChangeRepo, RegistryChangeRepo, NewRegistryChangeEvent};
+use golem_registry_service::services::registry_change_notifier::{
+    RegistryChangeNotifier, PostgresRegistryChangeNotifier,
 };
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
@@ -216,7 +216,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         full_deployment_repo: Box::new(DbDeploymentRepo::logged(pool.clone())),
         environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
-        deployment_change_repo: Box::new(DbDeploymentChangeRepo::new(pool.clone())),
+        registry_change_repo: Box::new(DbRegistryChangeRepo::new(pool.clone())),
     };
     deps.setup().await;
     deps
@@ -359,39 +359,44 @@ async fn test_mcp_deployment_list_and_delete(#[dimension(postgres_variant)] deps
 }
 
 #[test]
-async fn test_deployment_change_record_and_query(#[dimension(postgres_variant)] deps: &Deps) {
-    crate::repo::common::test_deployment_change_record_and_query(deps).await;
+async fn test_registry_change_record_and_query(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_registry_change_record_and_query(deps).await;
 }
 
 #[test]
-async fn test_deployment_change_cleanup(#[dimension(postgres_variant)] deps: &Deps) {
-    crate::repo::common::test_deployment_change_cleanup(deps).await;
+async fn test_registry_change_cleanup(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_registry_change_cleanup(deps).await;
 }
 
 #[test]
-async fn test_deployment_change_replay_and_broadcast(#[dimension(postgres_variant)] deps: &Deps) {
-    crate::repo::common::test_deployment_change_replay_and_broadcast(deps).await;
+async fn test_registry_change_replay_and_broadcast(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_registry_change_replay_and_broadcast(deps).await;
 }
 
 #[test]
-async fn test_deployment_change_cursor_expired_detection(
+async fn test_registry_change_cursor_expired_detection(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
-    crate::repo::common::test_deployment_change_cursor_expired_detection(deps).await;
+    crate::repo::common::test_registry_change_cursor_expired_detection(deps).await;
+}
+
+#[test]
+async fn test_registry_change_mixed_event_types(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_registry_change_mixed_event_types(deps).await;
 }
 
 /// Tests that Postgres LISTEN/NOTIFY propagates events through the
-/// `PostgresDeploymentChangeNotifier` background PgListener task.
+/// `PostgresRegistryChangeNotifier` background PgListener task.
 /// This validates the cross-node broadcast path used in multi-registry deployments.
 #[test]
 async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
     use std::sync::Arc;
     use uuid::Uuid;
 
-    let repo: Arc<dyn DeploymentChangeRepo> =
-        Arc::new(DbDeploymentChangeRepo::new(db.pool.clone()));
+    let repo: Arc<dyn RegistryChangeRepo> =
+        Arc::new(DbRegistryChangeRepo::new(db.pool.clone()));
 
-    let notifier = PostgresDeploymentChangeNotifier::new(64, repo.clone(), &db.config);
+    let notifier = PostgresRegistryChangeNotifier::new(64, repo.clone(), &db.config);
 
     let mut join_set = tokio::task::JoinSet::new();
     notifier.start_background_tasks(&mut join_set);
@@ -402,9 +407,12 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
     // Give the PgListener background task time to connect and LISTEN
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-    // Record an event via the repo — this INSERT triggers pg_notify('deployment_change', ...)
+    // Record an event via the repo — this INSERT triggers pg_notify('registry_change', ...)
     let env_id = Uuid::new_v4();
-    let event_id = repo.record_change_event(env_id, 42).await.unwrap();
+    let event_id = repo
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 42, vec![]))
+        .await
+        .unwrap();
 
     // The PgListener should pick up the NOTIFY, read the event from the DB,
     // and broadcast it through the sender.
@@ -414,8 +422,8 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
         .expect("broadcast channel closed");
 
     assert_eq!(received.event_id, event_id);
-    assert_eq!(received.environment_id, env_id);
-    assert_eq!(received.deployment_revision_id, 42);
+    assert_eq!(received.environment_id.unwrap(), env_id);
+    assert_eq!(received.deployment_revision_id.unwrap(), 42);
 
     join_set.abort_all();
 }

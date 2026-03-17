@@ -14,7 +14,9 @@
 
 use super::account::{AccountError, AccountService};
 use crate::repo::model::token::TokenRecord;
+use crate::repo::registry_change::{RegistryChangeEvent, RegistryEventType};
 use crate::repo::token::TokenRepo;
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenId;
@@ -60,13 +62,19 @@ error_forwarding!(TokenError, RepoError, AccountError);
 pub struct TokenService {
     token_repo: Arc<dyn TokenRepo>,
     account_service: Arc<AccountService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl TokenService {
-    pub fn new(token_repo: Arc<dyn TokenRepo>, account_service: Arc<AccountService>) -> Self {
+    pub fn new(
+        token_repo: Arc<dyn TokenRepo>,
+        account_service: Arc<AccountService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    ) -> Self {
         Self {
             token_repo,
             account_service,
+            registry_change_notifier,
         }
     }
 
@@ -223,7 +231,21 @@ impl TokenService {
 
         auth.authorize_account_action(token.account_id, AccountAction::DeleteToken)?;
 
-        self.token_repo.delete(token_id.0).await?;
+        if let Some(event_id) = self
+            .token_repo
+            .delete_and_record_invalidation(token_id.0, token.account_id.0)
+            .await?
+        {
+            self.registry_change_notifier.notify(RegistryChangeEvent {
+                event_id,
+                event_type: RegistryEventType::AccountTokensInvalidated,
+                environment_id: None,
+                deployment_revision_id: None,
+                account_id: Some(token.account_id.0),
+                grantee_account_id: None,
+                domains: vec![],
+            });
+        }
 
         Ok(())
     }

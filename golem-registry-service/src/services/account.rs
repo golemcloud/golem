@@ -17,6 +17,10 @@ use crate::config::PrecreatedAccount;
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::repo::registry_change::{
+    NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo, RegistryEventType,
+};
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use anyhow::anyhow;
 use golem_common::model::account::AccountSetRoles;
 use golem_common::model::account::{
@@ -70,6 +74,8 @@ pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,
     plan_service: Arc<PlanService>,
     default_plan_id: PlanId,
+    registry_change_repo: Arc<dyn RegistryChangeRepo>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl AccountService {
@@ -77,11 +83,15 @@ impl AccountService {
         account_repo: Arc<dyn AccountRepo>,
         plan_service: Arc<PlanService>,
         default_plan_id: PlanId,
+        registry_change_repo: Arc<dyn RegistryChangeRepo>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             account_repo,
             plan_service,
             default_plan_id,
+            registry_change_repo,
+            registry_change_notifier,
         }
     }
 
@@ -226,7 +236,28 @@ impl AccountService {
         let result = self.account_repo.delete(record).await;
 
         match result {
-            Ok(record) => Ok(record.try_into()?),
+            Ok(record) => {
+                let account: Account = record.try_into()?;
+                // Account soft-delete invalidates all its tokens
+                let event = NewRegistryChangeEvent::account_tokens_invalidated(account_id.0);
+                match self.registry_change_repo.record_change_event(&event).await {
+                    Ok(event_id) => {
+                        self.registry_change_notifier.notify(RegistryChangeEvent {
+                            event_id,
+                            event_type: RegistryEventType::AccountTokensInvalidated,
+                            environment_id: None,
+                            deployment_revision_id: None,
+                            account_id: Some(account_id.0),
+                            grantee_account_id: None,
+                            domains: vec![],
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to record account deletion token invalidation event: {e}");
+                    }
+                }
+                Ok(account)
+            }
             Err(AccountRepoError::ConcurrentModification) => Err(AccountError::ConcurrentUpdate)?,
             Err(other) => Err(other)?,
         }

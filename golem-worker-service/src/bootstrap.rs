@@ -48,6 +48,7 @@ pub struct Services {
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
     pub registry_service: Arc<dyn RegistryService>,
     pub agent_resolution_cache: Arc<AgentResolutionCache>,
+    pub route_resolver: Arc<RouteResolver>,
 }
 
 impl Services {
@@ -175,6 +176,7 @@ impl Services {
             mcp_capability_lookup,
             registry_service: registry_service_client,
             agent_resolution_cache,
+            route_resolver,
         })
     }
 }

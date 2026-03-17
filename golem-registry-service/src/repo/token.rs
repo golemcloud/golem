@@ -13,13 +13,16 @@
 // limitations under the License.
 
 use crate::repo::model::token::TokenRecord;
+use crate::repo::registry_change::{ChangeEventId, NewRegistryChangeEvent};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
+use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo::{RepoResult, ResultExt};
+use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
+use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -34,6 +37,12 @@ pub trait TokenRepo: Send + Sync {
     async fn get_by_account(&self, account_id: Uuid) -> RepoResult<Vec<TokenRecord>>;
 
     async fn delete(&self, token_id: Uuid) -> RepoResult<()>;
+
+    async fn delete_and_record_invalidation(
+        &self,
+        token_id: Uuid,
+        account_id: Uuid,
+    ) -> RepoResult<Option<ChangeEventId>>;
 }
 
 pub struct LoggedTokenRepo<Repo: TokenRepo> {
@@ -90,6 +99,17 @@ impl<Repo: TokenRepo> TokenRepo for LoggedTokenRepo<Repo> {
             .instrument(Self::span_id(token_id))
             .await
     }
+
+    async fn delete_and_record_invalidation(
+        &self,
+        token_id: Uuid,
+        account_id: Uuid,
+    ) -> RepoResult<Option<ChangeEventId>> {
+        self.repo
+            .delete_and_record_invalidation(token_id, account_id)
+            .instrument(Self::span_id(token_id))
+            .await
+    }
 }
 
 pub struct DbTokenRepo<DBP: Pool> {
@@ -117,6 +137,52 @@ impl<DBP: Pool> DbTokenRepo<DBP> {
     fn with_rw(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_rw(METRICS_SVC_NAME, api_name)
     }
+
+    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, E>
+    where
+        R: Send,
+        E: Debug + Send + From<RepoError>,
+        F: for<'f> FnOnce(
+                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, Result<R, E>>
+            + Send,
+    {
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, api_name, f)
+            .await
+    }
+}
+
+impl DbTokenRepo<PostgresPool> {
+    async fn insert_token_invalidation_event(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> RepoResult<ChangeEventId> {
+        let event = NewRegistryChangeEvent::account_tokens_invalidated(account_id);
+        crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event).await
+    }
+
+    async fn pg_notify_change_event(&self, event_id: ChangeEventId) {
+        let _ = self
+            .db_pool
+            .with_rw(METRICS_SVC_NAME, "pg_notify")
+            .execute(
+                sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0),
+            )
+            .await;
+    }
+}
+
+impl DbTokenRepo<SqlitePool> {
+    async fn insert_token_invalidation_event(
+        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> RepoResult<ChangeEventId> {
+        let event = NewRegistryChangeEvent::account_tokens_invalidated(account_id);
+        crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event).await
+    }
+
+    async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -203,5 +269,38 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .await?;
 
         Ok(())
+    }
+
+    async fn delete_and_record_invalidation(
+        &self,
+        token_id: Uuid,
+        account_id: Uuid,
+    ) -> RepoResult<Option<ChangeEventId>> {
+        let result: Option<ChangeEventId> = self
+            .with_tx_err("delete_and_record_invalidation", |tx| {
+                Box::pin(async move {
+                    let delete_result = tx
+                        .execute(
+                            sqlx::query("DELETE FROM tokens WHERE token_id = $1").bind(token_id),
+                        )
+                        .await
+                        .map_err(RepoError::from)?;
+
+                    if delete_result.rows_affected() == 0 {
+                        return Ok::<_, RepoError>(None);
+                    }
+
+                    let event_id =
+                        Self::insert_token_invalidation_event(tx, account_id).await?;
+                    Ok(Some(event_id))
+                })
+            })
+            .await?;
+
+        if let Some(event_id) = result {
+            self.pg_notify_change_event(event_id).await;
+        }
+
+        Ok(result)
     }
 }

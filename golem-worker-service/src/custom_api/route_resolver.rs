@@ -113,6 +113,17 @@ impl RouteResolver {
         })
     }
 
+    pub async fn invalidate_domain(&self, domain: &Domain) {
+        self.domain_api_cache.remove(domain).await;
+    }
+
+    pub async fn clear_all(&self) {
+        let keys = self.domain_api_cache.keys().await;
+        for key in keys {
+            self.domain_api_cache.remove(&key).await;
+        }
+    }
+
     async fn get_or_build_domain_api(
         &self,
         domain: &Domain,

@@ -196,7 +196,7 @@ pub trait RegistryService: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<EnvironmentState, RegistryServiceError>;
 
-    async fn subscribe_deployment_invalidations(
+    async fn subscribe_registry_invalidations(
         &self,
         last_seen_event_id: Option<u64>,
     ) -> Result<
@@ -204,7 +204,7 @@ pub trait RegistryService: Send + Sync {
             Box<
                 dyn futures::Stream<
                         Item = Result<
-                            golem_common::model::agent::DeploymentInvalidationEvent,
+                            golem_common::model::agent::RegistryInvalidationEvent,
                             RegistryServiceError,
                         >,
                     > + Send,
@@ -895,7 +895,7 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn subscribe_deployment_invalidations(
+    async fn subscribe_registry_invalidations(
         &self,
         last_seen_event_id: Option<u64>,
     ) -> Result<
@@ -903,7 +903,7 @@ impl RegistryService for GrpcRegistryService {
             Box<
                 dyn futures::Stream<
                         Item = Result<
-                            golem_common::model::agent::DeploymentInvalidationEvent,
+                            golem_common::model::agent::RegistryInvalidationEvent,
                             RegistryServiceError,
                         >,
                     > + Send,
@@ -912,36 +912,104 @@ impl RegistryService for GrpcRegistryService {
         RegistryServiceError,
     > {
         use futures::StreamExt;
-        use golem_api_grpc::proto::golem::registry::v1::SubscribeDeploymentInvalidationsRequest;
-        use golem_common::model::agent::DeploymentInvalidationEvent;
+        use golem_api_grpc::proto::golem::registry::v1::SubscribeRegistryInvalidationsRequest;
 
         let response = self
             .client
-            .call("subscribe_deployment_invalidations", move |client| {
-                let request = SubscribeDeploymentInvalidationsRequest {
+            .call("subscribe_registry_invalidations", move |client| {
+                let request = SubscribeRegistryInvalidationsRequest {
                     last_seen_event_id,
                 };
-                Box::pin(client.subscribe_deployment_invalidations(request))
+                Box::pin(client.subscribe_registry_invalidations(request))
             })
             .await?
             .into_inner();
 
         let stream = response.map(move |result| match result {
-            Ok(event) => {
-                let env_id = event
-                    .environment_id
-                    .and_then(|eid| eid.try_into().ok());
-                Ok(DeploymentInvalidationEvent {
-                    event_id: event.event_id,
-                    environment_id: env_id,
-                    deployment_revision: event.deployment_revision,
-                    cursor_expired: event.cursor_expired,
-                })
-            }
+            Ok(event) => proto_registry_event_to_model(event),
             Err(status) => Err(RegistryServiceError::from(status)),
         });
 
         Ok(Box::pin(stream))
+    }
+}
+
+fn proto_registry_event_to_model(
+    event: golem_api_grpc::proto::golem::registry::v1::RegistryInvalidationEvent,
+) -> Result<golem_common::model::agent::RegistryInvalidationEvent, RegistryServiceError> {
+    use golem_api_grpc::proto::golem::registry::v1::registry_invalidation_event::Payload;
+
+    let event_id = event.event_id;
+    match event.payload {
+        Some(Payload::CursorExpired(_)) => {
+            Ok(golem_common::model::agent::RegistryInvalidationEvent::CursorExpired { event_id })
+        }
+        Some(Payload::DeploymentChanged(dc)) => {
+            let environment_id = dc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in DeploymentChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::DeploymentChanged {
+                    event_id,
+                    environment_id,
+                    deployment_revision: dc.deployment_revision,
+                    domains: dc.domains,
+                },
+            )
+        }
+        Some(Payload::AccountTokensInvalidated(at)) => {
+            let account_id = at
+                .account_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing account_id in AccountTokensInvalidated",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::AccountTokensInvalidated {
+                    event_id,
+                    account_id,
+                },
+            )
+        }
+        Some(Payload::PermissionsChanged(pc)) => {
+            let environment_id = pc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in PermissionsChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let grantee_account_id = pc
+                .grantee_account_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing grantee_account_id in PermissionsChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::EnvironmentPermissionsChanged {
+                    event_id,
+                    environment_id,
+                    grantee_account_id,
+                },
+            )
+        }
+        None => Err(RegistryServiceError::internal_client_error(
+            "Missing payload in RegistryInvalidationEvent",
+        )),
     }
 }
 

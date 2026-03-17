@@ -24,6 +24,10 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::domain_registration::{
     DomainRegistrationRecord, DomainRegistrationRepoError,
 };
+use crate::repo::registry_change::{
+    NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo, RegistryEventType,
+};
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
@@ -76,6 +80,8 @@ pub struct DomainRegistrationService {
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_service: Arc<EnvironmentService>,
     domain_provisioner: Arc<dyn DomainProvisioner>,
+    registry_change_repo: Arc<dyn RegistryChangeRepo>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl DomainRegistrationService {
@@ -83,11 +89,15 @@ impl DomainRegistrationService {
         domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
         environment_service: Arc<EnvironmentService>,
         domain_provisioner: Arc<dyn DomainProvisioner>,
+        registry_change_repo: Arc<dyn RegistryChangeRepo>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             domain_registration_repo,
             environment_service,
             domain_provisioner,
+            registry_change_repo,
+            registry_change_notifier,
         }
     }
 
@@ -146,6 +156,28 @@ impl DomainRegistrationService {
             })?
             .into();
 
+        let event = NewRegistryChangeEvent::deployment_changed(
+            environment_id.0,
+            0,
+            vec![created.domain.0.clone()],
+        );
+        match self.registry_change_repo.record_change_event(&event).await {
+            Ok(event_id) => {
+                self.registry_change_notifier.notify(RegistryChangeEvent {
+                    event_id,
+                    event_type: RegistryEventType::DeploymentChanged,
+                    environment_id: Some(environment_id.0),
+                    deployment_revision_id: None,
+                    account_id: None,
+                    grantee_account_id: None,
+                    domains: vec![created.domain.0.clone()],
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Failed to record domain registration change event: {e}");
+            }
+        }
+
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
         self.domain_provisioner
             .provision_domain(&created.domain)
@@ -177,6 +209,28 @@ impl DomainRegistrationService {
                 domain_registration_id,
             ))?
             .into();
+
+        let event = NewRegistryChangeEvent::deployment_changed(
+            deleted.environment_id.0,
+            0,
+            vec![deleted.domain.0.clone()],
+        );
+        match self.registry_change_repo.record_change_event(&event).await {
+            Ok(event_id) => {
+                self.registry_change_notifier.notify(RegistryChangeEvent {
+                    event_id,
+                    event_type: RegistryEventType::DeploymentChanged,
+                    environment_id: Some(deleted.environment_id.0),
+                    deployment_revision_id: None,
+                    account_id: None,
+                    grantee_account_id: None,
+                    domains: vec![deleted.domain.0.clone()],
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Failed to record domain deregistration change event: {e}");
+            }
+        }
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
         self.domain_provisioner

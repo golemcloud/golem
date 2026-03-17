@@ -16,4 +16,5 @@ pub mod agent_resolution_cache;
 pub mod auth;
 pub mod component;
 pub mod limit;
+pub mod registry_event_subscriber;
 pub mod worker;

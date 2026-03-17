@@ -53,9 +53,9 @@ service RegistryService {
   rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
   rpc GetCurrentEnvironmentState (GetCurrentEnvironmentStateRequest) returns (GetCurrentEnvironmentStateResponse);
 
-  // deployment invalidation stream
-  rpc SubscribeDeploymentInvalidations(SubscribeDeploymentInvalidationsRequest)
-      returns (stream DeploymentInvalidationEvent);
+  // registry invalidation stream — multiplexed event types
+  rpc SubscribeRegistryInvalidations(SubscribeRegistryInvalidationsRequest)
+      returns (stream RegistryInvalidationEvent);
 }
 
 message AuthenticateTokenRequest {
@@ -361,22 +361,45 @@ message GetCurrentEnvironmentStateSuccessResponse {
   EnvironmentState environment_state = 1;
 }
 
-message SubscribeDeploymentInvalidationsRequest {
+// ── Multiplexed registry invalidation stream ──
+
+message SubscribeRegistryInvalidationsRequest {
   // The event_id of the last event the client successfully processed.
   // If omitted, the server starts streaming from live events only (no replay).
   optional uint64 last_seen_event_id = 1;
 }
 
-// Streamed to worker-service subscribers when a deployment changes.
-// Used to invalidate cached agent resolution data.
-message DeploymentInvalidationEvent {
+// Streamed to worker-service subscribers when any registry state changes.
+// Each event carries exactly one payload variant.
+message RegistryInvalidationEvent {
   uint64 event_id = 1;
-  // The environment whose current deployment changed. Not set when cursor_expired is true.
-  golem.common.EnvironmentId environment_id = 2;
-  // The new deployment revision for the environment. Not meaningful when cursor_expired is true.
-  uint64 deployment_revision = 3;
-  // When true, the client's last_seen_event_id is older than the server's event
-  // retention window, so missed events cannot be replayed. The client must flush
-  // its entire cache and use this event's event_id as its new cursor.
-  bool cursor_expired = 4;
+  oneof payload {
+    CursorExpiredEvent cursor_expired = 2;
+    DeploymentChangedEvent deployment_changed = 3;
+    AccountTokensInvalidatedEvent account_tokens_invalidated = 4;
+    EnvironmentPermissionsChangedEvent permissions_changed = 5;
+  }
+}
+
+// Sent when the client's cursor is older than the server's retention window.
+// The client must flush all caches and use this event's event_id as its new cursor.
+message CursorExpiredEvent {}
+
+// Sent when the current deployment for an environment changes.
+message DeploymentChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  uint64 deployment_revision = 2;
+  // Union of old and new domains — includes removed domains for cache invalidation.
+  repeated string domains = 3;
+}
+
+// Sent when an account's tokens are invalidated (token deleted or account soft-deleted).
+message AccountTokensInvalidatedEvent {
+  golem.common.AccountId account_id = 1;
+}
+
+// Sent when environment sharing permissions change (create/update/delete share).
+message EnvironmentPermissionsChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.common.AccountId grantee_account_id = 2;
 }

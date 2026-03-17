@@ -53,9 +53,9 @@ use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
-use crate::repo::deployment_change::{DbDeploymentChangeRepo, DeploymentChangeRepo};
-use crate::services::deployment_change_notifier::{
-    DeploymentChangeNotifier, LocalDeploymentChangeNotifier, PostgresDeploymentChangeNotifier,
+use crate::repo::registry_change::{DbRegistryChangeRepo, RegistryChangeRepo};
+use crate::services::registry_change_notifier::{
+    RegistryChangeNotifier, LocalRegistryChangeNotifier, PostgresRegistryChangeNotifier,
 };
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
@@ -94,8 +94,8 @@ pub struct Services {
     pub component_write_service: Arc<ComponentWriteService>,
     pub deployed_routes_service: Arc<DeployedRoutesService>,
     pub deployed_mcp_service: Arc<DeployedMcpService>,
-    pub deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
-    pub deployment_change_repo: Arc<dyn DeploymentChangeRepo>,
+    pub registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    pub registry_change_repo: Arc<dyn RegistryChangeRepo>,
     pub deployment_service: Arc<DeploymentService>,
     pub deployment_write_service: Arc<DeploymentWriteService>,
     pub domain_registration_service: Arc<DomainRegistrationService>,
@@ -119,7 +119,7 @@ struct Repos {
     agent_secret_repo: Arc<dyn AgentSecretRepo>,
     application_repo: Arc<dyn ApplicationRepo>,
     component_repo: Arc<dyn ComponentRepo>,
-    deployment_change_repo: Arc<dyn DeploymentChangeRepo>,
+    registry_change_repo: Arc<dyn RegistryChangeRepo>,
     deployment_repo: Arc<dyn DeploymentRepo>,
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
@@ -163,17 +163,32 @@ impl Services {
             .ok_or(anyhow!("No default plan"))?
             .plan_id;
 
+        let registry_change_notifier: Arc<dyn RegistryChangeNotifier> = match &config.db {
+            DbConfig::Postgres(pg_config) => Arc::new(PostgresRegistryChangeNotifier::new(
+                1024,
+                repos.registry_change_repo.clone(),
+                pg_config,
+            )),
+            _ => Arc::new(LocalRegistryChangeNotifier::new(1024)),
+        };
+
         let account_service = Arc::new(AccountService::new(
             repos.account_repo.clone(),
             plan_service.clone(),
             default_plan_id,
+            repos.registry_change_repo.clone(),
+            registry_change_notifier.clone(),
         ));
         account_service
             .create_initial_accounts(&config.initial_accounts)
             .await
             .map_err(|e| e.into_anyhow())?;
 
-        let token_service = Arc::new(TokenService::new(repos.token_repo, account_service.clone()));
+        let token_service = Arc::new(TokenService::new(
+            repos.token_repo,
+            account_service.clone(),
+            registry_change_notifier.clone(),
+        ));
         {
             let initial_tokens = config
                 .initial_accounts
@@ -203,6 +218,7 @@ impl Services {
         let environment_share_service = Arc::new(EnvironmentShareService::new(
             repos.environment_share_repo.clone(),
             environment_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let deployment_service = Arc::new(DeploymentService::new(
@@ -268,6 +284,8 @@ impl Services {
             repos.domain_registration_repo.clone(),
             environment_service.clone(),
             domain_provisioner.clone(),
+            repos.registry_change_repo.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
@@ -294,15 +312,6 @@ impl Services {
             environment_service.clone(),
         ));
 
-        let deployment_change_notifier: Arc<dyn DeploymentChangeNotifier> = match &config.db {
-            DbConfig::Postgres(pg_config) => Arc::new(PostgresDeploymentChangeNotifier::new(
-                1024,
-                repos.deployment_change_repo.clone(),
-                pg_config,
-            )),
-            _ => Arc::new(LocalDeploymentChangeNotifier::new(1024)),
-        };
-
         let deployment_write_service = Arc::new(DeploymentWriteService::new(
             environment_service.clone(),
             repos.deployment_repo.clone(),
@@ -310,7 +319,7 @@ impl Services {
             http_api_deployment_service.clone(),
             mcp_deployment_service.clone(),
             agent_secret_service.clone(),
-            deployment_change_notifier.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let deployed_routes_service =
@@ -335,8 +344,8 @@ impl Services {
             component_write_service,
             deployed_routes_service,
             deployed_mcp_service,
-            deployment_change_notifier,
-            deployment_change_repo: repos.deployment_change_repo,
+            registry_change_notifier,
+            registry_change_repo: repos.registry_change_repo,
             deployment_service,
             deployment_write_service,
             domain_registration_service,
@@ -390,8 +399,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
-            let deployment_change_repo: Arc<dyn DeploymentChangeRepo> =
-                Arc::new(DbDeploymentChangeRepo::new(db_pool.clone()));
+            let registry_change_repo: Arc<dyn RegistryChangeRepo> =
+                Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -399,7 +408,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 agent_secret_repo,
                 application_repo,
                 component_repo,
-                deployment_change_repo,
+                registry_change_repo,
                 deployment_repo,
                 domain_registration_repo,
                 environment_plugin_grant_repo,
@@ -446,8 +455,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
-            let deployment_change_repo: Arc<dyn DeploymentChangeRepo> =
-                Arc::new(DbDeploymentChangeRepo::new(db_pool.clone()));
+            let registry_change_repo: Arc<dyn RegistryChangeRepo> =
+                Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -455,7 +464,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 agent_secret_repo,
                 application_repo,
                 component_repo,
-                deployment_change_repo,
+                registry_change_repo,
                 deployment_repo,
                 domain_registration_repo,
                 environment_plugin_grant_repo,

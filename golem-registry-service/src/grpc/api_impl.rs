@@ -18,8 +18,8 @@ use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
-use crate::repo::deployment_change::DeploymentChangeRepo;
-use crate::services::deployment_change_notifier::DeploymentChangeNotifier;
+use crate::repo::registry_change::RegistryChangeRepo;
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_state::EnvironmentStateService;
 use applying::Apply;
@@ -29,7 +29,7 @@ use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
-    DeploymentInvalidationEvent, SubscribeDeploymentInvalidationsRequest,
+    RegistryInvalidationEvent, SubscribeRegistryInvalidationsRequest,
     BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, BatchUpdateFuelUsageSuccessResponse,
     DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
     GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
@@ -92,8 +92,8 @@ pub struct RegistryServiceGrpcApi {
     deployed_routes_service: Arc<DeployedRoutesService>,
     deployed_mcp_service: Arc<DeployedMcpService>,
     environment_state_service: Arc<EnvironmentStateService>,
-    deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
-    deployment_change_repo: Arc<dyn DeploymentChangeRepo>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    registry_change_repo: Arc<dyn RegistryChangeRepo>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -107,8 +107,8 @@ impl RegistryServiceGrpcApi {
         deployed_routes_service: Arc<DeployedRoutesService>,
         deployed_mcp_service: Arc<DeployedMcpService>,
         environment_state_service: Arc<EnvironmentStateService>,
-        deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
-        deployment_change_repo: Arc<dyn DeploymentChangeRepo>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        registry_change_repo: Arc<dyn RegistryChangeRepo>,
     ) -> Self {
         Self {
             auth_service,
@@ -120,8 +120,8 @@ impl RegistryServiceGrpcApi {
             deployed_routes_service,
             deployed_mcp_service,
             environment_state_service,
-            deployment_change_notifier,
-            deployment_change_repo,
+            registry_change_notifier,
+            registry_change_repo,
         }
     }
 
@@ -1059,21 +1059,21 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         }))
     }
 
-    type SubscribeDeploymentInvalidationsStream = std::pin::Pin<
+    type SubscribeRegistryInvalidationsStream = std::pin::Pin<
         Box<
-            dyn futures::Stream<Item = Result<DeploymentInvalidationEvent, tonic::Status>> + Send,
+            dyn futures::Stream<Item = Result<RegistryInvalidationEvent, tonic::Status>> + Send,
         >,
     >;
 
-    async fn subscribe_deployment_invalidations(
+    async fn subscribe_registry_invalidations(
         &self,
-        request: Request<SubscribeDeploymentInvalidationsRequest>,
-    ) -> Result<Response<Self::SubscribeDeploymentInvalidationsStream>, Status> {
+        request: Request<SubscribeRegistryInvalidationsRequest>,
+    ) -> Result<Response<Self::SubscribeRegistryInvalidationsStream>, Status> {
         let last_seen = request.into_inner().last_seen_event_id;
 
-        let stream = crate::services::deployment_change_notifier::subscribe_deployment_invalidations(
-            self.deployment_change_repo.clone(),
-            self.deployment_change_notifier.as_ref(),
+        let stream = crate::services::registry_change_notifier::subscribe_registry_invalidations(
+            self.registry_change_repo.clone(),
+            self.registry_change_notifier.as_ref(),
             last_seen,
         );
 

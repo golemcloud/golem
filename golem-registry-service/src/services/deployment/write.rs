@@ -18,8 +18,8 @@ use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreation
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::route_compilation::render_http_method;
-use crate::repo::deployment_change::DeploymentChangeEvent;
-use crate::services::deployment_change_notifier::DeploymentChangeNotifier;
+use crate::repo::registry_change::{RegistryChangeEvent, RegistryEventType};
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
@@ -226,7 +226,7 @@ pub struct DeploymentWriteService {
     http_api_deployment_service: Arc<HttpApiDeploymentService>,
     mcp_deployment_service: Arc<McpDeploymentService>,
     agent_secrets_service: Arc<AgentSecretService>,
-    deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl DeploymentWriteService {
@@ -237,7 +237,7 @@ impl DeploymentWriteService {
         http_api_deployment_service: Arc<HttpApiDeploymentService>,
         mcp_deployment_service: Arc<McpDeploymentService>,
         agent_secrets_service: Arc<AgentSecretService>,
-        deployment_change_notifier: Arc<dyn DeploymentChangeNotifier>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -246,7 +246,7 @@ impl DeploymentWriteService {
             http_api_deployment_service,
             mcp_deployment_service,
             agent_secrets_service,
-            deployment_change_notifier,
+            registry_change_notifier,
         }
     }
 
@@ -388,7 +388,7 @@ impl DeploymentWriteService {
             auth.account_id(),
         )?;
 
-        let (ext_revision, change_event_id) = self
+        let (ext_revision, change_event_id, domains) = self
             .deployment_repo
             .deploy(record, deployment_context.environment.version_check)
             .await
@@ -412,11 +412,15 @@ impl DeploymentWriteService {
         let deployment: CurrentDeployment = ext_revision.try_into()?;
 
         // Notify subscribers (event was already recorded in the deploy transaction)
-        self.deployment_change_notifier
-            .notify(DeploymentChangeEvent {
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent {
                 event_id: change_event_id,
-                environment_id: environment_id.0,
-                deployment_revision_id: deployment.revision.into(),
+                event_type: RegistryEventType::DeploymentChanged,
+                environment_id: Some(environment_id.0),
+                deployment_revision_id: Some(deployment.revision.into()),
+                account_id: None,
+                grantee_account_id: None,
+                domains,
             });
 
         Ok(deployment)
@@ -467,7 +471,7 @@ impl DeploymentWriteService {
             ))?
             .try_into()?;
 
-        let (revision_record, change_event_id) = self
+        let (revision_record, change_event_id, domains) = self
             .deployment_repo
             .set_current_deployment(
                 auth.account_id().0,
@@ -486,11 +490,15 @@ impl DeploymentWriteService {
             revision_record.into_model(target_deployment.version, target_deployment.deployment_hash)?;
 
         // Notify subscribers (event was already recorded in the rollback transaction)
-        self.deployment_change_notifier
-            .notify(DeploymentChangeEvent {
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent {
                 event_id: change_event_id,
-                environment_id: environment_id.0,
-                deployment_revision_id: payload.deployment_revision.into(),
+                event_type: RegistryEventType::DeploymentChanged,
+                environment_id: Some(environment_id.0),
+                deployment_revision_id: Some(payload.deployment_revision.into()),
+                account_id: None,
+                grantee_account_id: None,
+                domains,
             });
 
         Ok(current_deployment)

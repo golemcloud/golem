@@ -86,10 +86,14 @@ impl WorkerService {
     ) -> anyhow::Result<RunDetails> {
         let registry_service = self.services.registry_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
+        let route_resolver = self.services.route_resolver.clone();
+        let auth_service = self.services.auth_service.clone();
         join_set.spawn(async move {
-            service::agent_resolution_cache::run_invalidation_subscriber(
+            service::registry_event_subscriber::run_registry_event_subscriber(
                 registry_service,
                 agent_resolution_cache,
+                route_resolver,
+                auth_service,
             )
             .await;
             Ok(())

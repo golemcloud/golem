@@ -39,6 +39,9 @@ pub trait EnvironmentStateService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<HashMap<Vec<String>, AgentSecret>, WorkerExecutorError>;
+
+    async fn invalidate_environment(&self, _environment_id: EnvironmentId) {}
+    async fn invalidate_all(&self) {}
 }
 
 pub struct GrpcEnvironmentStateService {
@@ -111,5 +114,16 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
     ) -> Result<HashMap<Vec<String>, AgentSecret>, WorkerExecutorError> {
         let environment_state = self.get_environment_state(environment_id).await?;
         Ok(environment_state.agent_secrets.clone())
+    }
+
+    async fn invalidate_environment(&self, environment_id: EnvironmentId) {
+        self.cached_environment_state.remove(&environment_id).await;
+    }
+
+    async fn invalidate_all(&self) {
+        let keys = self.cached_environment_state.keys().await;
+        for key in keys {
+            self.cached_environment_state.remove(&key).await;
+        }
     }
 }
