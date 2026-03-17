@@ -18,7 +18,7 @@ import pc from 'picocolors';
 import {CliArgMetadata, CliCommandMetadata, CliCommandsConfig} from './config';
 import {flushStdIO, writeChunk} from './process';
 import {writeFullLineSeparator} from './format';
-import * as base from './base';
+import type * as base from '@golemcloud/golem-ts-bridge';
 import * as uuid from 'uuid';
 
 const AGENT_STREAM_CLOSE_DELAY_MS = 300;

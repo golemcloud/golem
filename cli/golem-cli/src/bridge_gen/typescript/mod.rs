@@ -26,10 +26,11 @@ use crate::bridge_gen::typescript::ts_writer::{
     indent, FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter,
 };
 use crate::bridge_gen::typescript::type_name::TypeScriptTypeName;
-use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
+use crate::bridge_gen::{bridge_client_directory_name, workspace_root, BridgeGenerator};
+use crate::fs;
+use crate::sdk_overrides::sdk_overrides;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use golem_common::model::agent::{
     AgentMethod, AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
     NamedElementSchema, NamedElementSchemas, TextDescriptor,
@@ -38,6 +39,8 @@ use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use indoc::formatdoc;
 use serde_json::json;
+
+const TS_BRIDGE_PACKAGE_NAME: &str = "@golemcloud/golem-ts-bridge";
 
 pub struct TypeScriptBridgeGenerator {
     target_path: Utf8PathBuf,
@@ -58,7 +61,6 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         let ts_path = self.target_path.join(format!("{library_name}.ts"));
         let package_json_path = self.target_path.join("package.json");
         let tsconfig_json_path = self.target_path.join("tsconfig.json");
-        let base_ts_path = self.target_path.join("base.ts");
         let test_path = self.target_path.join("test.ts");
 
         if !self.target_path.exists() {
@@ -67,7 +69,6 @@ impl BridgeGenerator for TypeScriptBridgeGenerator {
         self.generate_ts(&ts_path)?;
         self.generate_package_json(&package_json_path)?;
         self.generate_tsconfig_json(&tsconfig_json_path)?;
-        self.generate_base_ts(&base_ts_path)?;
         if self.testing {
             self.generate_test(&test_path)?;
         }
@@ -95,6 +96,17 @@ impl TypeScriptBridgeGenerator {
         })
     }
 
+    fn bridge_package_dep(testing: bool) -> anyhow::Result<String> {
+        if testing {
+            return Ok(fs::path_to_str(
+                &workspace_root()?.join("sdks/ts/packages/golem-ts-bridge"),
+            )?
+            .to_string());
+        }
+
+        Ok(sdk_overrides()?.ts_package_dep("golem-ts-bridge"))
+    }
+
     /// Generates the client library's package.json
     fn generate_package_json(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let scripts = if self.testing {
@@ -118,7 +130,8 @@ impl TypeScriptBridgeGenerator {
                 "types": format!("{}.d.ts", self.library_name()),
                 "scripts": scripts,
                 "dependencies": {
-                    "uuid": "^13"
+                    "uuid": "^13",
+                    (TS_BRIDGE_PACKAGE_NAME): Self::bridge_package_dep(self.testing)?,
                 },
                 "devDependencies": {
                     "typescript": "^5.9",
@@ -134,7 +147,7 @@ impl TypeScriptBridgeGenerator {
 
     /// Generates the client library's tsconfig.json
     fn generate_tsconfig_json(&self, path: &Utf8Path) -> anyhow::Result<()> {
-        let mut include = vec![format!("{}.ts", self.library_name()), "base.ts".to_string()];
+        let mut include = vec![format!("{}.ts", self.library_name())];
         if self.testing {
             include.push("test.ts".to_string());
         }
@@ -159,17 +172,6 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
-    /// Writes the base.ts common helper file and embeds the well-known local server token into it.
-    fn generate_base_ts(&self, path: &Utf8Path) -> anyhow::Result<()> {
-        let base_ts_content_template = include_str!("../../../ts_bridge/base.ts");
-        let base_ts_content = base_ts_content_template
-            .replace("__REPLACE_WITH_LOCAL_TOKEN__", LOCAL_WELL_KNOWN_TOKEN);
-
-        std::fs::write(path, base_ts_content)
-            .map_err(|e| anyhow!("Failed to write base.ts file: {e}"))?;
-        Ok(())
-    }
-
     /// Generates the test.ts module. This module exposes encoding/decoding functions via
     /// stdin/out to be used from tests only. The test module is not usable by itself and
     /// should never be part of the generated NPM package outside of Golem's internal tests.
@@ -189,7 +191,7 @@ impl TypeScriptBridgeGenerator {
 
     /// Writes the imports section of the test module.
     fn generate_test_imports(&self, writer: &mut TsWriter) {
-        writer.import_module("base", "./base");
+        writer.import_module("base", TS_BRIDGE_PACKAGE_NAME);
     }
 
     /// Defines the test types and their corresponding encode/decode functions. These types and functions are
@@ -440,7 +442,7 @@ impl TypeScriptBridgeGenerator {
     /// Generates the import section of the client library
     fn generate_ts_imports(&self, writer: &mut TsWriter) {
         writer.import_item("v4", "uuidv4", "uuid");
-        writer.import_module("base", "./base");
+        writer.import_module("base", TS_BRIDGE_PACKAGE_NAME);
     }
 
     /// Generates the global variables of the client library.

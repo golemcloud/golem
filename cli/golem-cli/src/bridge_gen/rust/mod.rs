@@ -15,7 +15,7 @@
 use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::type_naming::TypeNaming;
-use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
+use crate::bridge_gen::{bridge_client_directory_name, workspace_root, BridgeGenerator};
 use crate::fs;
 use crate::sdk_overrides::sdk_overrides;
 use anyhow::anyhow;
@@ -95,7 +95,7 @@ impl RustBridgeGenerator {
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let golem_source = if self.testing {
             // In test mode, use local workspace path so we always test against the current code
-            GolemDependencySource::Path(test_workspace_root()?)
+            GolemDependencySource::Path(workspace_root()?)
         } else {
             match sdk_overrides()?.golem_repo_root()? {
                 Some(repo_root) => GolemDependencySource::Path(repo_root),
@@ -2039,12 +2039,4 @@ fn path_dep(path: &str, features: &[&str]) -> Item {
     entry["path"] = value(path);
     add_features(&mut entry, features);
     entry
-}
-
-fn test_workspace_root() -> anyhow::Result<std::path::PathBuf> {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .join("../..")
-        .canonicalize()
-        .map_err(|e| anyhow!("Failed to canonicalize workspace root: {e}"))
 }

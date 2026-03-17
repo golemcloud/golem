@@ -30,8 +30,8 @@ import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
 import { flushStdIO, setOutput, writeln } from './process';
 import { formatAsTable, formatEvalError, logSnippetInfo } from './format';
-import * as base from './base';
-import { AgentInvocationRequest, AgentInvocationResult, JsonResult } from './base';
+import type * as base from '@golemcloud/golem-ts-bridge';
+import type { AgentInvocationRequest, AgentInvocationResult, JsonResult } from '@golemcloud/golem-ts-bridge';
 
 const MAX_COMPLETION_ENTRIES = 50;
 

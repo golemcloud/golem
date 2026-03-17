@@ -15,7 +15,7 @@
 import {env} from 'node:process';
 import fs from 'node:fs';
 import util from 'node:util';
-import * as base from './base';
+import type * as base from '@golemcloud/golem-ts-bridge';
 
 export type Config = {
   binary: string;
