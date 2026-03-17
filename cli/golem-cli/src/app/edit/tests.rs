@@ -639,6 +639,42 @@ components:
 }
 
 #[test]
+fn golem_yaml_merge_agents_map_has_no_extra_blank_lines() {
+    let base = r#"httpApi:
+  deployments:
+    local:
+    - domain: test-app.localhost:9006
+      agents:
+        CounterAgent: {}
+"#;
+
+    let update = r#"httpApi:
+  deployments:
+    local:
+    - agents:
+        WorkflowAgent: {}
+        HumanAgent: {}
+"#;
+
+    let merged = golem_yaml::merge_documents(base, update).unwrap();
+
+    assert!(merged.contains("WorkflowAgent: {}"));
+    assert!(merged.contains("HumanAgent: {}"));
+    assert!(!merged.contains("WorkflowAgent: {}\n\n        HumanAgent: {}"));
+}
+
+#[test]
+fn golem_yaml_merge_normalizes_trailing_empty_lines() {
+    let base = "a: 1\n";
+    let update = "b: 2\n\n\n";
+
+    let merged = golem_yaml::merge_documents(base, update).unwrap();
+
+    assert!(merged.ends_with('\n'));
+    assert!(!merged.ends_with("\n\n"));
+}
+
+#[test]
 fn agents_md_merge_guides_preserves_user_content() {
     let rust_guide = make_managed_guide(GuestLanguage::Rust, "# Rust guide\nRust body");
     let ts_guide = make_managed_guide(GuestLanguage::TypeScript, "# TS guide\nTS body");

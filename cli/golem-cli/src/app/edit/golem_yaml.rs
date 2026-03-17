@@ -160,7 +160,13 @@ pub fn merge_documents(base: &str, update: &str) -> anyhow::Result<String> {
 
     let mut edits = Vec::new();
     merge_mapping_nodes(base, base_root, update, update_root, &mut edits)?;
-    apply_edits(base, edits)
+    let merged = apply_edits(base, edits)?;
+    Ok(normalize_trailing_newlines(&merged))
+}
+
+fn normalize_trailing_newlines(source: &str) -> String {
+    let trimmed = source.trim_end_matches([' ', '\t', '\r', '\n']);
+    format!("{trimmed}\n")
 }
 
 fn parse_yaml(source: &str) -> anyhow::Result<Tree> {
@@ -397,6 +403,7 @@ fn merge_mapping_nodes(
     let base_pairs = mapping_pairs(base_mapping, base_source)?;
     let update_pairs = mapping_pairs(update_mapping, update_source)?;
     let mut base_index = std::collections::HashMap::new();
+    let mut missing_insertions = Vec::<String>::new();
     for (idx, pair) in base_pairs.iter().enumerate() {
         base_index.insert(pair.key.clone(), (idx, pair.pair_node, pair.value_node));
     }
@@ -440,6 +447,10 @@ fn merge_mapping_nodes(
         if !insertion.ends_with('\n') {
             insertion.push('\n');
         }
+        missing_insertions.push(insertion);
+    }
+
+    if !missing_insertions.is_empty() {
         let insert_pos = if let Some(pair) = base_pairs.last() {
             pair.pair_node.end_byte()
         } else {
@@ -450,12 +461,14 @@ fn merge_mapping_nodes(
         } else {
             "\n"
         };
+
         edits.push(TextEdit::new(
             insert_pos,
             insert_pos,
-            format!("{prefix}{insertion}"),
+            format!("{prefix}{}", missing_insertions.concat()),
         ));
     }
+
     Ok(())
 }
 
