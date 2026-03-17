@@ -35,6 +35,8 @@ tag_suite!(worker_local_agent_config, group2);
 tag_suite!(api, group2);
 tag_suite!(custom_api, group2);
 
+test_r::sequential_suite!(plugins);
+
 #[derive(Debug)]
 pub struct Tracing;
 
