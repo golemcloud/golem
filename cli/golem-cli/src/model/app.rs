@@ -558,24 +558,21 @@ struct PartitionedComponentPresets {
 }
 
 impl PartitionedComponentPresets {
-    fn new(
-        presets: IndexMap<String, app_raw::ComponentLayerProperties>,
-        default: Option<app_raw::Marker>,
-    ) -> Self {
+    fn new(presets: IndexMap<String, app_raw::ComponentPreset>) -> Self {
         let mut default_custom_preset = None;
         let mut custom_presets = IndexMap::new();
         let mut env_presets = IndexMap::new();
 
-        for (preset_name, properties) in presets {
+        for (preset_name, preset) in presets {
             match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
                 Some(env_name) => {
-                    env_presets.insert(env_name.to_string(), properties.into());
+                    env_presets.insert(env_name.to_string(), preset.component_properties.into());
                 }
                 None => {
-                    if default == Some(app_raw::Marker) || default_custom_preset.is_none() {
+                    if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
-                    custom_presets.insert(preset_name, properties.into());
+                    custom_presets.insert(preset_name, preset.component_properties.into());
                 }
             }
         }
@@ -1999,8 +1996,7 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
-                    let presets =
-                        PartitionedComponentPresets::new(template.presets, template.default);
+                    let presets = PartitionedComponentPresets::new(template.presets);
 
                     if let Some(err) = self
                         .component_layer_store
@@ -2075,7 +2071,7 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
-                    let presets = PartitionedComponentPresets::new(component.presets, None);
+                    let presets = PartitionedComponentPresets::new(component.presets);
 
                     presets.custom_presets.keys().for_each(|preset_name| {
                         self.component_custom_presets
