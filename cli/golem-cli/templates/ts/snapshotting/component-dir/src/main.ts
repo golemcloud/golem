@@ -1,1 +1,1 @@
-export { CounterAgent } from './counter-agent';
+export { CounterWithSnapshotAgent } from './counter-with-snapshot-agent';

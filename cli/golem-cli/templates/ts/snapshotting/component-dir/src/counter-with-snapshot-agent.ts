@@ -7,9 +7,9 @@ import {
 } from '@golemcloud/golem-ts-sdk';
 
 @agent({
-  mount: "/counters/{name}"
+  mount: "/snapshot-counters/{name}"
 })
-export class CounterAgent extends BaseAgent {
+export class CounterWithSnapshotAgent extends BaseAgent {
     private readonly name: string;
     private value: number = 0;
 

@@ -1,8 +1,8 @@
 use crate::app::{cmd, flag, replace_string_in_file, TestContext};
 use crate::Tracing;
 
+use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
-use heck::ToKebabCase;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, tag, test};
 
@@ -15,7 +15,7 @@ async fn build_and_deploy_all_templates() {
 
     let app_name = "all-templates-app";
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;
+    let outputs = ctx.cli([cmd::TEMPLATES]).await;
     assert!(outputs.success_or_dump());
 
     let template_prefix = "  - ";
@@ -39,15 +39,13 @@ async fn build_and_deploy_all_templates() {
 
     println!("{templates:#?}");
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
-    assert!(outputs.success_or_dump());
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
 
     ctx.cd(app_name);
 
     for template in &templates {
-        let component_name = format!("app:{}", template.to_kebab_case(),);
         let outputs = ctx
-            .cli([cmd::COMPONENT, cmd::NEW, template, &component_name])
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
             .await;
         assert!(outputs.success_or_dump());
     }
@@ -110,252 +108,212 @@ fn agent_metas() -> Vec<AgentMeta> {
     vec![
         // Rust agents: prefix with Rust
         AgentMeta::new(
-            "components-rust/app-rust/src/lib.rs",
+            "app-rust/src/lib.rs",
             "CounterAgent",
             "RustCounterAgent",
             vec![
-                (
-                    "components-rust/app-rust/src/lib.rs",
-                    "/counters",
-                    "/rust-counters",
-                ),
-                (
-                    "components-rust/app-rust/golem.yaml",
-                    "counter-agent",
-                    "rust-counter-agent",
-                ),
-                (
-                    "components-rust/app-rust/golem.yaml",
-                    "CounterAgent",
-                    "RustCounterAgent",
-                ),
+                ("app-rust/src/lib.rs", "/counters", "/rust-counters"),
+                ("app-rust/golem.yaml", "counter-agent", "rust-counter-agent"),
+                ("app-rust/golem.yaml", "CounterAgent", "RustCounterAgent"),
             ],
         ),
         AgentMeta::new(
-            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+            "app-rust-human-in-the-loop/src/lib.rs",
             "WorkflowAgent",
             "RustWorkflowAgent",
             vec![
                 (
-                    "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+                    "app-rust-human-in-the-loop/src/lib.rs",
                     "/workflows",
                     "/rust-workflows",
                 ),
                 (
-                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                    "app-rust-human-in-the-loop/golem.yaml",
                     "workflow-agent",
                     "rust-workflow-agent",
                 ),
                 (
-                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                    "app-rust-human-in-the-loop/golem.yaml",
                     "WorkflowAgent",
                     "RustWorkflowAgent",
                 ),
             ],
         ),
         AgentMeta::new(
-            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+            "app-rust-human-in-the-loop/src/lib.rs",
             "HumanAgent",
             "RustHumanAgent",
             vec![
                 (
-                    "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+                    "app-rust-human-in-the-loop/src/lib.rs",
                     "/humans",
                     "/rust-humans",
                 ),
                 (
-                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                    "app-rust-human-in-the-loop/golem.yaml",
                     "human-agent",
                     "rust-human-agent",
                 ),
                 (
-                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                    "app-rust-human-in-the-loop/golem.yaml",
                     "HumanAgent",
                     "RustHumanAgent",
                 ),
             ],
         ),
         AgentMeta::new(
-            "components-rust/app-rust-json/src/lib.rs",
+            "app-rust-json/src/lib.rs",
             "Tasks",
             "RustTasks",
             vec![
                 (
-                    "components-rust/app-rust-json/src/lib.rs",
+                    "app-rust-json/src/lib.rs",
                     "/task-agents",
                     "/rust-task-agents",
                 ),
                 (
-                    "components-rust/app-rust-json/golem.yaml",
+                    "app-rust-json/golem.yaml",
                     "tasks(name)",
                     "rust-tasks(name)",
                 ),
-                (
-                    "components-rust/app-rust-json/golem.yaml",
-                    "Tasks",
-                    "RustTasks",
-                ),
+                ("app-rust-json/golem.yaml", "Tasks", "RustTasks"),
             ],
         ),
         // NOTE: These are temporarily disabled because of golem-ai depending on an older golem-rust
         // AgentMeta::new(
-        //     "components-rust/app-rust-llm-session/src/lib.rs",
+        //     "app-rust-llm-session/src/lib.rs",
         //     "ChatAgent",
         //     "RustChatAgent",
         //     vec![
         //         (
-        //             "components-rust/app-rust-llm-session/src/lib.rs",
+        //             "app-rust-llm-session/src/lib.rs",
         //             "/chats",
         //             "/rust-chats",
         //         ),
         //         (
-        //             "components-rust/app-rust-llm-session/golem.yaml",
+        //             "app-rust-llm-session/golem.yaml",
         //             "chat-agent",
         //             "rust-chat-agent",
         //         ),
         //     ],
         // ),
         // AgentMeta::new(
-        //     "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
+        //     "app-rust-llm-websearch-summary-example/src/lib.rs",
         //     "ResearchAgent",
         //     "RustResearchAgent",
         //     vec![
         //         (
-        //             "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
+        //             "app-rust-llm-websearch-summary-example/src/lib.rs",
         //             "/research",
         //             "/rust-research",
         //         ),
         //         (
-        //             "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
+        //             "app-rust-llm-websearch-summary-example/golem.yaml",
         //             "research-agent",
         //             "rust-research-agent",
         //         ),
         //     ],
         // ),
         AgentMeta::new(
-            "components-rust/app-rust-snapshotting/src/lib.rs",
-            "CounterAgent",
+            "app-rust-snapshotting/src/counter_with_snapshot_agent.rs",
+            "CounterWithSnapshotAgent",
             "RustCounterAgentSnapshotting",
             vec![
                 (
-                    "components-rust/app-rust-snapshotting/src/lib.rs",
-                    "/counters",
+                    "app-rust-snapshotting/src/counter_with_snapshot_agent.rs",
+                    "/snapshot-counters",
                     "/rust-agent-snapshotting-counters",
                 ),
                 (
-                    "components-rust/app-rust-snapshotting/golem.yaml",
-                    "counter-agent",
+                    "app-rust-snapshotting/golem.yaml",
+                    "counter-with-snapshot-agent",
                     "rust-counter-agent-snapshotting",
                 ),
             ],
         ),
         // TypeScript agents: prefix with Ts
         AgentMeta::new(
-            "components-ts/app-ts/src/main.ts",
+            "app-ts/src/main.ts",
             "CounterAgent",
             "TsCounterAgent",
             vec![
-                (
-                    "components-ts/app-ts/src/main.ts",
-                    "/counters",
-                    "/ts-counters",
-                ),
-                (
-                    "components-ts/app-ts/golem.yaml",
-                    "counter-agent",
-                    "ts-counter-agent",
-                ),
-                (
-                    "components-ts/app-ts/golem.yaml",
-                    "CounterAgent",
-                    "TsCounterAgent",
-                ),
+                ("app-ts/src/main.ts", "/counters", "/ts-counters"),
+                ("app-ts/golem.yaml", "counter-agent", "ts-counter-agent"),
+                ("app-ts/golem.yaml", "CounterAgent", "TsCounterAgent"),
             ],
         ),
         AgentMeta::new(
-            "components-ts/app-ts-human-in-the-loop/src/main.ts",
+            "app-ts-human-in-the-loop/src/main.ts",
             "WorkflowAgent",
             "TsWorkflowAgent",
             vec![
                 (
-                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
+                    "app-ts-human-in-the-loop/src/main.ts",
                     "/workflows",
                     "/ts-workflows",
                 ),
                 (
-                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "app-ts-human-in-the-loop/golem.yaml",
                     "workflow-agent",
                     "ts-workflow-agent",
                 ),
                 (
-                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "app-ts-human-in-the-loop/golem.yaml",
                     "WorkflowAgent",
                     "TsWorkflowAgent",
                 ),
             ],
         ),
         AgentMeta::new(
-            "components-ts/app-ts-human-in-the-loop/src/main.ts",
+            "app-ts-human-in-the-loop/src/main.ts",
             "HumanAgent",
             "TsHumanAgent",
             vec![
                 (
-                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
+                    "app-ts-human-in-the-loop/src/main.ts",
                     "/humans",
                     "/ts-humans",
                 ),
                 (
-                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "app-ts-human-in-the-loop/golem.yaml",
                     "human-agent",
                     "ts-human-agent",
                 ),
                 (
-                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "app-ts-human-in-the-loop/golem.yaml",
                     "HumanAgent",
                     "TsHumanAgent",
                 ),
             ],
         ),
         AgentMeta::new(
-            "components-ts/app-ts-json/src/main.ts",
+            "app-ts-json/src/main.ts",
             "TaskAgent",
             "TsTaskAgent",
             vec![
-                (
-                    "components-ts/app-ts-json/src/main.ts",
-                    "/task-agents",
-                    "/ts-task-agents",
-                ),
-                (
-                    "components-ts/app-ts-json/golem.yaml",
-                    "task-agent",
-                    "ts-task-agent",
-                ),
-                (
-                    "components-ts/app-ts-json/golem.yaml",
-                    "TaskAgent",
-                    "TsTaskAgent",
-                ),
+                ("app-ts-json/src/main.ts", "/task-agents", "/ts-task-agents"),
+                ("app-ts-json/golem.yaml", "task-agent", "ts-task-agent"),
+                ("app-ts-json/golem.yaml", "TaskAgent", "TsTaskAgent"),
             ],
         ),
         AgentMeta::new(
-            "components-ts/app-ts-snapshotting/src/main.ts",
-            "CounterAgent",
+            "app-ts-snapshotting/src/main.ts",
+            "CounterWithSnapshotAgent",
             "TsCounterAgentSnapshotting",
             vec![
                 (
-                    "components-ts/app-ts-snapshotting/src/main.ts",
-                    "/counters",
+                    "app-ts-snapshotting/src/main.ts",
+                    "/snapshot-counters",
                     "/ts-agent-snapshotting-counters",
                 ),
                 (
-                    "components-ts/app-ts-snapshotting/golem.yaml",
-                    "counter-agent",
+                    "app-ts-snapshotting/golem.yaml",
+                    "counter-with-snapshot-agent",
                     "ts-counter-agent-snapshotting",
                 ),
                 (
-                    "components-ts/app-ts-snapshotting/golem.yaml",
-                    "CounterAgent",
+                    "app-ts-snapshotting/golem.yaml",
+                    "CounterWithSnapshotAgent",
                     "TsCounterAgentSnapshotting",
                 ),
             ],

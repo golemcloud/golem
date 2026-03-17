@@ -1,7 +1,7 @@
 use golem_rust::{agent_definition, agent_implementation, endpoint};
 
 #[agent_definition]
-pub trait CounterAgent {
+pub trait CounterWithSnapshotAgent {
     // The agent constructor, it's parameters identify the agent
     fn new(name: String) -> Self;
 
@@ -13,8 +13,8 @@ struct CounterImpl {
     count: u32,
 }
 
-#[agent_implementation(mount = "/counters/{name}")]
-impl CounterAgent for CounterImpl {
+#[agent_implementation(mount = "/snapshot-counters/{name}")]
+impl CounterWithSnapshotAgent for CounterImpl {
     fn new(name: String) -> Self {
         Self {
             _name: name,
