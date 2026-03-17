@@ -47,7 +47,6 @@ export type CliCommandsConfig = {
   appMainDir: string;
   clientConfig: base.Configuration;
   commandMetadata: CliCommandMetadata;
-  multiComponentMode: boolean;
 };
 
 export type CliCommandMetadata = {
@@ -109,7 +108,6 @@ export function cliCommandsConfigFromBaseConfig(
     appMainDir: config.appMainDir,
     clientConfig,
     commandMetadata,
-    multiComponentMode: Object.keys(config.agents).length > 1,
   };
 }
 

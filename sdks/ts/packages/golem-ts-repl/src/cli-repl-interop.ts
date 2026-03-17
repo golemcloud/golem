@@ -39,7 +39,6 @@ export class CliReplInterop {
       binary: config.binary,
       cwd: this.config.appMainDir,
       clientConfig: this.config.clientConfig,
-      multiComponentMode: config.multiComponentMode,
     });
     this.builtinCommands = [];
     this.agentStreams = new Map();
@@ -348,17 +347,7 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
           if (typeof agentName !== 'string') {
             return undefined;
           }
-
-          if (!cli.isMultiComponentMode) {
-            return agentName;
-          }
-
-          const componentName = agent?.componentName;
-          if (typeof componentName !== 'string') {
-            return undefined;
-          }
-
-          return `${componentName}/${agentName}`;
+          return agentName;
         })
         .filter((value: unknown): value is string => typeof value === 'string');
 
@@ -399,22 +388,11 @@ class GolemCli {
   private readonly binaryName: string;
   private readonly cwd: string;
   private readonly clientConfig: base.Configuration;
-  private readonly multiComponentMode: boolean;
 
-  constructor(opts: {
-    binary: string;
-    cwd: string;
-    clientConfig: base.Configuration;
-    multiComponentMode: boolean;
-  }) {
+  constructor(opts: { binary: string; cwd: string; clientConfig: base.Configuration }) {
     this.binaryName = opts.binary;
     this.cwd = opts.cwd;
     this.clientConfig = opts.clientConfig;
-    this.multiComponentMode = opts.multiComponentMode;
-  }
-
-  get isMultiComponentMode(): boolean {
-    return this.multiComponentMode;
   }
 
   async run(opts: { args: string[]; mode: 'inherit' | 'collect' }): Promise<{
@@ -654,10 +632,6 @@ export function parseRawArgs(rawArgs: string): string[] {
     return /[A-Za-z0-9_-]/.test(ch);
   }
 
-  function isComponentName(value: string): boolean {
-    return /^[a-z0-9-]+(?::[a-z0-9-]+)?$/.test(value);
-  }
-
   function tryReadAgentCallOpenParenIndex(start: number): number | undefined {
     let simpleAgentEnd = start;
     while (simpleAgentEnd < rawArgs.length && isIdentChar(rawArgs[simpleAgentEnd])) {
@@ -670,48 +644,6 @@ export function parseRawArgs(rawArgs: string): string[] {
 
     if (rawArgs[simpleAgentEnd] === '(') {
       return simpleAgentEnd;
-    }
-
-    let componentEnd = start;
-    while (componentEnd < rawArgs.length && /[a-z0-9-]/.test(rawArgs[componentEnd])) {
-      componentEnd += 1;
-    }
-
-    if (componentEnd === start) {
-      return;
-    }
-
-    if (rawArgs[componentEnd] === ':') {
-      componentEnd += 1;
-      const secondSegmentStart = componentEnd;
-      while (componentEnd < rawArgs.length && /[a-z0-9-]/.test(rawArgs[componentEnd])) {
-        componentEnd += 1;
-      }
-      if (componentEnd === secondSegmentStart) {
-        return;
-      }
-    }
-
-    const componentName = rawArgs.slice(start, componentEnd);
-    if (!isComponentName(componentName)) {
-      return;
-    }
-
-    if (rawArgs[componentEnd] !== '/') {
-      return;
-    }
-
-    let agentEnd = componentEnd + 1;
-    while (agentEnd < rawArgs.length && isIdentChar(rawArgs[agentEnd])) {
-      agentEnd += 1;
-    }
-
-    if (agentEnd === componentEnd + 1) {
-      return;
-    }
-
-    if (rawArgs[agentEnd] === '(') {
-      return agentEnd;
     }
   }
 
