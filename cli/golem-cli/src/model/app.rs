@@ -31,7 +31,10 @@ use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::app::template::AppTemplateName;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
+use golem_common::model::component::{
+    AgentConfigEntry, ComponentFilePath, ComponentFilePermissions, ComponentName,
+};
+use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::validate_lower_kebab_case_identifier;
@@ -336,6 +339,8 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+    agent_secrets_defaults:
+        BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -445,6 +450,21 @@ impl Application {
 
     pub fn task_result_marker_dir(&self) -> PathBuf {
         self.temp_dir().join("task-results")
+    }
+
+    pub fn deployment_agent_secret_defaults(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Vec<DeploymentAgentSecretDefault> {
+        let mut result = Vec::new();
+        if let Some(environment_agent_secret_defaults) =
+            self.agent_secrets_defaults.get(environment)
+        {
+            for agent_secret_default in environment_agent_secret_defaults {
+                result.push(agent_secret_default.value.clone())
+            }
+        }
+        result
     }
 
     pub fn bridge_sdks(&self) -> &app_raw::BridgeSdks {
@@ -960,6 +980,15 @@ impl Layer for ComponentLayer {
                     properties.config_vars.value().clone(),
                 ),
             );
+
+            value.agents.apply_layer(
+                id,
+                selection,
+                (
+                    properties.agents_merge_mode.unwrap_or_default(),
+                    properties.agents.value().clone(),
+                ),
+            );
         }
 
         Ok(())
@@ -1098,6 +1127,10 @@ impl<'a> Component<'a> {
         &self.properties().config_vars
     }
 
+    pub fn agent_config(&self) -> &Vec<AgentConfigEntry> {
+        &self.properties().agent_config
+    }
+
     pub fn files(&self) -> &Vec<InitialComponentFile> {
         &self.properties().files
     }
@@ -1154,6 +1187,9 @@ pub struct ComponentLayerProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_vars_merge_mode: Option<MapMergeMode>,
     pub config_vars: MapProperty<ComponentLayer, String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents_merge_mode: Option<MapMergeMode>,
+    pub agents: MapProperty<ComponentLayer, AgentTypeName, app_raw::ComponentAgentProperties>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
@@ -1177,6 +1213,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             env: value.env.unwrap_or_default().into(),
             config_vars_merge_mode: value.config_vars_merge_mode,
             config_vars: value.config_vars.unwrap_or_default().into(),
+            agents_merge_mode: value.agents_merge_mode,
+            agents: value.agents.into(),
         }
     }
 }
@@ -1237,6 +1275,7 @@ pub struct ComponentProperties {
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
+    pub agent_config: Vec<AgentConfigEntry>,
 }
 
 impl ComponentProperties {
@@ -1249,6 +1288,18 @@ impl ComponentProperties {
             InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
+
+        let mut agent_config = Vec::new();
+
+        for (agent, agent_properties) in merged.agents.value() {
+            for config in &agent_properties.config {
+                agent_config.push(AgentConfigEntry {
+                    agent: agent.clone(),
+                    path: config.path.clone(),
+                    value: config.value.clone(),
+                });
+            }
+        }
 
         let properties = Self {
             source_wit: merged.source_wit.value().clone().unwrap_or_default(),
@@ -1273,6 +1324,7 @@ impl ComponentProperties {
                 .into_iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            agent_config,
         };
 
         for (name, value) in [
@@ -1481,8 +1533,10 @@ mod app_builder {
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
+    use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
+    use golem_common::model::deployment::DeploymentAgentSecretDefault;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
@@ -1590,6 +1644,9 @@ mod app_builder {
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
+        agent_secret_defaults:
+            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
+
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
@@ -1627,6 +1684,7 @@ mod app_builder {
                 clean: builder.clean,
                 http_api_deployments: builder.http_api_deployments,
                 mcp_deployments: builder.mcp_deployments,
+                agent_secrets_defaults: builder.agent_secret_defaults,
                 bridge_sdks: builder.bridge_sdks,
             })
         }
@@ -1811,6 +1869,21 @@ mod app_builder {
                                     McpDeploymentDeployProperties { agents },
                                 ));
                             }
+                        }
+                    }
+
+                    for (environment, environment_agent_secrets) in app.application.secret_defaults {
+                        let entry = self.agent_secret_defaults
+                            .entry(environment.clone())
+                            .or_default();
+
+                        for environment_agent_secret in environment_agent_secrets {
+                            entry.push(
+                                WithSource::new(
+                                    app.source.to_path_buf(),
+                                    DeploymentAgentSecretDefault { path: AgentSecretPath(environment_agent_secret.path), secret_value: environment_agent_secret.value }
+                                )
+                            )
                         }
                     }
 

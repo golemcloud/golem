@@ -18,7 +18,7 @@ mod invocation_loop;
 pub mod status;
 
 use self::agent_config::{
-    ensure_required_agent_secrets_are_configured, parse_worker_creation_local_agent_config,
+    ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
 };
 use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
@@ -45,16 +45,17 @@ use anyhow::anyhow;
 use chrono::Utc;
 use futures::channel::oneshot;
 use futures::FutureExt;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
+use golem_common::model::component::ComponentFilePath;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
+use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
@@ -146,7 +147,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -162,7 +163,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 account_id,
                 worker_env,
                 worker_config_vars,
-                worker_local_agent_config,
+                worker_agent_config,
                 component_revision,
                 parent,
                 invocation_context_stack,
@@ -178,7 +179,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -193,7 +194,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_agent_id,
             worker_env,
             worker_config_vars,
-            worker_local_agent_config,
+            worker_agent_config,
             component_revision,
             parent,
             invocation_context_stack,
@@ -238,7 +239,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -258,7 +259,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             worker_env,
             worker_config,
-            worker_local_agent_config,
+            worker_agent_config,
             parent,
         )
         .await?;
@@ -1051,7 +1052,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn activate_plugin(
         &self,
-        plugin_priority: PluginPriority,
+        plugin_grant_id: EnvironmentPluginGrantId,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1063,7 +1064,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.add_and_commit_oplog_internal(
             &instance_guard,
-            OplogEntry::activate_plugin(plugin_priority),
+            OplogEntry::activate_plugin(plugin_grant_id),
         )
         .await;
 
@@ -1073,7 +1074,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn deactivate_plugin(
         &self,
-        plugin_priority: PluginPriority,
+        plugin_grant_id: EnvironmentPluginGrantId,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1085,7 +1086,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.add_and_commit_oplog_internal(
             &instance_guard,
-            OplogEntry::deactivate_plugin(plugin_priority),
+            OplogEntry::deactivate_plugin(plugin_grant_id),
         )
         .await;
 
@@ -1253,7 +1254,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+    pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result.cache(&self.owned_agent_id, self).await;
@@ -1524,7 +1525,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         parent: Option<AgentId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_agent_id.component_id();
@@ -1643,8 +1644,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )?
                 };
 
-                let initial_local_agent_config = parse_worker_creation_local_agent_config(
-                    worker_local_agent_config,
+                let initial_agent_config = parse_worker_creation_agent_config(
+                    worker_agent_config,
                     agent_id.as_ref(),
                     &component,
                 )?;
@@ -1667,7 +1668,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     active_plugins: component
                         .installed_plugins
                         .iter()
-                        .map(|i| i.priority)
+                        .map(|i| i.environment_plugin_grant_id)
                         .collect(),
                     ..Default::default()
                 };
@@ -1679,7 +1680,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // the new effective set as the component revision changes otherwise.
                     env: worker_env,
                     config_vars: worker_config_vars.unwrap_or_default(),
-                    local_agent_config: initial_local_agent_config,
+                    agent_config: initial_agent_config,
                     environment_id: owned_agent_id.environment_id(),
                     created_by: *account_id,
                     created_at,
@@ -1708,7 +1709,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .clone(),
                     initial_worker_metadata.config_vars.clone(),
                     initial_worker_metadata
-                        .local_agent_config
+                        .agent_config
                         .iter()
                         .cloned()
                         .map(Into::into)
@@ -2244,7 +2245,7 @@ impl RunningWorker {
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.config_vars,
-                worker_metadata.local_agent_config,
+                worker_metadata.agent_config,
                 last_snapshot_index,
             ),
             parent.execution_status.clone(),
@@ -2378,6 +2379,7 @@ impl InvocationResult {
                     Ok(AgentInvocationOutput {
                         result: invocation_result,
                         consumed_fuel: Some(consumed_fuel as u64),
+                        invocation_status: None,
                         component_revision: Some(component_revision),
                     })
                 }

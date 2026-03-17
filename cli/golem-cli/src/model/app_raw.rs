@@ -103,6 +103,8 @@ pub struct Application {
     pub environments: IndexMap<String, Environment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub secret_defaults: IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>,
 }
 
 #[derive(Debug)]
@@ -237,6 +239,13 @@ pub struct Component {
     pub component_properties: ComponentLayerProperties,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentLayerProperties>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnvironmentAgentSecret {
+    pub path: Vec<String>,
+    pub value: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -450,6 +459,24 @@ pub struct ComponentLayerProperties {
     pub config_vars_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_vars: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub agents: IndexMap<AgentTypeName, ComponentAgentProperties>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentAgentProperties {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<AgentConfigEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentConfigEntry {
+    pub path: Vec<String>,
+    pub value: serde_json::Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

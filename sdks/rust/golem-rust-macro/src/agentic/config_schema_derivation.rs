@@ -63,7 +63,7 @@ pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) 
             #field_ident: {
                 let mut field_path = path.to_vec();
                 field_path.push(#field_name.to_string());
-                <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::load(&field_path)?
+                <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::load(&field_path)
             }
         });
     }
@@ -75,10 +75,10 @@ pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) 
                 #(#append_config_entries)*
                 config_entries
             }
-            fn load(path: &[String]) -> Result<Self, String> {
-                Ok(Self {
+            fn load(path: &[String]) -> Self {
+                Self {
                     #(#load_entries),*
-                })
+                }
             }
         }
     };
@@ -119,7 +119,7 @@ fn derive_nested_config_field(
                 config_entries
             }
 
-            fn load(path: &[String]) -> Result<Self, String> {
+            fn load(path: &[String]) -> Self {
                 <Self as #golem_rust_crate_ident::agentic::ConfigSchema>::load(path)
             }
         }

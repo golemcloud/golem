@@ -8849,11 +8849,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
+            $ref: '#/components/schemas/WorkerAgentConfigEntry'
       required:
       - name
       - env
@@ -9122,6 +9122,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        agentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
         status:
           $ref: '#/components/schemas/AgentStatus'
         componentRevision:
@@ -9155,11 +9159,8 @@ components:
         activePlugins:
           type: array
           items:
-            title: |-
-              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-              There can only be a single plugin with a given priority installed to a component.
-            type: integer
-            format: int32
+            type: string
+            format: uuid
         skippedRegions:
           description: |-
             Oplog regions that are skipped during the worker's state recovery, but describe
@@ -9179,6 +9180,7 @@ components:
       - createdBy
       - env
       - configVars
+      - agentConfig
       - status
       - componentRevision
       - retryCount
@@ -10093,8 +10095,8 @@ components:
       required:
       - start
       - end
-    ParsedWorkerCreationLocalAgentConfigEntry:
-      title: ParsedWorkerCreationLocalAgentConfigEntry
+    ParsedWorkerAgentConfigEntry:
+      title: ParsedWorkerAgentConfigEntry
       type: object
       properties:
         key:
@@ -10129,6 +10131,9 @@ components:
       title: PluginInstallationDescription
       type: object
       properties:
+        environmentPluginGrantId:
+          type: string
+          format: uuid
         pluginPriority:
           title: |-
             Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
@@ -10144,6 +10149,7 @@ components:
           additionalProperties:
             type: string
       required:
+      - environmentPluginGrantId
       - pluginPriority
       - pluginName
       - pluginVersion
@@ -10472,6 +10478,7 @@ components:
           CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
           Snapshot: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
+          OplogProcessorCheckpoint: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -10512,6 +10519,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -10836,6 +10844,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#NoOpParams'
+    PublicOplogEntry_r#OplogProcessorCheckpointParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: OplogProcessorCheckpoint
+            type: string
+            enum:
+            - OplogProcessorCheckpoint
+        required:
+        - type
+      - $ref: '#/components/schemas/r#OplogProcessorCheckpointParams'
     PublicOplogEntry_r#PendingAgentInvocationParams:
       allOf:
       - type: object
@@ -11697,17 +11717,17 @@ components:
           type: string
       required:
       - version
-    WorkerCreationLocalAgentConfigEntry:
-      title: WorkerCreationLocalAgentConfigEntry
+    WorkerAgentConfigEntry:
+      title: WorkerAgentConfigEntry
       type: object
       properties:
-        key:
+        path:
           type: array
           items:
             type: string
         value: {}
       required:
-      - key
+      - path
       - value
     WorkerCreationResponse:
       title: WorkerCreationResponse
@@ -11938,7 +11958,7 @@ components:
         localAgentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/ParsedWorkerCreationLocalAgentConfigEntry'
+            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
@@ -12164,6 +12184,33 @@ components:
           format: date-time
       required:
       - timestamp
+    r#OplogProcessorCheckpointParams:
+      title: r#OplogProcessorCheckpointParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
+        targetAgentId:
+          $ref: '#/components/schemas/AgentId'
+        confirmedUpTo:
+          type: integer
+          format: uint64
+        sendingUpTo:
+          type: integer
+          format: uint64
+        lastBatchStart:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - plugin
+      - targetAgentId
+      - confirmedUpTo
+      - sendingUpTo
+      - lastBatchStart
     r#PendingAgentInvocationParams:
       title: r#PendingAgentInvocationParams
       type: object
@@ -12477,6 +12524,21 @@ components:
           type: string
       required:
       - currentRevision
+    AgentConfigEntry:
+      title: AgentConfigEntry
+      type: object
+      properties:
+        agent:
+          type: string
+        path:
+          type: array
+          items:
+            type: string
+        value: {}
+      required:
+      - agent
+      - path
+      - value
     AgentConstructor:
       title: AgentConstructor
       type: object
@@ -12552,6 +12614,9 @@ components:
       type: object
       properties:
         path:
+          title: |-
+            Agent secret path in any casing. All agent secret paths
+            are converted to the same casing internally to allow easier cross-language use.
           type: array
           items:
             type: string
@@ -12572,6 +12637,7 @@ components:
           type: string
           format: uuid
         path:
+          title: Canonical representation of an agent secret path (segments are each camelCase)
           type: array
           items:
             type: string
@@ -12791,11 +12857,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         agentTypes:
           default: []
           type: array
@@ -12856,10 +12922,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         wasmHash:
           type: string
           format: hash
@@ -12878,7 +12944,7 @@ components:
       - installedPlugins
       - env
       - configVars
-      - localAgentConfig
+      - agentConfig
       - wasmHash
     ComponentFileOptions:
       title: ComponentFileOptions
@@ -12958,10 +13024,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         agentTypes:
           type: array
           items:
@@ -13142,6 +13208,9 @@ components:
       type: object
       properties:
         path:
+          title: |-
+            Agent secret path in any casing. All agent secret paths
+            are converted to the same casing internally to allow easier cross-language use.
           type: array
           items:
             type: string
@@ -13946,21 +14015,6 @@ components:
         value:
           type: string
       required:
-      - value
-    LocalAgentConfigEntry:
-      title: LocalAgentConfigEntry
-      type: object
-      properties:
-        agent:
-          type: string
-        key:
-          type: array
-          items:
-            type: string
-        value: {}
-      required:
-      - agent
-      - key
       - value
     McpDeployment:
       title: McpDeployment
