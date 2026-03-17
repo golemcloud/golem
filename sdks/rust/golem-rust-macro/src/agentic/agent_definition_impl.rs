@@ -405,9 +405,10 @@ fn get_agent_type_with_remote_client(
     let mut constructor_name = String::new();
 
     let mut agent_config_types = Vec::new();
-    let mut client_constructor_param_defs = vec![];
-    let mut client_agent_config_param_idents = Vec::new();
+    let mut client_data_value_param_defs = Vec::new();
     let mut client_data_value_param_idents = Vec::new();
+    let mut client_agent_config_param_defs = Vec::new();
+    let mut client_agent_config_param_idents = Vec::new();
 
     let high_level_description =
         extract_description(&agent_definition_trait.attrs).unwrap_or_default();
@@ -443,12 +444,12 @@ fn get_agent_type_with_remote_client(
                         if has_agent_config_attr(pat_type) {
                             agent_config_types.push(pat_type.ty.clone());
 
-                            client_constructor_param_defs.push(quote! {
+                            client_agent_config_param_defs.push(quote! {
                                 #param_ident: <<#ty as ::golem_rust::agentic::InnerTypeHelper>::Type as ::golem_rust::agentic::ConfigSchema>::RpcType
                             });
                             client_agent_config_param_idents.push(param_ident.clone());
                         } else if type_name != "Principal" {
-                            client_constructor_param_defs.push(quote! {
+                            client_data_value_param_defs.push(quote! {
                                 #param_ident: #ty
                             });
                             client_data_value_param_idents.push(param_ident.clone());
@@ -500,8 +501,9 @@ fn get_agent_type_with_remote_client(
 
     let remote_client = get_remote_client(
         agent_definition_trait,
-        client_constructor_param_defs,
+        &client_data_value_param_defs,
         &client_data_value_param_idents,
+        &client_agent_config_param_defs,
         &client_agent_config_param_idents,
         type_parameters,
     );

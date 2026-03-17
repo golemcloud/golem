@@ -698,42 +698,74 @@ export class ConfigAgent extends BaseAgent {
   }
 
   async fun1(): Promise<void> {
-    const remoteClient = ConfigAgent.get(1, {}, true);
+    const remoteClient = ConfigAgent.getWithConfig(1, true, {});
 
     await remoteClient.fun1();
   }
 
   async fun2(arg: number): Promise<void> {
-    const remoteClient = ConfigAgent.get(
-      1,
-      {
-        foo: 2,
-        nested: {
-          a: false,
-        },
+    const remoteClient = ConfigAgent.getWithConfig(1, true, {
+      foo: 2,
+      nested: {
+        a: false,
       },
-      true,
-    );
+    });
 
     await remoteClient.fun1();
     await remoteClient.fun2(1);
   }
 
   async fun3(): Promise<void> {
-    const remoteClient = ConfigAgent.getPhantom(
+    const remoteClient = ConfigAgent.getPhantomWithConfig(
       {
         lowBits: BigInt(1),
         highBits: BigInt(2),
       },
       1,
+      true,
       {
         foo: 2,
         nested: {
           a: false,
         },
       },
+    );
+    await remoteClient.fun1();
+    await remoteClient.fun2(1);
+  }
+
+  async fun4(): Promise<void> {
+    const remoteClient = ConfigAgent.newPhantomWithConfig(1, true, {
+      foo: 2,
+      nested: {
+        a: false,
+      },
+    });
+    await remoteClient.fun1();
+    await remoteClient.fun2(1);
+  }
+
+  async fun5(): Promise<void> {
+    const remoteClient = ConfigAgent.get(1, true);
+
+    await remoteClient.fun1();
+  }
+
+  async fun6(): Promise<void> {
+    const remoteClient = ConfigAgent.getPhantom(
+      {
+        lowBits: BigInt(1),
+        highBits: BigInt(2),
+      },
+      1,
       true,
     );
+    await remoteClient.fun1();
+    await remoteClient.fun2(1);
+  }
+
+  async fun7(): Promise<void> {
+    const remoteClient = ConfigAgent.newPhantom(1, true);
     await remoteClient.fun1();
     await remoteClient.fun2(1);
   }

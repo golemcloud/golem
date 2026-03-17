@@ -184,6 +184,16 @@ export class BaseAgent {
     );
   }
 
+  static getWithConfig<T extends new (...args: any[]) => BaseAgent>(
+    this: T,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ..._args: TransformGetArgsWithConfig<ConstructorParameters<T>>
+  ): Client<InstanceType<T>> {
+    throw new Error(
+      `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
+    );
+  }
+
   static getPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -196,10 +206,32 @@ export class BaseAgent {
     );
   }
 
+  static getPhantomWithConfig<T extends new (...args: any[]) => BaseAgent>(
+    this: T,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _phantomId: Uuid,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ..._args: TransformGetArgsWithConfig<ConstructorParameters<T>>
+  ): Client<InstanceType<T>> {
+    throw new Error(
+      `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
+    );
+  }
+
   static newPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     ..._args: TransformGetArgs<ConstructorParameters<T>>
+  ): Client<InstanceType<T>> {
+    throw new Error(
+      `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
+    );
+  }
+
+  static newPhantomWithConfig<T extends new (...args: any[]) => BaseAgent>(
+    this: T,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ..._args: TransformGetArgsWithConfig<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
       `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
@@ -249,36 +281,48 @@ export type RemoteMethod<Args extends unknown[], R> = {
   schedule: (ts: Datetime, ...args: Args) => void;
 };
 
-type TransformMethodArg<T> = T extends Principal ? never : T;
+type IsPrincipal<T> = T extends Principal ? true : false;
+
+type IsConfig<T> = T extends Config<any> ? true : false;
 
 type TransformMethodArgs<T extends readonly unknown[]> = T extends readonly [
   infer Head,
   ...infer Tail,
 ]
-  ? TransformMethodArg<Head> extends never
+  ? IsPrincipal<Head> extends true
     ? TransformMethodArgs<Tail>
-    : [TransformMethodArg<Head>, ...TransformMethodArgs<Tail>]
+    : [Head, ...TransformMethodArgs<Tail>]
   : T;
-
-type TransformGetArg<T> = T extends Principal
-  ? never
-  : T extends Config<infer C>
-    ? RpcConfigInput<C>
-    : T;
 
 export type TransformGetArgs<T extends readonly unknown[]> = T extends readonly [
   infer Head,
   ...infer Tail,
 ]
-  ? TransformGetArg<Head> extends never
+  ? IsPrincipal<Head> extends true
     ? TransformGetArgs<Tail>
-    : [TransformGetArg<Head>, ...TransformGetArgs<Tail>]
+    : IsConfig<Head> extends true
+      ? TransformGetArgs<Tail>
+      : [Head, ...TransformGetArgs<Tail>]
+  : T;
+
+type TransformGetArgsWithConfig<
+  T extends readonly unknown[],
+  NonConfig extends unknown[] = [],
+  Configs extends unknown[] = [],
+> = T extends readonly [infer Head, ...infer Tail]
+  ? IsPrincipal<Head> extends true
+    ? TransformGetArgsWithConfig<Tail, NonConfig, Configs> // skip Principal
+    : IsConfig<Head> extends true
+      ? TransformGetArgsWithConfig<Tail, NonConfig, [...Configs, RpcConfigInput<Head>]>
+      : TransformGetArgsWithConfig<Tail, [...NonConfig, Head], Configs>
+  : [...NonConfig, ...Configs];
+
+type RpcConfigInput<T> = T extends Config<infer C> ? RpcConfigInputInner<C> : T;
+
+type RpcConfigInputInner<T> = T extends object
+  ? { [K in keyof RemoveSecretFields<T>]?: RpcConfigInputInner<RemoveSecretFields<T>[K]> }
   : T;
 
 type RemoveSecretFields<T> = {
   [K in keyof T as T[K] extends Secret<any> ? never : K]: T[K];
 };
-
-type RpcConfigInput<T> = T extends object
-  ? { [K in keyof RemoveSecretFields<T>]?: RpcConfigInput<RemoveSecretFields<T>[K]> }
-  : T;

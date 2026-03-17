@@ -43,6 +43,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
   agentType: AgentType,
   ctor: T,
+  configIncludedInArgs: boolean,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -51,12 +52,12 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
+  const shared = new WasmRpcProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const constructedId = shared.constructAgentId(args);
+    const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
   };
@@ -66,6 +67,7 @@ export function getPhantomRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
   agentType: AgentType,
   ctor: T,
+  configIncludedInArgs: boolean,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -75,12 +77,12 @@ export function getPhantomRemoteClient<T extends new (...args: any[]) => any>(
     );
   }
 
-  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
+  const shared = new WasmRpcProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (finalPhantomId: Uuid, ...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const constructedId = shared.constructAgentId(args, finalPhantomId);
+    const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
   };
@@ -90,6 +92,7 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
   agentClassName: AgentClassName,
   agentType: AgentType,
   ctor: T,
+  configIncludedInArgs: boolean,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -98,13 +101,13 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
+  const shared = new WasmRpcProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
     const finalPhantomId = randomUuid();
-    const constructedId = shared.constructAgentId(args, finalPhantomId);
+    const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
   };
@@ -121,7 +124,7 @@ type CachedMethodInfo = {
   returnType: TypeInfoInternal;
 };
 
-type ConstructedAgentId = {
+type WasmRpcParams = {
   agentTypeName: string;
   constructorDataValue: DataValue;
   phantomId: Uuid | undefined;
@@ -129,7 +132,7 @@ type ConstructedAgentId = {
   agentConfigEntries: TypedAgentConfigValue[];
 };
 
-class WasmRpxProxyHandlerShared {
+class WasmRpcProxyHandlerShared {
   readonly metadata: ClassMetadata;
   readonly agentClassName: AgentClassName;
   readonly agentType: AgentType;
@@ -157,17 +160,36 @@ class WasmRpxProxyHandlerShared {
     }
   }
 
-  constructAgentId(args: any[], phantomId?: Uuid): ConstructedAgentId {
+  constructWasmRpcParams(
+    args: any[],
+    configIncludedInArgs: boolean,
+    phantomId?: Uuid,
+  ): WasmRpcParams {
     let constructorDataValue: DataValue;
     const agentConfigEntries: TypedAgentConfigValue[] = [];
 
-    if (args.length === 1 && this.constructorParamTypes[0].tag === 'multimodal') {
+    let orderedConstructorParamsTypes;
+    if (configIncludedInArgs) {
+      orderedConstructorParamsTypes = [
+        ...this.constructorParamTypes.filter((cp) => cp.tag !== 'config'),
+        ...this.constructorParamTypes.filter((cp) => cp.tag === 'config'),
+      ];
+    } else {
+      orderedConstructorParamsTypes = this.constructorParamTypes.filter(
+        (cp) => cp.tag !== 'config',
+      );
+    }
+
+    if (args.length === 1 && orderedConstructorParamsTypes[0].tag === 'multimodal') {
       constructorDataValue = serializeToDataValue(args[0], this.constructorParamTypes[0]);
     } else {
       const elementValues: ElementValue[] = [];
 
       for (const [index, arg] of args.entries()) {
-        const typeInfoInternal = this.constructorParamTypes[index];
+        if (index >= orderedConstructorParamsTypes.length) {
+          throw new Error('Received more args than expected');
+        }
+        let typeInfoInternal = orderedConstructorParamsTypes[index];
 
         switch (typeInfoInternal.tag) {
           case 'analysed':
@@ -278,7 +300,7 @@ class WasmRpxProxyHandlerShared {
 }
 
 class WasmRpcProxyHandler implements ProxyHandler<any> {
-  private readonly shared: WasmRpxProxyHandlerShared;
+  private readonly shared: WasmRpcProxyHandlerShared;
   private readonly agentId: AgentId;
   private readonly wasmRpc: WasmRpc;
 
@@ -291,15 +313,15 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
   };
   private readonly getAgentTypeMethod: () => AgentType = () => this.shared.agentType;
 
-  constructor(shared: WasmRpxProxyHandlerShared, constructedId: ConstructedAgentId) {
+  constructor(shared: WasmRpcProxyHandlerShared, rpcParams: WasmRpcParams) {
     this.shared = shared;
-    this.agentId = new AgentId(constructedId.agentIdString);
+    this.agentId = new AgentId(rpcParams.agentIdString);
 
     this.wasmRpc = new WasmRpc(
-      constructedId.agentTypeName,
-      constructedId.constructorDataValue,
-      constructedId.phantomId,
-      constructedId.agentConfigEntries,
+      rpcParams.agentTypeName,
+      rpcParams.constructorDataValue,
+      rpcParams.phantomId,
+      rpcParams.agentConfigEntries,
     );
   }
 
