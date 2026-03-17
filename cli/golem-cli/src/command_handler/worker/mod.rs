@@ -29,14 +29,12 @@ use crate::log::{
     log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
     LogColorize, LogIndent,
 };
-use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{show_exported_agent_constructors, ComponentNameMatchKind};
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
-    AvailableAgentConstructorsHelp, AvailableComponentNamesHelp, AvailableFunctionNamesHelp,
-    WorkerNameHelp,
+    AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp, WorkerNameHelp,
 };
 use crate::model::text::worker::{
     format_agent_name_match, format_timestamp, FileNodeView, WorkerCreateView, WorkerFilesView,
@@ -47,12 +45,14 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 
 use crate::agent_id_display::SourceLanguage;
-use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
+use crate::model::environment::{
+    EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
+};
 use crate::model::worker::{
     AgentMetadata, AgentMetadataView, AgentNameMatch, AgentUpdateMode, AgentsMetadataResponseView,
     RawAgentId,
 };
-use golem_client::api::{AgentClient, ComponentClient, EnvironmentClient, WorkerClient};
+use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;
 use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
@@ -573,10 +573,8 @@ impl WorkerCommandHandler {
         let Some(agent_type) = self
             .ctx
             .app_handler()
-            .list_agent_types(&environment)
+            .get_agent_type_by_name(&environment, &agent_type_name)
             .await?
-            .into_iter()
-            .find(|t| t.agent_type.type_name.0 == agent_type_name)
         else {
             bail!("Agent type not found: {}", agent_type_name);
         };
@@ -808,50 +806,40 @@ impl WorkerCommandHandler {
                     .environment_handler()
                     .resolve_environment(EnvironmentResolveMode::Any)
                     .await?;
-                environment
-                    .with_current_deployment_revision_or_default_warn(
-                        |current_deployment_revision| async move {
-                            debug!("Finding agent type {}", agent_type_name);
-                            let Some(agent_type) = clients
-                                .environment
-                                .get_deployment_agent_type(
-                                    &environment.environment_id.0,
-                                    current_deployment_revision.into(),
-                                    &agent_type_name,
-                                )
-                                .await
-                                .map_service_error_not_found_as_opt()?
-                            else {
-                                log_error(format!(
-                                    "Agent type {} not found",
-                                    agent_type_name.log_color_highlight()
-                                ));
-                                bail!(NonSuccessfulExit)
-                            };
-
-                            let mut filters = filters;
-                            filters.insert(
-                                0,
-                                format!(
-                                    "name startswith {}(",
-                                    agent_type.agent_type.type_name.0.clone()
-                                ),
-                            );
-
-                            Ok((
-                                vec![
-                                    component_handler
-                                        .get_component_revision_by_id(
-                                            &agent_type.implemented_by.component_id,
-                                            agent_type.implemented_by.component_revision,
-                                        )
-                                        .await?,
-                                ],
-                                filters,
-                            ))
-                        },
-                    )
+                debug!("Finding agent type {}", agent_type_name);
+                let Some(agent_type) = self
+                    .ctx
+                    .app_handler()
+                    .get_agent_type_by_name(&environment, &agent_type_name)
                     .await?
+                else {
+                    log_error(format!(
+                        "Agent type {} not found",
+                        agent_type_name.log_color_highlight()
+                    ));
+                    bail!(NonSuccessfulExit)
+                };
+
+                let mut filters = filters;
+                filters.insert(
+                    0,
+                    format!(
+                        "name startswith {}(",
+                        agent_type.agent_type.type_name.0.clone()
+                    ),
+                );
+
+                (
+                    vec![
+                        component_handler
+                            .get_component_revision_by_id(
+                                &agent_type.implemented_by.component_id,
+                                agent_type.implemented_by.component_revision,
+                            )
+                            .await?,
+                    ],
+                    filters,
+                )
             }
             None => {
                 let selected_components = self
@@ -1907,74 +1895,83 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
+    async fn match_agent_name_in_environment(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+        agent_name: String,
+    ) -> anyhow::Result<AgentNameMatch> {
+        let parsed_agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_name) {
+            Ok(agent_type_name) => agent_type_name,
+            Err(err) => {
+                logln("");
+                log_error(format!(
+                    "Failed to parse agent name ({}) as agent id: {err}",
+                    agent_name.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&WorkerNameHelp);
+                bail!(NonSuccessfulExit);
+            }
+        };
+
+        let Some(agent_type) = self
+            .ctx
+            .app_handler()
+            .get_agent_type_by_name(&environment, &parsed_agent_type_name.0)
+            .await?
+        else {
+            logln("");
+            log_error(format!(
+                "Agent type {} is not found in the selected deployment.",
+                parsed_agent_type_name.0.log_color_error_highlight()
+            ));
+            logln("");
+            logln(
+                "Deploy the component that defines this agent type or specify environment/application/account prefixes.",
+            );
+            logln("");
+            log_text_view(&WorkerNameHelp);
+            bail!(NonSuccessfulExit);
+        };
+
+        let component = self
+            .ctx
+            .component_handler()
+            .get_component_revision_by_id(
+                &agent_type.implemented_by.component_id,
+                agent_type.implemented_by.component_revision,
+            )
+            .await?;
+
+        Ok(AgentNameMatch {
+            environment,
+            component_name_match_kind: ComponentNameMatchKind::Unknown,
+            component_name: component.component_name,
+            agent_name: agent_name.into(),
+            source_language: SourceLanguage::from(agent_type.agent_type.source_language.as_str()),
+        })
+    }
+
     pub async fn match_agent_name(&self, agent_name: RawAgentId) -> anyhow::Result<AgentNameMatch> {
         let segments = split_agent_name(&agent_name.0);
         match segments.len() {
-            // <WORKER>
+            // <AGENT>
             1 => {
                 let agent_name = segments[0].to_string();
 
-                self.ctx
-                    .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::CurrentDir)
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::Any)
                     .await?;
 
-                let app_ctx = self.ctx.app_context_lock().await;
-                let app_ctx = app_ctx.opt()?;
-                match app_ctx {
-                    Some(app_ctx) => {
-                        let selected_component_names = app_ctx.selected_component_names();
-
-                        if selected_component_names.len() != 1 {
-                            logln("");
-                            log_error(
-                                format!("Multiple components were selected based on the current directory: {}",
-                                        selected_component_names.iter().map(|cn| cn.as_str().log_color_highlight()).join(", ")),
-                            );
-                            logln("");
-                            logln(
-                                "Switch to a different directory with only one component or specify the full or partial component name as part of the agent name!",
-                            );
-                            logln("");
-                            log_text_view(&WorkerNameHelp);
-                            logln("");
-                            log_text_view(&AvailableComponentNamesHelp(
-                                app_ctx.application().component_names().cloned().collect(),
-                            ));
-                            bail!(NonSuccessfulExit);
-                        }
-
-                        let environment = self
-                            .ctx
-                            .environment_handler()
-                            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-                            .await?;
-
-                        Ok(AgentNameMatch {
-                            environment,
-                            component_name_match_kind: ComponentNameMatchKind::AppCurrentDir,
-                            component_name: ComponentName::try_from(
-                                selected_component_names.iter().next().unwrap().as_str(),
-                            )
-                            .map_err(|err| anyhow!(err))?,
-                            agent_name: agent_name.into(),
-                            source_language: SourceLanguage::default(),
-                        })
-                    }
-                    None => {
-                        logln("");
-                        log_error("Cannot infer the component name for the agent as the current directory is not part of an application.");
-                        logln("");
-                        logln("Switch to an application directory or specify the full component name as part of the agent name!");
-                        logln("");
-                        log_text_view(&WorkerNameHelp);
-                        // TODO: hint for deployed component names?
-                        bail!(NonSuccessfulExit);
-                    }
-                }
+                self.match_agent_name_in_environment(environment, agent_name)
+                    .await
             }
-            // [ACCOUNT]/[APPLICATION]/[ENVIRONMENT]/<COMPONENT>/<WORKER>
-            2..=5 => {
+            // <ENVIRONMENT>/<AGENT>
+            // <APPLICATION>/<ENVIRONMENT>/<AGENT>
+            // <ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT>
+            2..=4 => {
                 fn non_empty<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
                     if value.is_empty() {
                         log_error(format!(
@@ -2021,50 +2018,35 @@ impl WorkerCommandHandler {
                     validated("environment", value)
                 }
 
-                fn validated_component(value: &str) -> anyhow::Result<ComponentName> {
-                    Ok(ComponentName(non_empty("component", value)?.to_string()))
-                }
-
                 fn validated_worker(value: &str) -> anyhow::Result<String> {
                     Ok(non_empty("agent", value)?.to_string())
                 }
 
-                let (environment_reference, component_name, agent_name): (
-                    Option<EnvironmentReference>,
-                    ComponentName,
-                    String,
-                ) = match segments.len() {
-                    2 => (
-                        None,
-                        validated_component(segments[0])?,
-                        validated_worker(segments[1])?,
-                    ),
-                    3 => (
-                        Some(EnvironmentReference::Environment {
-                            environment_name: validated_environment(segments[0])?,
-                        }),
-                        validated_component(segments[1])?,
-                        validated_worker(segments[2])?,
-                    ),
-                    4 => (
-                        Some(EnvironmentReference::ApplicationEnvironment {
-                            application_name: validated_application(segments[0])?,
-                            environment_name: validated_environment(segments[1])?,
-                        }),
-                        validated_component(segments[2])?,
-                        validated_worker(segments[3])?,
-                    ),
-                    5 => (
-                        Some(EnvironmentReference::AccountApplicationEnvironment {
-                            account_email: validated_account(segments[0])?,
-                            application_name: validated_application(segments[1])?,
-                            environment_name: validated_environment(segments[2])?,
-                        }),
-                        validated_component(segments[3])?,
-                        validated_worker(segments[4])?,
-                    ),
-                    other => panic!("Unexpected segment count: {other}"),
-                };
+                let (environment_reference, agent_name): (Option<EnvironmentReference>, String) =
+                    match segments.len() {
+                        2 => (
+                            Some(EnvironmentReference::Environment {
+                                environment_name: validated_environment(segments[0])?,
+                            }),
+                            validated_worker(segments[1])?,
+                        ),
+                        3 => (
+                            Some(EnvironmentReference::ApplicationEnvironment {
+                                application_name: validated_application(segments[0])?,
+                                environment_name: validated_environment(segments[1])?,
+                            }),
+                            validated_worker(segments[2])?,
+                        ),
+                        4 => (
+                            Some(EnvironmentReference::AccountApplicationEnvironment {
+                                account_email: validated_account(segments[0])?,
+                                application_name: validated_application(segments[1])?,
+                                environment_name: validated_environment(segments[2])?,
+                            }),
+                            validated_worker(segments[3])?,
+                        ),
+                        other => panic!("Unexpected segment count: {other}"),
+                    };
 
                 let environment = self
                     .ctx
@@ -2075,78 +2057,8 @@ impl WorkerCommandHandler {
                     )
                     .await?;
 
-                self.ctx
-                    .app_handler()
-                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
-                    .await?;
-
-                let app_ctx = self.ctx.app_context_lock().await;
-                let app_ctx = app_ctx.opt()?;
-                match app_ctx {
-                    Some(app_ctx) if environment.is_manifest_scoped() => {
-                        let fuzzy_search = FuzzySearch::new(
-                            app_ctx
-                                .application()
-                                .component_names()
-                                .map(|cn| cn.as_str()),
-                        );
-                        match fuzzy_search.find(&component_name.0) {
-                            Ok(match_) => {
-                                log_fuzzy_match(&match_);
-                                Ok(AgentNameMatch {
-                                    environment,
-                                    component_name_match_kind: ComponentNameMatchKind::App,
-                                    component_name: ComponentName(match_.option),
-                                    agent_name: agent_name.into(),
-                                    source_language: SourceLanguage::default(),
-                                })
-                            }
-                            Err(error) => match error {
-                                Error::Ambiguous {
-                                    highlighted_options,
-                                    ..
-                                } => {
-                                    logln("");
-                                    log_error(format!(
-                                        "The requested application component name ({}) is ambiguous.",
-                                        component_name.0.log_color_error_highlight()
-                                    ));
-                                    logln("");
-                                    logln("Did you mean one of");
-                                    for option in highlighted_options {
-                                        logln(format!(" - {}", option.bold()));
-                                    }
-                                    logln("?");
-                                    logln("");
-                                    log_text_view(&WorkerNameHelp);
-                                    logln("");
-                                    log_text_view(&AvailableComponentNamesHelp(
-                                        app_ctx.application().component_names().cloned().collect(),
-                                    ));
-
-                                    bail!(NonSuccessfulExit);
-                                }
-                                Error::NotFound { .. } => {
-                                    // Assuming non-app component
-                                    Ok(AgentNameMatch {
-                                        environment,
-                                        component_name_match_kind: ComponentNameMatchKind::Unknown,
-                                        component_name,
-                                        agent_name: agent_name.into(),
-                                        source_language: SourceLanguage::default(),
-                                    })
-                                }
-                            },
-                        }
-                    }
-                    _ => Ok(AgentNameMatch {
-                        environment,
-                        component_name_match_kind: ComponentNameMatchKind::Unknown,
-                        component_name,
-                        agent_name: agent_name.into(),
-                        source_language: SourceLanguage::default(),
-                    }),
-                }
+                self.match_agent_name_in_environment(environment, agent_name)
+                    .await
             }
             _ => {
                 logln("");

@@ -814,9 +814,9 @@ pub mod shared_args {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
         /// Agent ID, accepted formats:
         ///   - <AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         #[arg(verbatim_doc_comment)]
         pub agent_id: RawAgentId,
     }

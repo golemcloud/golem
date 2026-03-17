@@ -542,6 +542,30 @@ impl AppCommandHandler {
             .await
     }
 
+    pub async fn get_agent_type_by_name(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        agent_type_name: &str,
+    ) -> anyhow::Result<Option<DeployedRegisteredAgentType>> {
+        environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    self.ctx
+                        .golem_clients()
+                        .await?
+                        .environment
+                        .get_deployment_agent_type(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                            agent_type_name,
+                        )
+                        .await
+                        .map_service_error_not_found_as_opt()
+                },
+            )
+            .await
+    }
+
     async fn deploy_by_version(
         &self,
         version: String,
