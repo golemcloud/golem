@@ -298,7 +298,12 @@ pub async fn execute_external_command(
     let (sources, targets) = {
         if !command.sources.is_empty() && !command.targets.is_empty() {
             (
-                fs::compile_and_collect_globs(app_root_dir, &build_dir, &command.sources)?,
+                fs::compile_and_collect_globs_with_expanders(
+                    app_root_dir,
+                    &build_dir,
+                    &command.sources,
+                    &[fs::GlobExpander::TsConfigInclude],
+                )?,
                 fs::compile_and_collect_globs(app_root_dir, &build_dir, &command.targets)?,
             )
         } else {
