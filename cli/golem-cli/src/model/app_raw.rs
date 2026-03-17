@@ -15,7 +15,6 @@
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
-use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use crate::model::GuestLanguage;
 use crate::{fs, APP_MANIFEST_JSON_SCHEMA};
@@ -436,8 +435,6 @@ pub struct ComponentLayerProperties {
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component_type: Option<AppComponentType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

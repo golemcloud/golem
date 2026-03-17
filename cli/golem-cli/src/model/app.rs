@@ -22,7 +22,6 @@ use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::property::Property;
-use crate::model::component::AppComponentType;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
 use crate::model::{app_raw, GuestLanguage};
@@ -918,10 +917,6 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value
-                .component_type
-                .apply_layer(id, selection, *properties.component_type.value());
-
             value.files.apply_layer(
                 id,
                 selection,
@@ -973,10 +968,6 @@ pub struct Component<'a> {
 impl<'a> Component<'a> {
     pub fn name(&self) -> &ComponentName {
         self.component_name
-    }
-
-    pub fn component_type(&self) -> AppComponentType {
-        self.properties().component_type
     }
 
     // TODO: FCL: cleanup this, and make lang ids reserved for template names
@@ -1087,10 +1078,6 @@ impl<'a> Component<'a> {
         &self.properties().plugins
     }
 
-    pub fn is_deployable(&self) -> bool {
-        self.properties().component_type.is_deployable()
-    }
-
     pub fn custom_commands(&self) -> &BTreeMap<String, Vec<app_raw::ExternalCommand>> {
         &self.properties().custom_commands
     }
@@ -1120,7 +1107,6 @@ pub struct ComponentLayerProperties {
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
-    pub component_type: OptionalProperty<ComponentLayer, AppComponentType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_merge_mode: Option<VecMergeMode>,
     pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
@@ -1145,7 +1131,6 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
-            component_type: value.component_type.into(),
             files_merge_mode: value.files_merge_mode,
             files: value.files.unwrap_or_default().into(),
             plugins_merge_mode: value.plugins_merge_mode,
@@ -1165,7 +1150,6 @@ impl ComponentLayerProperties {
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
-        self.component_type.compact_trace();
         self.files.compact_trace();
         self.plugins.compact_trace();
         self.env.compact_trace();
@@ -1207,7 +1191,6 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub component_type: AppComponentType,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
@@ -1240,7 +1223,6 @@ impl ComponentProperties {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             clean: merged.clean.value().clone(),
-            component_type: (*merged.component_type.value()).unwrap_or_default(),
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value()),

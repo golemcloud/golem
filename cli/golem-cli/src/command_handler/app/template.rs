@@ -215,7 +215,7 @@ impl TemplateHandler {
                 }
 
                 let existing_components = app_ctx
-                    .deployable_component_names()
+                    .component_names()
                     .into_iter()
                     .map(|component_name| {
                         let component = app_ctx.application().component(&component_name);

@@ -369,12 +369,8 @@ impl ApplicationContext {
         &self.selected_component_names
     }
 
-    pub fn deployable_component_names(&self) -> BTreeSet<ComponentName> {
-        self.application
-            .component_names()
-            .filter(|name| self.application.component(name).is_deployable())
-            .cloned()
-            .collect()
+    pub fn component_names(&self) -> BTreeSet<ComponentName> {
+        self.application.component_names().cloned().collect()
     }
 
     pub async fn build(&self, build_config: &BuildConfig) -> anyhow::Result<()> {

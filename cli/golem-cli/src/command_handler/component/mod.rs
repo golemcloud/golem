@@ -762,7 +762,7 @@ impl ComponentCommandHandler {
     ) -> anyhow::Result<BTreeMap<ComponentName, ComponentDeployProperties>> {
         let component_names = {
             let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx.some_or_err()?.deployable_component_names()
+            app_ctx.some_or_err()?.component_names()
         };
 
         let mut components = BTreeMap::<ComponentName, ComponentDeployProperties>::new();
@@ -788,10 +788,6 @@ impl ComponentCommandHandler {
         .await?;
         let component = app_ctx.application().component(component_name);
         let wasm_path = component.final_wasm();
-
-        if !component.component_type().is_deployable() {
-            bail!("Component {component_name} is not deployable");
-        }
         let files = component.files().clone();
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
