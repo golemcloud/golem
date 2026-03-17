@@ -138,9 +138,7 @@ async fn dispatch_event(
                 .invalidate_environment_auth(*environment_id, *grantee_account_id)
                 .await;
         }
-        RegistryInvalidationEvent::SecuritySchemeChanged {
-            environment_id, ..
-        } => {
+        RegistryInvalidationEvent::SecuritySchemeChanged { environment_id, .. } => {
             debug!(
                 environment_id = %environment_id,
                 "Received security scheme changed event, invalidating route cache"

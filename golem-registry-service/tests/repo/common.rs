@@ -1692,10 +1692,7 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
     // Record first event
     let id1 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id1,
-            1,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id1, 1))
         .await
         .unwrap();
     assert!(id1 > baseline);
@@ -1703,10 +1700,7 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
     // Record second event
     let id2 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id2,
-            2,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id2, 2))
         .await
         .unwrap();
     assert!(id2 > id1);
@@ -1714,10 +1708,7 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
     // Record third event for same environment
     let id3 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id1,
-            3,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id1, 3))
         .await
         .unwrap();
     assert!(id3 > id2);
@@ -1779,18 +1770,12 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     // Insert some events in the DB (simulating past deployments)
     let id1 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id,
-            10,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 10))
         .await
         .unwrap();
     let id2 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id,
-            20,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 20))
         .await
         .unwrap();
 
@@ -1807,11 +1792,17 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     assert!(our_events.len() == 2);
     assert!(matches!(
         &our_events[0],
-        RegistryChangeEvent::DeploymentChanged { deployment_revision_id: 10, .. }
+        RegistryChangeEvent::DeploymentChanged {
+            deployment_revision_id: 10,
+            ..
+        }
     ));
     assert!(matches!(
         &our_events[1],
-        RegistryChangeEvent::DeploymentChanged { deployment_revision_id: 20, .. }
+        RegistryChangeEvent::DeploymentChanged {
+            deployment_revision_id: 20,
+            ..
+        }
     ));
 
     // Subscribe to broadcast for live events
@@ -1820,10 +1811,7 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     // Simulate a new deployment: record in DB and notify
     let id3 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id,
-            30,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 30))
         .await
         .unwrap();
     notifier.notify(RegistryChangeEvent::DeploymentChanged {
@@ -1861,18 +1849,12 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
     // Insert events
     let id1 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id,
-            10,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 10))
         .await
         .unwrap();
     let id2 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id,
-            20,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 20))
         .await
         .unwrap();
 
@@ -1932,10 +1914,7 @@ pub async fn test_registry_change_cleanup(deps: &Deps) {
     // Record an event
     let id = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id,
-            1,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 1))
         .await
         .unwrap();
 
@@ -1974,10 +1953,7 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
     // Record deployment changed event
     let id1 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id,
-            1,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 1))
         .await
         .unwrap();
 

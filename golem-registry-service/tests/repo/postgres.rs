@@ -409,10 +409,7 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
     // Record an event via the repo — this INSERT triggers pg_notify('registry_change', ...)
     let env_id = Uuid::new_v4();
     let event_id = repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
-            env_id,
-            42,
-        ))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 42))
         .await
         .unwrap();
 

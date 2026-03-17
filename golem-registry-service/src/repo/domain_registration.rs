@@ -277,17 +277,15 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
                             DomainRegistrationRepoError::DomainAlreadyExists,
                         )?;
 
-                    let change_event =
-                        NewRegistryChangeEvent::domain_registration_changed(
-                            environment_id,
-                            vec![domain],
-                        );
-                    let event_id =
-                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
-                            tx,
-                            &change_event,
-                        )
-                        .await?;
+                    let change_event = NewRegistryChangeEvent::domain_registration_changed(
+                        environment_id,
+                        vec![domain],
+                    );
+                    let event_id = DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                        tx,
+                        &change_event,
+                    )
+                    .await?;
 
                     Ok::<_, DomainRegistrationRepoError>((created, event_id))
                 }
@@ -362,11 +360,10 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
 
                     match deleted {
                         Some(record) => {
-                            let change_event =
-                                NewRegistryChangeEvent::domain_registration_changed(
-                                    record.environment_id,
-                                    vec![record.domain.clone()],
-                                );
+                            let change_event = NewRegistryChangeEvent::domain_registration_changed(
+                                record.environment_id,
+                                vec![record.domain.clone()],
+                            );
                             let event_id =
                                 DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
                                     tx,

@@ -200,10 +200,7 @@ pub struct NewRegistryChangeEvent {
 }
 
 impl NewRegistryChangeEvent {
-    pub fn deployment_changed(
-        environment_id: Uuid,
-        deployment_revision_id: i64,
-    ) -> Self {
+    pub fn deployment_changed(environment_id: Uuid, deployment_revision_id: i64) -> Self {
         Self {
             event_type: RegistryEventType::DeploymentChanged,
             environment_id: Some(environment_id),

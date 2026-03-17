@@ -139,9 +139,7 @@ async fn dispatch_event(
                 "Received environment permissions changed event, ignoring"
             );
         }
-        RegistryInvalidationEvent::SecuritySchemeChanged {
-            environment_id, ..
-        } => {
+        RegistryInvalidationEvent::SecuritySchemeChanged { environment_id, .. } => {
             debug!(
                 environment_id = %environment_id,
                 "Received security scheme changed event, ignoring"

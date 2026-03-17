@@ -15,9 +15,8 @@
 use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent, RegistryChangeRepo};
 use golem_api_grpc::proto::golem::registry::v1::{
     AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
-    DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent,
-    RegistryInvalidationEvent, SecuritySchemeChangedEvent,
-    registry_invalidation_event::Payload,
+    DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent,
+    SecuritySchemeChangedEvent, registry_invalidation_event::Payload,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
@@ -541,6 +540,12 @@ mod tests {
                         event_id: id,
                         environment_id: event.environment_id.unwrap_or_default(),
                         domains: event.domains.clone(),
+                    }
+                }
+                RegistryEventType::SecuritySchemeChanged => {
+                    RegistryChangeEvent::SecuritySchemeChanged {
+                        event_id: id,
+                        environment_id: event.environment_id.unwrap_or_default(),
                     }
                 }
             };

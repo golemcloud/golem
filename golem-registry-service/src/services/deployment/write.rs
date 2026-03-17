@@ -492,7 +492,7 @@ impl DeploymentWriteService {
                 event_id: change_event_id,
                 environment_id: environment_id.0,
                 deployment_revision_id: payload.deployment_revision.into(),
-        });
+            });
 
         Ok(current_deployment)
     }

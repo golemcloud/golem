@@ -259,13 +259,10 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                         return Ok::<_, RepoError>(None);
                     }
 
-                    let event =
-                        NewRegistryChangeEvent::account_tokens_invalidated(account_id);
+                    let event = NewRegistryChangeEvent::account_tokens_invalidated(account_id);
                     let event_id =
-                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
-                            tx, &event,
-                        )
-                        .await?;
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &event)
+                            .await?;
                     Ok(Some(event_id))
                 })
             })
