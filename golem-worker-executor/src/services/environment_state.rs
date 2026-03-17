@@ -15,6 +15,7 @@
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -38,7 +39,7 @@ pub trait EnvironmentStateService: Send + Sync {
     async fn get_agent_secrets(
         &self,
         environment_id: EnvironmentId,
-    ) -> Result<HashMap<Vec<String>, AgentSecret>, WorkerExecutorError>;
+    ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError>;
 
     async fn invalidate_environment(&self, _environment_id: EnvironmentId) {}
     async fn invalidate_all(&self) {}
@@ -111,7 +112,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
     async fn get_agent_secrets(
         &self,
         environment_id: EnvironmentId,
-    ) -> Result<HashMap<Vec<String>, AgentSecret>, WorkerExecutorError> {
+    ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
         let environment_state = self.get_environment_state(environment_id).await?;
         Ok(environment_state.agent_secrets.clone())
     }

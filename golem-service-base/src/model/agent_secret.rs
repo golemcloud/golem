@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent_secret::{AgentSecretId, AgentSecretRevision};
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
@@ -22,7 +24,7 @@ use golem_wasm::json::ValueAndTypeJsonExtensions;
 pub struct AgentSecret {
     pub id: AgentSecretId,
     pub environment_id: EnvironmentId,
-    pub path: Vec<String>,
+    pub path: CanonicalAgentSecretPath,
     pub revision: AgentSecretRevision,
     pub secret_type: AnalysedType,
     pub secret_value: Option<golem_wasm::Value>,
@@ -51,7 +53,7 @@ impl From<AgentSecret> for golem_api_grpc::proto::golem::registry::AgentSecret {
         Self {
             agent_secret_id: Some(value.id.into()),
             environment_id: Some(value.environment_id.into()),
-            path: value.path,
+            path: value.path.0,
             revision: value.revision.into(),
             secret_type: Some((&value.secret_type).into()),
             secret_value: value.secret_value.map(Into::into),
@@ -64,6 +66,11 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecret> for AgentSecre
     fn try_from(
         value: golem_api_grpc::proto::golem::registry::AgentSecret,
     ) -> Result<Self, Self::Error> {
+        debug_assert!(
+            CanonicalAgentSecretPath::from_path_in_unknown_casing(&value.path).0 == value.path,
+            "agent secret path must be in canonical form"
+        );
+
         Ok(Self {
             id: value
                 .agent_secret_id
@@ -73,7 +80,7 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::AgentSecret> for AgentSecre
                 .environment_id
                 .ok_or("Missing environment_id field")?
                 .try_into()?,
-            path: value.path,
+            path: CanonicalAgentSecretPath(value.path),
             revision: AgentSecretRevision::try_from(value.revision)?,
             secret_type: (&value.secret_type.ok_or("Missing secret_type field")?).try_into()?,
             secret_value: value.secret_value.map(TryInto::try_into).transpose()?,

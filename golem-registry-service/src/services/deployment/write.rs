@@ -25,6 +25,7 @@ use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploy
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
 use futures::TryFutureExt;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, HttpMethod};
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
@@ -182,27 +183,27 @@ pub enum DeployValidationError {
     },
     #[error(
         "Secret default at key {rendered_path} has the wrong type: [{rendered_errors}]",
-        rendered_path = path.join("."),
+        rendered_path = path.0.join("."),
         rendered_errors = errors.join(", ")
     )]
     AgentSecretDefaultTypeMismatch {
-        path: Vec<String>,
+        path: CanonicalAgentSecretPath,
         errors: Vec<String>,
     },
     #[error(
         "Agent secret at path {rendered_path} is not compatible with existing secret in the environment. agent: {agent_secret_type:?}; environment: {environment_secret_type:?}",
-        rendered_path = path.join("."),
+        rendered_path = path.0.join("."),
     )]
     AgentSecretNotCompatibleWithEnvironmentSecret {
-        path: Vec<String>,
+        path: CanonicalAgentSecretPath,
         agent_secret_type: AnalysedType,
         environment_secret_type: AnalysedType,
     },
     #[error(
         "Agent secret at path {rendered_path} has different type across deployed agents",
-        rendered_path = path.join("."),
+        rendered_path = path.0.join("."),
     )]
-    AgentSecretTypeConflict { path: Vec<String> },
+    AgentSecretTypeConflict { path: CanonicalAgentSecretPath },
 }
 
 impl SafeDisplay for DeployValidationError {

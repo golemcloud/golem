@@ -30,7 +30,7 @@ use golem_common::model::AgentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::{proto_agent_id_string, proto_component_id_string};
 use golem_service_base::model::auth::AuthCtx;
@@ -267,12 +267,12 @@ impl WorkerGrpcApi {
             agent_id: request.name,
         };
 
-        let local_agent_config = request
-            .local_agent_config
+        let agent_config = request
+            .agent_config
             .into_iter()
-            .map(WorkerCreationLocalAgentConfigEntry::try_from)
+            .map(WorkerAgentConfigEntry::try_from)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| bad_request_error(format!("failed converting local_agent_config: {e}")))?;
+            .map_err(|e| bad_request_error(format!("failed converting agent_config: {e}")))?;
 
         let latest_component_revision = self
             .worker_service
@@ -280,7 +280,7 @@ impl WorkerGrpcApi {
                 &agent_id,
                 request.env,
                 request.config_vars.into_iter().collect(),
-                local_agent_config,
+                agent_config,
                 request.ignore_already_existing,
                 auth,
                 request.context,
@@ -399,6 +399,9 @@ impl WorkerGrpcApi {
         &self,
         request: InvokeAgentRequest,
     ) -> Result<InvokeAgentSuccess, GrpcAgentError> {
+        let is_lookup =
+            request.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
+
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
@@ -407,9 +410,18 @@ impl WorkerGrpcApi {
 
         let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
-        let method_parameters = request
-            .method_parameters
-            .ok_or_else(|| bad_request_error("Missing method_parameters"))?;
+        if !is_lookup {
+            if request.method_name.is_none() {
+                return Err(bad_request_error(
+                    "method_name is required for non-lookup invocations",
+                ));
+            }
+            if request.method_parameters.is_none() {
+                return Err(bad_request_error(
+                    "method_parameters is required for non-lookup invocations",
+                ));
+            }
+        }
 
         let principal = request
             .principal
@@ -426,7 +438,7 @@ impl WorkerGrpcApi {
             .invoke_agent(
                 &agent_id,
                 request.method_name,
-                method_parameters,
+                request.method_parameters,
                 request.mode,
                 request.schedule_at,
                 request.idempotency_key.map(|k| k.into()),
@@ -443,10 +455,14 @@ impl WorkerGrpcApi {
             }
             _ => None,
         };
+        let proto_status = output
+            .invocation_status
+            .map(|s| golem_api_grpc::proto::golem::worker::InvocationStatus::from(s) as i32);
         Ok(InvokeAgentSuccess {
             result: result_value,
             fuel_consumed: output.consumed_fuel,
             component_revision: output.component_revision.map(|r| r.get()),
+            status: proto_status,
         })
     }
 }

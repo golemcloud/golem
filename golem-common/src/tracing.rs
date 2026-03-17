@@ -402,6 +402,7 @@ pub mod directive {
         vec![
             warn("cranelift_codegen"),
             warn("wasmtime_cranelift"),
+            warn("wasmtime_internal_cranelift"),
             warn("wasmtime_jit"),
             warn("h2"),
             warn("hyper"),

@@ -29,11 +29,24 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub struct Config<T>(pub T);
+pub struct Config<T>(PhantomData<T>);
+
+impl<T> Config<T> {
+    pub(crate) fn new() -> Self {
+        Self(PhantomData)
+    }
+
+    pub fn get(&self) -> T
+    where
+        T: ConfigSchema,
+    {
+        T::load(&[])
+    }
+}
 
 pub trait ConfigSchema: Sized {
     fn describe_config() -> Vec<ConfigEntry>;
-    fn load(path: &[String]) -> Result<Self, String>;
+    fn load(path: &[String]) -> Self;
 }
 
 pub struct Secret<T> {
@@ -49,13 +62,14 @@ impl<T> Secret<T> {
         }
     }
 
-    pub fn get(&self) -> Result<T, String>
+    pub fn get(&self) -> T
     where
         T: FromValueAndType + IntoValue,
     {
         let typ = T::get_type();
         let value = get_config_value(&self.path, &typ);
         T::from_value_and_type(ValueAndType { value, typ })
+            .expect("failed deserializing secret value")
     }
 }
 
@@ -90,7 +104,7 @@ pub trait ConfigField: Sized {
     const IS_SHARED: bool;
 
     fn collect_entries(path: &[String]) -> Vec<ConfigEntry>;
-    fn load(path: &[String]) -> Result<Self, String>;
+    fn load(path: &[String]) -> Self;
 }
 
 impl<T: IntoValue> ConfigField for Secret<T> {
@@ -104,8 +118,8 @@ impl<T: IntoValue> ConfigField for Secret<T> {
         }]
     }
 
-    fn load(path: &[String]) -> Result<Self, String> {
-        Ok(Secret::new(path.to_vec()))
+    fn load(path: &[String]) -> Self {
+        Secret::new(path.to_vec())
     }
 }
 
@@ -123,10 +137,11 @@ impl<T: ComponentModelConfigLeaf> ConfigField for T {
         }]
     }
 
-    fn load(path: &[String]) -> Result<Self, String> {
+    fn load(path: &[String]) -> Self {
         let typ = <Self as IntoValue>::get_type();
         let value = get_config_value(path, &typ);
         <Self as FromValueAndType>::from_value_and_type(ValueAndType { value, typ })
+            .expect("failed deserializing config value")
     }
 }
 

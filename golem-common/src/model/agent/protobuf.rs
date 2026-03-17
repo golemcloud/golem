@@ -40,61 +40,33 @@ impl From<AgentMode> for golem_api_grpc::proto::golem::component::AgentMode {
     }
 }
 
-// worker_service proto AgentInvocationMode conversions
-
-impl From<golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode> for AgentInvocationMode {
-    fn from(value: golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::AgentInvocationMode> for AgentInvocationMode {
+    fn from(value: golem_api_grpc::proto::golem::worker::AgentInvocationMode) -> Self {
         match value {
-            golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Await => {
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
                 AgentInvocationMode::Await
             }
-            golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Schedule => {
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
                 AgentInvocationMode::Schedule
+            }
+            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup => {
+                AgentInvocationMode::Lookup
             }
         }
     }
 }
 
-impl From<AgentInvocationMode> for golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode {
+impl From<AgentInvocationMode> for golem_api_grpc::proto::golem::worker::AgentInvocationMode {
     fn from(value: AgentInvocationMode) -> Self {
         match value {
             AgentInvocationMode::Await => {
-                golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Await
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
             }
             AgentInvocationMode::Schedule => {
-                golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Schedule
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule
             }
-        }
-    }
-}
-
-// workerexecutor proto AgentInvocationMode conversions
-
-impl From<golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode>
-    for AgentInvocationMode
-{
-    fn from(value: golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
-                AgentInvocationMode::Await
-            }
-            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
-                AgentInvocationMode::Schedule
-            }
-        }
-    }
-}
-
-impl From<AgentInvocationMode>
-    for golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode
-{
-    fn from(value: AgentInvocationMode) -> Self {
-        match value {
-            AgentInvocationMode::Await => {
-                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await
-            }
-            AgentInvocationMode::Schedule => {
-                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule
+            AgentInvocationMode::Lookup => {
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
             }
         }
     }

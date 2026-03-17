@@ -10,6 +10,7 @@ app: agent-mcp
 
 includes:
 - components-*/*/golem.yaml
+- ../golem-test-components-common.yaml
 environments:
   local:
     server: local

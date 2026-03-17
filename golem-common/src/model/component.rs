@@ -15,6 +15,7 @@
 use crate::model::diff;
 use uuid::Uuid;
 
+use super::diff::VecDiffable;
 pub use crate::base_model::component::*;
 use itertools::Itertools;
 
@@ -65,15 +66,15 @@ impl ComponentDto {
                     )
                 })
                 .collect(),
-            local_agent_config_ordered_by_agent_and_key: self
-                .local_agent_config
+            ordered_agent_config: self
+                .agent_config
                 .iter()
-                .map(|lac| diff::LocalAgentConfigEntry {
+                .map(|lac| diff::AgentConfigEntry {
                     agent: lac.agent.0.clone(),
-                    key: lac.key.clone(),
-                    value: lac.value.clone(),
+                    path: lac.path.clone(),
+                    value: diff::into_normalized_json(lac.value.clone()),
                 })
-                .sorted_by_key(|lac| (lac.agent.clone(), lac.key.clone()))
+                .sorted_by(|v1, v2| v1.ordering_key().cmp(&v2.ordering_key()))
                 .collect(),
         }
     }

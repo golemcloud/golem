@@ -657,12 +657,15 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         component_service.clone(),
         shard_service.clone(),
         lazy_worker_activator.clone(),
+        worker_proxy.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
         base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
+        golem_config.oplog.plugin_max_commit_count,
+        golem_config.oplog.plugin_max_elapsed_time,
     ));
 
     let worker_service = Arc::new(DefaultWorkerService::new(
