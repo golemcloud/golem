@@ -38,18 +38,21 @@ pub struct AtomicResourceEntry {
     in_flight_delta: AtomicI64,
     // Current (cached) value of the account level worker memory limits
     max_memory: AtomicUsize,
+    // Current (cached) value of the account level worker function table element limits
+    max_table_elements: AtomicUsize,
     // TODO: store a last_update timestamp here and fetch the server side values (by including a 0 update) after a certain interval.
     // The reason is that we want to see plan changes / bucket resets even when no work is being performed for that account on this instance right now.
     // Otherwise the first few attempts to start a worker might fail as we are using outdated values.
 }
 
 impl AtomicResourceEntry {
-    fn new(fuel: u64, max_memory: usize) -> Self {
+    pub fn new(fuel: u64, max_memory: usize, max_table_elements: usize) -> Self {
         Self {
             fuel: AtomicU64::new(fuel),
             delta: AtomicI64::new(0),
             in_flight_delta: AtomicI64::new(0),
             max_memory: AtomicUsize::new(max_memory),
+            max_table_elements: AtomicUsize::new(max_table_elements),
         }
     }
 
@@ -97,6 +100,10 @@ impl AtomicResourceEntry {
 
     pub fn max_memory_limit(&self) -> usize {
         self.max_memory.load(Ordering::Acquire)
+    }
+
+    pub fn max_table_elements_limit(&self) -> usize {
+        self.max_table_elements.load(Ordering::Acquire)
     }
 }
 
@@ -245,6 +252,10 @@ impl ResourceLimitsGrpc {
                     updated_limits.max_memory_per_worker as usize,
                     Ordering::Release,
                 );
+                entry.max_table_elements.store(
+                    updated_limits.max_table_elements_per_worker as usize,
+                    Ordering::Release,
+                );
             }
         }
     }
@@ -299,6 +310,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                     AtomicResourceEntry::new(
                         fetched.available_fuel,
                         fetched.max_memory_per_worker as usize,
+                        fetched.max_table_elements_per_worker as usize,
                     ),
                 ))
             })
@@ -316,6 +328,53 @@ impl ResourceLimits for ResourceLimitsDisabled {
         &self,
         _account_id: AccountId,
     ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
-        Ok(Arc::new(AtomicResourceEntry::new(u64::MAX, usize::MAX)))
+        Ok(Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    test_r::enable!();
+
+    #[test]
+    fn atomic_resource_entry_returns_table_elements_limit() {
+        let entry = AtomicResourceEntry::new(1000, 65536, 500);
+        assert_eq!(entry.max_table_elements_limit(), 500);
+    }
+
+    #[test]
+    fn atomic_resource_entry_table_elements_independent_of_memory() {
+        let entry = AtomicResourceEntry::new(0, 1024, 256);
+        assert_eq!(entry.max_memory_limit(), 1024);
+        assert_eq!(entry.max_table_elements_limit(), 256);
+    }
+
+    #[test]
+    fn atomic_resource_entry_table_elements_usize_max_for_disabled() {
+        let entry = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX);
+        assert_eq!(entry.max_table_elements_limit(), usize::MAX);
+    }
+
+    #[test]
+    fn atomic_resource_entry_table_elements_zero() {
+        let entry = AtomicResourceEntry::new(100, 4096, 0);
+        assert_eq!(entry.max_table_elements_limit(), 0);
+    }
+
+    #[test]
+    async fn resource_limits_disabled_returns_max_table_elements() {
+        let disabled = ResourceLimitsDisabled;
+        let entry = disabled
+            .initialize_account(AccountId::SYSTEM)
+            .await
+            .expect("initialize_account should succeed");
+        assert_eq!(entry.max_table_elements_limit(), usize::MAX);
     }
 }

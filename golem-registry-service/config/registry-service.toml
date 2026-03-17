@@ -72,6 +72,7 @@ app_limit = 10
 component_limit = 100
 env_limit = 40
 max_memory_per_worker = 1073741824
+max_table_elements_per_worker = 16384
 monthly_gas_limit = 1000000000000000000
 monthly_upload_limit = 1000000000
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"

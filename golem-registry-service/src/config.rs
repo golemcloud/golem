@@ -138,6 +138,7 @@ impl Default for RegistryServiceConfig {
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
+                max_table_elements_per_worker: 16_384,
             },
         );
 
@@ -380,6 +381,12 @@ pub struct PrecreatedPlan {
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
     pub max_memory_per_worker: u64,
+    #[serde(default = "default_max_table_elements_per_worker")]
+    pub max_table_elements_per_worker: u64,
+}
+
+fn default_max_table_elements_per_worker() -> u64 {
+    16_384
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

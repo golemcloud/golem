@@ -270,6 +270,10 @@ impl TrapType {
                             error: AgentError::ExceededMemoryLimit,
                             retry_from,
                         },
+                        Some(GolemSpecificWasmTrap::WorkerExceededTableLimit) => TrapType::Error {
+                            error: AgentError::ExceededTableLimit,
+                            retry_from,
+                        },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {

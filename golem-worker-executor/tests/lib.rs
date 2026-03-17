@@ -36,6 +36,7 @@ pub mod namespace_routed_key_value_storage;
 pub mod observability;
 pub mod rdbms;
 pub mod rdbms_service;
+pub mod resource_limits;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
@@ -62,6 +63,7 @@ tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
 
 tag_suite!(rdbms_service, rdbms_service);
+tag_suite!(resource_limits, group1);
 
 #[derive(Debug)]
 pub struct Tracing;
