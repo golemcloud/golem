@@ -19,6 +19,8 @@ use crate::{declare_structs, newtype_uuid};
 
 newtype_uuid!(
     EnvironmentPluginGrantId,
+    wit_name: "environment-plugin-grant-id",
+    wit_owner: "golem:api@1.5.0/oplog",
     golem_api_grpc::proto::golem::component::EnvironmentPluginGrantId
 );
 

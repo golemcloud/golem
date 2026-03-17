@@ -43,7 +43,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -179,7 +179,7 @@ pub trait RegistryService: Send + Sync {
         deployment_revision: Option<DeploymentRevision>,
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
-    ) -> Result<RegisteredAgentType, RegistryServiceError>;
+    ) -> Result<ResolvedAgentType, RegistryServiceError>;
 
     async fn get_active_routes_for_domain(
         &self,
@@ -754,7 +754,7 @@ impl RegistryService for GrpcRegistryService {
         deployment_revision: Option<DeploymentRevision>,
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
-    ) -> Result<RegisteredAgentType, RegistryServiceError> {
+    ) -> Result<ResolvedAgentType, RegistryServiceError> {
         let response = self
             .client
             .call("resolve_agent_type_by_names", move |client| {
@@ -773,10 +773,20 @@ impl RegistryService for GrpcRegistryService {
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(resolve_agent_type_by_names_response::Result::Success(payload)) => Ok(payload
-                .agent_type
-                .ok_or("missing agent_type field")?
-                .try_into()?),
+            Some(resolve_agent_type_by_names_response::Result::Success(payload)) => {
+                let registered_agent_type = payload
+                    .agent_type
+                    .ok_or("missing agent_type field")?
+                    .try_into()?;
+                let environment_id = payload
+                    .environment_id
+                    .ok_or("missing environment_id field")?
+                    .try_into()?;
+                Ok(ResolvedAgentType {
+                    registered_agent_type,
+                    environment_id,
+                })
+            }
             Some(resolve_agent_type_by_names_response::Result::Error(error)) => Err(error.into()),
         }
     }

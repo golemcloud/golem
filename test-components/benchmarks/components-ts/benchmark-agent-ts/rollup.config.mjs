@@ -12,7 +12,7 @@ config.plugins[config.plugins.length - 1] = typescript({
     noEmitOnError: true,
     include: [
         "./src/**/*.ts",
-        "../../common/ts/**/*.ts",
+        "../../common-ts/**/*.ts",
     ],
 });
 

@@ -169,7 +169,8 @@ impl RustBridgeGenerator {
         doc["dependencies"]["golem-common"] = golem_dep("golem-common", &["client"]);
         doc["dependencies"]["golem-wasm"] = golem_dep("golem-wasm", &["client"]);
         doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
-        doc["dependencies"]["reqwest"] = dep("0.12", &["rustls-tls"]);
+        doc["dependencies"]["reqwest"] = dep("0.13", &["rustls"]);
+        doc["dependencies"]["reqwest-middleware"] = dep("0.5", &[]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
         std::fs::write(path, doc.to_string())
@@ -268,7 +269,9 @@ impl RustBridgeGenerator {
                 ) -> Result<Option<golem_client::model::UntypedJsonDataValue>, golem_client::bridge::ClientError> {
                     let config = CONFIG.get().expect("Configuration has not been set");
 
-                    let client = reqwest::Client::builder().build().unwrap();
+                    let client = reqwest_middleware::ClientWithMiddleware::from(
+                        reqwest::Client::builder().build().unwrap()
+                    );
                     let context = golem_client::Context {
                         client,
                         base_url: config.server.url(),

@@ -113,9 +113,9 @@ impl AsRef<str> for ComponentName {
 }
 
 declare_structs! {
-    pub struct LocalAgentConfigEntry {
+    pub struct AgentConfigEntry {
         pub agent: AgentTypeName,
-        pub key: Vec<String>,
+        pub path: Vec<String>,
         pub value: serde_json::Value
     }
 
@@ -134,7 +134,7 @@ declare_structs! {
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
         pub config_vars: BTreeMap<String, String>,
-        pub local_agent_config: Vec<LocalAgentConfigEntry>,
+        pub agent_config: Vec<AgentConfigEntry>,
         pub wasm_hash: diff::Hash,
     }
 
@@ -151,7 +151,7 @@ declare_structs! {
         pub config_vars: BTreeMap<String, String>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub local_agent_config: Vec<LocalAgentConfigEntry>,
+        pub agent_config: Vec<AgentConfigEntry>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_types: Vec<AgentType>,
@@ -170,7 +170,7 @@ declare_structs! {
         pub new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         pub env: Option<BTreeMap<String, String>>,
         pub config_vars: Option<BTreeMap<String, String>>,
-        pub local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        pub agent_config: Option<Vec<AgentConfigEntry>>,
         pub agent_types: Option<Vec<AgentType>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]

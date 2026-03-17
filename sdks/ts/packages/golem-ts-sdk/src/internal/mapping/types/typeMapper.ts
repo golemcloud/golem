@@ -1,6 +1,6 @@
 import { AnalysedType } from './analysedType';
 
-import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 
 import * as Either from '../../../newTypes/either';
 import { TypeScope } from './scope';

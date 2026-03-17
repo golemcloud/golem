@@ -279,12 +279,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::worker::RevertWorkerTarget",
             ),
             (
-                "WorkerCreationRequest",
+                "AgentCreationRequest",
                 "golem_common::model::worker::AgentCreationRequest",
-            ),
-            (
-                "WorkerCreationLocalAgentConfigEntry",
-                "golem_common::model::worker::WorkerCreationLocalAgentConfigEntry",
             ),
             (
                 "AgentMetadataDto",

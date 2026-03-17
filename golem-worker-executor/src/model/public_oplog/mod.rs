@@ -30,10 +30,11 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
-    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -252,7 +253,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let initial_plugins = metadata
                     .installed_plugins
                     .into_iter()
-                    .filter(|p| initial_active_plugins.contains(&p.priority))
+                    .filter(|p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
                     .map(make_plugin_installation_description)
                     .collect();
 
@@ -509,7 +510,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let new_plugins = metadata
                     .installed_plugins
                     .into_iter()
-                    .filter(|p| new_active_plugins.contains(&p.priority))
+                    .filter(|p| new_active_plugins.contains(&p.environment_plugin_grant_id))
                     .map(make_plugin_installation_description)
                     .collect();
 
@@ -572,7 +573,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::ActivatePlugin {
                 timestamp,
-                plugin_priority,
+                plugin_grant_id,
             } => {
                 let metadata = components
                     .get_metadata(
@@ -585,7 +586,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let plugin_installation = metadata
                     .installed_plugins
                     .into_iter()
-                    .find(|p| p.priority == plugin_priority)
+                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
                     .ok_or("plugin not found in metadata".to_string())?;
 
                 let desc = make_plugin_installation_description(plugin_installation);
@@ -596,7 +597,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             }
             OplogEntry::DeactivatePlugin {
                 timestamp,
-                plugin_priority,
+                plugin_grant_id,
             } => {
                 let metadata = components
                     .get_metadata(
@@ -609,7 +610,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let plugin_installation = metadata
                     .installed_plugins
                     .into_iter()
-                    .find(|p| p.priority == plugin_priority)
+                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
                     .ok_or("plugin not found in metadata".to_string())?;
 
                 let desc = make_plugin_installation_description(plugin_installation);
@@ -742,6 +743,40 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     data: snapshot_data,
                 }))
+            }
+            OplogEntry::OplogProcessorCheckpoint {
+                timestamp,
+                plugin_grant_id,
+                target_agent_id,
+                confirmed_up_to,
+                sending_up_to,
+                last_batch_start,
+            } => {
+                let metadata = components
+                    .get_metadata(
+                        owned_agent_id.agent_id.component_id,
+                        Some(component_revision),
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+
+                let plugin_installation = metadata
+                    .installed_plugins
+                    .into_iter()
+                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                    .ok_or("plugin not found in metadata".to_string())?;
+
+                let desc = make_plugin_installation_description(plugin_installation);
+                Ok(PublicOplogEntry::OplogProcessorCheckpoint(
+                    OplogProcessorCheckpointParams {
+                        timestamp,
+                        plugin: desc,
+                        target_agent_id,
+                        confirmed_up_to,
+                        sending_up_to,
+                        last_batch_start,
+                    },
+                ))
             }
         }
     }
@@ -962,6 +997,7 @@ fn make_plugin_installation_description(
     installation: InstalledPlugin,
 ) -> PluginInstallationDescription {
     PluginInstallationDescription {
+        environment_plugin_grant_id: installation.environment_plugin_grant_id,
         plugin_priority: installation.priority,
         plugin_name: installation.plugin_name,
         plugin_version: installation.plugin_version,

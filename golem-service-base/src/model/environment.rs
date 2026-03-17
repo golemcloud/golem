@@ -15,6 +15,7 @@
 use super::AgentDeploymentDetails;
 use super::agent_secret::AgentSecret;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use std::collections::HashMap;
 
 // The current, mutable state of the environment.
@@ -22,7 +23,7 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub struct EnvironmentState {
     pub agent_deployment_details: HashMap<AgentTypeName, AgentDeploymentDetails>,
-    pub agent_secrets: HashMap<Vec<String>, AgentSecret>,
+    pub agent_secrets: HashMap<CanonicalAgentSecretPath, AgentSecret>,
 }
 
 impl From<EnvironmentState> for golem_api_grpc::proto::golem::registry::EnvironmentState {

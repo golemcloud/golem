@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::component::{ComponentRevision, PluginPriority};
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::oplog::PublicOplogEntry;
@@ -85,6 +86,7 @@ declare_structs! {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallationDescription {
+    pub environment_plugin_grant_id: EnvironmentPluginGrantId,
     pub plugin_priority: PluginPriority,
     pub plugin_name: String,
     pub plugin_version: String,

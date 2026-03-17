@@ -1551,6 +1551,14 @@ impl AppCommandHandler {
         &self,
         deploy_diff: &DeployDiff,
     ) -> anyhow::Result<CurrentDeployment> {
+        let agent_secret_defaults = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
+        };
+
         let clients = self.ctx.golem_clients().await?;
 
         log_action("Deploying", "staged changes to the environment");
@@ -1563,8 +1571,7 @@ impl AppCommandHandler {
                     current_revision: deploy_diff.current_deployment_revision(),
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
                     version: DeploymentVersion("".to_string()), // TODO: atomic
-                    // FIXME: agent-config
-                    agent_secret_defaults: Vec::new(),
+                    agent_secret_defaults,
                 },
             )
             .await

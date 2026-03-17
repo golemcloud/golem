@@ -24,7 +24,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{AgentError, PersistenceLevel};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
 use golem_common::model::{
     AgentId, AgentInvocationOutput, OplogIndex, ShardAssignment, ShardId, Timestamp,
 };
@@ -69,7 +69,7 @@ pub struct AgentConfig {
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub initial_config_vars: BTreeMap<String, String>,
-    pub initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+    pub initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
 }
 
@@ -80,7 +80,7 @@ impl AgentConfig {
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         initial_config_vars: BTreeMap<String, String>,
-        initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+        initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
     ) -> AgentConfig {
         AgentConfig {
@@ -89,7 +89,7 @@ impl AgentConfig {
             component_revision_for_replay,
             created_by,
             initial_config_vars,
-            initial_local_agent_config,
+            initial_agent_config,
             last_snapshot_index,
         }
     }

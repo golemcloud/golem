@@ -48,7 +48,7 @@ pub trait RegistryService: Send + Sync {
 
     async fn kill(&self);
 
-    async fn base_http_client(&self) -> reqwest::Client;
+    async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware;
 
     async fn client(&self, token: &TokenSecret) -> RegistryServiceClientLive {
         let url = format!("http://{}:{}", self.http_host(), self.http_port());

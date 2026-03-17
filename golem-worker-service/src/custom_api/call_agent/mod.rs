@@ -84,14 +84,15 @@ impl CallAgentHandler {
             .worker_service
             .invoke_agent(
                 &agent_id,
-                behaviour.method_name.clone(),
-                proto_method_parameters,
-                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32,
+                Some(behaviour.method_name.clone()),
+                Some(proto_method_parameters),
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 Some(IdempotencyKey::fresh()),
                 invocation_context,
                 AuthCtx::impersonated_user(resolved_route.route.account_id),
                 proto_principal,
+                Some(resolved_route.route.environment_id),
             )
             .await?;
 
