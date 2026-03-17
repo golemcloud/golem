@@ -51,7 +51,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
         .await?;
 
     let plugin_component = user_1
-        .component(&plugin_env.id, "oplog-processor")
+        .component(&plugin_env.id, "oplog_processor_release")
         .store()
         .await?;
 
@@ -194,7 +194,7 @@ async fn fail_with_404_when_sharing_plugin_to_env_you_are_not_member_of(
     let (_, unrelated_env) = user_2.app_and_env().await?;
 
     let plugin_component = user_1
-        .component(&plugin_env.id, "oplog-processor")
+        .component(&plugin_env.id, "oplog_processor_release")
         .store()
         .await?;
 
@@ -258,7 +258,7 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
         .await?;
 
     let plugin_component = user_1
-        .component(&plugin_env.id, "oplog-processor")
+        .component(&plugin_env.id, "oplog_processor_release")
         .store()
         .await?;
 
@@ -330,7 +330,7 @@ async fn cannot_grant_deleted_plugin(deps: &EnvBasedTestDependencies) -> anyhow:
     let client = user.registry_service_client().await;
 
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "oplog-processor").store().await?;
+    let component = user.component(&env.id, "oplog_processor_release").store().await?;
 
     let plugin = client
         .create_plugin(
@@ -385,7 +385,7 @@ async fn environment_owner_cannot_grant_foreign_plugin(
     let (_, plugin_env) = user_plugin_owner.app_and_env().await?;
 
     let component = user_plugin_owner
-        .component(&plugin_env.id, "oplog-processor")
+        .component(&plugin_env.id, "oplog_processor_release")
         .store()
         .await?;
 
@@ -447,7 +447,7 @@ async fn shared_user_with_readonly_role_cannot_grant_plugin(
         .await?;
 
     let component = user_owner
-        .component(&plugin_env.id, "oplog-processor")
+        .component(&plugin_env.id, "oplog_processor_release")
         .store()
         .await?;
     let plugin = client_owner
@@ -505,7 +505,7 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
         .await?;
 
     let comp = owner
-        .component(&plugin_env.id, "oplog-processor")
+        .component(&plugin_env.id, "oplog_processor_release")
         .store()
         .await?;
     let plugin = client_owner
@@ -571,7 +571,7 @@ async fn environment_owner_can_fetch_deleted_grant_with_include_deleted(
     let client_owner = owner.registry_service_client().await;
 
     let (_, env) = owner.app_and_env().await?;
-    let component = owner.component(&env.id, "oplog-processor").store().await?;
+    let component = owner.component(&env.id, "oplog_processor_release").store().await?;
 
     let plugin = client_owner
         .create_plugin(
@@ -627,7 +627,7 @@ async fn shared_user_can_fetch_deleted_grant_with_include_deleted(
         .share_environment(&env.id, &shared.account_id, &[EnvironmentRole::Admin])
         .await?;
 
-    let component = owner.component(&env.id, "oplog-processor").store().await?;
+    let component = owner.component(&env.id, "oplog_processor_release").store().await?;
     let plugin = client_owner
         .create_plugin(
             &owner.account_id.0,
@@ -675,7 +675,7 @@ async fn fetch_deleted_grant_with_deleted_plugin_and_account(
     let client_owner = owner.registry_service_client().await;
 
     let (_, env) = owner.app_and_env().await?;
-    let component = owner.component(&env.id, "oplog-processor").store().await?;
+    let component = owner.component(&env.id, "oplog_processor_release").store().await?;
 
     let plugin = client_owner
         .create_plugin(
@@ -730,7 +730,7 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
         .share_environment(&env.id, &revoked_user.account_id, &[EnvironmentRole::Admin])
         .await?;
 
-    let component = owner.component(&env.id, "oplog-processor").store().await?;
+    let component = owner.component(&env.id, "oplog_processor_release").store().await?;
     let plugin = client_owner
         .create_plugin(
             &owner.account_id.0,
