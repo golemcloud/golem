@@ -139,12 +139,11 @@ pub fn set_scalar(source: &str, path: &[&str], value_literal: &str) -> anyhow::R
         return Err(anyhow!("Missing entry"));
     };
     let replacement_range = value_node.start_byte()..value_node.end_byte();
-    let mut edits = Vec::new();
-    edits.push(TextEdit::new(
+    let edits = vec![TextEdit::new(
         replacement_range.start,
         replacement_range.end,
         value_literal,
-    ));
+    )];
     if source[replacement_range.end..pair_node.end_byte()].starts_with('\n') {
         // keep newline if present
     }
