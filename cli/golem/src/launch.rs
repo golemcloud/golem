@@ -299,6 +299,7 @@ fn worker_executor_config(
         },
         resource_limits: ResourceLimitsConfig::Grpc(ResourceLimitsGrpcConfig {
             batch_update_interval: Duration::from_secs(60),
+            limit_refresh_interval: Duration::from_secs(300),
         }),
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
