@@ -10146,6 +10146,14 @@ components:
       - pluginName
       - pluginVersion
       - parameters
+    ProcessErrorMessage:
+      title: ProcessErrorMessage
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+      - message
     ProcessOplogEntriesParameters:
       title: ProcessOplogEntriesParameters
       type: object
@@ -10154,6 +10162,12 @@ components:
           type: string
       required:
       - idempotencyKey
+    ProcessOplogEntriesResultParameters:
+      title: ProcessOplogEntriesResultParameters
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/PublicProcessError'
     PublicAgentInvocation:
       discriminator:
         propertyName: type
@@ -10181,7 +10195,7 @@ components:
           ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
@@ -10189,7 +10203,7 @@ components:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_AgentInvocationOutputParameters:
       allOf:
       - type: object
@@ -10219,13 +10233,25 @@ components:
       - type: object
         properties:
           type:
+            example: LoadSnapshot
+            type: string
+            enum:
+            - LoadSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/FallibleResultParameters'
+    PublicAgentInvocationResult_ProcessOplogEntriesResultParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
             example: ProcessOplogEntries
             type: string
             enum:
             - ProcessOplogEntries
         required:
         - type
-      - $ref: '#/components/schemas/FallibleResultParameters'
+      - $ref: '#/components/schemas/ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_SaveSnapshotResultParameters:
       allOf:
       - type: object
@@ -10992,6 +11018,28 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SuspendParams'
+    PublicProcessError:
+      discriminator:
+        propertyName: type
+        mapping:
+          Permanent: '#/components/schemas/PublicProcessError_ProcessErrorMessage'
+          Retriable: '#/components/schemas/PublicProcessError_ProcessErrorMessage'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicProcessError_ProcessErrorMessage'
+      - $ref: '#/components/schemas/PublicProcessError_ProcessErrorMessage'
+    PublicProcessError_ProcessErrorMessage:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Retriable
+            type: string
+            enum:
+            - Retriable
+        required:
+        - type
+      - $ref: '#/components/schemas/ProcessErrorMessage'
     PublicRetryConfig:
       title: PublicRetryConfig
       type: object

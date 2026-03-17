@@ -1150,6 +1150,18 @@ install_crate = "miniserve"
 command = "miniserve"
 args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
 
+## PLUGINS
+[tasks.build-plugins]
+dependencies = ["build"]
+description = "Builds built-in plugins (requires golem CLI to be built first)"
+script_runner = "@duckscript"
+script = '''
+cd plugins/otlp-exporter
+exec --fail-on-error ../../target/debug/golem build -P release --force-build
+exec --fail-on-error ../../target/debug/golem exec -P release copy
+cd ../..
+'''
+
 ## Cleanup
 [tasks.clear-v8]
 description = "Removes the v8 crate from the target directories"

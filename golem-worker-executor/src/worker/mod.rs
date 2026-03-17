@@ -27,7 +27,8 @@ use crate::durable_host::recover_stderr_logs;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::plugin::ForwardingOplog;
+use crate::services::oplog::{downcast_oplog, CommitLevel, Oplog, OplogOps};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
@@ -318,6 +319,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
         };
+
+        // Wire the worker event service into the forwarding oplog so plugin errors
+        // can be emitted as live events without writing to the oplog.
+        if let Some(forwarding_oplog) = downcast_oplog::<ForwardingOplog>(&worker.oplog) {
+            forwarding_oplog
+                .set_worker_event_service(worker.worker_event_service.clone())
+                .await;
+        }
 
         // just some sanity checking
         assert!(last_oplog_idx >= OplogIndex::INITIAL);

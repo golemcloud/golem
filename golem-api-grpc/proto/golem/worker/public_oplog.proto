@@ -164,11 +164,15 @@ message PublicAgentInvocationResult {
     golem.common.Empty manual_update = 3;
     OptionalError load_snapshot = 4;
     SnapshotData save_snapshot = 5;
-    OptionalError process_oplog_entries = 6;
+    ProcessOplogEntriesResult process_oplog_entries = 6;
   }
 }
 
 message OptionalError {
+  optional string error = 1;
+}
+
+message ProcessOplogEntriesResult {
   optional string error = 1;
 }
 

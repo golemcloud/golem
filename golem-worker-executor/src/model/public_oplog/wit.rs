@@ -32,8 +32,8 @@ use golem_common::model::oplog::public_oplog_entry::{
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, PublicOplogEntry,
-    PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotBasedUpdateParameters,
+    PublicSnapshotData, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::{Empty, Timestamp};
 use std::time::Duration;
@@ -547,9 +547,11 @@ impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
                     },
                 })
             }
-            PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters {
-                error,
-            }) => Self::ProcessOplogEntries(oplog::FallibleResultParameters { error }),
+            PublicAgentInvocationResult::ProcessOplogEntries(result) => {
+                Self::ProcessOplogEntries(oplog::FallibleResultParameters {
+                    error: result.error,
+                })
+            }
         }
     }
 }

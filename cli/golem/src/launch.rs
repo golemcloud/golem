@@ -22,8 +22,8 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::Empty;
 use golem_registry_service::config::{
-    ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount, PrecreatedPlan,
-    RegistryServiceConfig,
+    BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount,
+    PrecreatedPlan, RegistryServiceConfig,
 };
 use golem_registry_service::RegistryService;
 use golem_service_base::config::BlobStorageConfig;
@@ -49,6 +49,7 @@ use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -56,6 +57,10 @@ use tracing::Instrument;
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+
+// The otlp-exporter WASM is embedded at compile time from the plugins directory.
+// Build with `cargo make build-plugins` first to ensure this file exists.
+static OTLP_EXPORTER_WASM: &[u8] = include_bytes!("../../../plugins/otlp-exporter.wasm");
 
 pub struct LaunchArgs {
     pub router_addr: String,
@@ -215,6 +220,10 @@ fn registry_service_config(
                 },
             );
             accounts
+        },
+        builtin_plugins: BuiltinPluginsConfig {
+            enabled: true,
+            otlp_exporter_wasm: Some(Arc::from(OTLP_EXPORTER_WASM)),
         },
         ..Default::default()
     }

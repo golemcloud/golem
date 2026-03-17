@@ -1209,6 +1209,11 @@ pub enum AgentEvent {
         function: String,
         idempotency_key: IdempotencyKey,
     },
+    PluginError {
+        timestamp: Timestamp,
+        plugin_name: String,
+        message: String,
+    },
     /// The client fell behind and the point it left of is no longer in our buffer.
     /// {number_of_skipped_messages} is the number of messages between the client left of and the point it is now at.
     ClientLagged { number_of_missed_messages: u64 },
@@ -1252,6 +1257,13 @@ impl Display for AgentEvent {
                 ..
             } => {
                 write!(f, "<invocation-finished> {function} {idempotency_key}")
+            }
+            AgentEvent::PluginError {
+                plugin_name,
+                message,
+                ..
+            } => {
+                write!(f, "<plugin-error> [{plugin_name}] {message}")
             }
             AgentEvent::ClientLagged {
                 number_of_missed_messages,

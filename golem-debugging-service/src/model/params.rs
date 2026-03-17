@@ -119,6 +119,7 @@ impl LogNotification {
                 context,
                 message,
             }),
+            InternalWorkerEvent::PluginError { .. } => None,
         }
     }
 }

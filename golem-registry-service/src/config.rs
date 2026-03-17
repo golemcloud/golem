@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,6 +47,8 @@ pub struct RegistryServiceConfig {
     pub component_compilation: ComponentCompilationConfig,
     pub initial_accounts: HashMap<String, PrecreatedAccount>,
     pub initial_plans: HashMap<String, PrecreatedPlan>,
+    #[serde(default)]
+    pub builtin_plugins: BuiltinPluginsConfig,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -87,6 +90,13 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "{}",
             self.component_compilation.to_safe_string_indented()
+        );
+
+        let _ = writeln!(
+            &mut result,
+            "builtin plugins: enabled={}, wasm={}",
+            self.builtin_plugins.enabled,
+            self.builtin_plugins.otlp_exporter_wasm.is_some()
         );
 
         result
@@ -155,6 +165,7 @@ impl Default for RegistryServiceConfig {
             domain_provisioner: DomainProvisionerConfig::default(),
             initial_accounts,
             initial_plans,
+            builtin_plugins: BuiltinPluginsConfig::default(),
         }
     }
 }
@@ -355,6 +366,13 @@ impl ComponentCompilationEnabledConfig {
     pub fn uri(&self) -> Uri {
         grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct BuiltinPluginsConfig {
+    pub enabled: bool,
+    #[serde(skip)]
+    pub otlp_exporter_wasm: Option<Arc<[u8]>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
