@@ -102,7 +102,9 @@ use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::{
     DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsStatus, RdbmsTransactionStatus, RdbmsType,
 };
-use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+use golem_worker_executor::services::resource_limits::{
+    AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
+};
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -571,7 +573,7 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
-    fn borrow_fuel(&mut self, _current_level: u64) -> bool {
+    fn ensure_fuel(&mut self, _current_level: u64) -> bool {
         true
     }
 
@@ -1328,13 +1330,15 @@ fn get_durable_ctx_from_context(
 }
 
 // -------------------------------------------------------------------------
-// Production-Context bootstrap — uses Context which has real ResourceLimiterAsync
-// enforcement (memory_growing and table_growing checks against AtomicResourceEntry).
-// Used in tests that need to verify resource limit enforcement behaviour.
+// Production-Context bootstrap — uses the production Context which has real
+// fuel management via FuelTracker, and real ResourceLimiterAsync enforcement
+// (memory_growing / table_growing checks against AtomicResourceEntry).
+// Used by start_with_fuel_tracking and start_with_table_limit.
 // -------------------------------------------------------------------------
 
 struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
+    resource_limits: Arc<dyn ResourceLimits>,
 }
 
 #[async_trait]
@@ -1401,19 +1405,14 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
-        registry_service: Arc<dyn RegistryService>,
+        _registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<golem_worker_executor::workerctx::default::Context>> {
         use golem_worker_executor::services::NoAdditionalDeps;
 
-        let resource_limits = resource_limits::configured(
-            &golem_config.resource_limits,
-            registry_service,
-            shutdown_token.clone(),
-        );
-
+        let resource_limits = self.resource_limits.clone();
         let additional_deps = NoAdditionalDeps {};
 
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -1584,31 +1583,13 @@ impl ResourceLimits for FixedTableLimitResourceLimits {
     }
 }
 
-/// Starts a worker executor that uses the production [`Context`] worker context,
-/// with a specific function table element limit enforced via `table_growing`.
-///
-/// The resource limiter is configured with `max_table_elements` as the limit;
-/// fuel and memory remain unlimited (using `u64::MAX` / `usize::MAX`).
-pub async fn start_with_table_limit(
+fn make_production_context_config(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
-    max_table_elements: usize,
-) -> anyhow::Result<TestWorkerExecutor> {
-    use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-
-    let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
-    redis.assert_valid();
-    redis_monitor.assert_valid();
-
-    let prometheus = golem_worker_executor::metrics::register_all();
-
-    // Use Disabled resource limits config so the bootstrap does not try to
-    // connect to a registry service; we override the actual limits via
-    // FixedTableLimitResourceLimits injected into the bootstrap's create_services.
-    let config = GolemConfig {
+) -> GolemConfig {
+    GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
-            port: redis.public_port(),
+            port: deps.redis.public_port(),
             key_prefix: context.redis_prefix(),
             ..Default::default()
         }),
@@ -1631,217 +1612,32 @@ pub async fn start_with_table_limit(
         engine: EngineConfig {
             enable_fs_cache: true,
         },
+        // Use Disabled resource limits so initialize_account doesn't require a
+        // live registry service. Each caller injects its own ResourceLimits
+        // implementation via ProductionContextTestServerBootstrap.
         resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
         ..Default::default()
-    };
-
-    // Override resource limits after config is built so the bootstrap uses our
-    // custom limits. We patch the config's resource_limits to Disabled (no gRPC
-    // registry needed) but swap in our FixedTableLimitResourceLimits inside a
-    // wrapper bootstrap.
-    struct TableLimitBootstrap {
-        inner: ProductionContextTestServerBootstrap,
-        max_table_elements: usize,
     }
+}
 
-    #[async_trait]
-    impl Bootstrap<golem_worker_executor::workerctx::default::Context> for TableLimitBootstrap {
-        fn create_active_workers(
-            &self,
-            golem_config: &GolemConfig,
-        ) -> Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>> {
-            self.inner.create_active_workers(golem_config)
-        }
+async fn run_production_context_bootstrap(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    resource_limits: Arc<dyn ResourceLimits>,
+    timeout_msg: &'static str,
+) -> anyhow::Result<TestWorkerExecutor> {
+    deps.redis.assert_valid();
+    deps.redis_monitor.assert_valid();
 
-        fn create_environment_state_service(
-            &self,
-            config: &EnvironmentStateServiceConfig,
-            registry_service: Arc<dyn RegistryService>,
-        ) -> Arc<dyn EnvironmentStateService> {
-            self.inner
-                .create_environment_state_service(config, registry_service)
-        }
-
-        fn create_component_service(
-            &self,
-            golem_config: &GolemConfig,
-            registry_service: Arc<dyn RegistryService>,
-            blob_storage: Arc<dyn BlobStorage>,
-        ) -> Arc<dyn ComponentService> {
-            self.inner
-                .create_component_service(golem_config, registry_service, blob_storage)
-        }
-
-        async fn create_services(
-            &self,
-            active_workers: Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>>,
-            engine: Arc<Engine>,
-            linker: Arc<Linker<golem_worker_executor::workerctx::default::Context>>,
-            runtime: Handle,
-            component_service: Arc<dyn ComponentService>,
-            shard_manager_service: Arc<dyn ShardManagerService>,
-            worker_service: Arc<dyn WorkerService>,
-            worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
-            running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService>,
-            promise_service: Arc<dyn PromiseService>,
-            golem_config: Arc<GolemConfig>,
-            shard_service: Arc<dyn ShardService>,
-            key_value_service: Arc<dyn KeyValueService>,
-            blob_store_service: Arc<dyn BlobStoreService>,
-            rdbms_service: Arc<dyn rdbms::RdbmsService>,
-            worker_activator: Arc<
-                dyn WorkerActivator<golem_worker_executor::workerctx::default::Context>,
-            >,
-            oplog_service: Arc<dyn OplogService>,
-            scheduler_service: Arc<dyn SchedulerService>,
-            worker_proxy: Arc<dyn WorkerProxy>,
-            events: Arc<Events>,
-            file_loader: Arc<FileLoader>,
-            oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-            agent_types_service: Arc<dyn AgentTypesService>,
-            environment_state_service: Arc<dyn EnvironmentStateService>,
-            agent_webhooks_service: Arc<AgentWebhooksService>,
-            _registry_service: Arc<dyn RegistryService>,
-            shutdown_token: tokio_util::sync::CancellationToken,
-            http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
-            leak_sentinel: Arc<()>,
-        ) -> anyhow::Result<All<golem_worker_executor::workerctx::default::Context>> {
-            use golem_worker_executor::services::NoAdditionalDeps;
-
-            // Inject our custom resource limits directly, bypassing the config.
-            let resource_limits: Arc<dyn ResourceLimits> =
-                Arc::new(FixedTableLimitResourceLimits {
-                    max_table_elements: self.max_table_elements,
-                });
-
-            let additional_deps = NoAdditionalDeps {};
-
-            let worker_fork = Arc::new(DefaultWorkerFork::new(
-                Arc::new(RemoteInvocationRpc::new(
-                    worker_proxy.clone(),
-                    shard_service.clone(),
-                )),
-                active_workers.clone(),
-                engine.clone(),
-                linker.clone(),
-                runtime.clone(),
-                component_service.clone(),
-                shard_manager_service.clone(),
-                worker_service.clone(),
-                worker_proxy.clone(),
-                worker_enumeration_service.clone(),
-                running_worker_enumeration_service.clone(),
-                promise_service.clone(),
-                golem_config.clone(),
-                shard_service.clone(),
-                key_value_service.clone(),
-                blob_store_service.clone(),
-                rdbms_service.clone(),
-                oplog_service.clone(),
-                scheduler_service.clone(),
-                worker_activator.clone(),
-                events.clone(),
-                file_loader.clone(),
-                oplog_processor_plugin.clone(),
-                resource_limits.clone(),
-                environment_state_service.clone(),
-                agent_types_service.clone(),
-                agent_webhooks_service.clone(),
-                shutdown_token.clone(),
-                http_connection_pool.clone(),
-                additional_deps.clone(),
-                leak_sentinel.clone(),
-            ));
-
-            let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-                Arc::new(RemoteInvocationRpc::new(
-                    worker_proxy.clone(),
-                    shard_service.clone(),
-                )),
-                active_workers.clone(),
-                engine.clone(),
-                linker.clone(),
-                runtime.clone(),
-                component_service.clone(),
-                worker_fork.clone(),
-                worker_service.clone(),
-                worker_enumeration_service.clone(),
-                running_worker_enumeration_service.clone(),
-                promise_service.clone(),
-                golem_config.clone(),
-                shard_service.clone(),
-                shard_manager_service.clone(),
-                key_value_service.clone(),
-                blob_store_service.clone(),
-                rdbms_service.clone(),
-                oplog_service.clone(),
-                scheduler_service.clone(),
-                worker_activator.clone(),
-                events.clone(),
-                file_loader.clone(),
-                oplog_processor_plugin.clone(),
-                resource_limits.clone(),
-                shutdown_token.clone(),
-                environment_state_service.clone(),
-                agent_types_service.clone(),
-                agent_webhooks_service.clone(),
-                http_connection_pool.clone(),
-                additional_deps.clone(),
-                leak_sentinel.clone(),
-            ));
-
-            Ok(All::new(
-                active_workers,
-                agent_types_service,
-                agent_webhooks_service,
-                engine,
-                linker,
-                runtime,
-                component_service,
-                shard_manager_service,
-                worker_fork,
-                worker_service,
-                worker_enumeration_service,
-                running_worker_enumeration_service,
-                promise_service,
-                golem_config,
-                shard_service,
-                key_value_service,
-                blob_store_service,
-                rdbms_service,
-                oplog_service,
-                rpc,
-                scheduler_service,
-                worker_activator,
-                worker_proxy,
-                events,
-                file_loader,
-                oplog_processor_plugin,
-                resource_limits,
-                shutdown_token,
-                http_connection_pool,
-                environment_state_service,
-                additional_deps,
-                leak_sentinel,
-            ))
-        }
-
-        fn create_wasmtime_linker(
-            &self,
-            engine: &Engine,
-        ) -> anyhow::Result<Linker<golem_worker_executor::workerctx::default::Context>> {
-            self.inner.create_wasmtime_linker(engine)
-        }
-    }
+    let prometheus = golem_worker_executor::metrics::register_all();
+    let config = make_production_context_config(deps, context);
 
     let handle = tokio::runtime::Handle::current();
     let mut join_set = tokio::task::JoinSet::new();
 
-    let details = TableLimitBootstrap {
-        inner: ProductionContextTestServerBootstrap {
-            component_service_directory: deps.component_service_directory.clone(),
-        },
-        max_table_elements,
+    let details = ProductionContextTestServerBootstrap {
+        component_service_directory: deps.component_service_directory.clone(),
+        resource_limits,
     }
     .run(config, prometheus, handle, &mut join_set)
     .await?;
@@ -1872,11 +1668,46 @@ pub async fn start_with_table_limit(
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
-            return Err(anyhow::anyhow!(
-                "Timeout waiting for table-limit server to start"
-            ));
+            return Err(anyhow::anyhow!(timeout_msg));
         }
     }
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// which has real fuel management via [`FuelTracker`] and [`AtomicResourceEntry`].
+/// Use this in tests that need to verify actual fuel consumption behaviour.
+pub async fn start_with_fuel_tracking(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> anyhow::Result<TestWorkerExecutor> {
+    // ResourceLimitsDisabled gives unlimited fuel budget so workers are never
+    // suspended, allowing fuel consumption to be measured freely.
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(ResourceLimitsDisabled),
+        "Timeout waiting for fuel-aware server to start",
+    )
+    .await
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// with a specific function table element limit enforced via `table_growing`.
+///
+/// The resource limiter is configured with `max_table_elements` as the limit;
+/// fuel and memory remain unlimited (using `u64::MAX` / `usize::MAX`).
+pub async fn start_with_table_limit(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_table_elements: usize,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedTableLimitResourceLimits { max_table_elements }),
+        "Timeout waiting for table-limit server to start",
+    )
+    .await
 }
 
 #[derive(Clone)]
