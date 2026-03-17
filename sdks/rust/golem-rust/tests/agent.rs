@@ -24,8 +24,8 @@ mod tests {
         UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, AgentType, AgentConfigDeclaration, AgentConfigSource, ElementValue, Snapshotting,
-        SnapshottingConfig,
+        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, ElementValue,
+        Snapshotting, SnapshottingConfig,
     };
     use golem_rust::value_and_type::IntoValue;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};

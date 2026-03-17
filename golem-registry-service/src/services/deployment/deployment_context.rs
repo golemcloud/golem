@@ -24,7 +24,6 @@ use crate::services::deployment::route_compilation::{
 };
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::base_model::account::AccountId;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
     RegisteredAgentTypeImplementer,

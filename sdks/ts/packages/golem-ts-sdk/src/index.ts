@@ -20,8 +20,6 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
-import { loadConfigKey } from './internal/mapping/values/dataValue';
-import { Type } from '@golemcloud/golem-ts-types-core';
 import { setAgentId } from './internal/registry/agentId';
 
 export { BaseAgent } from './baseAgent';

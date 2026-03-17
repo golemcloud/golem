@@ -363,10 +363,10 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
       const resultDataValue =
         rpcResult.tag === 'err'
           ? (() => {
-            throw new Error(
-              'Remote agent returned error result: ' + JSON.stringify(rpcResult.val),
-            );
-          })()
+              throw new Error(
+                'Remote agent returned error result: ' + JSON.stringify(rpcResult.val),
+              );
+            })()
           : rpcResult.val;
 
       return deserializeRpcResult(resultDataValue, methodInfo.returnType);
@@ -500,10 +500,7 @@ function serializeRpcConfigObject(
       (err) => new Error(`Failed to construct analysed type for rpc agent config: ${err}`),
     );
 
-    const witValue = Either.getOrThrowWith(
-      WitValue.fromTsValueDefault(current, analysedType),
-      (err) => new Error(`Failed to serialize rpc agent config: ${err}`),
-    );
+    const witValue = WitValue.fromTsValueDefault(current, analysedType);
 
     const valueAndType: ValueAndType = {
       typ: witType,

@@ -58,7 +58,7 @@ export class BaseAgent {
     if (!agentId) {
       throw new Error(
         `AgentId is not available for \`${this.constructor.name}\`. ` +
-        `Ensure the class is decorated with @agent()`,
+          `Ensure the class is decorated with @agent()`,
       );
     }
 
@@ -88,7 +88,7 @@ export class BaseAgent {
       if (!agentType) {
         throw new Error(
           `Agent type metadata is not available for \`${this.constructor.name}\`. ` +
-          `Ensure the class is decorated with @agent()`,
+            `Ensure the class is decorated with @agent()`,
         );
       }
 
@@ -187,6 +187,8 @@ export class BaseAgent {
   static getPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _phantomId: Uuid,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     ..._args: TransformGetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
     throw new Error(
@@ -254,23 +256,23 @@ type TransformMethodArgs<T extends readonly unknown[]> = T extends readonly [
   ...infer Tail,
 ]
   ? TransformMethodArg<Head> extends never
-  ? TransformMethodArgs<Tail>
-  : [TransformMethodArg<Head>, ...TransformMethodArgs<Tail>]
+    ? TransformMethodArgs<Tail>
+    : [TransformMethodArg<Head>, ...TransformMethodArgs<Tail>]
   : T;
 
 type TransformGetArg<T> = T extends Principal
   ? never
   : T extends Config<infer C>
-  ? RpcConfigInput<C>
-  : T;
+    ? RpcConfigInput<C>
+    : T;
 
 export type TransformGetArgs<T extends readonly unknown[]> = T extends readonly [
   infer Head,
   ...infer Tail,
 ]
   ? TransformGetArg<Head> extends never
-  ? TransformGetArgs<Tail>
-  : [TransformGetArg<Head>, ...TransformGetArgs<Tail>]
+    ? TransformGetArgs<Tail>
+    : [TransformGetArg<Head>, ...TransformGetArgs<Tail>]
   : T;
 
 type RemoveSecretFields<T> = {

@@ -186,6 +186,7 @@ declare module 'golem:agent/common@1.5.0' {
   export type AgentType = {
     typeName: string;
     description: string;
+    sourceLanguage: string;
     constructor: AgentConstructor;
     methods: AgentMethod[];
     dependencies: AgentDependency[];
@@ -229,113 +230,4 @@ declare module 'golem:agent/common@1.5.0' {
     tag: 'custom-error'
     val: ValueAndType
   };
-<<<<<<< HEAD
-  export type SnapshottingConfig = 
-  {
-    tag: 'default'
-  } |
-  /** current default in the server */
-  {
-    tag: 'periodic'
-    val: Duration
-  } |
-  {
-    tag: 'every-n-invocation'
-    val: number
-  };
-  export type Snapshotting = 
-  {
-    tag: 'disabled'
-  } |
-  {
-    tag: 'enabled'
-    val: SnapshottingConfig
-  };
-  export type ConfigValueType = 
-  {
-    tag: 'local'
-    val: WitType
-  } |
-  {
-    tag: 'shared'
-    val: WitType
-  };
-  export type ConfigKeyValueType = {
-    key: string[];
-    value: ConfigValueType;
-  };
-  export type AgentType = {
-    typeName: string;
-    description: string;
-    sourceLanguage: string;
-    constructor: AgentConstructor;
-    methods: AgentMethod[];
-    dependencies: AgentDependency[];
-    mode: AgentMode;
-    httpMount?: HttpMountDetails;
-    snapshotting: Snapshotting;
-    config: ConfigKeyValueType[];
-  };
-  /**
-   * Associates an agent type with a component that implements it
-   */
-  export type RegisteredAgentType = {
-    agentType: AgentType;
-    implementedBy: ComponentId;
-  };
-||||||| parent of 57f9daa8e (agent-config: allow providing config in clients)
-  export type SnapshottingConfig = 
-  {
-    tag: 'default'
-  } |
-  /** current default in the server */
-  {
-    tag: 'periodic'
-    val: Duration
-  } |
-  {
-    tag: 'every-n-invocation'
-    val: number
-  };
-  export type Snapshotting = 
-  {
-    tag: 'disabled'
-  } |
-  {
-    tag: 'enabled'
-    val: SnapshottingConfig
-  };
-  export type ConfigValueType = 
-  {
-    tag: 'local'
-    val: WitType
-  } |
-  {
-    tag: 'shared'
-    val: WitType
-  };
-  export type ConfigKeyValueType = {
-    key: string[];
-    value: ConfigValueType;
-  };
-  export type AgentType = {
-    typeName: string;
-    description: string;
-    constructor: AgentConstructor;
-    methods: AgentMethod[];
-    dependencies: AgentDependency[];
-    mode: AgentMode;
-    httpMount?: HttpMountDetails;
-    snapshotting: Snapshotting;
-    config: ConfigKeyValueType[];
-  };
-  /**
-   * Associates an agent type with a component that implements it
-   */
-  export type RegisteredAgentType = {
-    agentType: AgentType;
-    implementedBy: ComponentId;
-  };
-=======
->>>>>>> 57f9daa8e (agent-config: allow providing config in clients)
 }
