@@ -505,7 +505,7 @@ impl SpinnerGuard {
         let handle = std::thread::spawn(move || {
             let frames: Vec<String> = {
                 if SHOULD_COLORIZE.should_colorize() {
-                    vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+                    vec!["⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"]
                         .into_iter()
                         .map(|s| s.dimmed().to_string())
                         .collect()
