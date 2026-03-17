@@ -155,6 +155,7 @@ type = "Grpc"
 
 [resource_limits.config]
 batch_update_interval = "1m"
+limit_refresh_interval = "5m"
 
 [retry]
 max_attempts = 3
@@ -378,6 +379,7 @@ without_time = false
 # 
 # [resource_limits.config]
 # batch_update_interval = "1m"
+# limit_refresh_interval = "5m"
 # 
 # [retry]
 # max_attempts = 3
