@@ -73,24 +73,23 @@ async fn test_rust_counter() {
         assert!(!outputs.stderr_contains("error"));
     }
 
-    // TODO: fix "no debug for future"
     // Test with Rust REPL
-    // {
-    //     let uuid = Uuid::new_v4().to_string();
-    //     let outputs = ctx
-    //         .cli([
-    //             cmd::REPL,
-    //             flag::LANGUAGE,
-    //             "rust",
-    //             flag::SCRIPT,
-    //             &format!("CounterAgent::get(\"{uuid}\").increment()"),
-    //         ])
-    //         .await;
-    //     assert!(outputs.success_or_dump());
-    //     assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
-    //     assert!(!outputs.stdout_contains("error"));
-    //     assert!(!outputs.stderr_contains("error"));
-    // }
+    {
+        let uuid = Uuid::new_v4().to_string();
+        let outputs = ctx
+            .cli([
+                cmd::REPL,
+                flag::LANGUAGE,
+                "rust",
+                flag::SCRIPT,
+                &format!("CounterAgent::get(\"{uuid}\".to_string()).increment().await"),
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
+        assert!(!outputs.stdout_contains("error"));
+        assert!(!outputs.stderr_contains("error"));
+    }
 }
 
 #[test]
@@ -573,24 +572,23 @@ async fn test_ts_counter() {
         assert!(!outputs.stderr_contains("error"));
     }
 
-    // TODO: fix "no debug for future"
     // Test with Rust REPL
-    // {
-    //     let uuid = Uuid::new_v4().to_string();
-    //     let outputs = ctx
-    //         .cli([
-    //             cmd::REPL,
-    //             flag::LANGUAGE,
-    //             "rust",
-    //             flag::SCRIPT,
-    //             &format!("CounterAgent::get(\"{uuid}\").increment()"),
-    //         ])
-    //         .await;
-    //     assert!(outputs.success_or_dump());
-    //     assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
-    //     assert!(!outputs.stdout_contains("error"));
-    //     assert!(!outputs.stderr_contains("error"));
-    // }
+    {
+        let uuid = Uuid::new_v4().to_string();
+        let outputs = ctx
+            .cli([
+                cmd::REPL,
+                flag::LANGUAGE,
+                "rust",
+                flag::SCRIPT,
+                &format!("CounterAgent::get(\"{uuid}\".to_string()).increment().await"),
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
+        assert!(!outputs.stdout_contains("error"));
+        assert!(!outputs.stderr_contains("error"));
+    }
 }
 
 // Invocations on code-first typescript agents, with complex types / functions.
