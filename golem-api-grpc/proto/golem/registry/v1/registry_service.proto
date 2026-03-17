@@ -379,6 +379,7 @@ message RegistryInvalidationEvent {
     AccountTokensInvalidatedEvent account_tokens_invalidated = 4;
     EnvironmentPermissionsChangedEvent permissions_changed = 5;
     DomainRegistrationChangedEvent domain_registration_changed = 6;
+    SecuritySchemeChangedEvent security_scheme_changed = 7;
   }
 }
 
@@ -407,4 +408,9 @@ message AccountTokensInvalidatedEvent {
 message EnvironmentPermissionsChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
   golem.common.AccountId grantee_account_id = 2;
+}
+
+// Sent when a security scheme is created, updated, or deleted.
+message SecuritySchemeChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
 }

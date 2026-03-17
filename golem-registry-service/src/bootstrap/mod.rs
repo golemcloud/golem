@@ -290,6 +290,7 @@ impl Services {
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
             repos.security_scheme_repo.clone(),
             environment_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(

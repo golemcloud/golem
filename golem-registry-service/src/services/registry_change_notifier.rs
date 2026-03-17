@@ -16,7 +16,8 @@ use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent, RegistryC
 use golem_api_grpc::proto::golem::registry::v1::{
     AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
     DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent,
-    RegistryInvalidationEvent, registry_invalidation_event::Payload,
+    RegistryInvalidationEvent, SecuritySchemeChangedEvent,
+    registry_invalidation_event::Payload,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
@@ -247,6 +248,15 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
             Payload::PermissionsChanged(EnvironmentPermissionsChangedEvent {
                 environment_id: Some(EnvironmentId(*environment_id).into()),
                 grantee_account_id: Some(AccountId(*grantee_account_id).into()),
+            }),
+        ),
+        RegistryChangeEvent::SecuritySchemeChanged {
+            event_id,
+            environment_id,
+        } => (
+            *event_id,
+            Payload::SecuritySchemeChanged(SecuritySchemeChangedEvent {
+                environment_id: Some(EnvironmentId(*environment_id).into()),
             }),
         ),
     };

@@ -34,6 +34,7 @@ pub enum RegistryEventType {
     AccountTokensInvalidated = 1,
     EnvironmentPermissionsChanged = 2,
     DomainRegistrationChanged = 3,
+    SecuritySchemeChanged = 4,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -45,6 +46,7 @@ impl TryFrom<i16> for RegistryEventType {
             1 => Ok(RegistryEventType::AccountTokensInvalidated),
             2 => Ok(RegistryEventType::EnvironmentPermissionsChanged),
             3 => Ok(RegistryEventType::DomainRegistrationChanged),
+            4 => Ok(RegistryEventType::SecuritySchemeChanged),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -80,6 +82,10 @@ pub enum RegistryChangeEvent {
         environment_id: Uuid,
         domains: Vec<String>,
     },
+    SecuritySchemeChanged {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+    },
 }
 
 impl RegistryChangeEvent {
@@ -89,6 +95,7 @@ impl RegistryChangeEvent {
             Self::AccountTokensInvalidated { event_id, .. } => *event_id,
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
             Self::DomainRegistrationChanged { event_id, .. } => *event_id,
+            Self::SecuritySchemeChanged { event_id, .. } => *event_id,
         }
     }
 }
@@ -166,6 +173,17 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                     domains: row.domains,
                 })
             }
+            RegistryEventType::SecuritySchemeChanged => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "SecuritySchemeChanged event missing environment_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::SecuritySchemeChanged {
+                    event_id: row.event_id,
+                    environment_id,
+                })
+            }
         }
     }
 }
@@ -225,6 +243,17 @@ impl NewRegistryChangeEvent {
             deployment_revision_id: None,
             account_id: None,
             grantee_account_id: Some(grantee_account_id),
+            domains: Vec::new(),
+        }
+    }
+
+    pub fn security_scheme_changed(environment_id: Uuid) -> Self {
+        Self {
+            event_type: RegistryEventType::SecuritySchemeChanged,
+            environment_id: Some(environment_id),
+            deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
             domains: Vec::new(),
         }
     }

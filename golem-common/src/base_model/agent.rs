@@ -146,6 +146,11 @@ pub enum RegistryInvalidationEvent {
         environment_id: EnvironmentId,
         grantee_account_id: AccountId,
     },
+    /// A security scheme was created, updated, or deleted.
+    SecuritySchemeChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+    },
 }
 
 impl RegistryInvalidationEvent {
@@ -156,6 +161,7 @@ impl RegistryInvalidationEvent {
             Self::DomainRegistrationChanged { event_id, .. } => *event_id,
             Self::AccountTokensInvalidated { event_id, .. } => *event_id,
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
+            Self::SecuritySchemeChanged { event_id, .. } => *event_id,
         }
     }
 }
