@@ -8,6 +8,10 @@ pub(crate) struct WorkerState {
     pub(crate) pending_spans: HashMap<String, PendingSpan>,
     pub(crate) implicit_spans: Vec<PendingSpan>,
     pub(crate) terminal_error: Option<String>,
+    /// Maps inherited span_id → resolved parent span_id (the nearest ancestor
+    /// that was NOT inherited, i.e. exported by the originating worker). `None`
+    /// means the inherited chain ends at a root / external span with no further parent.
+    pub(crate) inherited_span_parents: HashMap<String, Option<String>>,
 }
 
 impl WorkerState {
@@ -15,6 +19,7 @@ impl WorkerState {
         self.pending_spans.is_empty()
             && self.implicit_spans.is_empty()
             && self.terminal_error.is_none()
+            && self.inherited_span_parents.is_empty()
     }
 }
 

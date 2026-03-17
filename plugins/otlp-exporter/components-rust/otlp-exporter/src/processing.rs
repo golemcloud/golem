@@ -66,33 +66,109 @@ fn handle_invocation_started(
     state.pending_spans.clear();
     state.implicit_spans.clear();
     state.terminal_error = None;
+    state.inherited_span_parents.clear();
 
     state.trace_id = params.trace_id;
     state.trace_states = params.trace_states;
 
+    // First pass: build a raw map of inherited span_id → parent_span_id.
+    // External spans are roots in the inherited chain (parent = None).
+    let mut raw_inherited: HashMap<String, Option<String>> = HashMap::new();
+
+    for span_data in &params.invocation_context {
+        match span_data {
+            SpanData::LocalSpan(local) if local.inherited => {
+                raw_inherited.insert(local.span_id.clone(), local.parent.clone());
+            }
+            SpanData::ExternalSpan(ext) => {
+                raw_inherited.insert(ext.span_id.clone(), None);
+            }
+            _ => {}
+        }
+    }
+
+    // Resolve each inherited entry: follow the parent chain through the
+    // inherited map until reaching a parent that is NOT in the map (i.e. it
+    // was exported by the originating worker) or None (root).
+    let resolved: HashMap<String, Option<String>> = raw_inherited
+        .keys()
+        .map(|span_id| {
+            let resolved_parent = resolve_inherited_parent(span_id, &raw_inherited);
+            (span_id.clone(), resolved_parent)
+        })
+        .collect();
+
+    state.inherited_span_parents = resolved;
+
+    // Second pass: collect non-inherited local spans, resolving parents
+    // through the inherited map when necessary.
     for span_data in params.invocation_context {
         match span_data {
-            SpanData::LocalSpan(local) => {
-                if local.inherited {
-                    continue;
-                }
+            SpanData::LocalSpan(local) if !local.inherited => {
                 let attrs: HashMap<String, String> = local
                     .attributes
                     .into_iter()
                     .map(|a| (a.key, attribute_value_to_string(&a.value)))
                     .collect();
 
+                let parent = resolve_parent_through_inherited(
+                    local.parent,
+                    &state.inherited_span_parents,
+                );
+
                 state.implicit_spans.push(PendingSpan {
                     span_id: local.span_id,
-                    parent_span_id: local.parent,
+                    parent_span_id: parent,
                     start_time_ns: datetime_to_nanos(&local.start),
                     attributes: attrs,
                 });
             }
-            SpanData::ExternalSpan(_) => {
-                continue;
+            _ => {}
+        }
+    }
+}
+
+/// Given a span_id in the inherited map, follow the parent chain until we find
+/// a parent that is NOT itself in the map (meaning it was exported by the
+/// originating worker), or `None` if the chain ends at a root.
+fn resolve_inherited_parent(
+    span_id: &str,
+    inherited: &HashMap<String, Option<String>>,
+) -> Option<String> {
+    let mut current = span_id;
+    loop {
+        match inherited.get(current) {
+            Some(Some(parent)) => {
+                if inherited.contains_key(parent.as_str()) {
+                    current = parent.as_str();
+                } else {
+                    // Parent is not inherited — it's the real ancestor
+                    return Some(parent.clone());
+                }
+            }
+            Some(None) => {
+                // This entry is a root (external span or chain end)
+                return None;
+            }
+            None => {
+                // Not in the map — shouldn't happen for the initial call
+                return None;
             }
         }
+    }
+}
+
+/// If `parent` points to an inherited span, resolve through the inherited map
+/// to find the real (non-inherited) ancestor. Otherwise return as-is.
+fn resolve_parent_through_inherited(
+    parent: Option<String>,
+    inherited: &HashMap<String, Option<String>>,
+) -> Option<String> {
+    match parent {
+        Some(ref pid) if inherited.contains_key(pid.as_str()) => {
+            inherited.get(pid.as_str()).cloned().flatten()
+        }
+        other => other,
     }
 }
 
@@ -103,11 +179,13 @@ fn handle_start_span(state: &mut WorkerState, params: StartSpanParameters) {
         .map(|a| (a.key, attribute_value_to_string(&a.value)))
         .collect();
 
+    let parent = resolve_parent_through_inherited(params.parent, &state.inherited_span_parents);
+
     state.pending_spans.insert(
         params.span_id.clone(),
         PendingSpan {
             span_id: params.span_id,
-            parent_span_id: params.parent,
+            parent_span_id: parent,
             start_time_ns: datetime_to_nanos(&params.timestamp),
             attributes: attrs,
         },
@@ -220,13 +298,6 @@ fn flush_remaining_explicit_spans(
     let trace_id = state.trace_id.clone();
     let trace_state = combined_trace_state(&state.trace_states);
     let spans: Vec<PendingSpan> = state.pending_spans.drain().map(|(_, v)| v).collect();
-
-    if !spans.is_empty() && !is_error {
-        println!(
-            "OTLP exporter: {} explicit spans still open at invocation end, force-closing",
-            spans.len()
-        );
-    }
 
     for span in spans {
         completed.push(build_otel_span(

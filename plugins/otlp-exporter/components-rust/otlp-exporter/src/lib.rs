@@ -57,6 +57,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
                 pending_spans: HashMap::new(),
                 implicit_spans: Vec::new(),
                 terminal_error: None,
+                inherited_span_parents: HashMap::new(),
             })
         });
 

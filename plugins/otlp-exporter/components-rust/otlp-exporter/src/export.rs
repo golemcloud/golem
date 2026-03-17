@@ -19,6 +19,18 @@ pub(crate) fn build_otel_span(
     let name = pending
         .attributes
         .remove("name")
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            match (
+                pending.attributes.get("request.method"),
+                pending.attributes.get("request.uri"),
+            ) {
+                (Some(method), Some(uri)) if !method.is_empty() && !uri.is_empty() => {
+                    Some(format!("{method} {uri}"))
+                }
+                _ => None,
+            }
+        })
         .unwrap_or_else(|| "unknown".to_string());
     let kind = infer_span_kind(&name, &pending.attributes);
 

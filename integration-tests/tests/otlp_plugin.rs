@@ -25,7 +25,7 @@ use golem_test_framework::components::jaeger::{DockerJaeger, Jaeger, JaegerQuery
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use reqwest::Client;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, test_dep, timeout};
 use tracing::info;
@@ -131,7 +131,7 @@ async fn otlp_basic_trace_export(
     info!("Waiting for trace {jaeger_trace_id} in Jaeger");
 
     let trace = jaeger_client
-        .wait_for_trace(&jaeger_trace_id, Duration::from_secs(60))
+        .wait_for_trace_with_min_spans(&jaeger_trace_id, 5, Duration::from_secs(90))
         .await?;
 
     info!("Found trace with {} spans", trace.spans.len());
@@ -139,18 +139,18 @@ async fn otlp_basic_trace_export(
     assert!(!trace.spans.is_empty(), "Trace should have at least one span");
     assert_eq!(trace.trace_id, jaeger_trace_id);
 
-    let span_names: Vec<&str> = trace
-        .spans
-        .iter()
-        .map(|s| s.operation_name.as_str())
-        .collect();
-    info!("Span names: {span_names:?}");
+    let parent_span_id_str = format!("{parent_span_id}");
+    let external_parents = HashSet::from([parent_span_id_str.as_str()]);
+    trace.dump_spans(&external_parents);
 
-    assert!(
-        trace.spans.len() >= 1,
-        "Expected at least 1 span, got {}",
-        trace.spans.len()
-    );
+    let unknown = trace.unknown_name_spans();
+    assert!(unknown.is_empty(), "Found spans with 'unknown' name: {unknown:?}");
+
+    let disconnected = trace.disconnected_spans(&external_parents);
+    assert!(disconnected.is_empty(), "Found disconnected spans: {disconnected:?}");
+
+    let errors = trace.error_spans();
+    assert!(errors.is_empty(), "Found spans with ERROR status: {errors:?}");
 
     Ok(())
 }

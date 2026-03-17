@@ -14,6 +14,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -77,6 +78,108 @@ pub struct JaegerTag {
     pub value: serde_json::Value,
 }
 
+impl JaegerTrace {
+    /// Returns the set of all span IDs in this trace.
+    pub fn span_ids(&self) -> HashSet<&str> {
+        self.spans.iter().map(|s| s.span_id.as_str()).collect()
+    }
+
+    /// Logs each span with its parent relationship status.
+    ///
+    /// `known_external_parent_ids` contains span IDs that are expected to be
+    /// outside this trace (e.g. the caller's span ID from a `traceparent` header).
+    /// References to these IDs are labelled `[external-caller]` rather than
+    /// `[DISCONNECTED]`.
+    pub fn dump_spans(&self, known_external_parent_ids: &HashSet<&str>) {
+        let span_ids = self.span_ids();
+        for span in &self.spans {
+            let parent_id = span.parent_span_id().unwrap_or("(root)");
+            let parent_status = if parent_id == "(root)" {
+                ""
+            } else if span_ids.contains(parent_id) {
+                " [connected]"
+            } else if known_external_parent_ids.contains(parent_id) {
+                " [external-caller]"
+            } else {
+                " [DISCONNECTED]"
+            };
+            let tags_summary: Vec<String> = span
+                .tags
+                .iter()
+                .filter(|t| {
+                    !t.key.starts_with("otel.scope")
+                        && t.key != "span.kind"
+                        && t.key != "w3c.tracestate"
+                })
+                .map(|t| format!("{}={}", t.key, t.value))
+                .collect();
+            info!(
+                "  span {} '{}' parent={}{} tags=[{}]",
+                span.span_id,
+                span.operation_name,
+                parent_id,
+                parent_status,
+                tags_summary.join(", ")
+            );
+        }
+    }
+
+    /// Returns span IDs whose parent references a span not present in this
+    /// trace and not listed in `known_external_parent_ids`.
+    pub fn disconnected_spans(
+        &self,
+        known_external_parent_ids: &HashSet<&str>,
+    ) -> Vec<(&str, &str)> {
+        let span_ids = self.span_ids();
+        self.spans
+            .iter()
+            .filter_map(|s| {
+                s.parent_span_id().and_then(|pid| {
+                    if !span_ids.contains(pid) && !known_external_parent_ids.contains(pid) {
+                        Some((s.span_id.as_str(), pid))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Returns operation names of spans that have `otel.status_code = ERROR`.
+    pub fn error_spans(&self) -> Vec<&str> {
+        self.spans
+            .iter()
+            .filter(|s| {
+                s.tags
+                    .iter()
+                    .any(|t| t.key == "otel.status_code" && t.value == "ERROR")
+            })
+            .map(|s| s.operation_name.as_str())
+            .collect()
+    }
+
+    /// Returns span IDs of spans whose operation name is `"unknown"`.
+    pub fn unknown_name_spans(&self) -> Vec<&str> {
+        self.spans
+            .iter()
+            .filter(|s| s.operation_name == "unknown")
+            .map(|s| s.span_id.as_str())
+            .collect()
+    }
+}
+
+impl JaegerSpan {
+    /// Returns the parent span ID from the first CHILD_OF reference, if any.
+    pub fn parent_span_id(&self) -> Option<&str> {
+        self.references.first().map(|r| r.span_id.as_str())
+    }
+
+    /// Returns the value of a tag by key, if present.
+    pub fn tag_value(&self, key: &str) -> Option<&serde_json::Value> {
+        self.tags.iter().find(|t| t.key == key).map(|t| &t.value)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct JaegerServicesResponse {
     data: Vec<String>,
@@ -120,6 +223,41 @@ impl JaegerQueryClient {
             if start.elapsed() > timeout {
                 anyhow::bail!(
                     "Timed out waiting for trace {trace_id} after {}s",
+                    timeout.as_secs()
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    pub async fn wait_for_trace_with_min_spans(
+        &self,
+        trace_id: &str,
+        min_spans: usize,
+        timeout: Duration,
+    ) -> anyhow::Result<JaegerTrace> {
+        let start = Instant::now();
+        let mut last_count = 0;
+        loop {
+            match self.get_trace(trace_id).await {
+                Ok(Some(trace)) if trace.spans.len() >= min_spans => return Ok(trace),
+                Ok(Some(trace)) => {
+                    if trace.spans.len() != last_count {
+                        info!(
+                            "Trace {trace_id} has {} spans so far, waiting for at least {min_spans}",
+                            trace.spans.len()
+                        );
+                        last_count = trace.spans.len();
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    debug!("Error fetching trace {trace_id}: {e}");
+                }
+            }
+            if start.elapsed() > timeout {
+                anyhow::bail!(
+                    "Timed out waiting for trace {trace_id} with {min_spans} spans after {}s (last seen: {last_count} spans)",
                     timeout.as_secs()
                 );
             }

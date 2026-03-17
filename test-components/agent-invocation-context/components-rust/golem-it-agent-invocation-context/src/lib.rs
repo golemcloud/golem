@@ -95,7 +95,9 @@ fn broadcast_current_invocation_context(from: &str) {
     });
     println!("Sending context {body} through HTTP");
 
-    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let Ok(port) = std::env::var("PORT") else {
+        return;
+    };
     let client = Client::builder().build().unwrap();
 
     match client
