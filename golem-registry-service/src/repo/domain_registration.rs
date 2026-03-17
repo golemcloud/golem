@@ -15,7 +15,9 @@
 use super::model::domain_registration::{DomainRegistrationRecord, DomainRegistrationRepoError};
 use crate::repo::model::BindFields;
 use crate::repo::model::datetime::SqlDateTime;
-use crate::repo::registry_change::{ChangeEventId, NewRegistryChangeEvent};
+use crate::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -216,15 +218,6 @@ impl<DBP: Pool> DbDomainRegistrationRepo<DBP> {
 }
 
 impl DbDomainRegistrationRepo<PostgresPool> {
-    async fn insert_domain_change_event(
-        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        environment_id: Uuid,
-        domains: Vec<String>,
-    ) -> Result<ChangeEventId, RepoError> {
-        let event = NewRegistryChangeEvent::domain_registration_changed(environment_id, domains);
-        crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event).await
-    }
-
     async fn pg_notify_change_event(&self, event_id: ChangeEventId) {
         let _ = self
             .db_pool
@@ -235,15 +228,6 @@ impl DbDomainRegistrationRepo<PostgresPool> {
 }
 
 impl DbDomainRegistrationRepo<SqlitePool> {
-    async fn insert_domain_change_event(
-        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        environment_id: Uuid,
-        domains: Vec<String>,
-    ) -> Result<ChangeEventId, RepoError> {
-        let event = NewRegistryChangeEvent::domain_registration_changed(environment_id, domains);
-        crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event).await
-    }
-
     async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
 }
 
@@ -307,12 +291,17 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
                             DomainRegistrationRepoError::DomainAlreadyExists,
                         )?;
 
-                    let event_id = Self::insert_domain_change_event(
-                        tx,
-                        environment_id,
-                        vec![domain],
-                    )
-                    .await?;
+                    let change_event =
+                        NewRegistryChangeEvent::domain_registration_changed(
+                            environment_id,
+                            vec![domain],
+                        );
+                    let event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx,
+                            &change_event,
+                        )
+                        .await?;
 
                     Ok::<_, DomainRegistrationRepoError>((created, event_id))
                 }
@@ -387,12 +376,17 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
 
                     match deleted {
                         Some(record) => {
-                            let event_id = Self::insert_domain_change_event(
-                                tx,
-                                record.environment_id,
-                                vec![record.domain.clone()],
-                            )
-                            .await?;
+                            let change_event =
+                                NewRegistryChangeEvent::domain_registration_changed(
+                                    record.environment_id,
+                                    vec![record.domain.clone()],
+                                );
+                            let event_id =
+                                DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                                    tx,
+                                    &change_event,
+                                )
+                                .await?;
                             Ok::<_, DomainRegistrationRepoError>(Some((record, event_id)))
                         }
                         None => Ok(None),

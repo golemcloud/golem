@@ -510,10 +510,14 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
     }
 }
 
-/// Helpers for inserting registry change events inside existing transactions.
-pub mod pg {
-    use super::*;
-
+/// Insert a registry change event inside an existing transaction.
+///
+/// Postgres uses native `text[]` for the domains column; SQLite stores
+/// domains as a JSON string. We provide one inherent impl per supported
+/// pool type so `trait_gen`-expanded callers can invoke
+/// `DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(...)`
+/// or `DbRegistryChangeRepo::<SqlitePool>::insert_change_event_in_tx(...)`.
+impl DbRegistryChangeRepo<PostgresPool> {
     pub async fn insert_change_event_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         event: &NewRegistryChangeEvent,
@@ -544,9 +548,7 @@ pub mod pg {
     }
 }
 
-pub mod sqlite {
-    use super::*;
-
+impl DbRegistryChangeRepo<SqlitePool> {
     pub async fn insert_change_event_in_tx(
         tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         event: &NewRegistryChangeEvent,

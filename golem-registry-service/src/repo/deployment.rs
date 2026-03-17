@@ -34,7 +34,9 @@ use crate::repo::model::deployment::{
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
-use crate::repo::registry_change::{ChangeEventId, NewRegistryChangeEvent};
+use crate::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -550,35 +552,11 @@ impl DbDeploymentRepo<PostgresPool> {
             .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
             .await;
     }
-
-    async fn insert_change_event(
-        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        environment_id: Uuid,
-        deployment_revision_id: i64,
-    ) -> RepoResult<ChangeEventId> {
-        let event = NewRegistryChangeEvent::deployment_changed(
-            environment_id,
-            deployment_revision_id,
-        );
-        crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event).await
-    }
 }
 
 impl DbDeploymentRepo<SqlitePool> {
     /// No-op on SQLite — in-process broadcast is sufficient for single-node.
     async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
-
-    async fn insert_change_event(
-        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        environment_id: Uuid,
-        deployment_revision_id: i64,
-    ) -> RepoResult<ChangeEventId> {
-        let event = NewRegistryChangeEvent::deployment_changed(
-            environment_id,
-            deployment_revision_id,
-        );
-        crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event).await
-    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -843,12 +821,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     )
                     .await?;
 
-                    let change_event_id = Self::insert_change_event(
-                        tx,
+                    let change_event = NewRegistryChangeEvent::deployment_changed(
                         environment_id,
                         deployment_revision_id,
-                    )
-                    .await?;
+                    );
+                    let change_event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx,
+                            &change_event,
+                        )
+                        .await?;
 
                     let ext_revision = CurrentDeploymentExtRevisionRecord {
                         revision,
@@ -1267,12 +1249,16 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     )
                     .await?;
 
-                    let change_event_id = Self::insert_change_event(
-                        tx,
+                    let change_event = NewRegistryChangeEvent::deployment_changed(
                         environment_id,
                         deployment_revision_id,
-                    )
-                    .await?;
+                    );
+                    let change_event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx,
+                            &change_event,
+                        )
+                        .await?;
 
                     Ok::<_, DeployRepoError>((revision, change_event_id))
                 })

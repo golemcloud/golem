@@ -18,7 +18,9 @@ use super::model::environment_share::{
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::environment_share::EnvironmentShareRecord;
-use crate::repo::registry_change::{ChangeEventId, NewRegistryChangeEvent};
+use crate::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -173,20 +175,6 @@ impl<DBP: Pool> DbEnvironmentShareRepo<DBP> {
 }
 
 impl DbEnvironmentShareRepo<PostgresPool> {
-    async fn insert_permissions_change_event(
-        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        environment_id: Uuid,
-        grantee_account_id: Uuid,
-    ) -> Result<ChangeEventId, EnvironmentShareRepoError> {
-        let event = NewRegistryChangeEvent::environment_permissions_changed(
-            environment_id,
-            grantee_account_id,
-        );
-        crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event)
-            .await
-            .map_err(EnvironmentShareRepoError::from)
-    }
-
     async fn pg_notify_change_event(&self, event_id: ChangeEventId) {
         let _ = self
             .db_pool
@@ -197,20 +185,6 @@ impl DbEnvironmentShareRepo<PostgresPool> {
 }
 
 impl DbEnvironmentShareRepo<SqlitePool> {
-    async fn insert_permissions_change_event(
-        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        environment_id: Uuid,
-        grantee_account_id: Uuid,
-    ) -> Result<ChangeEventId, EnvironmentShareRepoError> {
-        let event = NewRegistryChangeEvent::environment_permissions_changed(
-            environment_id,
-            grantee_account_id,
-        );
-        crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event)
-            .await
-            .map_err(EnvironmentShareRepoError::from)
-    }
-
     async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
 }
 
@@ -270,7 +244,8 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
 
                 let revision_record = Self::insert_revision(tx, revision).await?;
 
-                let change_event_id = Self::insert_permissions_change_event(tx, environment_id, grantee_account_id).await?;
+                let change_event = NewRegistryChangeEvent::environment_permissions_changed(environment_id, grantee_account_id);
+                let change_event_id = DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &change_event).await?;
 
                 Ok::<_, EnvironmentShareRepoError>((EnvironmentShareExtRevisionRecord {
                     environment_id: environment_share_record.environment_id,
@@ -309,11 +284,11 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                     ).await?
                     .ok_or(EnvironmentShareRepoError::ConcurrentModification)?;
 
-                let change_event_id = Self::insert_permissions_change_event(
-                    tx,
+                let change_event = NewRegistryChangeEvent::environment_permissions_changed(
                     environment_share_record.environment_id,
                     environment_share_record.grantee_account_id,
-                ).await?;
+                );
+                let change_event_id = DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &change_event).await?;
 
                 Ok::<_, EnvironmentShareRepoError>((EnvironmentShareExtRevisionRecord {
                     environment_id: environment_share_record.environment_id,
@@ -352,11 +327,11 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
                     ).await?
                     .ok_or(EnvironmentShareRepoError::ConcurrentModification)?;
 
-                let change_event_id = Self::insert_permissions_change_event(
-                    tx,
+                let change_event = NewRegistryChangeEvent::environment_permissions_changed(
                     environment_share_record.environment_id,
                     environment_share_record.grantee_account_id,
-                ).await?;
+                );
+                let change_event_id = DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &change_event).await?;
 
                 Ok::<_, EnvironmentShareRepoError>((EnvironmentShareExtRevisionRecord {
                     environment_id: environment_share_record.environment_id,

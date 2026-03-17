@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::repo::model::token::TokenRecord;
-use crate::repo::registry_change::{ChangeEventId, NewRegistryChangeEvent};
+use crate::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
@@ -154,14 +156,6 @@ impl<DBP: Pool> DbTokenRepo<DBP> {
 }
 
 impl DbTokenRepo<PostgresPool> {
-    async fn insert_token_invalidation_event(
-        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        account_id: Uuid,
-    ) -> RepoResult<ChangeEventId> {
-        let event = NewRegistryChangeEvent::account_tokens_invalidated(account_id);
-        crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event).await
-    }
-
     async fn pg_notify_change_event(&self, event_id: ChangeEventId) {
         let _ = self
             .db_pool
@@ -172,14 +166,6 @@ impl DbTokenRepo<PostgresPool> {
 }
 
 impl DbTokenRepo<SqlitePool> {
-    async fn insert_token_invalidation_event(
-        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-        account_id: Uuid,
-    ) -> RepoResult<ChangeEventId> {
-        let event = NewRegistryChangeEvent::account_tokens_invalidated(account_id);
-        crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event).await
-    }
-
     async fn pg_notify_change_event(&self, _event_id: ChangeEventId) {}
 }
 
@@ -287,7 +273,13 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                         return Ok::<_, RepoError>(None);
                     }
 
-                    let event_id = Self::insert_token_invalidation_event(tx, account_id).await?;
+                    let event =
+                        NewRegistryChangeEvent::account_tokens_invalidated(account_id);
+                    let event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx, &event,
+                        )
+                        .await?;
                     Ok(Some(event_id))
                 })
             })
