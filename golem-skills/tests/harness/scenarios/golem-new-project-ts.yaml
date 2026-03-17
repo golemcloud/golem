@@ -16,7 +16,5 @@ steps:
     expect:
       exit_code: 0
 
-  - id: "deploy-project"
-    prompt: "Deploy the test-app application"
-    verify:
-      deploy: true
+  # Deploy requires components to be added to the project first;
+  # golem-new-project only scaffolds the app structure.
