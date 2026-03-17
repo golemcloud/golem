@@ -42,6 +42,12 @@ export type SnippetCompletion = {
   replaceEnd: number;
 };
 
+type SnippetTypeContext = {
+  checker: tsm.TypeChecker;
+  typeInfo: { fullExpressionNode: tsm.Node; type: tsm.Type };
+  remoteMethodExpansion?: string;
+};
+
 const SNIPPET_FILE_NAME = '__snippet__.ts';
 
 export class LanguageService {
@@ -135,31 +141,18 @@ export class LanguageService {
     if (!info) return;
 
     let formattedInfo = '';
-
-    let remoteMethodExpansion: string | undefined;
-    const typeInfo = getTypeAtSnippetPosition(snippet, this.snippetEndPos);
-    if (typeInfo) {
-      const checker = this.project.getTypeChecker();
-      const parameterNames = this.getRemoteMethodParameterNames(
-        typeInfo.fullExpressionNode,
-        checker,
-      );
-      remoteMethodExpansion = getRemoteMethodExpansion(
-        typeInfo.type,
-        typeInfo.fullExpressionNode,
-        checker,
-        parameterNames,
-      );
-    }
+    const typeContext = this.getSnippetTypeContext(snippet);
 
     if (info.displayParts?.length) {
       formattedInfo += formatDisplayParts(info.displayParts, {
-        elideRemoteMethodGenerics: Boolean(remoteMethodExpansion),
+        elideRemoteMethodGenerics: Boolean(typeContext?.remoteMethodExpansion),
       });
     }
 
-    if (remoteMethodExpansion) {
-      formattedInfo += formatTypeText(`<...> = {\n${indentTypeBlock(remoteMethodExpansion)}\n}`);
+    if (typeContext?.remoteMethodExpansion) {
+      formattedInfo += formatTypeText(
+        `<...> = {\n${indentTypeBlock(typeContext.remoteMethodExpansion)}\n}`,
+      );
     }
 
     return { formattedInfo };
@@ -171,28 +164,20 @@ export class LanguageService {
     const snippet = this.getSnippet();
     if (!snippet) return;
 
-    const typeInfo = getTypeAtSnippetPosition(snippet, this.snippetEndPos);
-    if (!typeInfo) return;
+    const typeContext = this.getSnippetTypeContext(snippet);
+    if (!typeContext) return;
+
+    const { checker, typeInfo, remoteMethodExpansion } = typeContext;
 
     const typeIsPromise = isPromise(typeInfo.type);
     const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(typeInfo.type);
 
-    const checker = this.project.getTypeChecker();
     let typeText = typeAsLiteralType
       ? typeAsLiteralType
       : checker.getTypeText(typeInfo.type, typeInfo.fullExpressionNode);
-    const parameterNames = this.getRemoteMethodParameterNames(typeInfo.fullExpressionNode, checker);
-    const remoteMethodExpansion = getRemoteMethodExpansion(
-      typeInfo.type,
-      typeInfo.fullExpressionNode,
-      checker,
-      parameterNames,
-    );
+
     if (remoteMethodExpansion) {
-      typeText = REMOTE_METHOD_ALIAS;
-    }
-    if (remoteMethodExpansion) {
-      typeText = `${typeText}<...> = {\n${indentTypeBlock(remoteMethodExpansion)}\n}`;
+      typeText = `${REMOTE_METHOD_ALIAS}<...> = {\n${indentTypeBlock(remoteMethodExpansion)}\n}`;
     }
 
     const formattedType = formatTypeText(typeText);
@@ -511,6 +496,22 @@ export class LanguageService {
     } catch {
       return undefined;
     }
+  }
+
+  private getSnippetTypeContext(snippet: tsm.SourceFile): SnippetTypeContext | undefined {
+    const typeInfo = getTypeAtSnippetPosition(snippet, this.snippetEndPos);
+    if (!typeInfo) return;
+
+    const checker = this.project.getTypeChecker();
+    const parameterNames = this.getRemoteMethodParameterNames(typeInfo.fullExpressionNode, checker);
+    const remoteMethodExpansion = getRemoteMethodExpansion(
+      typeInfo.type,
+      typeInfo.fullExpressionNode,
+      checker,
+      parameterNames,
+    );
+
+    return { checker, typeInfo, remoteMethodExpansion };
   }
 }
 
@@ -1353,6 +1354,10 @@ function elideRemoteMethodGenerics(text: string): string {
 const REMOTE_METHOD_ALIAS = 'RemoteMethod';
 const IMPORT_TYPE_PREFIX = /import\([^)]*\)\./g;
 
+export function stripImportTypePrefix(typeText: string): string {
+  return typeText.replace(IMPORT_TYPE_PREFIX, '').trim();
+}
+
 function getRemoteMethodExpansion(
   type: tsm.Type,
   node: tsm.Node,
@@ -1366,10 +1371,9 @@ function getRemoteMethodExpansion(
   if (aliasArgs.length < 2) return;
 
   const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, node, parameterNames);
-  const returnText = checker
-    .getTypeText(aliasArgs[1], node, ts.TypeFormatFlags.NoTruncation)
-    .replace(IMPORT_TYPE_PREFIX, '')
-    .trim();
+  const returnText = stripImportTypePrefix(
+    checker.getTypeText(aliasArgs[1], node, ts.TypeFormatFlags.NoTruncation),
+  );
 
   const scheduleAtText = getRemoteMethodScheduleParam(type, checker, node);
   const scheduleArgs = argsText ? `${scheduleAtText}, ${argsText}` : scheduleAtText;
@@ -1396,10 +1400,9 @@ function getRemoteMethodClientSignature(
   if (aliasArgs.length < 2) return;
 
   const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, location, parameterNames);
-  const returnText = checker
-    .getTypeText(aliasArgs[1], location, ts.TypeFormatFlags.NoTruncation)
-    .replace(IMPORT_TYPE_PREFIX, '')
-    .trim();
+  const returnText = stripImportTypePrefix(
+    checker.getTypeText(aliasArgs[1], location, ts.TypeFormatFlags.NoTruncation),
+  );
 
   return `(${argsText}) => ${returnText}`;
 }
@@ -1422,10 +1425,9 @@ function formatRemoteMethodArgs(
     return tupleElements
       .map((elementType, index) => {
         const name = parameterNames?.[index] ?? parameterNameForIndex(index);
-        const typeText = checker
-          .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
-          .replace(IMPORT_TYPE_PREFIX, '')
-          .trim();
+        const typeText = stripImportTypePrefix(
+          checker.getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation),
+        );
         return `${name}: ${typeText}`;
       })
       .join(', ');
@@ -1438,18 +1440,16 @@ function formatRemoteMethodArgs(
     argsType.getApparentType().getNumberIndexType();
 
   if (elementType) {
-    const typeText = checker
-      .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
-      .replace(IMPORT_TYPE_PREFIX, '')
-      .trim();
+    const typeText = stripImportTypePrefix(
+      checker.getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation),
+    );
     const restName = parameterNames?.[0] ?? 'args';
     return `...${restName}: ${typeText}`;
   }
 
-  const fallbackTypeText = checker
-    .getTypeText(argsType, location, ts.TypeFormatFlags.NoTruncation)
-    .replace(IMPORT_TYPE_PREFIX, '')
-    .trim();
+  const fallbackTypeText = stripImportTypePrefix(
+    checker.getTypeText(argsType, location, ts.TypeFormatFlags.NoTruncation),
+  );
   return `...args: ${fallbackTypeText}`;
 }
 
@@ -1466,10 +1466,9 @@ function getRemoteMethodScheduleParam(
     const param = signature?.getParameters()[0];
     if (param) {
       const paramType = checker.getTypeOfSymbolAtLocation(param, location);
-      const paramText = checker
-        .getTypeText(paramType, location, ts.TypeFormatFlags.NoTruncation)
-        .replace(IMPORT_TYPE_PREFIX, '')
-        .trim();
+      const paramText = stripImportTypePrefix(
+        checker.getTypeText(paramType, location, ts.TypeFormatFlags.NoTruncation),
+      );
       if (paramText) {
         return `scheduleAt: ${paramText}`;
       }

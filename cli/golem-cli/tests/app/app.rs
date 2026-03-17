@@ -164,15 +164,92 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
         .await;
     assert!(outputs.success_or_dump());
 
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:ts-extra"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join(
+            Path::new("components-ts")
+                .join("app-ts-extra")
+                .join("src")
+                .join("main.ts"),
+        ),
+        indoc! {
+            r#"
+            import {
+                BaseAgent,
+                agent,
+                prompt,
+                description
+            } from '@golemcloud/golem-ts-sdk';
+
+            @agent({})
+            class SampleAgent extends BaseAgent {
+                private readonly name: string;
+                private readonly region: string;
+                private readonly mode: "fast" | "safe";
+                private readonly complex: { a: number, b: string };
+                private value: number = 0;
+
+                constructor(name: string, region: string, mode: "fast" | "safe", complex?: { a: number, b: string }) {
+                    super()
+                    this.name = name;
+                    this.region = region;
+                    this.mode = mode;
+                    this.complex = complex ?? { a: 0, b: "default" };
+                }
+
+                @prompt("Run sample method")
+                @description("Runs the sample method and returns the new value")
+                async sampleMethod(): Promise<number> {
+                    this.value += 1;
+                    return this.value;
+                }
+            }
+            "#
+        },
+    )
+    .unwrap();
+
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
     ctx.cli_interactive([cmd::REPL, flag::LANGUAGE, "ts", flag::YES], move |repl| {
+        let agent_type_info_regex = indoc! {
+            r#"(?sx)
+            Available\ agent\ client\ types:
+            .*
+            (
+                SampleAgent\.get\(name: string, region: string, mode: "fast" \| "safe", complex: .*\)
+                .*
+                CounterAgent\.get\(name: string\)
+            |
+                CounterAgent\.get\(name: string\)
+                .*
+                SampleAgent\.get\(name: string, region: string, mode: "fast" \| "safe", complex: .*\)
+            )
+            .*"#
+        };
+
+        let methods_regex = indoc! {
+            r#"(?sx)
+            (
+                sampleMethod: \(\) => number
+                .*
+                increment: \(\) => number
+            |
+                increment: \(\) => number
+                .*
+                sampleMethod: \(\) => number
+            )"#
+        };
+
         repl.set_expect_timeout(Some(Duration::from_secs(30)));
         repl.expect_str("golem-ts-repl[test-app-repl-interactive][local]>")?;
-        repl.expect_str("Available agent client types:")?;
-        repl.expect_str("CounterAgent.get(name: string)")?;
-        repl.expect_str("increment: () => number")?;
+        repl.send_line_and_expect_regex(".agent-type-info", agent_type_info_regex)?;
+        repl.expect_regex(methods_regex)?;
 
         repl.set_expect_timeout(Some(Duration::from_secs(2)));
 
@@ -191,28 +268,33 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
 
         // Hints on "tab"
         {
-            repl.send_and_expect_str("Counter\t", "Agent")?;
+            repl.send_tab_complete_expect_str("Counter", "Agent")?;
             repl.send_line("")?;
 
-            repl.send_and_expect_regex("CounterAgent.\t\t", "get .* getPhantom ")?; // TODO: why does this require two tabs?
+            repl.send_tab_list_expect_regex("CounterAgent.", "get .* getPhantom ")?;
             repl.send_line("")?;
 
-            repl.send_and_expect_str("CounterAgent.g\t", "et")?;
+            repl.send_tab_complete_expect_str("CounterAgent.g", "et")?;
             repl.send_line("")?;
 
-            repl.send_and_expect_regex("CounterAgent.get\t\t", "get .* getPhantom")?; // TODO: why does this require two tabs?
+            repl.send_tab_list_expect_regex("CounterAgent.get", "get .* getPhantom")?;
             repl.send_line("")?;
 
-            repl.send_and_expect_str("CounterAgent.get(\t", "\"?\"")?;
+            repl.send_tab_complete_expect_str("CounterAgent.get(", "\"?\"")?;
             repl.send_line("")?;
 
-            repl.send_and_expect_str("CounterAgent.get(\"xyz\").\t\t", "increment")?; // TODO: why does this require two tabs?
+            repl.send_tab_list_expect_regex("CounterAgent.get(\"xyz\").", "increment")?;
+            repl.send_line("")?;
+
+            repl.send_tab_complete_expect_str("Sample", "Agent")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex(
+                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).",
+                "sampleMethod",
+            )?;
             repl.send_line("")?;
         }
-
-        // TODO: tests with multi components
-
-        // TODO: tests with complex constructor agent type info
 
         Ok(())
     })

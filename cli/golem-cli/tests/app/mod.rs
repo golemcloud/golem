@@ -622,6 +622,14 @@ pub trait InteractiveSession {
     fn expect_str(&mut self, expected: &str) -> anyhow::Result<()>;
     fn expect_regex(&mut self, expected: &str) -> anyhow::Result<()>;
 
+    fn send_tab_complete_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.send_and_expect_str(&format!("{line}\t"), expected)
+    }
+
+    fn send_tab_list_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.send_and_expect_regex(&format!("{line}\t\t"), expected)
+    }
+
     fn send_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send(line)?;
         self.expect_str(expected)

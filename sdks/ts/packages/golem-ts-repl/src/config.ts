@@ -167,7 +167,7 @@ export function loadReplCliFlags(): ReplCliFlags {
       return values.script;
     }
     if (scriptPath !== undefined) {
-      fs.readFileSync(scriptPath, 'utf8');
+      return fs.readFileSync(scriptPath, 'utf8');
     }
     return undefined;
   })();
