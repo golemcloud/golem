@@ -22,8 +22,8 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::{
-    ComponentFileOptions, ComponentFilePath, PluginInstallation, PluginInstallationAction,
-    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
+    AgentConfigEntry, ComponentFileOptions, ComponentFilePath, PluginInstallation,
+    PluginInstallationAction, PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 
 use golem_common::model::diff;
@@ -60,6 +60,13 @@ impl ComponentDiff {
         match self {
             ComponentDiff::All => true,
             ComponentDiff::Diff { diff } => diff.metadata_changed,
+        }
+    }
+
+    pub fn agent_config_changed(&self) -> bool {
+        match self {
+            ComponentDiff::All => true,
+            ComponentDiff::Diff { diff } => !diff.agent_config_changes.is_empty(),
         }
     }
 }
@@ -264,6 +271,18 @@ impl<'a> ComponentStager<'a> {
     pub fn config_vars_if_changed(&self) -> Option<BTreeMap<String, String>> {
         if self.diff.metadata_changed() {
             Some(self.config_vars())
+        } else {
+            None
+        }
+    }
+
+    pub fn agent_config(&self) -> Vec<AgentConfigEntry> {
+        self.component_deploy_properties.agent_config.clone()
+    }
+
+    pub fn agent_config_if_changed(&self) -> Option<Vec<AgentConfigEntry>> {
+        if self.diff.agent_config_changed() {
+            Some(self.agent_config())
         } else {
             None
         }

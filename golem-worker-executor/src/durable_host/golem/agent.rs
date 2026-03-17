@@ -21,6 +21,7 @@ use golem_common::model::agent::bindings::golem::agent::common::{
 };
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::agent::{ConfigValueType, ConfigValueTypeLocal, ConfigValueTypeShared};
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
     GolemAgentGetConfigValue,
@@ -43,7 +44,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         expected_type: &AnalysedType,
         local_decl: &ConfigValueTypeLocal,
     ) -> anyhow::Result<WitValue> {
-        let config_value = self.state.local_agent_config.get(key);
+        let config_value = self.state.agent_config.get(key);
 
         if local_decl.value != *expected_type {
             return Err(anyhow!(
@@ -78,7 +79,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .get_agent_secrets(self.state.component_metadata.environment_id)
                 .await?;
 
-            let agent_secret = agent_secrets.get(&key);
+            let canonical_agent_secret_path =
+                CanonicalAgentSecretPath::from_path_in_unknown_casing(&key);
+            let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
 
             let agent_secret_type = agent_secret.map(|sec| &sec.secret_type);
             let agent_secret_value = agent_secret.and_then(|sec| sec.secret_value.as_ref());

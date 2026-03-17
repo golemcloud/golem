@@ -32,7 +32,7 @@ pub use ser::*;
 
 use serde::{Serialize, Serializer};
 use similar::TextDiff;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub trait Diffable {
     type DiffResult: Serialize;
@@ -70,6 +70,12 @@ pub trait Diffable {
             to_yaml_with_mode(&new, mode).expect("failed to serialize current"),
         )
     }
+}
+
+pub trait VecDiffable: Diffable {
+    type OrderingKey: Ord;
+
+    fn ordering_key(&self) -> Self::OrderingKey;
 }
 
 pub fn unified_diff(current: impl AsRef<str>, new: impl AsRef<str>) -> String {
@@ -188,40 +194,71 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum VecDiffValue<ValueDiff> {
-    Create,
-    Delete,
-    Update(ValueDiff),
+pub enum VecDiffValue<OrderingKey, ValueDiff> {
+    Create(OrderingKey),
+    Delete(OrderingKey),
+    Update(OrderingKey, ValueDiff),
 }
 
-pub type VecDiff<V> = BTreeMap<String, VecDiffValue<<V as Diffable>::DiffResult>>;
+pub type VecDiff<V> =
+    Vec<VecDiffValue<<V as VecDiffable>::OrderingKey, <V as Diffable>::DiffResult>>;
 
 impl<V> Diffable for Vec<V>
 where
-    V: Diffable,
+    V: VecDiffable,
+    V::OrderingKey: Serialize,
     V::DiffResult: Serialize,
 {
     type DiffResult = VecDiff<V>;
 
     fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        let mut diff = BTreeMap::new();
+        let mut diff = Vec::new();
 
-        let max_len = std::cmp::max(new.len(), current.len());
+        let mut new: VecDeque<(V::OrderingKey, &V)> = new
+            .iter()
+            .map(|v| (v.ordering_key(), v))
+            .collect::<Vec<_>>()
+            .into();
 
-        for i in 0..max_len {
-            match (new.get(i), current.get(i)) {
-                (Some(n), Some(c)) => {
-                    if let Some(d) = n.diff_with_current(c) {
-                        diff.insert(i.to_string(), VecDiffValue::Update(d));
+        assert!(new.iter().is_sorted_by_key(|(k, _)| k));
+
+        let mut current: VecDeque<(V::OrderingKey, &V)> = current
+            .iter()
+            .map(|v| (v.ordering_key(), v))
+            .collect::<Vec<_>>()
+            .into();
+
+        assert!(current.iter().is_sorted_by_key(|(k, _)| k));
+
+        while !new.is_empty() || !current.is_empty() {
+            match (new.front(), current.front()) {
+                (Some((kn, _)), Some((kc, _))) => match kn.cmp(kc) {
+                    std::cmp::Ordering::Equal => {
+                        let (kn, n) = new.pop_front().unwrap();
+                        let (_, c) = current.pop_front().unwrap();
+
+                        if let Some(d) = n.diff_with_current(c) {
+                            diff.push(VecDiffValue::Update(kn, d));
+                        }
                     }
-                }
+                    std::cmp::Ordering::Less => {
+                        let (k, _) = new.pop_front().unwrap();
+                        diff.push(VecDiffValue::Create(k));
+                    }
+                    std::cmp::Ordering::Greater => {
+                        let (k, _) = current.pop_front().unwrap();
+                        diff.push(VecDiffValue::Delete(k));
+                    }
+                },
                 (Some(_), None) => {
-                    diff.insert(i.to_string(), VecDiffValue::Create);
+                    let (k, _) = new.pop_front().unwrap();
+                    diff.push(VecDiffValue::Create(k));
                 }
                 (None, Some(_)) => {
-                    diff.insert(i.to_string(), VecDiffValue::Delete);
+                    let (k, _) = current.pop_front().unwrap();
+                    diff.push(VecDiffValue::Delete(k));
                 }
-                (None, None) => {}
+                (None, None) => break,
             }
         }
 
@@ -230,5 +267,33 @@ where
         } else {
             Some(diff)
         }
+    }
+}
+
+pub fn into_normalized_json(mut value: serde_json::Value) -> serde_json::Value {
+    normalize_json(&mut value);
+    value
+}
+
+fn normalize_json(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Number(n) => {
+            if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 {
+                    *value = serde_json::Value::Number(serde_json::Number::from(f as i64));
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                normalize_json(v);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                normalize_json(v);
+            }
+        }
+        _ => {}
     }
 }

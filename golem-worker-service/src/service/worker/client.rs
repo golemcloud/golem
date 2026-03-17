@@ -39,12 +39,12 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
 };
-use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
+use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, InvocationStatus};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
@@ -64,7 +64,7 @@ pub trait WorkerClient: Send + Sync {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -224,8 +224,8 @@ pub trait WorkerClient: Send + Sync {
     async fn invoke_agent(
         &self,
         agent_id: &AgentId,
-        method_name: String,
-        method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
+        method_name: Option<String>,
+        method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -404,7 +404,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -424,10 +424,10 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         agent_id: Some(agent_id.into()),
                         env: environment_variables.clone(),
                         config_vars: config_vars.clone().into_iter().collect(),
-                        local_agent_config: local_agent_config
+                        agent_config: agent_config
                             .clone()
                             .into_iter()
-                            .map(golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry::from)
+                            .map(golem_api_grpc::proto::golem::worker::AgentConfigEntry::from)
                             .collect(),
                         component_owner_account_id: Some(account_id_clone.into()),
                         environment_id: Some(environment_id.into()),
@@ -1269,8 +1269,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn invoke_agent(
         &self,
         agent_id: &AgentId,
-        method_name: String,
-        method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
+        method_name: Option<String>,
+        method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -1292,7 +1292,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         workerexecutor::v1::InvokeAgentRequest {
                             agent_id: Some(agent_id_clone.clone().into()),
                             method_name: method_name.clone(),
-                            method_parameters: Some(method_parameters.clone()),
+                            method_parameters: method_parameters.clone(),
                             mode,
                             schedule_at,
                             idempotency_key: idempotency_key.clone().map(|k| k.into()),
@@ -1312,6 +1312,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                     result,
                                     fuel_consumed,
                                     component_revision,
+                                    status,
                                 },
                             )),
                     } => {
@@ -1323,9 +1324,15 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             }
                             None => AgentInvocationResult::AgentInitialization,
                         };
+                        let invocation_status = status.and_then(|s| {
+                            golem_api_grpc::proto::golem::worker::InvocationStatus::try_from(s)
+                                .ok()
+                                .map(InvocationStatus::from)
+                        });
                         Ok(AgentInvocationOutput {
                             result: invocation_result,
                             consumed_fuel: fuel_consumed,
+                            invocation_status,
                             component_revision: component_revision
                                 .map(ComponentRevision::new)
                                 .transpose()

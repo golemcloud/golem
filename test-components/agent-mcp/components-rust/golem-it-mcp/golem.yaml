@@ -18,7 +18,7 @@ mcp:
 
 components:
   golem-it:mcp:
-    templates: rust
+    templates: rust, rust-test-component
 
     # Component environment variables can reference system environment variables with minijinja syntax:
     #
@@ -193,5 +193,3 @@ components:
 
     ## Tavily
     # TAVILY_API_KEY: "<KEY>"
-
-

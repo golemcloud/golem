@@ -33,7 +33,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::clients::registry::RegistryService;
@@ -74,7 +74,7 @@ impl WorkerService {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -90,7 +90,7 @@ impl WorkerService {
             component,
             environment_variables,
             config_vars,
-            local_agent_config,
+            agent_config,
             ignore_already_existing,
             auth_ctx,
             invocation_context,
@@ -106,7 +106,7 @@ impl WorkerService {
         component: Component,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -128,7 +128,7 @@ impl WorkerService {
                 agent_id,
                 environment_variables,
                 config_vars,
-                local_agent_config,
+                agent_config,
                 ignore_already_existing,
                 environment_auth_details.account_id_owning_environment,
                 component.environment_id,
@@ -706,8 +706,8 @@ impl WorkerService {
     pub async fn invoke_agent(
         &self,
         agent_id: &AgentId,
-        method_name: String,
-        method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
+        method_name: Option<String>,
+        method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -837,11 +837,10 @@ impl WorkerService {
 
         let proto_mode = match request.mode {
             AgentInvocationMode::Await => {
-                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32
             }
             AgentInvocationMode::Schedule => {
-                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule
-                    as i32
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32
             }
         };
 
@@ -862,8 +861,8 @@ impl WorkerService {
         let output = self
             .invoke_agent(
                 &agent_id,
-                request.method_name,
-                proto_method_parameters,
+                Some(request.method_name),
+                Some(proto_method_parameters),
                 proto_mode,
                 proto_schedule_at,
                 request.idempotency_key,
