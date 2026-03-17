@@ -3994,6 +3994,7 @@ dependencies = [
  "crossbeam-channel",
  "desert_rust",
  "dirs",
+ "dotenvy",
  "evcxr",
  "expectrl",
  "fs_extra",

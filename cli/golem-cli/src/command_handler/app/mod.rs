@@ -167,11 +167,7 @@ impl AppCommandHandler {
                 let _indent = LogIndent::new();
                 for language in &languages {
                     if let Some(common_template) = app_template_repo.common_template(*language)? {
-                        match common_template.generate(
-                            &application_name,
-                            &app_dir,
-                            self.ctx.sdk_overrides(),
-                        ) {
+                        match common_template.generate(&application_name, &app_dir) {
                             Ok(()) => {
                                 log_action(
                                     "Added",
@@ -2006,15 +2002,10 @@ impl AppCommandHandler {
         let (common_template, component_template) = self.get_templates(template_name)?;
 
         if let Some(common_template) = common_template {
-            common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())?;
+            common_template.generate(application_name, app_dir)?;
         }
 
-        match component_template.generate(
-            application_name,
-            component_name,
-            app_dir,
-            self.ctx.sdk_overrides(),
-        ) {
+        match component_template.generate(application_name, component_name, app_dir) {
             Ok(()) => {
                 log_action(
                     "Added",

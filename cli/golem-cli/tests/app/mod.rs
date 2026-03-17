@@ -38,6 +38,7 @@ use anyhow::Context;
 use colored::Colorize;
 use expectrl::Expect;
 use golem_cli::fs::{read_to_string, write_str};
+use golem_cli::sdk_overrides::SdkOverrides;
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
 use itertools::Itertools;
@@ -306,16 +307,7 @@ impl TestContext {
 
         env.insert("NO_COLOR".to_string(), "1".to_string());
 
-        for key in [
-            "GOLEM_RUST_PATH",
-            "GOLEM_RUST_VERSION",
-            "GOLEM_TS_PACKAGES_PATH",
-            "GOLEM_TS_VERSION",
-        ] {
-            if let Ok(val) = std::env::var(key) {
-                env.insert(key.to_string(), val);
-            }
-        }
+        env.extend(SdkOverrides::for_default_test_profile(&workspace_path()).to_env_vars());
 
         let ctx = Self {
             quiet,
