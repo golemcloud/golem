@@ -859,26 +859,6 @@ impl Layer for ComponentLayer {
             let template_ctx = self.id.is_template().then(|| ctx.template_context());
             let template_ctx = template_ctx.as_ref();
 
-            value.source_wit.apply_layer(
-                id,
-                selection,
-                properties
-                    .source_wit
-                    .value()
-                    .render_or_clone(template_env, template_ctx)
-                    .map_err(|err| format!("Failed to render sourceWit: {}", err))?,
-            );
-
-            value.generated_wit.apply_layer(
-                id,
-                selection,
-                properties
-                    .generated_wit
-                    .value()
-                    .render_or_clone(template_env, template_ctx)
-                    .map_err(|err| format!("Failed to render generatedWit: {}", err))?,
-            );
-
             value.component_wasm.apply_layer(
                 id,
                 selection,
@@ -1041,10 +1021,6 @@ impl<'a> Component<'a> {
         self.component_name.as_str().replace(":", "_")
     }
 
-    pub fn source_wit(&self) -> PathBuf {
-        self.component_dir().join(&self.properties().source_wit)
-    }
-
     pub fn generated_base_wit(&self) -> PathBuf {
         self.temp_dir
             .join("generated-base-wit")
@@ -1062,11 +1038,6 @@ impl<'a> Component<'a> {
                 exports_package_name.namespace, exports_package_name.name
             ))
             .join("exports.wit")
-    }
-
-    pub fn generated_wit(&self) -> PathBuf {
-        self.component_dir()
-            .join(self.properties().generated_wit.clone())
     }
 
     pub fn wasm(&self) -> PathBuf {
@@ -1142,8 +1113,6 @@ pub struct ComponentLayerProperties {
     )]
     pub applied_layers: Vec<(ComponentLayerId, Option<String>)>,
 
-    pub source_wit: OptionalProperty<ComponentLayer, String>,
-    pub generated_wit: OptionalProperty<ComponentLayer, String>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1170,8 +1139,6 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
     fn from(value: app_raw::ComponentLayerProperties) -> Self {
         Self {
             applied_layers: vec![],
-            source_wit: value.source_wit.into(),
-            generated_wit: value.generated_wit.into(),
             component_wasm: value.component_wasm.into(),
             output_wasm: value.output_wasm.into(),
             build_merge_mode: value.build_merge_mode,
@@ -1193,8 +1160,6 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
 
 impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
-        self.source_wit.compact_trace();
-        self.generated_wit.compact_trace();
         self.component_wasm.compact_trace();
         self.output_wasm.compact_trace();
         self.build.compact_trace();
@@ -1237,8 +1202,6 @@ impl ComponentLayerProperties {
 pub struct ComponentProperties {
     pub dir: Option<PathBuf>, // Relative path starting from the defining golem.yaml
     pub component_dir: PathBuf, // Resolved canonical component path
-    pub source_wit: String,
-    pub generated_wit: String,
     pub component_wasm: String,
     pub output_wasm: Option<String>,
     pub build: Vec<app_raw::BuildCommand>,
@@ -1267,8 +1230,6 @@ impl ComponentProperties {
         let properties = Self {
             dir,
             component_dir,
-            source_wit: merged.source_wit.value().clone().unwrap_or_default(),
-            generated_wit: merged.generated_wit.value().clone().unwrap_or_default(),
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
             output_wasm: merged.output_wasm.value().clone(),
             build: merged.build.value().clone(),
@@ -1291,11 +1252,7 @@ impl ComponentProperties {
                 .collect(),
         };
 
-        for (name, value) in [
-            ("sourceWit", &properties.source_wit),
-            ("generatedWit", &properties.generated_wit),
-            ("componentWasm", &properties.component_wasm),
-        ] {
+        for (name, value) in [("componentWasm", &properties.component_wasm)] {
             if value.is_empty() {
                 validation.add_error(format!(
                     "Property {} is empty or undefined",
@@ -2396,8 +2353,6 @@ mod test {
 
             componentTemplates:
               malbogle:
-                sourceWit: dummy-source.wit
-                generatedWit: dummy-generated.wit
                 componentWasm: dummy-component.wasm
 
             components:
@@ -2405,9 +2360,9 @@ mod test {
                 templates: malbogle
                 presets:
                   a:
-                    sourceWit: a.wit
+                    componentWasm: a.wasm
                   b:
-                    sourceWit: b.wit
+                    componentWasm: b.wasm
 
         "# };
 
@@ -2422,7 +2377,7 @@ mod test {
         let component_name = "app:main".parse().unwrap();
         let component = app.component(&component_name);
 
-        assert_eq!(component.source_wit(), PathBuf::from("./a.wit"));
+        assert_eq!(component.wasm(), PathBuf::from("./a.wasm"));
     }
 
     fn load_app(source: &str, selector: &ComponentPresetSelector) -> Application {

@@ -425,10 +425,6 @@ pub struct InitialComponentFile {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_wit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generated_wit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,

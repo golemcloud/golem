@@ -33,8 +33,6 @@ componentTemplates:
       module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
       moduleWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.module.wasm"
       into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
-    sourceWit: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
-    generatedWit: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}/wit-generated"
     componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
     outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
 customCommands:
