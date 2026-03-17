@@ -97,7 +97,6 @@ impl Services {
         ));
 
         let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
-            registry_service_client.clone(),
             component_service.clone(),
             auth_service.clone(),
             limit_service.clone(),

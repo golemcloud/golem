@@ -37,7 +37,6 @@ use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
-use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
@@ -46,7 +45,6 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
 pub struct WorkerService {
-    registry_service: Arc<dyn RegistryService>,
     component_service: Arc<dyn ComponentService>,
     auth_service: Arc<dyn AuthService>,
     limit_service: Arc<dyn LimitService>,
@@ -56,7 +54,6 @@ pub struct WorkerService {
 
 impl WorkerService {
     pub fn new(
-        registry_service: Arc<dyn RegistryService>,
         component_service: Arc<dyn ComponentService>,
         auth_service: Arc<dyn AuthService>,
         limit_service: Arc<dyn LimitService>,
@@ -64,7 +61,6 @@ impl WorkerService {
         agent_resolution_cache: Arc<AgentResolutionCache>,
     ) -> Self {
         Self {
-            registry_service,
             component_service,
             auth_service,
             limit_service,
@@ -776,27 +772,30 @@ impl WorkerService {
             })
             .transpose()?;
 
-        let resolved = if deployment_revision.is_none() {
-            self.agent_resolution_cache
-                .resolve(
-                    &request.app_name,
-                    &request.env_name,
-                    &request.agent_type_name,
-                    request.owner_account_email.as_deref(),
-                    &auth,
-                )
-                .await?
-        } else {
-            self.registry_service
-                .resolve_agent_type_by_names(
-                    &request.app_name,
-                    &request.env_name,
-                    &request.agent_type_name,
-                    deployment_revision,
-                    request.owner_account_email.as_deref(),
-                    &auth,
-                )
-                .await?
+        let resolved = match deployment_revision {
+            None => {
+                self.agent_resolution_cache
+                    .resolve(
+                        &request.app_name,
+                        &request.env_name,
+                        &request.agent_type_name,
+                        request.owner_account_email.as_deref(),
+                        &auth,
+                    )
+                    .await?
+            }
+            Some(rev) => {
+                self.agent_resolution_cache
+                    .resolve_pinned(
+                        &request.app_name,
+                        &request.env_name,
+                        &request.agent_type_name,
+                        rev,
+                        request.owner_account_email.as_deref(),
+                        &auth,
+                    )
+                    .await?
+            }
         };
 
         let registered_agent_type = resolved.registered_agent_type;

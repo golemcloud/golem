@@ -31,8 +31,19 @@ struct AgentResolutionCacheKey {
     owner_account_email: Option<String>,
 }
 
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+struct PinnedAgentResolutionCacheKey {
+    app_name: String,
+    env_name: String,
+    agent_type_name: String,
+    deployment_revision: DeploymentRevision,
+    owner_account_email: Option<String>,
+}
+
 pub struct AgentResolutionCache {
     cache: Cache<AgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
+    pinned_cache:
+        Cache<PinnedAgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
     registry_service: Arc<dyn RegistryService>,
     latest_revisions: scc::HashMap<EnvironmentId, DeploymentRevision>,
 }
@@ -53,8 +64,15 @@ impl AgentResolutionCache {
             },
             "agent_resolution",
         );
+        let pinned_cache = Cache::new(
+            Some(capacity),
+            FullCacheEvictionMode::LeastRecentlyUsed(1),
+            BackgroundEvictionMode::None,
+            "agent_resolution_pinned",
+        );
         Self {
             cache,
+            pinned_cache,
             registry_service,
             latest_revisions: scc::HashMap::new(),
         }
@@ -102,6 +120,46 @@ impl AgentResolutionCache {
         self.advance_latest_revision(resolved.environment_id, resolved.deployment_revision);
 
         Ok(resolved)
+    }
+
+    pub async fn resolve_pinned(
+        &self,
+        app_name: &ApplicationName,
+        env_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: DeploymentRevision,
+        owner_account_email: Option<&str>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ResolvedAgentType, RegistryServiceError> {
+        let key = PinnedAgentResolutionCacheKey {
+            app_name: app_name.0.clone(),
+            env_name: env_name.0.clone(),
+            agent_type_name: agent_type_name.0.clone(),
+            deployment_revision,
+            owner_account_email: owner_account_email.map(|s| s.to_string()),
+        };
+
+        let registry = self.registry_service.clone();
+        let app = app_name.clone();
+        let env = env_name.clone();
+        let agent = agent_type_name.clone();
+        let owner = owner_account_email.map(|s| s.to_string());
+        let auth = auth_ctx.clone();
+
+        self.pinned_cache
+            .get_or_insert_simple(&key, async move || {
+                registry
+                    .resolve_agent_type_by_names(
+                        &app,
+                        &env,
+                        &agent,
+                        Some(deployment_revision),
+                        owner.as_deref(),
+                        &auth,
+                    )
+                    .await
+            })
+            .await
     }
 
     fn is_stale(&self, resolved: &ResolvedAgentType) -> bool {
@@ -541,5 +599,58 @@ mod tests {
             .resolve(&app, &env, &agent, Some("bob@test.com"), &make_auth())
             .await;
         assert!(r3.is_ok());
+    }
+
+    #[test]
+    async fn test_pinned_cache_hit() {
+        let env_id = EnvironmentId(Uuid::new_v4());
+        let registry = Arc::new(MockRegistryService::new(env_id));
+        registry.set_revision(5);
+        let cache = make_cache(registry.clone());
+
+        let app = ApplicationName("app".to_string());
+        let env = EnvironmentName("env".to_string());
+        let agent = AgentTypeName("agent".to_string());
+        let rev = DeploymentRevision::new(5).unwrap();
+
+        let r1 = cache
+            .resolve_pinned(&app, &env, &agent, rev, None, &make_auth())
+            .await;
+        assert!(r1.is_ok());
+        assert_eq!(r1.unwrap().deployment_revision, rev);
+
+        // Second call should hit the pinned cache
+        let r2 = cache
+            .resolve_pinned(&app, &env, &agent, rev, None, &make_auth())
+            .await;
+        assert!(r2.is_ok());
+        assert_eq!(r2.unwrap().deployment_revision, rev);
+    }
+
+    #[test]
+    async fn test_pinned_cache_different_revisions_are_separate() {
+        let env_id = EnvironmentId(Uuid::new_v4());
+        let registry = Arc::new(MockRegistryService::new(env_id));
+        let cache = make_cache(registry.clone());
+
+        let app = ApplicationName("app".to_string());
+        let env = EnvironmentName("env".to_string());
+        let agent = AgentTypeName("agent".to_string());
+
+        registry.set_revision(1);
+        let rev1 = DeploymentRevision::new(1).unwrap();
+        let r1 = cache
+            .resolve_pinned(&app, &env, &agent, rev1, None, &make_auth())
+            .await;
+        assert!(r1.is_ok());
+        assert_eq!(r1.unwrap().deployment_revision, rev1);
+
+        registry.set_revision(2);
+        let rev2 = DeploymentRevision::new(2).unwrap();
+        let r2 = cache
+            .resolve_pinned(&app, &env, &agent, rev2, None, &make_auth())
+            .await;
+        assert!(r2.is_ok());
+        assert_eq!(r2.unwrap().deployment_revision, rev2);
     }
 }
