@@ -187,6 +187,15 @@ impl RustBridgeGenerator {
                 phantom_id: Option<uuid::Uuid>,
             }
 
+            impl std::fmt::Debug for #client_struct_name {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.debug_struct(stringify!(#client_struct_name))
+                        .field("constructor_parameters", &self.constructor_parameters)
+                        .field("phantom_id", &self.phantom_id)
+                        .finish()
+                }
+            }
+
             impl #client_struct_name {
                 pub fn get(#(#constructor_params),*) -> Self {
                     #constructor_params_to_data_value
