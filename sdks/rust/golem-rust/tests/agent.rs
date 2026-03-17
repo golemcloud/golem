@@ -525,7 +525,7 @@ mod tests {
         }
 
         async fn remote_get(&mut self) -> String {
-            let client = AgentWithReservedMethodsClient::_get("increment".to_string());
+            let client = AgentWithReservedMethodsClient::get_("increment".to_string());
 
             client.get().await
         }
