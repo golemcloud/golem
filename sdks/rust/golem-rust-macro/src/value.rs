@@ -224,7 +224,12 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                                 builder = <#typ as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.case(#case_name));
                             }
                         } else {
-                            let (_, inner_add_to_type_builder) = record_or_tuple(&ident_lit, &variant.fields, golem_rust_crate_ident);
+                            let case_name_lit = LitStr::new(&case_name, Span::call_site());
+                            let (_, inner_add_to_type_builder) = record_or_tuple(
+                                &case_name_lit,
+                                &variant.fields,
+                                golem_rust_crate_ident,
+                            );
 
                             quote! {
                                 builder = {
