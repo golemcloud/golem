@@ -323,7 +323,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
     let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
     let shutdown = golem_worker_executor::services::shutdown::Shutdown::new();
 
-    let (worker_executor_impl, epoch_thread, epoch_stop) =
+    let (worker_executor_impl, epoch_thread, epoch_stop, _registry_service) =
         create_worker_executor_impl::<DebugContext, T>(
             golem_config.clone(),
             bootstrap,

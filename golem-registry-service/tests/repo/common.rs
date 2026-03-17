@@ -59,7 +59,7 @@ use golem_registry_service::repo::registry_change::{
     ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent, RegistryEventType,
 };
 use golem_registry_service::services::registry_change_notifier::{
-    RegistryChangeNotifier, LocalRegistryChangeNotifier,
+    LocalRegistryChangeNotifier, RegistryChangeNotifier,
 };
 use golem_service_base::repo::blob::Blob;
 use heck::ToKebabCase;
@@ -1692,7 +1692,11 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
     // Record first event
     let id1 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id1, 1, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id1,
+            1,
+            vec![],
+        ))
         .await
         .unwrap();
     assert!(id1 > baseline);
@@ -1700,7 +1704,11 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
     // Record second event
     let id2 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id2, 2, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id2,
+            2,
+            vec![],
+        ))
         .await
         .unwrap();
     assert!(id2 > id1);
@@ -1708,7 +1716,11 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
     // Record third event for same environment
     let id3 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id1, 3, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id1,
+            3,
+            vec![],
+        ))
         .await
         .unwrap();
     assert!(id3 > id2);
@@ -1729,10 +1741,7 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
         .unwrap();
     assert!(events.len() >= 3);
     // Find our events by id
-    let our_events: Vec<_> = events
-        .iter()
-        .filter(|e| e.event_id >= id1)
-        .collect();
+    let our_events: Vec<_> = events.iter().filter(|e| e.event_id >= id1).collect();
     assert!(our_events.len() == 3);
     assert!(our_events[0].event_id == id1);
     assert!(our_events[0].environment_id.unwrap() == env_id1);
@@ -1767,12 +1776,20 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     // Insert some events in the DB (simulating past deployments)
     let id1 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 10, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id,
+            10,
+            vec![],
+        ))
         .await
         .unwrap();
     let id2 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 20, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id,
+            20,
+            vec![],
+        ))
         .await
         .unwrap();
 
@@ -1796,7 +1813,11 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     // Simulate a new deployment: record in DB and notify
     let id3 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 30, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id,
+            30,
+            vec![],
+        ))
         .await
         .unwrap();
     notifier.notify(RegistryChangeEvent {
@@ -1835,12 +1856,20 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
     // Insert events
     let id1 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 10, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id,
+            10,
+            vec![],
+        ))
         .await
         .unwrap();
     let id2 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 20, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id,
+            20,
+            vec![],
+        ))
         .await
         .unwrap();
 
@@ -1900,7 +1929,11 @@ pub async fn test_registry_change_cleanup(deps: &Deps) {
     // Record an event
     let id = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 1, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id,
+            1,
+            vec![],
+        ))
         .await
         .unwrap();
 
@@ -1948,18 +1981,19 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
         .unwrap();
 
     // Record account tokens invalidated event
-    let id2 = deps
+    let _id2 = deps
         .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::account_tokens_invalidated(account_id))
+        .record_change_event(&NewRegistryChangeEvent::account_tokens_invalidated(
+            account_id,
+        ))
         .await
         .unwrap();
 
     // Record environment permissions changed event
-    let id3 = deps
+    let _id3 = deps
         .registry_change_repo
         .record_change_event(&NewRegistryChangeEvent::environment_permissions_changed(
-            env_id,
-            grantee_id,
+            env_id, grantee_id,
         ))
         .await
         .unwrap();
@@ -1974,18 +2008,27 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
     assert_eq!(our_events.len(), 3);
 
     // Verify deployment event
-    assert_eq!(our_events[0].event_type, RegistryEventType::DeploymentChanged);
+    assert_eq!(
+        our_events[0].event_type,
+        RegistryEventType::DeploymentChanged
+    );
     assert_eq!(our_events[0].environment_id, Some(env_id));
     assert_eq!(our_events[0].deployment_revision_id, Some(1));
     assert_eq!(our_events[0].domains, vec!["example.com".to_string()]);
 
     // Verify account tokens event
-    assert_eq!(our_events[1].event_type, RegistryEventType::AccountTokensInvalidated);
+    assert_eq!(
+        our_events[1].event_type,
+        RegistryEventType::AccountTokensInvalidated
+    );
     assert_eq!(our_events[1].account_id, Some(account_id));
     assert!(our_events[1].environment_id.is_none());
 
     // Verify permissions event
-    assert_eq!(our_events[2].event_type, RegistryEventType::EnvironmentPermissionsChanged);
+    assert_eq!(
+        our_events[2].event_type,
+        RegistryEventType::EnvironmentPermissionsChanged
+    );
     assert_eq!(our_events[2].environment_id, Some(env_id));
     assert_eq!(our_events[2].grantee_account_id, Some(grantee_id));
 }

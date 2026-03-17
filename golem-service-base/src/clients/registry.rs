@@ -917,9 +917,7 @@ impl RegistryService for GrpcRegistryService {
         let response = self
             .client
             .call("subscribe_registry_invalidations", move |client| {
-                let request = SubscribeRegistryInvalidationsRequest {
-                    last_seen_event_id,
-                };
+                let request = SubscribeRegistryInvalidationsRequest { last_seen_event_id };
                 Box::pin(client.subscribe_registry_invalidations(request))
             })
             .await?

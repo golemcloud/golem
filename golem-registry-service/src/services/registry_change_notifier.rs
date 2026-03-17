@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent, RegistryChangeRepo, RegistryEventType};
+use crate::repo::registry_change::{
+    ChangeEventId, RegistryChangeEvent, RegistryChangeRepo, RegistryEventType,
+};
 use golem_api_grpc::proto::golem::registry::v1::{
-    RegistryInvalidationEvent,
+    AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
+    EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent,
     registry_invalidation_event::Payload,
-    CursorExpiredEvent,
-    DeploymentChangedEvent,
-    AccountTokensInvalidatedEvent,
-    EnvironmentPermissionsChangedEvent,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
@@ -87,7 +86,11 @@ impl PostgresRegistryChangeNotifier {
         let (sender, _) = broadcast::channel(capacity);
         let connect_url = format!(
             "postgres://{}:{}@{}:{}/{}",
-            pg_config.username, pg_config.password, pg_config.host, pg_config.port, pg_config.database
+            pg_config.username,
+            pg_config.password,
+            pg_config.host,
+            pg_config.port,
+            pg_config.database
         );
         Self {
             sender,
@@ -238,30 +241,12 @@ async fn replay_from_cursor(
 ) -> Result<ChangeEventId, ReplayError> {
     match repo.get_events_since(cursor).await {
         Ok(events) if events.is_empty() => {
-            if let Ok(Some(latest_id)) = repo.get_latest_event_id().await {
-                if latest_id.0 > cursor.0 + 1 {
-                    if tx
-                        .send(Ok(RegistryInvalidationEvent {
-                            event_id: latest_id.0 as u64,
-                            payload: Some(Payload::CursorExpired(CursorExpiredEvent {})),
-                        }))
-                        .await
-                        .is_err()
-                    {
-                        return Err(ReplayError::Disconnected);
-                    }
-                    return Ok(latest_id);
-                }
-            }
-            Ok(cursor)
-        }
-        Ok(events) if !events.is_empty() => {
-            let mut cursor = cursor;
-            // Gap detection: if first event is not cursor+1, cursor has expired
-            if events[0].event_id.0 > cursor.0 + 1 {
+            if let Ok(Some(latest_id)) = repo.get_latest_event_id().await
+                && latest_id.0 > cursor.0 + 1
+            {
                 if tx
                     .send(Ok(RegistryInvalidationEvent {
-                        event_id: events[0].event_id.0 as u64,
+                        event_id: latest_id.0 as u64,
                         payload: Some(Payload::CursorExpired(CursorExpiredEvent {})),
                     }))
                     .await
@@ -269,10 +254,31 @@ async fn replay_from_cursor(
                 {
                     return Err(ReplayError::Disconnected);
                 }
+                return Ok(latest_id);
+            }
+            Ok(cursor)
+        }
+        Ok(events) if !events.is_empty() => {
+            let mut cursor = cursor;
+            // Gap detection: if first event is not cursor+1, cursor has expired
+            if events[0].event_id.0 > cursor.0 + 1
+                && tx
+                    .send(Ok(RegistryInvalidationEvent {
+                        event_id: events[0].event_id.0 as u64,
+                        payload: Some(Payload::CursorExpired(CursorExpiredEvent {})),
+                    }))
+                    .await
+                    .is_err()
+            {
+                return Err(ReplayError::Disconnected);
             }
             for event in &events {
                 cursor = event.event_id;
-                if tx.send(Ok(to_registry_invalidation_event(event))).await.is_err() {
+                if tx
+                    .send(Ok(to_registry_invalidation_event(event)))
+                    .await
+                    .is_err()
+                {
                     return Err(ReplayError::Disconnected);
                 }
             }
@@ -317,7 +323,11 @@ pub fn subscribe_registry_invalidations(
                 Ok(event) => {
                     if event.event_id > cursor {
                         cursor = event.event_id;
-                        if tx.send(Ok(to_registry_invalidation_event(&event))).await.is_err() {
+                        if tx
+                            .send(Ok(to_registry_invalidation_event(&event)))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -529,8 +539,7 @@ mod tests {
         repo.push(make_deployment_change_event(3));
 
         let notifier = LocalRegistryChangeNotifier::new(16);
-        let mut stream =
-            subscribe_registry_invalidations(repo, &notifier, Some(1));
+        let mut stream = subscribe_registry_invalidations(repo, &notifier, Some(1));
 
         let e1 = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
             .await
@@ -553,8 +562,7 @@ mod tests {
 
         let repo = Arc::new(MockRegistryChangeRepo::new());
         let notifier = LocalRegistryChangeNotifier::new(16);
-        let mut stream =
-            subscribe_registry_invalidations(repo, &notifier, None);
+        let mut stream = subscribe_registry_invalidations(repo, &notifier, None);
 
         // Give the spawned task time to start
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -582,8 +590,7 @@ mod tests {
 
         let notifier = LocalRegistryChangeNotifier::new(16);
         // Subscribe with cursor 0, so replay returns events 1 and 2
-        let mut stream =
-            subscribe_registry_invalidations(repo, &notifier, Some(0));
+        let mut stream = subscribe_registry_invalidations(repo, &notifier, Some(0));
 
         // Also push the same events through the notifier (simulating overlap)
         notifier.notify(ev1);
@@ -618,8 +625,7 @@ mod tests {
 
         // Capacity 2 — will lag when we burst
         let notifier = LocalRegistryChangeNotifier::new(2);
-        let mut stream =
-            subscribe_registry_invalidations(repo, &notifier, None);
+        let mut stream = subscribe_registry_invalidations(repo, &notifier, None);
 
         // Give the spawned task time to start listening
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -656,8 +662,7 @@ mod tests {
 
         let notifier = LocalRegistryChangeNotifier::new(16);
         // Subscribe with cursor 5 — events 6..100 were purged
-        let mut stream =
-            subscribe_registry_invalidations(repo, &notifier, Some(5));
+        let mut stream = subscribe_registry_invalidations(repo, &notifier, Some(5));
 
         let ev = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
             .await
@@ -666,7 +671,8 @@ mod tests {
             .expect("error");
         assert!(
             matches!(ev.payload, Some(Payload::CursorExpired(_))),
-            "expected CursorExpired payload, got {:?}", ev.payload
+            "expected CursorExpired payload, got {:?}",
+            ev.payload
         );
         assert_eq!(ev.event_id, 100);
     }
@@ -700,6 +706,10 @@ mod tests {
         // After lagged, we can still receive the remaining buffered events
         let event = rx.recv().await.unwrap();
         // With capacity=2, after lag recovery we get the oldest surviving event
-        assert!(event.event_id >= ChangeEventId(2), "expected surviving event, got {}", event.event_id.0);
+        assert!(
+            event.event_id >= ChangeEventId(2),
+            "expected surviving event, got {}",
+            event.event_id.0
+        );
     }
 }

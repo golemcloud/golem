@@ -112,10 +112,7 @@ impl RegistryService {
         api::make_open_api_service(&self.services)
     }
 
-    fn start_cleanup_task(
-        &self,
-        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-    ) {
+    fn start_cleanup_task(&self, join_set: &mut JoinSet<Result<(), anyhow::Error>>) {
         let repo = self.services.registry_change_repo.clone();
         let retention = self.config.deployment_events.retention;
         let interval = self.config.deployment_events.cleanup_interval;

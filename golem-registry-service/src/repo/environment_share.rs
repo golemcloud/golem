@@ -178,8 +178,10 @@ impl DbEnvironmentShareRepo<PostgresPool> {
         environment_id: Uuid,
         grantee_account_id: Uuid,
     ) -> Result<ChangeEventId, EnvironmentShareRepoError> {
-        let event =
-            NewRegistryChangeEvent::environment_permissions_changed(environment_id, grantee_account_id);
+        let event = NewRegistryChangeEvent::environment_permissions_changed(
+            environment_id,
+            grantee_account_id,
+        );
         crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event)
             .await
             .map_err(EnvironmentShareRepoError::from)
@@ -189,9 +191,7 @@ impl DbEnvironmentShareRepo<PostgresPool> {
         let _ = self
             .db_pool
             .with_rw(METRICS_SVC_NAME, "pg_notify")
-            .execute(
-                sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0),
-            )
+            .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
             .await;
     }
 }
@@ -202,8 +202,10 @@ impl DbEnvironmentShareRepo<SqlitePool> {
         environment_id: Uuid,
         grantee_account_id: Uuid,
     ) -> Result<ChangeEventId, EnvironmentShareRepoError> {
-        let event =
-            NewRegistryChangeEvent::environment_permissions_changed(environment_id, grantee_account_id);
+        let event = NewRegistryChangeEvent::environment_permissions_changed(
+            environment_id,
+            grantee_account_id,
+        );
         crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event)
             .await
             .map_err(EnvironmentShareRepoError::from)

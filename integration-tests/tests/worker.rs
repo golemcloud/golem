@@ -1832,17 +1832,12 @@ async fn deployment_invalidates_agent_resolution_cache(
     // would resolve to v1's component which has no decrement(), and this call would fail.
     // Success proves the cache was invalidated and the new deployment is being used.
     let agent_v2_id = agent_id!("CounterAgent", 42u64);
-    let _agent_v2 = user
-        .start_agent(&component.id, agent_v2_id.clone())
-        .await?;
+    let _agent_v2 = user.start_agent(&component.id, agent_v2_id.clone()).await?;
     let result_v2 = user
         .invoke_and_await_agent(&component, &agent_v2_id, "decrement", data_value!())
         .await?;
     // Counter starts at 0, decrement returns option::none
-    assert_eq!(
-        result_v2.into_return_value(),
-        Some(Value::Option(None))
-    );
+    assert_eq!(result_v2.into_return_value(), Some(Value::Option(None)));
 
     Ok(())
 }

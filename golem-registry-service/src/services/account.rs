@@ -253,7 +253,9 @@ impl AccountService {
                         });
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to record account deletion token invalidation event: {e}");
+                        tracing::warn!(
+                            "Failed to record account deletion token invalidation event: {e}"
+                        );
                     }
                 }
                 Ok(account)

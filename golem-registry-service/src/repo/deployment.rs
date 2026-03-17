@@ -31,10 +31,10 @@ use crate::repo::model::deployment::{
     CurrentDeploymentRevisionRecord, DeployRepoError, DeployedDeploymentIdentity,
     DeploymentIdentity, DeploymentRevisionRecord,
 };
-use crate::repo::registry_change::{ChangeEventId, NewRegistryChangeEvent};
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
+use crate::repo::registry_change::{ChangeEventId, NewRegistryChangeEvent};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -95,7 +95,14 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError>;
+    ) -> Result<
+        (
+            CurrentDeploymentExtRevisionRecord,
+            ChangeEventId,
+            Vec<String>,
+        ),
+        DeployRepoError,
+    >;
 
     async fn list_active_compiled_routes_for_domain(
         &self,
@@ -302,7 +309,14 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError> {
+    ) -> Result<
+        (
+            CurrentDeploymentExtRevisionRecord,
+            ChangeEventId,
+            Vec<String>,
+        ),
+        DeployRepoError,
+    > {
         let span = Self::span_user_and_env(
             deployment_creation.user_account_id,
             deployment_creation.environment_id,
@@ -491,7 +505,8 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError> {
+    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError>
+    {
         self.repo
             .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
             .instrument(info_span!(
@@ -547,10 +562,7 @@ impl DbDeploymentRepo<PostgresPool> {
         let _ = self
             .db_pool
             .with_rw(METRICS_SVC_NAME, "pg_notify")
-            .execute(
-                sqlx::query("SELECT pg_notify('registry_change', $1::text)")
-                    .bind(event_id.0),
-            )
+            .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
             .await;
     }
 
@@ -563,8 +575,7 @@ impl DbDeploymentRepo<PostgresPool> {
                 sqlx::query("SELECT domain FROM domain_registrations WHERE environment_id = $1 AND deleted_at IS NULL ORDER BY domain")
                     .bind(environment_id),
             )
-            .await
-            .map_err(RepoError::from)?;
+            .await?;
         rows.into_iter()
             .map(|row| row.try_get::<String, _>("domain").map_err(RepoError::from))
             .collect()
@@ -576,7 +587,11 @@ impl DbDeploymentRepo<PostgresPool> {
         deployment_revision_id: i64,
         domains: Vec<String>,
     ) -> RepoResult<ChangeEventId> {
-        let event = NewRegistryChangeEvent::deployment_changed(environment_id, deployment_revision_id, domains);
+        let event = NewRegistryChangeEvent::deployment_changed(
+            environment_id,
+            deployment_revision_id,
+            domains,
+        );
         crate::repo::registry_change::pg::insert_change_event_in_tx(tx, &event).await
     }
 }
@@ -594,8 +609,7 @@ impl DbDeploymentRepo<SqlitePool> {
                 sqlx::query("SELECT domain FROM domain_registrations WHERE environment_id = $1 AND deleted_at IS NULL ORDER BY domain")
                     .bind(environment_id),
             )
-            .await
-            .map_err(RepoError::from)?;
+            .await?;
         rows.into_iter()
             .map(|row| row.try_get::<String, _>("domain").map_err(RepoError::from))
             .collect()
@@ -607,7 +621,11 @@ impl DbDeploymentRepo<SqlitePool> {
         deployment_revision_id: i64,
         domains: Vec<String>,
     ) -> RepoResult<ChangeEventId> {
-        let event = NewRegistryChangeEvent::deployment_changed(environment_id, deployment_revision_id, domains);
+        let event = NewRegistryChangeEvent::deployment_changed(
+            environment_id,
+            deployment_revision_id,
+            domains,
+        );
         crate::repo::registry_change::sqlite::insert_change_event_in_tx(tx, &event).await
     }
 }
@@ -771,7 +789,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError> {
+    ) -> Result<
+        (
+            CurrentDeploymentExtRevisionRecord,
+            ChangeEventId,
+            Vec<String>,
+        ),
+        DeployRepoError,
+    > {
         if version_check
             && self
                 .version_exists(
@@ -785,55 +810,59 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             });
         }
 
-        let result = self.with_tx_err("deploy", |tx| {
-            async move {
-                let environment_id = deployment_creation.environment_id;
-                let deployment_revision_id = deployment_creation.deployment_revision_id;
+        let result = self
+            .with_tx_err("deploy", |tx| {
+                async move {
+                    let environment_id = deployment_creation.environment_id;
+                    let deployment_revision_id = deployment_creation.deployment_revision_id;
 
-                let deployment_revision = Self::create_deployment_revision(
-                    tx,
-                    deployment_creation.user_account_id,
-                    environment_id,
-                    deployment_creation.deployment_revision_id,
-                    deployment_creation.version,
-                    deployment_creation.hash,
-                )
-                .await?;
-
-                for component in &deployment_creation.components {
-                    Self::create_deployment_component_revision(
+                    let deployment_revision = Self::create_deployment_revision(
                         tx,
+                        deployment_creation.user_account_id,
                         environment_id,
-                        deployment_revision_id,
-                        component,
+                        deployment_creation.deployment_revision_id,
+                        deployment_creation.version,
+                        deployment_creation.hash,
                     )
-                    .await?
-                }
+                    .await?;
 
-                for deployment in &deployment_creation.http_api_deployments {
-                    Self::create_deployment_http_api_deployment_revision(tx, deployment).await?
-                }
+                    for component in &deployment_creation.components {
+                        Self::create_deployment_component_revision(
+                            tx,
+                            environment_id,
+                            deployment_revision_id,
+                            component,
+                        )
+                        .await?
+                    }
 
-                for deployment in &deployment_creation.mcp_deployments {
-                    Self::create_deployment_mcp_deployment_revision(tx, deployment).await?
-                }
+                    for deployment in &deployment_creation.http_api_deployments {
+                        Self::create_deployment_http_api_deployment_revision(tx, deployment).await?
+                    }
 
-                for compiled_route in &deployment_creation.compiled_routes {
-                    Self::create_deployment_compiled_route(tx, compiled_route).await?
-                }
+                    for deployment in &deployment_creation.mcp_deployments {
+                        Self::create_deployment_mcp_deployment_revision(tx, deployment).await?
+                    }
 
-                for registered_agent_type in &deployment_creation.registered_agent_types {
-                    Self::create_deployment_registered_agent_type(tx, registered_agent_type)
-                        .await?;
-                }
+                    for compiled_route in &deployment_creation.compiled_routes {
+                        Self::create_deployment_compiled_route(tx, compiled_route).await?
+                    }
 
-                for compiled_mcp in &deployment_creation.compiled_mcp {
-                    Self::create_deployment_mcp(tx, compiled_mcp).await?;
-                }
+                    for registered_agent_type in &deployment_creation.registered_agent_types {
+                        Self::create_deployment_registered_agent_type(tx, registered_agent_type)
+                            .await?;
+                    }
 
-                for agent_secret in deployment_creation.created_agent_secrets {
-                    let agent_secret_path = agent_secret.path.0.clone();
-                    DbAgentSecretRepo::<PostgresPool>::create_within_transaction(tx, agent_secret)
+                    for compiled_mcp in &deployment_creation.compiled_mcp {
+                        Self::create_deployment_mcp(tx, compiled_mcp).await?;
+                    }
+
+                    for agent_secret in deployment_creation.created_agent_secrets {
+                        let agent_secret_path = agent_secret.path.0.clone();
+                        DbAgentSecretRepo::<PostgresPool>::create_within_transaction(
+                            tx,
+                            agent_secret,
+                        )
                         .await
                         .map_err(|err| match err {
                             AgentSecretRepoError::SecretViolatesUniqueness => {
@@ -846,10 +875,13 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             }
                             other => other.into(),
                         })?;
-                }
+                    }
 
-                for agent_secret in deployment_creation.updated_agent_secrets {
-                    DbAgentSecretRepo::<PostgresPool>::update_within_transaction(tx, agent_secret)
+                    for agent_secret in deployment_creation.updated_agent_secrets {
+                        DbAgentSecretRepo::<PostgresPool>::update_within_transaction(
+                            tx,
+                            agent_secret,
+                        )
                         .await
                         .map_err(|err| match err {
                             AgentSecretRepoError::ConcurrentModification => {
@@ -857,31 +889,37 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             }
                             other => other.into(),
                         })?;
+                    }
+
+                    let revision = Self::set_current_deployment_internal(
+                        tx,
+                        deployment_creation.user_account_id,
+                        deployment_revision.environment_id,
+                        deployment_revision.revision_id,
+                    )
+                    .await?;
+
+                    // Query domains and record registry change event in the same transaction
+                    let domains = Self::query_domains_for_environment(tx, environment_id).await?;
+                    let change_event_id = Self::insert_change_event(
+                        tx,
+                        environment_id,
+                        deployment_revision_id,
+                        domains.clone(),
+                    )
+                    .await?;
+
+                    let ext_revision = CurrentDeploymentExtRevisionRecord {
+                        revision,
+                        deployment_version: deployment_revision.version,
+                        deployment_hash: deployment_revision.hash,
+                    };
+
+                    Ok::<_, DeployRepoError>((ext_revision, change_event_id, domains))
                 }
-
-                let revision = Self::set_current_deployment_internal(
-                    tx,
-                    deployment_creation.user_account_id,
-                    deployment_revision.environment_id,
-                    deployment_revision.revision_id,
-                )
-                .await?;
-
-                // Query domains and record registry change event in the same transaction
-                let domains = Self::query_domains_for_environment(tx, environment_id).await?;
-                let change_event_id = Self::insert_change_event(tx, environment_id, deployment_revision_id, domains.clone()).await?;
-
-                let ext_revision = CurrentDeploymentExtRevisionRecord {
-                    revision,
-                    deployment_version: deployment_revision.version,
-                    deployment_hash: deployment_revision.hash,
-                };
-
-                Ok::<_, DeployRepoError>((ext_revision, change_event_id, domains))
-            }
-            .boxed()
-        })
-        .await?;
+                .boxed()
+            })
+            .await?;
 
         self.pg_notify_change_event(result.1).await;
 
@@ -1276,25 +1314,33 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError> {
-        let result = self.with_tx_err("set_current_deployment", |tx| {
-            Box::pin(async move {
-                let revision = Self::set_current_deployment_internal(
-                    tx,
-                    user_account_id,
-                    environment_id,
-                    deployment_revision_id,
-                )
-                .await?;
+    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId, Vec<String>), DeployRepoError>
+    {
+        let result = self
+            .with_tx_err("set_current_deployment", |tx| {
+                Box::pin(async move {
+                    let revision = Self::set_current_deployment_internal(
+                        tx,
+                        user_account_id,
+                        environment_id,
+                        deployment_revision_id,
+                    )
+                    .await?;
 
-                // Query domains and record registry change event in the same transaction
-                let domains = Self::query_domains_for_environment(tx, environment_id).await?;
-                let change_event_id = Self::insert_change_event(tx, environment_id, deployment_revision_id, domains.clone()).await?;
+                    // Query domains and record registry change event in the same transaction
+                    let domains = Self::query_domains_for_environment(tx, environment_id).await?;
+                    let change_event_id = Self::insert_change_event(
+                        tx,
+                        environment_id,
+                        deployment_revision_id,
+                        domains.clone(),
+                    )
+                    .await?;
 
-                Ok::<_, DeployRepoError>((revision, change_event_id, domains))
+                    Ok::<_, DeployRepoError>((revision, change_event_id, domains))
+                })
             })
-        })
-        .await?;
+            .await?;
 
         self.pg_notify_change_event(result.1).await;
 

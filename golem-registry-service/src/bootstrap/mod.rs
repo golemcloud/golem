@@ -34,6 +34,7 @@ use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::plugin::{DbPluginRepo, PluginRepo};
+use crate::repo::registry_change::{DbRegistryChangeRepo, RegistryChangeRepo};
 use crate::repo::report::{DbReportRepo, ReportRepo};
 use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
@@ -53,15 +54,14 @@ use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
-use crate::repo::registry_change::{DbRegistryChangeRepo, RegistryChangeRepo};
-use crate::services::registry_change_notifier::{
-    RegistryChangeNotifier, LocalRegistryChangeNotifier, PostgresRegistryChangeNotifier,
-};
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
+use crate::services::registry_change_notifier::{
+    LocalRegistryChangeNotifier, PostgresRegistryChangeNotifier, RegistryChangeNotifier,
+};
 use crate::services::reports::ReportsService;
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;

@@ -22,7 +22,6 @@ use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use std::time::Duration;
 
-
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct AgentResolutionCacheKey {
     app_name: String,
@@ -42,8 +41,7 @@ struct PinnedAgentResolutionCacheKey {
 
 pub struct AgentResolutionCache {
     cache: Cache<AgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
-    pinned_cache:
-        Cache<PinnedAgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
+    pinned_cache: Cache<PinnedAgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
     registry_service: Arc<dyn RegistryService>,
     latest_revisions: scc::HashMap<EnvironmentId, DeploymentRevision>,
 }
@@ -94,10 +92,10 @@ impl AgentResolutionCache {
         };
 
         // Check if we have a cached but stale entry and remove it before get_or_insert
-        if let Some(resolved) = self.cache.try_get(&key).await {
-            if self.is_stale(&resolved) {
-                self.cache.remove(&key).await;
-            }
+        if let Some(resolved) = self.cache.try_get(&key).await
+            && self.is_stale(&resolved)
+        {
+            self.cache.remove(&key).await;
         }
 
         let registry = self.registry_service.clone();
@@ -212,6 +210,7 @@ mod tests {
     use super::*;
     use golem_common::base_model::account::AccountId;
     use golem_common::base_model::application::ApplicationId;
+    use golem_common::model::Empty;
     use golem_common::model::agent::{
         AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
         RegisteredAgentType, RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
@@ -220,7 +219,6 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-    use golem_common::model::Empty;
     use golem_service_base::clients::registry::RegistryServiceError;
     use golem_service_base::model::auth::AuthCtx;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -238,9 +236,7 @@ mod tests {
                         name: None,
                         description: String::new(),
                         prompt_hint: None,
-                        input_schema: DataSchema::Tuple(NamedElementSchemas {
-                            elements: vec![],
-                        }),
+                        input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
                     },
                     methods: vec![],
                     dependencies: vec![],
@@ -414,8 +410,7 @@ mod tests {
         async fn get_active_routes_for_domain(
             &self,
             _: &golem_common::base_model::domain_registration::Domain,
-        ) -> Result<golem_service_base::custom_api::CompiledRoutes, RegistryServiceError>
-        {
+        ) -> Result<golem_service_base::custom_api::CompiledRoutes, RegistryServiceError> {
             unimplemented!()
         }
         async fn get_active_compiled_mcps_for_domain(
@@ -456,7 +451,12 @@ mod tests {
     }
 
     fn make_cache(registry: Arc<dyn RegistryService>) -> AgentResolutionCache {
-        AgentResolutionCache::new(registry, 10, Duration::from_secs(60), Duration::from_secs(60))
+        AgentResolutionCache::new(
+            registry,
+            10,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        )
     }
 
     #[test]
@@ -493,9 +493,7 @@ mod tests {
         let env = EnvironmentName("env".to_string());
         let agent = AgentTypeName("agent".to_string());
 
-        let result = cache
-            .resolve(&app, &env, &agent, None, &make_auth())
-            .await;
+        let result = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result.is_ok());
     }
 
@@ -509,11 +507,12 @@ mod tests {
         let env = EnvironmentName("env".to_string());
         let agent = AgentTypeName("agent".to_string());
 
-        let result = cache
-            .resolve(&app, &env, &agent, None, &make_auth())
-            .await;
+        let result = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().deployment_revision, DeploymentRevision::INITIAL);
+        assert_eq!(
+            result.unwrap().deployment_revision,
+            DeploymentRevision::INITIAL
+        );
 
         // Simulate invalidation with a newer revision
         let new_rev = DeploymentRevision::new(1).unwrap();
@@ -523,9 +522,7 @@ mod tests {
         registry.set_revision(1);
 
         // Should re-resolve from registry since cached entry is stale
-        let result2 = cache
-            .resolve(&app, &env, &agent, None, &make_auth())
-            .await;
+        let result2 = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result2.is_ok());
         assert_eq!(result2.unwrap().deployment_revision, new_rev);
     }
@@ -540,16 +537,12 @@ mod tests {
         let env = EnvironmentName("env".to_string());
         let agent = AgentTypeName("agent".to_string());
 
-        let result = cache
-            .resolve(&app, &env, &agent, None, &make_auth())
-            .await;
+        let result = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result.is_ok());
 
         cache.update_latest_revision(env_id, DeploymentRevision::INITIAL);
 
-        let result2 = cache
-            .resolve(&app, &env, &agent, None, &make_auth())
-            .await;
+        let result2 = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result2.is_ok());
     }
 
@@ -563,15 +556,11 @@ mod tests {
         let env = EnvironmentName("env".to_string());
         let agent = AgentTypeName("agent".to_string());
 
-        let _ = cache
-            .resolve(&app, &env, &agent, None, &make_auth())
-            .await;
+        let _ = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         cache.clear().await;
 
         // After clear, cache should re-resolve (which works fine since mock returns a value)
-        let result = cache
-            .resolve(&app, &env, &agent, None, &make_auth())
-            .await;
+        let result = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result.is_ok());
     }
 
@@ -585,9 +574,7 @@ mod tests {
         let env = EnvironmentName("env".to_string());
         let agent = AgentTypeName("agent".to_string());
 
-        let r1 = cache
-            .resolve(&app, &env, &agent, None, &make_auth())
-            .await;
+        let r1 = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(r1.is_ok());
 
         let r2 = cache

@@ -92,8 +92,16 @@ impl SafeDisplay for RegistryServiceConfig {
         );
 
         let _ = writeln!(&mut result, "deployment events:");
-        let _ = writeln!(&mut result, "  retention: {:?}", self.deployment_events.retention);
-        let _ = writeln!(&mut result, "  cleanup_interval: {:?}", self.deployment_events.cleanup_interval);
+        let _ = writeln!(
+            &mut result,
+            "  retention: {:?}",
+            self.deployment_events.retention
+        );
+        let _ = writeln!(
+            &mut result,
+            "  cleanup_interval: {:?}",
+            self.deployment_events.cleanup_interval
+        );
 
         result
     }

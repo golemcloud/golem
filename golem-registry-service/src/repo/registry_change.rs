@@ -106,10 +106,7 @@ impl NewRegistryChangeEvent {
         }
     }
 
-    pub fn environment_permissions_changed(
-        environment_id: Uuid,
-        grantee_account_id: Uuid,
-    ) -> Self {
+    pub fn environment_permissions_changed(environment_id: Uuid, grantee_account_id: Uuid) -> Self {
         Self {
             event_type: RegistryEventType::EnvironmentPermissionsChanged,
             environment_id: Some(environment_id),
@@ -195,9 +192,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
 
         let _ = self
             .with_rw("pg_notify")
-            .execute(
-                sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0),
-            )
+            .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
             .await;
 
         Ok(event_id)
@@ -224,18 +219,13 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
 
         rows.iter()
             .map(|row| {
-                let event_type_raw: i16 =
-                    row.try_get("event_type").map_err(RepoError::from)?;
+                let event_type_raw: i16 = row.try_get("event_type").map_err(RepoError::from)?;
                 let domains: Option<Vec<String>> =
                     row.try_get("domains").map_err(RepoError::from)?;
                 Ok(RegistryChangeEvent {
-                    event_id: ChangeEventId(
-                        row.try_get("event_id").map_err(RepoError::from)?,
-                    ),
+                    event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
                     event_type: RegistryEventType::try_from(event_type_raw)?,
-                    environment_id: row
-                        .try_get("environment_id")
-                        .map_err(RepoError::from)?,
+                    environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
                     deployment_revision_id: row
                         .try_get("deployment_revision_id")
                         .map_err(RepoError::from)?,
@@ -252,13 +242,11 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
     async fn get_latest_event_id(&self) -> RepoResult<Option<ChangeEventId>> {
         let row = self
             .with_ro("get_latest_event_id")
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
+            .fetch_optional(sqlx::query(indoc! { r#"
                     SELECT event_id FROM registry_change_events
                     ORDER BY event_id DESC
                     LIMIT 1
-                "#}),
-            )
+                "#}))
             .await?;
 
         match row {
@@ -345,24 +333,21 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
 
         rows.iter()
             .map(|row| {
-                let event_type_raw: i16 =
-                    row.try_get("event_type").map_err(RepoError::from)?;
+                let event_type_raw: i16 = row.try_get("event_type").map_err(RepoError::from)?;
                 let domains_json: Option<String> =
                     row.try_get("domains").map_err(RepoError::from)?;
                 let domains: Vec<String> = match domains_json {
                     Some(json) if !json.is_empty() => serde_json::from_str(&json).map_err(|e| {
-                        RepoError::InternalError(anyhow::anyhow!("Failed to deserialize domains: {e}"))
+                        RepoError::InternalError(anyhow::anyhow!(
+                            "Failed to deserialize domains: {e}"
+                        ))
                     })?,
                     _ => Vec::new(),
                 };
                 Ok(RegistryChangeEvent {
-                    event_id: ChangeEventId(
-                        row.try_get("event_id").map_err(RepoError::from)?,
-                    ),
+                    event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
                     event_type: RegistryEventType::try_from(event_type_raw)?,
-                    environment_id: row
-                        .try_get("environment_id")
-                        .map_err(RepoError::from)?,
+                    environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
                     deployment_revision_id: row
                         .try_get("deployment_revision_id")
                         .map_err(RepoError::from)?,
@@ -379,13 +364,11 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
     async fn get_latest_event_id(&self) -> RepoResult<Option<ChangeEventId>> {
         let row = self
             .with_ro("get_latest_event_id")
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
+            .fetch_optional(sqlx::query(indoc! { r#"
                     SELECT event_id FROM registry_change_events
                     ORDER BY event_id DESC
                     LIMIT 1
-                "#}),
-            )
+                "#}))
             .await?;
 
         match row {
@@ -418,9 +401,7 @@ pub mod pg {
     use super::*;
 
     pub async fn insert_change_event_in_tx(
-        tx: &mut <
-            <PostgresPool as Pool>::LabelledApi as LabelledPoolApi
-        >::LabelledTransaction,
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         event: &NewRegistryChangeEvent,
     ) -> RepoResult<ChangeEventId> {
         let event_type: i16 = event.event_type.into();
@@ -441,8 +422,7 @@ pub mod pg {
                 .bind(event.grantee_account_id)
                 .bind(domains),
             )
-            .await
-            .map_err(RepoError::from)?;
+            .await?;
 
         Ok(ChangeEventId(
             row.try_get("event_id").map_err(RepoError::from)?,
@@ -454,9 +434,7 @@ pub mod sqlite {
     use super::*;
 
     pub async fn insert_change_event_in_tx(
-        tx: &mut <
-            <SqlitePool as Pool>::LabelledApi as LabelledPoolApi
-        >::LabelledTransaction,
+        tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         event: &NewRegistryChangeEvent,
     ) -> RepoResult<ChangeEventId> {
         let event_type: i16 = event.event_type.into();
@@ -483,8 +461,7 @@ pub mod sqlite {
                 .bind(event.grantee_account_id)
                 .bind(&domains_json),
             )
-            .await
-            .map_err(RepoError::from)?;
+            .await?;
 
         Ok(ChangeEventId(
             row.try_get("event_id").map_err(RepoError::from)?,

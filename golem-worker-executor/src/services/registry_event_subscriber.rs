@@ -104,9 +104,7 @@ async fn dispatch_event(
             environment_state_service.invalidate_all().await;
             agent_types_service.invalidate_all().await;
         }
-        RegistryInvalidationEvent::DeploymentChanged {
-            environment_id, ..
-        } => {
+        RegistryInvalidationEvent::DeploymentChanged { environment_id, .. } => {
             debug!(
                 environment_id = %environment_id,
                 "Received deployment changed event, invalidating environment caches"

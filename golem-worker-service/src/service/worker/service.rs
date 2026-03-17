@@ -15,6 +15,7 @@
 use super::WorkerResult;
 use super::{ConnectWorkerStream, WorkerClient, WorkerServiceError};
 use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult};
+use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
@@ -36,7 +37,6 @@ use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
-use crate::service::agent_resolution_cache::AgentResolutionCache;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};

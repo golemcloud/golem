@@ -141,7 +141,11 @@ impl EnvironmentShareService {
         match result {
             Ok((record, change_event_id)) => {
                 let share: EnvironmentShare = record.try_into()?;
-                self.notify_permissions_changed(change_event_id, environment_id.0, data.grantee_account_id.0);
+                self.notify_permissions_changed(
+                    change_event_id,
+                    environment_id.0,
+                    data.grantee_account_id.0,
+                );
                 Ok(share)
             }
             Err(EnvironmentShareRepoError::ShareViolatesUniqueness) => {

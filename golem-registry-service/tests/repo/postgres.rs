@@ -26,9 +26,11 @@ use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
-use golem_registry_service::repo::registry_change::{DbRegistryChangeRepo, RegistryChangeRepo, NewRegistryChangeEvent};
+use golem_registry_service::repo::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
+};
 use golem_registry_service::services::registry_change_notifier::{
-    RegistryChangeNotifier, PostgresRegistryChangeNotifier,
+    PostgresRegistryChangeNotifier, RegistryChangeNotifier,
 };
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
@@ -374,9 +376,7 @@ async fn test_registry_change_replay_and_broadcast(#[dimension(postgres_variant)
 }
 
 #[test]
-async fn test_registry_change_cursor_expired_detection(
-    #[dimension(postgres_variant)] deps: &Deps,
-) {
+async fn test_registry_change_cursor_expired_detection(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_registry_change_cursor_expired_detection(deps).await;
 }
 
@@ -393,8 +393,7 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
     use std::sync::Arc;
     use uuid::Uuid;
 
-    let repo: Arc<dyn RegistryChangeRepo> =
-        Arc::new(DbRegistryChangeRepo::new(db.pool.clone()));
+    let repo: Arc<dyn RegistryChangeRepo> = Arc::new(DbRegistryChangeRepo::new(db.pool.clone()));
 
     let notifier = PostgresRegistryChangeNotifier::new(64, repo.clone(), &db.config);
 
@@ -410,7 +409,11 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
     // Record an event via the repo — this INSERT triggers pg_notify('registry_change', ...)
     let env_id = Uuid::new_v4();
     let event_id = repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 42, vec![]))
+        .record_change_event(&NewRegistryChangeEvent::deployment_changed(
+            env_id,
+            42,
+            vec![],
+        ))
         .await
         .unwrap();
 

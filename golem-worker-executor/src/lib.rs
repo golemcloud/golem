@@ -364,7 +364,15 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
     shutdown_token: tokio_util::sync::CancellationToken,
-) -> Result<(All<Ctx>, std::thread::JoinHandle<()>, Arc<AtomicBool>, Arc<dyn RegistryService>), anyhow::Error> {
+) -> Result<
+    (
+        All<Ctx>,
+        std::thread::JoinHandle<()>,
+        Arc<AtomicBool>,
+        Arc<dyn RegistryService>,
+    ),
+    anyhow::Error,
+> {
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,

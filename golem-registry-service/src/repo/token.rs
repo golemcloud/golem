@@ -166,9 +166,7 @@ impl DbTokenRepo<PostgresPool> {
         let _ = self
             .db_pool
             .with_rw(METRICS_SVC_NAME, "pg_notify")
-            .execute(
-                sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0),
-            )
+            .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
             .await;
     }
 }
@@ -283,15 +281,13 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                         .execute(
                             sqlx::query("DELETE FROM tokens WHERE token_id = $1").bind(token_id),
                         )
-                        .await
-                        .map_err(RepoError::from)?;
+                        .await?;
 
                     if delete_result.rows_affected() == 0 {
                         return Ok::<_, RepoError>(None);
                     }
 
-                    let event_id =
-                        Self::insert_token_invalidation_event(tx, account_id).await?;
+                    let event_id = Self::insert_token_invalidation_event(tx, account_id).await?;
                     Ok(Some(event_id))
                 })
             })
