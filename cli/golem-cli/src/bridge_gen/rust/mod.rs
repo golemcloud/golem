@@ -29,7 +29,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use std::collections::{BTreeMap, HashMap};
 use syn::{Lit, LitStr};
-use toml_edit::{value, Array, DocumentMut, Item, Table};
+use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value};
 use tracing::debug;
 
 #[allow(clippy::module_inception)]
@@ -2017,35 +2017,39 @@ impl GolemDependencySource {
     }
 }
 
-fn add_features(entry: &mut Item, features: &[&str]) {
+fn add_features(entry: &mut InlineTable, features: &[&str]) {
     if !features.is_empty() {
         let mut feature_items = Array::default();
         for feature in features {
             feature_items.push(*feature);
         }
-        entry["default-features"] = value(false);
-        entry["features"] = value(feature_items);
+        entry.insert("default-features", Value::from(false));
+        entry.insert("features", Value::Array(feature_items));
     }
 }
 
 fn dep(version: &str, features: &[&str]) -> Item {
-    let mut entry = Item::Table(Table::default());
-    entry["version"] = value(version);
+    if features.is_empty() {
+        return value(version);
+    }
+
+    let mut entry = InlineTable::new();
+    entry.insert("version", Value::from(version));
     add_features(&mut entry, features);
-    entry
+    Item::Value(Value::InlineTable(entry))
 }
 
 fn git_dep(url: &str, branch: &str, features: &[&str]) -> Item {
-    let mut entry = Item::Table(Table::default());
-    entry["git"] = value(url);
-    entry["branch"] = value(branch);
+    let mut entry = InlineTable::new();
+    entry.insert("git", Value::from(url));
+    entry.insert("branch", Value::from(branch));
     add_features(&mut entry, features);
-    entry
+    Item::Value(Value::InlineTable(entry))
 }
 
 fn path_dep(path: &str, features: &[&str]) -> Item {
-    let mut entry = Item::Table(Table::default());
-    entry["path"] = value(path);
+    let mut entry = InlineTable::new();
+    entry.insert("path", Value::from(path));
     add_features(&mut entry, features);
-    entry
+    Item::Value(Value::InlineTable(entry))
 }
