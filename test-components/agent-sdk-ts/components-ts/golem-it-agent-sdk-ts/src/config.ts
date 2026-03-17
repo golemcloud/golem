@@ -121,7 +121,7 @@ export class RpcLocalConfigAgent extends BaseAgent {
 
   async echoLocalConfig(): Promise<string> {
     const config = this.config.value;
-    let client = LocalConfigAgent.get(
+    let client = LocalConfigAgent.getWithConfig(
       this.name,
       {
         foo: config.foo,

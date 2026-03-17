@@ -91,7 +91,7 @@ async fn rpc_provided_config_overrides_defaults(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-local-config-agent", "test-agent");
+    let agent_id = agent_id!("RpcLocalConfigAgent", "test-agent");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
@@ -173,7 +173,7 @@ async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-local-config-agent", "test-agent");
+    let agent_id = agent_id!("RpcLocalConfigAgent", "test-agent");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
@@ -260,10 +260,10 @@ async fn rpc_does_not_override_values_of_existing_agent(
         .store()
         .await?;
 
-    user.start_agent(&component.id, agent_id!("local-config-agent", "test-agent"))
+    user.start_agent(&component.id, agent_id!("LocalConfigAgent", "test-agent"))
         .await?;
 
-    let agent_id = agent_id!("rpc-local-config-agent", "test-agent");
+    let agent_id = agent_id!("RpcLocalConfigAgent", "test-agent");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user

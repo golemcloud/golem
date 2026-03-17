@@ -202,7 +202,7 @@ impl RpcLocalConfigAgent for RpcLocalConfigAgentImpl {
 
     async fn echo_local_config(&self) -> String {
         let config = self.config.get();
-        let client = LocalConfigAgentClient::get(
+        let client = LocalConfigAgentClient::get_with_config(
             self.name.clone(),
             LocalConfigAgentConfigRpc {
                 foo: Some(config.foo.clone()),

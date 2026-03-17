@@ -41,7 +41,7 @@ pub fn get_remote_client(
         generate_constructor_data_value_params_encoding(constructor_data_value_param_idents);
 
     let get_method_ident = if method_names.contains_get() {
-        format_ident!("_get")
+        format_ident!("get_")
     } else {
         format_ident!("get")
     };
@@ -61,9 +61,8 @@ pub fn get_remote_client(
     };
 
     let optional_get_with_config_impl = if !constructor_agent_config_param_defs.is_empty() {
-        let get_with_config_method_ident = format_ident!("{}_with_config", get_method_ident);
         quote! {
-            pub fn #get_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
+            pub fn get_with_config(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
                 let agent_type =
                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
