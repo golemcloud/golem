@@ -35,8 +35,82 @@ pub struct TemplatePlan {
     file_steps: BTreeMap<PathBuf, anyhow::Result<TemplatePlanStep>>,
 }
 
+pub struct SafeTemplatePlan {
+    file_steps: BTreeMap<PathBuf, SafeTemplatePlanStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SafeTemplatePlanStep {
+    Create { new: String },
+    Merge { current: String, new: String },
+    SkipSame { current: String },
+}
+
+pub struct UnsafeTemplatePlan {
+    file_steps: BTreeMap<PathBuf, UnsafeTemplatePlanStep>,
+}
+
+pub enum UnsafeTemplatePlanStep {
+    Overwrite { current: String, new: String },
+    FailedPlan { error: anyhow::Error },
+}
+
 impl TemplatePlan {
     pub fn file_steps(&self) -> &BTreeMap<PathBuf, anyhow::Result<TemplatePlanStep>> {
+        &self.file_steps
+    }
+
+    pub fn partition(self) -> (SafeTemplatePlan, UnsafeTemplatePlan) {
+        let mut safe_steps = BTreeMap::new();
+        let mut unsafe_steps = BTreeMap::new();
+
+        for (path, step) in self.file_steps {
+            match step {
+                Ok(TemplatePlanStep::Create { new }) => {
+                    safe_steps.insert(path, SafeTemplatePlanStep::Create { new });
+                }
+                Ok(TemplatePlanStep::Overwrite { current, new }) => {
+                    unsafe_steps.insert(path, UnsafeTemplatePlanStep::Overwrite { current, new });
+                }
+                Ok(TemplatePlanStep::Merge { current, new }) => {
+                    safe_steps.insert(path, SafeTemplatePlanStep::Merge { current, new });
+                }
+                Ok(TemplatePlanStep::SkipSame { current }) => {
+                    safe_steps.insert(path, SafeTemplatePlanStep::SkipSame { current });
+                }
+                Err(error) => {
+                    unsafe_steps.insert(path, UnsafeTemplatePlanStep::FailedPlan { error });
+                }
+            }
+        }
+
+        (
+            SafeTemplatePlan {
+                file_steps: safe_steps,
+            },
+            UnsafeTemplatePlan {
+                file_steps: unsafe_steps,
+            },
+        )
+    }
+}
+
+impl SafeTemplatePlan {
+    pub fn is_empty(&self) -> bool {
+        self.file_steps.is_empty()
+    }
+
+    pub fn file_steps(&self) -> &BTreeMap<PathBuf, SafeTemplatePlanStep> {
+        &self.file_steps
+    }
+}
+
+impl UnsafeTemplatePlan {
+    pub fn is_empty(&self) -> bool {
+        self.file_steps.is_empty()
+    }
+
+    pub fn file_steps(&self) -> &BTreeMap<PathBuf, UnsafeTemplatePlanStep> {
         &self.file_steps
     }
 
@@ -44,7 +118,7 @@ impl TemplatePlan {
         self.file_steps
             .iter()
             .filter_map(|(path, step)| match step {
-                Ok(TemplatePlanStep::Overwrite { .. }) => Some(path.as_ref()),
+                UnsafeTemplatePlanStep::Overwrite { .. } => Some(path.as_ref()),
                 _ => None,
             })
     }
@@ -52,7 +126,10 @@ impl TemplatePlan {
     pub fn failed_plans(&self) -> impl Iterator<Item = (&PathBuf, &anyhow::Error)> {
         self.file_steps
             .iter()
-            .filter_map(|(path, step)| step.as_ref().err().map(|err| (path, err)))
+            .filter_map(|(path, step)| match step {
+                UnsafeTemplatePlanStep::FailedPlan { error } => Some((path, error)),
+                _ => None,
+            })
     }
 }
 

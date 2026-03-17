@@ -418,6 +418,14 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_template_plan_apply(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            "The above template plan steps will now be applied. Do you want to continue?",
+            None,
+        )
+    }
+
     fn confirm<M: AsRef<str>>(
         &self,
         default: bool,

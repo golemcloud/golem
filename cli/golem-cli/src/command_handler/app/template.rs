@@ -14,8 +14,8 @@
 
 use crate::app::context::validated_to_anyhow;
 use crate::app::template::{
-    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName, TemplatePlan,
-    TemplatePlanBuilder, TemplatePlanStep,
+    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName, SafeTemplatePlan,
+    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, UnsafeTemplatePlan,
 };
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::Handlers;
@@ -160,9 +160,18 @@ impl TemplateHandler {
             &template_inputs,
         )?;
 
-        self.validate_new_template_plan(&template_plan)?;
-        self.log_new_template_plan(&template_plan);
-        self.apply_new_template_plan(&template_plan)?;
+        let (safe_template_plan, unsafe_template_plan) = template_plan.partition();
+
+        self.validate_new_template_plan(&unsafe_template_plan)?;
+        self.log_new_template_plan(&safe_template_plan);
+
+        if !safe_template_plan.is_empty()
+            && !self.ctx.interactive_handler().confirm_template_plan_apply()?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        self.apply_new_template_plan(&safe_template_plan)?;
 
         logln("");
         log_finished_ok("applying template(s)");
@@ -830,9 +839,12 @@ impl TemplateHandler {
         Ok(())
     }
 
-    fn validate_new_template_plan(&self, template_plan: &TemplatePlan) -> anyhow::Result<()> {
-        let overwrites = template_plan.overwrites().collect::<Vec<_>>();
-        let failed_plans = template_plan.failed_plans().collect::<Vec<_>>();
+    fn validate_new_template_plan(
+        &self,
+        unsafe_template_plan: &UnsafeTemplatePlan,
+    ) -> anyhow::Result<()> {
+        let overwrites = unsafe_template_plan.overwrites().collect::<Vec<_>>();
+        let failed_plans = unsafe_template_plan.failed_plans().collect::<Vec<_>>();
 
         if !overwrites.is_empty() || !failed_plans.is_empty() {
             logln("");
@@ -873,77 +885,69 @@ impl TemplateHandler {
         Ok(())
     }
 
-    fn log_new_template_plan(&self, template_plan: &TemplatePlan) {
-        // TODO: FCL: create a safe subset of the template plan?
-        // TODO: FCL: review and approve
+    fn log_new_template_plan(&self, safe_template_plan: &SafeTemplatePlan) {
+        if safe_template_plan.is_empty() {
+            return;
+        }
+
         logln("");
         log_action(
             "Planned",
             "required changes for applying the selected template(s)",
         );
         let _indent = self.ctx.log_handler().nested_text_view_indent();
-        for (path, step) in template_plan.file_steps() {
-            if let Ok(step) = step {
-                match step {
-                    TemplatePlanStep::Create { .. } => {
-                        logln(format!(
-                            "- {} {}",
-                            "create".green(),
-                            path.log_color_highlight()
-                        ));
-                    }
-                    TemplatePlanStep::Overwrite { .. } => {
-                        logln(format!(
-                            "- {} {}",
-                            "overwrite".red(),
-                            path.log_color_highlight()
-                        ));
-                    }
-                    TemplatePlanStep::Merge { current, new } => {
-                        logln(format!(
-                            "- {} {}",
-                            "update".green(),
-                            path.log_color_highlight()
-                        ));
-                        let _indent = LogIndent::new();
-                        let _indent = self.ctx.log_handler().nested_text_view_indent();
-                        log_unified_diff(&diff::unified_diff(current, new));
-                    }
-                    TemplatePlanStep::SkipSame { .. } => {
-                        logln(format!(
-                            "- {} {}",
-                            "skip".yellow(),
-                            path.log_color_highlight(),
-                        ));
-                    }
+        for (path, step) in safe_template_plan.file_steps() {
+            match step {
+                SafeTemplatePlanStep::Create { .. } => {
+                    logln(format!(
+                        "- {} {}",
+                        "create".green(),
+                        path.log_color_highlight()
+                    ));
+                }
+                SafeTemplatePlanStep::Merge { current, new } => {
+                    logln(format!(
+                        "- {} {}",
+                        "update".green(),
+                        path.log_color_highlight()
+                    ));
+                    let _indent = LogIndent::new();
+                    let _indent = self.ctx.log_handler().nested_text_view_indent();
+                    log_unified_diff(&diff::unified_diff(current, new));
+                }
+                SafeTemplatePlanStep::SkipSame { .. } => {
+                    logln(format!(
+                        "- {} {}",
+                        "skip".yellow(),
+                        path.log_color_highlight(),
+                    ));
                 }
             }
         }
     }
 
-    fn apply_new_template_plan(&self, template_plan: &TemplatePlan) -> anyhow::Result<()> {
+    fn apply_new_template_plan(&self, safe_template_plan: &SafeTemplatePlan) -> anyhow::Result<()> {
+        if safe_template_plan.is_empty() {
+            log_skipping_up_to_date("applying template(s)");
+            return Ok(());
+        }
+
         logln("");
         log_action("Applying", "template(s)");
         let _indent = LogIndent::new();
 
-        for (path, step) in template_plan.file_steps() {
-            if let Ok(step) = step {
-                match step {
-                    TemplatePlanStep::Create { new } => {
-                        log_action("Creating", format!("{}", path.log_color_highlight()));
-                        fs::write_str(path, new)?;
-                    }
-                    TemplatePlanStep::Overwrite { new, .. } => {
-                        log_action("Overwriting", format!("{}", path.log_color_highlight()));
-                        fs::write_str(path, new)?;
-                    }
-                    TemplatePlanStep::Merge { new, .. } => {
-                        log_action("Updating", format!("{}", path.log_color_highlight()));
-                        fs::write_str(path, new)?;
-                    }
-                    TemplatePlanStep::SkipSame { .. } => {
-                        log_skipping_up_to_date(format!("updating {}", path.log_color_highlight()));
-                    }
+        for (path, step) in safe_template_plan.file_steps() {
+            match step {
+                SafeTemplatePlanStep::Create { new } => {
+                    log_action("Creating", format!("{}", path.log_color_highlight()));
+                    fs::write_str(path, new)?;
+                }
+                SafeTemplatePlanStep::Merge { new, .. } => {
+                    log_action("Updating", format!("{}", path.log_color_highlight()));
+                    fs::write_str(path, new)?;
+                }
+                SafeTemplatePlanStep::SkipSame { .. } => {
+                    log_skipping_up_to_date(format!("updating {}", path.log_color_highlight()));
                 }
             }
         }
