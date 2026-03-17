@@ -26,13 +26,21 @@ async fn test_rust_counter() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"]).await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:counter"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:counter",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
@@ -101,34 +109,39 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"]).await;
 
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "rust:agent"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "rust:agent",
+        ])
         .await;
 
     assert!(outputs.success_or_dump());
 
     let component_manifest_path = ctx.cwd_path_join(
-        Path::new("components-rust")
-            .join("rust-agent")
+        Path::new("rust-agent")
             .join("golem.yaml"),
     );
 
     let component_source_code_lib_file = ctx.cwd_path_join(
-        Path::new("components-rust")
-            .join("rust-agent")
+        Path::new("rust-agent")
             .join("src")
             .join("lib.rs"),
     );
 
     let component_source_code_model_file = ctx.cwd_path_join(
-        Path::new("components-rust")
-            .join("rust-agent")
+        Path::new("rust-agent")
             .join("src")
             .join("model.rs"),
     );
@@ -526,13 +539,21 @@ async fn test_ts_counter() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"]).await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "app:counter",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
@@ -606,32 +627,39 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"]).await;
 
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "ts:agent"]).await;
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "ts:agent",
+        ])
+        .await;
 
     assert!(outputs.success_or_dump());
 
     let component_manifest_path = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("ts-agent")
+        Path::new("ts-agent")
             .join("golem.yaml"),
     );
 
     let component_source_code_main_file = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("ts-agent")
+        Path::new("ts-agent")
             .join("src")
             .join("main.ts"),
     );
 
     let component_source_code_model_file = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("ts-agent")
+        Path::new("ts-agent")
             .join("src")
             .join("model.ts"),
     );
@@ -879,19 +907,26 @@ async fn test_component_env_var_substitution() {
     let mut ctx = TestContext::new();
     let app_name = "env-var-substitution";
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"]).await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "app:weather-agent",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
     let component_manifest_path = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("app-weather-agent")
+        Path::new("app-weather-agent")
             .join("golem.yaml"),
     );
 
@@ -958,37 +993,50 @@ async fn test_http_api_merging() {
     let mut ctx = TestContext::new();
     let app_name = "http-api-merging";
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"]).await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter1"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "app:counter1",
+        ])
         .await;
     assert!(outputs.success_or_dump());
     let component1_manifest_path = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("app-counter1")
+        Path::new("app-counter1")
             .join("golem.yaml"),
     );
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter2"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "app:counter2",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
     let component2_source_path = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("app-counter2")
+        Path::new("app-counter2")
             .join("src")
             .join("main.ts"),
     );
     replace_strings_in_file(component2_source_path, &[("CounterAgent", "CounterAgent2")]).unwrap();
 
     let component2_manifest_path = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("app-counter2")
+        Path::new("app-counter2")
             .join("golem.yaml"),
     );
 
@@ -1153,20 +1201,29 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     let mut ctx = TestContext::new();
     let app_name = "agent-id-casing-and-normalizing";
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"]).await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "app:agent",
+        ])
+        .await;
     assert!(outputs.success_or_dump());
 
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
 
     let component_golem_yaml = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("app-agent")
+        Path::new("app-agent")
             .join("golem.yaml"),
     );
     fs::write_str(
@@ -1180,8 +1237,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     .unwrap();
 
     let component_source_code = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("app-agent")
+        Path::new("app-agent")
             .join("src")
             .join("main.ts"),
     );
@@ -1256,17 +1312,26 @@ async fn test_naming_extremes() {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"]).await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "app:agent",
+        ])
+        .await;
     assert!(outputs.success_or_dump());
 
     let component_golem_yaml = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("app-agent")
+        Path::new("app-agent")
             .join("golem.yaml"),
     );
 
@@ -1281,8 +1346,7 @@ async fn test_naming_extremes() {
     .unwrap();
 
     let component_source_code = ctx.cwd_path_join(
-        Path::new("components-ts")
-            .join("app-agent")
+        Path::new("app-agent")
             .join("src")
             .join("main.ts"),
     );

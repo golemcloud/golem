@@ -77,11 +77,13 @@ mod cmd {
 
 mod flag {
     pub static AGENT_TYPE_NAME: &str = "--agent-type-name";
+    pub static COMPONENT_NAME: &str = "--component-name";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
     pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static TEMPLATE: &str = "--template";
     pub static YES: &str = "--yes";
 }
 

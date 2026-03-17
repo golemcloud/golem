@@ -246,11 +246,16 @@ impl TemplateHandler {
                 })
             }
             None => {
-                let application_path = fs::canonicalize_path(
-                    application_path
-                        .as_deref()
-                        .unwrap_or_else(|| Path::new(".")),
-                )?;
+                let application_path = application_path
+                    .as_deref()
+                    .unwrap_or_else(|| Path::new("."));
+                let application_path = {
+                    if application_path.is_absolute() {
+                        application_path.to_path_buf()
+                    } else {
+                        std::env::current_dir()?.join(application_path)
+                    }
+                };
                 let application_name_candidate = match application_name {
                     Some(application_name) => application_name.0,
                     None => fs::file_name_to_str(&application_path)?.to_string(),

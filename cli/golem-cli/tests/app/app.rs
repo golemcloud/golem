@@ -25,18 +25,44 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::NEW, app_name, "typescript", "rust"]).await;
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::TEMPLATE,
+            "ts",
+            flag::TEMPLATE,
+            "rust",
+        ])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "typescript", "app:typescript"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "app:typescript",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:rust",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
@@ -56,13 +82,23 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:rust",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
@@ -111,7 +147,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
 #[test]
 async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::NEW, "dummy-app-name"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, "dummy-app-name"]).await;
     assert!(!outputs.success());
     assert!(outputs.stdout_contains("Available languages:"));
 
@@ -151,21 +187,29 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:rust",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
     fs::write_str(
         ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("app-rust")
-                .join("golem.yaml"),
+            Path::new("app-rust").join("golem.yaml"),
         ),
         indoc! {"
             components:
@@ -200,9 +244,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     fs::write_str(
         ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("app-rust")
-                .join("golem.yaml"),
+            Path::new("app-rust").join("golem.yaml"),
         ),
         indoc! {"
             components:
@@ -255,13 +297,23 @@ async fn custom_app_subcommand_with_builtin_name() {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:rust",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
