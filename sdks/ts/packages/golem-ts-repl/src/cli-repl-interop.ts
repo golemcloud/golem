@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import childProcess, {ChildProcess} from 'node:child_process';
+import childProcess, { ChildProcess } from 'node:child_process';
 import repl from 'node:repl';
 import pc from 'picocolors';
-import {CliArgMetadata, CliCommandMetadata, CliCommandsConfig} from './config';
-import {flushStdIO, writeChunk} from './process';
-import {writeFullLineSeparator} from './format';
+import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
+import { flushStdIO, writeChunk } from './process';
+import { writeFullLineSeparator } from './format';
 import type * as base from '@golemcloud/golem-ts-bridge';
 import * as uuid from 'uuid';
 
@@ -77,8 +77,8 @@ export class CliReplInterop {
     const builtinCompletions =
       tokens.length === 1
         ? this.builtinCommands
-          .filter((command) => command.startsWith(tokens[0]))
-          .map((command) => `${prefixChar}${command}`)
+            .filter((command) => command.startsWith(tokens[0]))
+            .map((command) => `${prefixChar}${command}`)
         : [];
 
     const lastToken = tokens.length > 0 ? tokens[tokens.length - 1] : '';
@@ -107,7 +107,7 @@ export class CliReplInterop {
     if (!command) return;
 
     const argTokens = consumedTokens.slice(1);
-    const {usedArgIds, positionalValues, expectingValueFor} = parseArgs(command, argTokens);
+    const { usedArgIds, positionalValues, expectingValueFor } = parseArgs(command, argTokens);
 
     if (expectingValueFor) {
       const result = await this.completeArgValue(expectingValueFor, currentToken);
@@ -221,7 +221,7 @@ export class CliReplInterop {
       args = hook.adaptArgs(args);
     }
 
-    let result = await this.cli.run({args: command.commandPath.concat(args), mode: 'inherit'});
+    let result = await this.cli.run({ args: command.commandPath.concat(args), mode: 'inherit' });
 
     if (hook) {
       await hook.handleResult(command.commandPath.concat(args), result);
@@ -247,7 +247,7 @@ export class CliReplInterop {
 
     const hook = findArgCompletionHook(arg);
     if (!hook) {
-      return {values: [], completeOn: currentToken};
+      return { values: [], completeOn: currentToken };
     }
 
     const values = await hook.complete(this.cli, currentToken);
@@ -336,7 +336,7 @@ type CompletionHook = { complete: CompletionHookFn };
 const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
   AGENT_ID: {
     complete: async (cli, currentToken) => {
-      const result = await cli.runJson({args: ['agent', 'list']});
+      const result = await cli.runJson({ args: ['agent', 'list'] });
 
       if (!result.ok || !result.json || !Array.isArray(result.json.agents)) {
         return [];
@@ -368,7 +368,7 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
 
   COMPONENT_NAME: {
     complete: async (cli, currentToken) => {
-      const result = await cli.runJson({args: ['component', 'list']});
+      const result = await cli.runJson({ args: ['component', 'list'] });
       if (!result.ok) {
         return [];
       }
@@ -401,7 +401,12 @@ class GolemCli {
   private readonly clientConfig: base.Configuration;
   private readonly multiComponentMode: boolean;
 
-  constructor(opts: { binary: string; cwd: string; clientConfig: base.Configuration, multiComponentMode: boolean }) {
+  constructor(opts: {
+    binary: string;
+    cwd: string;
+    clientConfig: base.Configuration;
+    multiComponentMode: boolean;
+  }) {
     this.binaryName = opts.binary;
     this.cwd = opts.cwd;
     this.clientConfig = opts.clientConfig;
@@ -449,7 +454,7 @@ class GolemCli {
       }
 
       child.once('exit', (code) => {
-        resolve({ok: code === 0, code, stdout, stderr});
+        resolve({ ok: code === 0, code, stdout, stderr });
       });
     });
   }
@@ -457,8 +462,8 @@ class GolemCli {
   async runJson(opts: {
     args: string[];
   }): Promise<{ ok: boolean; code: number | null; json: any }> {
-    const result = await this.run({args: ['--format', 'json', ...opts.args], mode: 'collect'});
-    return {ok: result.ok, code: result.code, json: JSON.parse(result.stdout)};
+    const result = await this.run({ args: ['--format', 'json', ...opts.args], mode: 'collect' });
+    return { ok: result.ok, code: result.code, json: JSON.parse(result.stdout) };
   }
 }
 
@@ -480,7 +485,7 @@ function collectReplCliCommands(root: CliCommandMetadata): ReplCliCommand[] {
   ) {
     const replCommand = commandPathToReplCommandName(command.path);
     const about = command.about ?? command.longAbout ?? command.name;
-    const {globalFlagArgs, flagArgs, positionalArgs} = partitionArgs(command.args);
+    const { globalFlagArgs, flagArgs, positionalArgs } = partitionArgs(command.args);
 
     flagArgs.set('--help', {
       action: '',
@@ -560,7 +565,7 @@ function partitionArgs(args: CliArgMetadata[]): {
     }
   }
 
-  return {globalFlagArgs, flagArgs, positionalArgs};
+  return { globalFlagArgs, flagArgs, positionalArgs };
 }
 
 function parseArgs(command: ReplCliCommand, tokens: string[]) {
@@ -592,7 +597,7 @@ function parseArgs(command: ReplCliCommand, tokens: string[]) {
     positionalValues.push(token);
   }
 
-  return {usedArgIds, positionalValues, expectingValueFor};
+  return { usedArgIds, positionalValues, expectingValueFor };
 }
 
 function completeFlags(command: ReplCliCommand, usedArgIds: Set<string>, prefix: string): string[] {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {env} from 'node:process';
+import { env } from 'node:process';
 import fs from 'node:fs';
 import util from 'node:util';
 import type * as base from '@golemcloud/golem-ts-bridge';
@@ -117,7 +117,7 @@ function clientServerConfigFromEnv(): base.GolemServer {
   const server_kind = requiredEnvVar('GOLEM_REPL_SERVER_KIND');
   switch (server_kind) {
     case 'local':
-      return {type: 'local'};
+      return { type: 'local' };
     case 'cloud':
       return {
         type: 'cloud',
@@ -147,14 +147,14 @@ export function loadReplCliFlags(): ReplCliFlags {
     .slice(2)
     .map((arg) => (arg === '-script-file' ? '--script-file' : arg));
 
-  const {values} = util.parseArgs({
+  const { values } = util.parseArgs({
     args: normalizedArgs,
     options: {
-      script: {type: 'string'},
-      'script-file': {type: 'string'},
-      'disable-auto-imports': {type: 'boolean'},
-      'disable-type-info': {type: 'boolean'},
-      'disable-stream': {type: 'boolean'},
+      script: { type: 'string' },
+      'script-file': { type: 'string' },
+      'disable-auto-imports': { type: 'boolean' },
+      'disable-type-info': { type: 'boolean' },
+      'disable-stream': { type: 'boolean' },
     },
     allowPositionals: true,
   });

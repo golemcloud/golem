@@ -1,5 +1,5 @@
-import {describe, expect, it} from 'vitest';
-import {parseRawArgs} from '../src/cli-repl-interop';
+import { describe, expect, it } from 'vitest';
+import { parseRawArgs } from '../src/cli-repl-interop';
 
 describe('parseRawArgs', () => {
   it('keeps component/agent ids with quoted params as a single token', () => {

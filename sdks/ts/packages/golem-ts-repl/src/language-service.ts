@@ -378,7 +378,8 @@ export class LanguageService {
   getAgentTypeGetSignature(agentTypeName: string): string | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
 
-    const sourceText = this.snippetImports + `const __agentType = ${agentTypeName};\n` + 'void __agentType;\n';
+    const sourceText =
+      this.snippetImports + `const __agentType = ${agentTypeName};\n` + 'void __agentType;\n';
     const sourceFile = this.project.createSourceFile('__client_info__.ts', sourceText, {
       overwrite: true,
     });
@@ -403,8 +404,7 @@ export class LanguageService {
         let typeText = checker.getTypeText(paramType, decl ?? agentTypeDecl);
         typeText = typeText.replace(/import\([^)]*\)\./g, '');
 
-        const parameterDecl =
-          decl && tsm.Node.isParameterDeclaration(decl) ? decl : undefined;
+        const parameterDecl = decl && tsm.Node.isParameterDeclaration(decl) ? decl : undefined;
         const prefix = parameterDecl?.isRestParameter() ? '...' : '';
         const optional = parameterDecl?.isOptional() ? '?' : '';
 
