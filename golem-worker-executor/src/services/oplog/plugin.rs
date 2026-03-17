@@ -762,6 +762,13 @@ impl Drop for ForwardingOplog {
         if let Some(timer) = self.timer.take() {
             timer.abort();
         }
+        // Abort all background monitor tasks to prevent them from
+        // outliving this oplog and causing resource contention.
+        if let Some(mut state) = self.state.try_lock() {
+            for task in state.monitor_tasks.drain(..) {
+                task.abort();
+            }
+        }
     }
 }
 
