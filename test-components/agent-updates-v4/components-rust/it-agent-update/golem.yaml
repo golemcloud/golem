@@ -31,6 +31,15 @@
 components:
   it:agent-update:
     templates: rust, rust-test-component
+    presets:
+      debug:
+        customCommands:
+          copy:
+          - command: cp ../../golem-temp/agents/it_agent_update_debug.wasm ../../../it_agent_update_v4_debug.wasm
+      release:
+        customCommands:
+          copy:
+          - command: cp ../../golem-temp/agents/it_agent_update_release.wasm ../../../it_agent_update_v4_release.wasm
 
     # Component environment variables can reference system environment variables with minijinja syntax:
     #

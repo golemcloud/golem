@@ -47,7 +47,9 @@ use golem_common::model::{
     AgentId, AgentInvocation, IdempotencyKey, OplogIndex, OwnedAgentId, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
-use golem_wasm::{CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, WasmRpcEntry};
+use golem_wasm::{
+    CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, ValueAndType, WasmRpcEntry,
+};
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -56,7 +58,9 @@ use tracing::{error, Instrument};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -64,6 +68,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         agent_type_name: String,
         constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
+        agent_config: Vec<
+            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
@@ -98,7 +105,22 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let remote_agent_id = golem_common::model::AgentId::from_agent_id(component_id, &agent_id)
             .map_err(|err| anyhow::anyhow!("{err}"))?;
 
-        construct_wasm_rpc_resource(self, remote_agent_id, &env, config_vars).await
+        let agent_config = agent_config
+            .into_iter()
+            .map(|c| {
+                let value_and_type = ValueAndType::from(c.value);
+                let encoded = value_and_type
+                    .to_json_value()
+                    .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
+
+                Ok::<_, anyhow::Error>(WorkerAgentConfigEntry {
+                    path: c.path,
+                    value: encoded,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        construct_wasm_rpc_resource(self, remote_agent_id, &env, config_vars, agent_config).await
     }
 
     async fn invoke_and_await(
@@ -930,6 +952,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_agent_id: AgentId,
     env: &[(String, String)],
     config: std::collections::BTreeMap<String, String>,
+    agent_config: Vec<WorkerAgentConfigEntry>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
 
@@ -948,6 +971,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             env,
             config,
             stack,
+            agent_config,
         )
         .await?;
     let entry = ctx.table().push(WasmRpcEntry {

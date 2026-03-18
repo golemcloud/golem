@@ -35,7 +35,10 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "oplog-processor").store().await?;
+    let component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin = client
         .create_plugin(
@@ -97,7 +100,10 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "oplog-processor").store().await?;
+    let component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin1 = client
         .create_plugin(
@@ -196,7 +202,10 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "oplog-processor").store().await?;
+    let component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     client
         .create_plugin(
@@ -251,7 +260,10 @@ async fn fails_with_bad_request_when_creating_plugin_if_component_user_does_not_
     let user_2 = deps.user().await?;
 
     let (_, env) = user_1.app_and_env().await?;
-    let component = user_1.component(&env.id, "oplog-processor").store().await?;
+    let component = user_1
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let client = deps.registry_service().client(&user_2.token).await;
 
@@ -291,7 +303,10 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
     let user_2 = deps.user().await?;
 
     let (_, env) = user_1.app_and_env().await?;
-    let component = user_1.component(&env.id, "oplog-processor").store().await?;
+    let component = user_1
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
     user_1
         .share_environment(&env.id, &user_2.account_id, &[EnvironmentRole::Viewer])
         .await?;

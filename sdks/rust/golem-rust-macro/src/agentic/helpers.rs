@@ -84,7 +84,7 @@ pub fn get_asyncness(sig: &syn::Signature) -> Asyncness {
     }
 }
 
-pub fn has_async_trait_attribute(impl_block: &syn::ItemImpl) -> bool {
+pub fn has_async_trait_attr(impl_block: &syn::ItemImpl) -> bool {
     impl_block.attrs.iter().any(is_async_trait_attr)
 }
 
@@ -94,18 +94,18 @@ pub fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
     path.is_ident("async_trait") || path.is_ident("async_trait::async_trait")
 }
 
-pub fn has_autoinject_attribute(pat_type: &syn::PatType) -> bool {
+pub fn has_agent_config_attr(pat_type: &syn::PatType) -> bool {
     pat_type
         .attrs
         .iter()
-        .any(|a| a.path().is_ident("autoinject"))
+        .any(|a| a.path().is_ident("agent_config"))
 }
 
-pub struct AutoInjectAttrRemover;
-impl VisitMut for AutoInjectAttrRemover {
+pub struct AgentConfigAttrRemover;
+impl VisitMut for AgentConfigAttrRemover {
     fn visit_fn_arg_mut(&mut self, i: &mut syn::FnArg) {
         if let syn::FnArg::Typed(arg) = i {
-            arg.attrs.retain(|att| !att.path().is_ident("autoinject"));
+            arg.attrs.retain(|att| !att.path().is_ident("agent_config"));
         }
         syn::visit_mut::visit_fn_arg_mut(self, i);
     }

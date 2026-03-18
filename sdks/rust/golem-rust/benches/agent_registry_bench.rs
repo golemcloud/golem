@@ -111,7 +111,8 @@ mod bench {
 
         let start = Instant::now();
         for _ in 0..iterations {
-            black_box(f());
+            f();
+            black_box(());
         }
         let elapsed = start.elapsed();
         let per_iter = elapsed / iterations as u32;
