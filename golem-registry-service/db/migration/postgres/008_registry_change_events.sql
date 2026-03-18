@@ -9,4 +9,4 @@ CREATE TABLE registry_change_events (
     changed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_registry_change_events_changed_at ON registry_change_events (changed_at);
+CREATE INDEX registry_change_events_changed_at_idx ON registry_change_events (changed_at);
