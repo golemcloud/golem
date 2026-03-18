@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {Config, ReplCliFlags} from './config';
+import { Config, ReplCliFlags } from './config';
 
-import tsm, {ts} from 'ts-morph';
+import tsm, { ts } from 'ts-morph';
 import pc from 'picocolors';
 
 export type SnippetTypeCheckResult =
   | {
-  ok: true;
-}
+      ok: true;
+    }
   | {
-  ok: false;
-  formattedErrors: string;
-};
+      ok: false;
+      formattedErrors: string;
+    };
 
 export type SnippetQuickInfo = {
   formattedInfo: string;
@@ -64,13 +64,13 @@ export class LanguageService {
     this.snippetImports = replCliFlags.disableAutoImports
       ? ''
       : Object.entries(config.agents)
-      .map(([agentTypeName, agentConfig]) => {
-        return [
-          `import { ${agentTypeName} } from '${agentConfig.clientPackageName}';`,
-          `import * as ${agentConfig.clientPackageImportedName} from '${agentConfig.clientPackageName}';`,
-        ].join('\n');
-      })
-      .join('\n') + '\n';
+          .map(([agentTypeName, agentConfig]) => {
+            return [
+              `import { ${agentTypeName} } from '${agentConfig.clientPackageName}';`,
+              `import * as ${agentConfig.clientPackageImportedName} from '${agentConfig.clientPackageName}';`,
+            ].join('\n');
+          })
+          .join('\n') + '\n';
 
     this.project = new tsm.Project({
       tsConfigFilePath: 'tsconfig.json',
@@ -90,7 +90,7 @@ export class LanguageService {
     if (this.snippetEndPos < this.snippetHistory.length) {
       this.snippetEndPos = -1;
     }
-    this.project.createSourceFile(SNIPPET_FILE_NAME, fullSnippet, {overwrite: true});
+    this.project.createSourceFile(SNIPPET_FILE_NAME, fullSnippet, { overwrite: true });
   }
 
   addSnippetToHistory(snippet: string) {
@@ -113,14 +113,14 @@ export class LanguageService {
   typeCheckSnippet(): SnippetTypeCheckResult {
     const snippet = this.getSnippet();
     if (!snippet) {
-      return {ok: true};
+      return { ok: true };
     }
 
     const diagnostics = snippet.getPreEmitDiagnostics();
     const errors = diagnostics.filter((d) => d.getCategory() === ts.DiagnosticCategory.Error);
 
     if (errors.length === 0) {
-      return {ok: true};
+      return { ok: true };
     } else {
       return {
         ok: false,
@@ -155,7 +155,7 @@ export class LanguageService {
       );
     }
 
-    return {formattedInfo};
+    return { formattedInfo };
   }
 
   getSnippetTypeInfo(): SnippetTypeInfo | undefined {
@@ -167,7 +167,7 @@ export class LanguageService {
     const typeContext = this.getSnippetTypeContext(snippet);
     if (!typeContext) return;
 
-    const {checker, typeInfo, remoteMethodExpansion} = typeContext;
+    const { checker, typeInfo, remoteMethodExpansion } = typeContext;
 
     const typeIsPromise = isPromise(typeInfo.type);
     const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(typeInfo.type);
@@ -411,7 +411,7 @@ export class LanguageService {
     const context = getCallContextForPlaceholders(snippet, pos, rawStart);
     if (!context) return;
 
-    const {signature, argIndex, argNode, replaceRange, expressionNode} = context;
+    const { signature, argIndex, argNode, replaceRange, expressionNode } = context;
     if (!signature) return;
     if (signature.getParameters().length === 0) {
       const snippetText = snippet.getText();
@@ -511,7 +511,7 @@ export class LanguageService {
       parameterNames,
     );
 
-    return {checker, typeInfo, remoteMethodExpansion};
+    return { checker, typeInfo, remoteMethodExpansion };
   }
 }
 
@@ -680,7 +680,7 @@ function getFallbackCallContext(
     signature,
     argIndex: argInfo.argIndex,
     argNode: undefined,
-    replaceRange: {replaceStart, replaceEnd},
+    replaceRange: { replaceStart, replaceEnd },
   };
 }
 
@@ -790,7 +790,7 @@ function getFallbackArgumentInfo(
   }
 
   const replaceStartAbs = lastComma >= 0 ? lastComma + 1 : openParenPos + 1;
-  return {argIndex: commaCount, replaceStartAbs};
+  return { argIndex: commaCount, replaceStartAbs };
 }
 
 function getResolvedSignature(
@@ -1009,19 +1009,19 @@ function buildTypePlaceholdersInner(
     const tagged = getTaggedUnionInfo(unionTypes, checker);
     const entries = tagged
       ? tagged.variants.map((variant) =>
-        buildTaggedObjectPlaceholder(
-          variant.type,
-          tagged.tagName,
-          variant.tagValue,
-          checker,
-          options,
-          seen,
-          depth + 1,
-        ),
-      )
+          buildTaggedObjectPlaceholder(
+            variant.type,
+            tagged.tagName,
+            variant.tagValue,
+            checker,
+            options,
+            seen,
+            depth + 1,
+          ),
+        )
       : unionTypes.flatMap((unionType) =>
-        buildTypePlaceholdersInner(unionType, checker, options, seen, depth + 1),
-      );
+          buildTypePlaceholdersInner(unionType, checker, options, seen, depth + 1),
+        );
 
     const result = uniquePlaceholders(entries).slice(0, options.maxVariants);
     seen.delete(type);
@@ -1200,11 +1200,11 @@ function getTaggedUnionInfo(
         break;
       }
 
-      variants.push({type: variantType, tagValue: literalValue});
+      variants.push({ type: variantType, tagValue: literalValue });
     }
 
     if (variants.length === unionTypes.length) {
-      return {tagName: name, variants};
+      return { tagName: name, variants };
     }
   }
 
@@ -1293,17 +1293,17 @@ function formatTypeText(typeText: string): string {
     const tokenStart = scanner.getTokenStart();
     if (tokenStart > lastPos) {
       const gap = typeText.slice(lastPos, tokenStart);
-      parts.push({text: gap, kind: 'space'});
+      parts.push({ text: gap, kind: 'space' });
     }
 
     const text = scanner.getTokenText();
-    parts.push({text, kind: tokenKindToDisplayPartKind(token)});
+    parts.push({ text, kind: tokenKindToDisplayPartKind(token) });
 
     lastPos = scanner.getTokenEnd();
   }
 
   if (lastPos < typeText.length) {
-    parts.push({text: typeText.slice(lastPos), kind: 'space'});
+    parts.push({ text: typeText.slice(lastPos), kind: 'space' });
   }
 
   return formatDisplayParts(parts);
@@ -1659,7 +1659,7 @@ function getTypeAtSnippetPosition(
 
   try {
     const type = fullExpressionNode.getType();
-    return {fullExpressionNode, type};
+    return { fullExpressionNode, type };
   } catch (e) {
     console.error();
     console.error('If you see this, please report it!');
