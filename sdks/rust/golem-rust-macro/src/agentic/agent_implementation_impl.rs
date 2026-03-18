@@ -197,7 +197,6 @@ fn build_match_arms(
 ) -> (Vec<proc_macro2::TokenStream>, Option<&syn::ImplItemFn>) {
     let mut match_arms = Vec::new();
     let mut constructor_method = None;
-    let mut method_index: usize = 0;
 
     for item in &impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
@@ -295,14 +294,10 @@ fn build_match_arms(
                 },
             };
 
-            let current_method_index = method_index;
-            method_index += 1;
-
             let method_param_extraction = generate_method_param_extraction(
                 &param_idents,
                 &agent_type_name,
                 method_name_str.as_str(),
-                current_method_index,
                 post_method_param_extraction_logic,
             );
 
@@ -321,19 +316,18 @@ fn generate_method_param_extraction(
     param_idents: &[syn::Ident],
     agent_type_name: &str,
     method_name: &str,
-    method_index: usize,
     post_method_param_extraction_logic: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let input_param_index_init = quote! {
       let mut input_param_index: usize = 0;
       let __agent_type_name = golem_rust::agentic::AgentTypeName(#agent_type_name.to_string());
-      let __param_schemas = golem_rust::agentic::get_method_parameter_types_by_index(
+      let __param_schemas = golem_rust::agentic::get_method_parameter_types(
           &__agent_type_name,
-          #method_index,
+          #method_name
       ).ok_or_else(|| {
           golem_rust::agentic::custom_error(format!(
-              "Internal Error: Parameter schemas not found for agent: {}, method index: {}",
-              #agent_type_name, #method_index
+              "Internal Error: Parameter schemas not found for agent: {}, method: {}",
+              #agent_type_name, #method_name
           ))
       })?;
     };
