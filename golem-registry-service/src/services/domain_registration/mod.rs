@@ -141,7 +141,7 @@ impl DomainRegistrationService {
 
         let (created_record, event_id) = self
             .domain_registration_repo
-            .create_and_record_event(record)
+            .create(record)
             .await
             .map_err(|err| match err {
                 DomainRegistrationRepoError::DomainAlreadyExists => {
@@ -184,7 +184,7 @@ impl DomainRegistrationService {
 
         let (deleted_record, event_id) = self
             .domain_registration_repo
-            .delete_and_record_event(domain_registration_id.0, auth.account_id().0)
+            .delete(domain_registration_id.0, auth.account_id().0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
                 domain_registration_id,

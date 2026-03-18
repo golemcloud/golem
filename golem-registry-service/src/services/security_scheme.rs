@@ -132,7 +132,7 @@ impl SecuritySchemeService {
 
         let result = self
             .security_scheme_repo
-            .create_and_record_event(environment_id.0, data.name.0.clone(), record)
+            .create(environment_id.0, data.name.0.clone(), record)
             .await;
 
         match result {
@@ -196,7 +196,7 @@ impl SecuritySchemeService {
 
         let result = self
             .security_scheme_repo
-            .update_and_record_event(
+            .update(
                 environment_id.0,
                 SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
             )
@@ -245,7 +245,7 @@ impl SecuritySchemeService {
 
         let result = self
             .security_scheme_repo
-            .delete_and_record_event(
+            .delete(
                 environment_id.0,
                 SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
             )
