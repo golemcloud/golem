@@ -703,6 +703,25 @@ mod tests {
         ) -> Result<EnvironmentState, RegistryServiceError> {
             unimplemented!()
         }
+
+        async fn subscribe_registry_invalidations(
+            &self,
+            _last_seen_event_id: Option<u64>,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = Result<
+                                golem_common::model::agent::RegistryInvalidationEvent,
+                                RegistryServiceError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            RegistryServiceError,
+        > {
+            unimplemented!()
+        }
     }
 
     fn account_id() -> AccountId {

@@ -24,6 +24,7 @@ use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
@@ -113,6 +114,26 @@ impl RouteResolver {
         })
     }
 
+    pub async fn invalidate_domain(&self, domain: &Domain) {
+        self.domain_api_cache.remove(domain).await;
+    }
+
+    pub async fn clear_all(&self) {
+        let keys = self.domain_api_cache.keys().await;
+        for key in keys {
+            self.domain_api_cache.remove(&key).await;
+        }
+    }
+
+    pub async fn invalidate_domains_for_environment(&self, environment_id: EnvironmentId) {
+        let entries = self.domain_api_cache.iter().await;
+        for (domain, domain_api) in entries {
+            if domain_api.environment_id == environment_id {
+                self.domain_api_cache.remove(&domain).await;
+            }
+        }
+    }
+
     async fn get_or_build_domain_api(
         &self,
         domain: &Domain,
@@ -132,6 +153,7 @@ impl RouteResolver {
             Ok(value) => value,
             Err(ApiDefinitionLookupError::UnknownSite(_)) => {
                 return Ok(DomainHttpApi {
+                    environment_id: EnvironmentId(uuid::Uuid::nil()),
                     router: Router::new(),
                     openapi_spec: None,
                 });
@@ -142,6 +164,7 @@ impl RouteResolver {
             }
         };
 
+        let environment_id = compiled_routes.environment_id;
         let finalized_routes = match Self::finalize_routes(compiled_routes).await {
             Ok(value) => value,
             Err(err) => {
@@ -161,6 +184,7 @@ impl RouteResolver {
         let router = build_router(finalized_routes);
 
         Ok(DomainHttpApi {
+            environment_id,
             router,
             openapi_spec,
         })
@@ -286,6 +310,7 @@ fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRoute>
 
 #[derive(Clone)]
 struct DomainHttpApi {
+    environment_id: EnvironmentId,
     router: Router<Arc<RichCompiledRoute>>,
     openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
 }

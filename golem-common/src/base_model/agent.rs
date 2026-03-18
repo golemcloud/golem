@@ -14,6 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
+use crate::base_model::deployment::DeploymentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::AgentId;
 use crate::model::Empty;
@@ -110,9 +111,59 @@ impl From<DeployedRegisteredAgentType> for RegisteredAgentType {
 
 /// Result of resolving an agent type by names, bundling the agent type
 /// with the environment it belongs to.
+#[derive(Clone)]
 pub struct ResolvedAgentType {
     pub registered_agent_type: RegisteredAgentType,
     pub environment_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
+}
+
+/// Event received from the registry service when any registry state changes.
+#[derive(Debug, Clone)]
+pub enum RegistryInvalidationEvent {
+    /// The client's cursor is older than the server's retention window.
+    CursorExpired { event_id: u64 },
+    /// A deployment changed for an environment.
+    DeploymentChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        deployment_revision: u64,
+    },
+    /// Domain registrations changed (created/deleted).
+    DomainRegistrationChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        domains: Vec<String>,
+    },
+    /// An account's tokens were invalidated.
+    AccountTokensInvalidated {
+        event_id: u64,
+        account_id: AccountId,
+    },
+    /// Environment sharing permissions changed.
+    EnvironmentPermissionsChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        grantee_account_id: AccountId,
+    },
+    /// A security scheme was created, updated, or deleted.
+    SecuritySchemeChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+    },
+}
+
+impl RegistryInvalidationEvent {
+    pub fn event_id(&self) -> u64 {
+        match self {
+            Self::CursorExpired { event_id } => *event_id,
+            Self::DeploymentChanged { event_id, .. } => *event_id,
+            Self::DomainRegistrationChanged { event_id, .. } => *event_id,
+            Self::AccountTokensInvalidated { event_id, .. } => *event_id,
+            Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
+            Self::SecuritySchemeChanged { event_id, .. } => *event_id,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
