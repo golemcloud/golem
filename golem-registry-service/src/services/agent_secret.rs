@@ -35,7 +35,7 @@ use std::sync::Arc;
 pub enum AgentSecretError {
     #[error("Agent secret value does not match type: [{rendered_errors}]", rendered_errors = errors.join(", "))]
     AgentSecretValueDoesNotMatchType { errors: Vec<String> },
-    #[error("Agent secret for path {rendered_path} already exists in environment", rendered_path = path.0.join("."))]
+    #[error("Agent secret for path {path} already exists in environment")]
     AgentSecretForPathAlreadyExists { path: CanonicalAgentSecretPath },
     #[error("Environment {0} not found")]
     ParentEnvironmentNotFound(EnvironmentId),

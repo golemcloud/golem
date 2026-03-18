@@ -196,8 +196,7 @@ pub enum DeployValidationError {
         normalized: String,
     },
     #[error(
-        "Secret default at key {rendered_path} has the wrong type: [{rendered_errors}]",
-        rendered_path = path.0.join("."),
+        "Secret default at key {path} has the wrong type: [{rendered_errors}]",
         rendered_errors = errors.join(", ")
     )]
     AgentSecretDefaultTypeMismatch {
@@ -205,18 +204,14 @@ pub enum DeployValidationError {
         errors: Vec<String>,
     },
     #[error(
-        "Agent secret at path {rendered_path} is not compatible with existing secret in the environment. agent: {agent_secret_type:?}; environment: {environment_secret_type:?}",
-        rendered_path = path.0.join("."),
+        "Agent secret at path {path} is not compatible with existing secret in the environment. agent: {agent_secret_type:?}; environment: {environment_secret_type:?}"
     )]
     AgentSecretNotCompatibleWithEnvironmentSecret {
         path: CanonicalAgentSecretPath,
         agent_secret_type: AnalysedType,
         environment_secret_type: AnalysedType,
     },
-    #[error(
-        "Agent secret at path {rendered_path} has different type across deployed agents",
-        rendered_path = path.0.join("."),
-    )]
+    #[error("Agent secret at path {path} has different type across deployed agents")]
     AgentSecretTypeConflict { path: CanonicalAgentSecretPath },
 }
 
