@@ -24,7 +24,9 @@ use golem_worker_service::custom_api::error::RequestHandlerError;
 use golem_worker_service::custom_api::oidc::handler::OidcHandler;
 use golem_worker_service::custom_api::oidc::model::{AuthorizationUrl, PendingOidcLogin};
 use golem_worker_service::custom_api::oidc::session_store::SessionStore;
-use golem_worker_service::custom_api::oidc::{IdentityProvider, IdentityProviderError};
+use golem_worker_service::custom_api::oidc::{
+    IdentityProvider, IdentityProviderError, RawTokenResponse,
+};
 use golem_worker_service::custom_api::route_resolver::ResolvedRouteEntry;
 use golem_worker_service::custom_api::{
     RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
@@ -94,6 +96,28 @@ impl IdentityProvider for FakeIdentityProvider {
             csrf_state,
             nonce,
         })
+    }
+
+    async fn exchange_code_for_raw_id_token(
+        &self,
+        _security_scheme: &SecuritySchemeDetails,
+        _code: &AuthorizationCode,
+    ) -> Result<RawTokenResponse, IdentityProviderError> {
+        Ok(RawTokenResponse {
+            id_token: "fake-id-token".to_string(),
+            access_token: Some("fake-access-token".to_string()),
+            refresh_token: None,
+            expires_in: Some(3600),
+            token_type: "Bearer".to_string(),
+        })
+    }
+
+    async fn validate_bearer_token(
+        &self,
+        _security_scheme: &SecuritySchemeDetails,
+        _token: &str,
+    ) -> Result<(), IdentityProviderError> {
+        Ok(())
     }
 }
 

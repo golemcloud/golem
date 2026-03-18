@@ -24,6 +24,8 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::domain_registration::{
     DomainRegistrationRecord, DomainRegistrationRepoError,
 };
+use crate::repo::registry_change::RegistryChangeEvent;
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
@@ -76,6 +78,7 @@ pub struct DomainRegistrationService {
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_service: Arc<EnvironmentService>,
     domain_provisioner: Arc<dyn DomainProvisioner>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl DomainRegistrationService {
@@ -83,11 +86,13 @@ impl DomainRegistrationService {
         domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
         environment_service: Arc<EnvironmentService>,
         domain_provisioner: Arc<dyn DomainProvisioner>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             domain_registration_repo,
             environment_service,
             domain_provisioner,
+            registry_change_notifier,
         }
     }
 
@@ -134,7 +139,7 @@ impl DomainRegistrationService {
             ImmutableAuditFields::new(auth.account_id().0),
         );
 
-        let created: DomainRegistration = self
+        let (created_record, event_id) = self
             .domain_registration_repo
             .create(record)
             .await
@@ -143,8 +148,16 @@ impl DomainRegistrationService {
                     DomainRegistrationError::DomainAlreadyExists(data.domain)
                 }
                 other => other.into(),
-            })?
-            .into();
+            })?;
+
+        let created: DomainRegistration = created_record.into();
+
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::DomainRegistrationChanged {
+                event_id,
+                environment_id: environment_id.0,
+                domains: vec![created.domain.0.clone()],
+            });
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
         self.domain_provisioner
@@ -169,14 +182,22 @@ impl DomainRegistrationService {
             EnvironmentAction::DeleteDomainRegistration,
         )?;
 
-        let deleted: DomainRegistration = self
+        let (deleted_record, event_id) = self
             .domain_registration_repo
             .delete(domain_registration_id.0, auth.account_id().0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
                 domain_registration_id,
-            ))?
-            .into();
+            ))?;
+
+        let deleted: DomainRegistration = deleted_record.into();
+
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::DomainRegistrationChanged {
+                event_id,
+                environment_id: deleted.environment_id.0,
+                domains: vec![deleted.domain.0.clone()],
+            });
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
         self.domain_provisioner

@@ -14,6 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
+use crate::base_model::deployment::DeploymentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::AgentId;
 use crate::model::Empty;
@@ -110,9 +111,59 @@ impl From<DeployedRegisteredAgentType> for RegisteredAgentType {
 
 /// Result of resolving an agent type by names, bundling the agent type
 /// with the environment it belongs to.
+#[derive(Clone)]
 pub struct ResolvedAgentType {
     pub registered_agent_type: RegisteredAgentType,
     pub environment_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
+}
+
+/// Event received from the registry service when any registry state changes.
+#[derive(Debug, Clone)]
+pub enum RegistryInvalidationEvent {
+    /// The client's cursor is older than the server's retention window.
+    CursorExpired { event_id: u64 },
+    /// A deployment changed for an environment.
+    DeploymentChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        deployment_revision: u64,
+    },
+    /// Domain registrations changed (created/deleted).
+    DomainRegistrationChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        domains: Vec<String>,
+    },
+    /// An account's tokens were invalidated.
+    AccountTokensInvalidated {
+        event_id: u64,
+        account_id: AccountId,
+    },
+    /// Environment sharing permissions changed.
+    EnvironmentPermissionsChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        grantee_account_id: AccountId,
+    },
+    /// A security scheme was created, updated, or deleted.
+    SecuritySchemeChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+    },
+}
+
+impl RegistryInvalidationEvent {
+    pub fn event_id(&self) -> u64 {
+        match self {
+            Self::CursorExpired { event_id } => *event_id,
+            Self::DeploymentChanged { event_id, .. } => *event_id,
+            Self::DomainRegistrationChanged { event_id, .. } => *event_id,
+            Self::AccountTokensInvalidated { event_id, .. } => *event_id,
+            Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
+            Self::SecuritySchemeChanged { event_id, .. } => *event_id,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
@@ -393,7 +444,7 @@ pub struct AgentType {
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
     pub snapshotting: Snapshotting,
-    pub config: Vec<ConfigKeyValueType>,
+    pub config: Vec<AgentConfigDeclaration>,
 }
 
 impl AgentType {
@@ -401,7 +452,7 @@ impl AgentType {
         self.methods.sort_by(|a, b| a.name.cmp(&b.name));
         self.dependencies
             .sort_by(|a, b| a.type_name.cmp(&b.type_name));
-        self.config.sort_by(|a, b| a.key.cmp(&b.key));
+        self.config.sort_by(|a, b| a.path.cmp(&b.path));
 
         Self {
             type_name: self.type_name,
@@ -1131,6 +1182,18 @@ pub struct SnapshottingEveryNInvocation {
     pub count: u16,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "agent-config-source", owner = "golem:agent@1.5.0/common")
+)]
+#[repr(i32)]
+pub enum AgentConfigSource {
+    Local = 0,
+    Secret = 1,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -1138,49 +1201,15 @@ pub struct SnapshottingEveryNInvocation {
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct ConfigKeyValueType {
-    pub key: Vec<String>,
-    pub value: ConfigValueType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
+    wit(name = "agent-config-declaration", owner = "golem:agent@1.5.0/common")
 )]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type")]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub enum ConfigValueType {
-    Local(ConfigValueTypeLocal),
-    Shared(ConfigValueTypeShared),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", desert(transparent))]
-#[cfg_attr(feature = "full", wit_transparent)]
-pub struct ConfigValueTypeLocal {
-    pub value: AnalysedType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
-)]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", desert(transparent))]
-#[cfg_attr(feature = "full", wit_transparent)]
-pub struct ConfigValueTypeShared {
-    pub value: AnalysedType,
+pub struct AgentConfigDeclaration {
+    pub source: AgentConfigSource,
+    pub path: Vec<String>,
+    pub value_type: AnalysedType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]

@@ -16,7 +16,9 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use crate::model::security_scheme::SecurityScheme;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::security_scheme::{SecuritySchemeRepoError, SecuritySchemeRevisionRecord};
+use crate::repo::registry_change::RegistryChangeEvent;
 use crate::repo::security_scheme::SecuritySchemeRepo;
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::security_scheme::{
     SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
@@ -73,16 +75,19 @@ error_forwarding!(
 pub struct SecuritySchemeService {
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     environment_service: Arc<EnvironmentService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl SecuritySchemeService {
     pub fn new(
         security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
         environment_service: Arc<EnvironmentService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             security_scheme_repo,
             environment_service,
+            registry_change_notifier,
         }
     }
 
@@ -131,7 +136,14 @@ impl SecuritySchemeService {
             .await;
 
         match result {
-            Ok(record) => Ok(record.try_into()?),
+            Ok((record, event_id)) => {
+                self.registry_change_notifier
+                    .notify(RegistryChangeEvent::SecuritySchemeChanged {
+                        event_id,
+                        environment_id: environment_id.0,
+                    });
+                Ok(record.try_into()?)
+            }
             Err(SecuritySchemeRepoError::SecuritySchemeViolatesUniqueness) => Err(
                 SecuritySchemeError::SecuritySchemeWithNameAlreadyExists(data.name),
             ),
@@ -180,16 +192,25 @@ impl SecuritySchemeService {
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
 
+        let environment_id = security_scheme.environment_id;
+
         let result = self
             .security_scheme_repo
-            .update(SecuritySchemeRevisionRecord::from_model(
-                security_scheme,
-                audit,
-            ))
+            .update(
+                environment_id.0,
+                SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
+            )
             .await;
 
         match result {
-            Ok(record) => Ok(record.try_into()?),
+            Ok((record, event_id)) => {
+                self.registry_change_notifier
+                    .notify(RegistryChangeEvent::SecuritySchemeChanged {
+                        event_id,
+                        environment_id: environment_id.0,
+                    });
+                Ok(record.try_into()?)
+            }
             Err(SecuritySchemeRepoError::ConcurrentModification) => {
                 Err(SecuritySchemeError::ConcurrentUpdateAttempt)
             }
@@ -218,18 +239,27 @@ impl SecuritySchemeService {
 
         security_scheme.revision = security_scheme.revision.next()?;
 
+        let environment_id = security_scheme.environment_id;
+
         let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
 
         let result = self
             .security_scheme_repo
-            .delete(SecuritySchemeRevisionRecord::from_model(
-                security_scheme,
-                audit,
-            ))
+            .delete(
+                environment_id.0,
+                SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
+            )
             .await;
 
         match result {
-            Ok(record) => Ok(record.try_into()?),
+            Ok((record, event_id)) => {
+                self.registry_change_notifier
+                    .notify(RegistryChangeEvent::SecuritySchemeChanged {
+                        event_id,
+                        environment_id: environment_id.0,
+                    });
+                Ok(record.try_into()?)
+            }
             Err(SecuritySchemeRepoError::ConcurrentModification) => {
                 Err(SecuritySchemeError::ConcurrentUpdateAttempt)
             }

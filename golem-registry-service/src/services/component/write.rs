@@ -26,7 +26,7 @@ use crate::services::environment_plugin_grant::{
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
 use golem_common::base_model::component::AgentConfigEntry as CommonAgentConfigEntry;
-use golem_common::model::agent::{AgentType, ConfigValueType};
+use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::component::{
     ComponentCreation, ComponentFileContentHash, ComponentFileOptions, ComponentFilePath,
     ComponentFilePermissions, ComponentUpdate, InitialComponentFile, InstalledPlugin,
@@ -42,7 +42,6 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::component::{AgentConfigEntry, Component};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use std::collections::HashSet;
@@ -711,30 +710,30 @@ fn validate_and_transform_agent_config_entries(
             let matching_declaration = agent_type
                 .config
                 .iter()
-                .find(|c| c.key == config_value.path)
+                .find(|c| c.path == config_value.path)
                 .ok_or_else(|| ComponentError::AgentConfigNotDeclared {
                     agent: agent_type.type_name.clone(),
                     key: config_value.path.clone(),
                 })?;
 
-            let analysed_type: AnalysedType = match &matching_declaration.value {
-                ConfigValueType::Local(inner) => inner.value.clone(),
-                ConfigValueType::Shared(_) => {
-                    return Err(
-                        ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed {
-                            agent: agent_type.type_name.clone(),
-                            key: config_value.path,
-                        },
-                    );
-                }
-            };
+            if matching_declaration.source == AgentConfigSource::Secret {
+                return Err(
+                    ComponentError::AgentConfigProvidedSecretWhereOnlyLocalAllowed {
+                        agent: agent_type.type_name.clone(),
+                        path: config_value.path,
+                    },
+                );
+            }
 
-            let value = ValueAndType::parse_with_type(&config_value.value, &analysed_type)
-                .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
-                    agent: agent_type.type_name.clone(),
-                    key: config_value.path.clone(),
-                    errors,
-                })?;
+            let value = ValueAndType::parse_with_type(
+                &config_value.value,
+                &matching_declaration.value_type,
+            )
+            .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
+                agent: agent_type.type_name.clone(),
+                key: config_value.path.clone(),
+                errors,
+            })?;
 
             let result = AgentConfigEntry {
                 agent: config_value.agent,
@@ -745,7 +744,7 @@ fn validate_and_transform_agent_config_entries(
             if !seen_agent_config_keys.insert(result.path.clone()) {
                 return Err(ComponentError::AgentConfigDuplicateValue {
                     agent: agent_type.type_name.clone(),
-                    key: result.path.clone(),
+                    path: result.path.clone(),
                 });
             }
 
@@ -768,25 +767,22 @@ fn check_transformed_agent_config_entries_match(
             let matching_declaration = agent_type
                 .config
                 .iter()
-                .find(|c| c.key == config_value.path)
+                .find(|c| c.path == config_value.path)
                 .ok_or_else(|| ComponentError::AgentConfigNotDeclared {
                     agent: agent_type.type_name.clone(),
                     key: config_value.path.clone(),
                 })?;
 
-            let analysed_type: &AnalysedType = match &matching_declaration.value {
-                ConfigValueType::Local(inner) => &inner.value,
-                ConfigValueType::Shared(_) => {
-                    return Err(
-                        ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed {
-                            agent: agent_type.type_name.clone(),
-                            key: config_value.path.clone(),
-                        },
-                    );
-                }
+            if matching_declaration.source == AgentConfigSource::Secret {
+                return Err(
+                    ComponentError::AgentConfigProvidedSecretWhereOnlyLocalAllowed {
+                        agent: agent_type.type_name.clone(),
+                        path: config_value.path.clone(),
+                    },
+                );
             };
 
-            if config_value.value.typ != *analysed_type {
+            if config_value.value.typ != matching_declaration.value_type {
                 return Err(ComponentError::AgentConfigOldConfigNotValid {
                     agent: agent_type.type_name.clone(),
                     key: config_value.path.clone(),

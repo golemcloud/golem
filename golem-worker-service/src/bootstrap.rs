@@ -17,13 +17,14 @@ use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
 use crate::custom_api::call_agent::CallAgentHandler;
-use crate::custom_api::oidc::DefaultIdentityProvider;
 use crate::custom_api::oidc::handler::OidcHandler;
 use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, SqliteSessionStore};
+use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhoooks::WebhookCallbackHandler;
 use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
+use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
@@ -45,6 +46,11 @@ pub struct Services {
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
+    pub registry_service: Arc<dyn RegistryService>,
+    pub agent_resolution_cache: Arc<AgentResolutionCache>,
+    pub route_resolver: Arc<RouteResolver>,
+    pub identity_provider: Arc<dyn IdentityProvider>,
+    pub session_store: Arc<dyn SessionStore>,
 }
 
 impl Services {
@@ -85,12 +91,19 @@ impl Services {
             routing_table_service.clone(),
         ));
 
-        let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
+        let agent_resolution_cache = Arc::new(AgentResolutionCache::new(
             registry_service_client.clone(),
+            config.agent_resolution_cache.max_capacity,
+            config.agent_resolution_cache.ttl,
+            config.agent_resolution_cache.eviction_period,
+        ));
+
+        let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
             component_service.clone(),
             auth_service.clone(),
             limit_service.clone(),
             worker_client.clone(),
+            agent_resolution_cache.clone(),
         ));
 
         let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(
@@ -162,6 +175,11 @@ impl Services {
             worker_service,
             request_handler,
             mcp_capability_lookup,
+            registry_service: registry_service_client,
+            agent_resolution_cache,
+            route_resolver,
+            identity_provider,
+            session_store,
         })
     }
 }

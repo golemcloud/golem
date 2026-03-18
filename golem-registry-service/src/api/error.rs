@@ -278,7 +278,7 @@ impl From<ComponentError> for ApiError {
             | ComponentError::ConflictingPluginPriority(_)
             | ComponentError::ConflictingEnvironmentPluginGrantId(_)
             | ComponentError::AgentConfigNotDeclared { .. }
-            | ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed { .. }
+            | ComponentError::AgentConfigProvidedSecretWhereOnlyLocalAllowed { .. }
             | ComponentError::AgentConfigOldConfigNotValid { .. }
             | ComponentError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))

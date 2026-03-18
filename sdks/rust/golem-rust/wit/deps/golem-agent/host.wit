@@ -4,7 +4,7 @@ interface host {
     use golem:core/types@1.5.0.{component-id, uuid, promise-id, wit-value, wit-type};
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use wasi:io/poll@0.2.3.{pollable};
-    use common.{agent-error, agent-type, data-value, registered-agent-type};
+    use common.{agent-error, agent-type, data-value, registered-agent-type, typed-agent-config-value};
 
     /// Gets all the registered agent types
     get-all-agent-types: func() -> list<registered-agent-type>;
@@ -46,7 +46,7 @@ interface host {
     /// An RPC client for invoking remote agents
     resource wasm-rpc {
       /// Constructs the RPC client connecting to the given target agent
-      constructor(agent-type-name: string, %constructor: data-value, phantom-id: option<uuid>);
+      constructor(agent-type-name: string, %constructor: data-value, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>);
 
       /// Invokes a remote method with the given parameters, and awaits the result
       invoke-and-await: func(method-name: string, input: data-value) -> result<data-value, rpc-error>;

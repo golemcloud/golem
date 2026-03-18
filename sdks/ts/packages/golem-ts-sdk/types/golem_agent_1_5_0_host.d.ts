@@ -49,7 +49,7 @@ declare module 'golem:agent/host@1.5.0' {
     /**
      * Constructs the RPC client connecting to the given target agent
      */
-    constructor(agentTypeName: string, constructor: DataValue, phantomId: Uuid | undefined);
+    constructor(agentTypeName: string, constructor: DataValue, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
     /**
      * Invokes a remote method with the given parameters, and awaits the result
      * @throws RpcError
@@ -102,6 +102,7 @@ declare module 'golem:agent/host@1.5.0' {
   export type AgentType = golemAgent150Common.AgentType;
   export type DataValue = golemAgent150Common.DataValue;
   export type RegisteredAgentType = golemAgent150Common.RegisteredAgentType;
+  export type TypedAgentConfigValue = golemAgent150Common.TypedAgentConfigValue;
   /**
    * Possible failures of an RPC call
    */

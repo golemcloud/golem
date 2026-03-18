@@ -25,6 +25,7 @@ pub mod key_value;
 pub mod oplog;
 pub mod promise;
 pub mod rdbms;
+pub mod registry_event_subscriber;
 pub mod resource_limits;
 pub mod rpc;
 pub mod scheduler;

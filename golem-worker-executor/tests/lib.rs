@@ -20,7 +20,7 @@ use golem_worker_executor_test_utils::{
 use std::fmt::Debug;
 use std::path::Path;
 use std::sync::atomic::AtomicU16;
-use test_r::{tag_suite, test_dep};
+use test_r::{sequential_suite, tag_suite, test_dep};
 
 pub mod agent;
 pub mod api;
@@ -65,6 +65,10 @@ tag_suite!(revert, group3);
 
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
+
+sequential_suite!(key_value_storage);
+sequential_suite!(namespace_routed_key_value_storage);
+sequential_suite!(indexed_storage);
 
 #[derive(Debug)]
 pub struct Tracing;

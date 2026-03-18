@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::error::GrpcApiError;
+use crate::repo::registry_change::RegistryChangeRepo;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
@@ -20,6 +21,7 @@ use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_state::EnvironmentStateService;
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use applying::Apply;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -42,15 +44,15 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
     GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse,
     GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
-    RegistryServiceError, ResolveAgentTypeAtDeploymentRequest,
+    RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeAtDeploymentRequest,
     ResolveAgentTypeAtDeploymentResponse, ResolveAgentTypeAtDeploymentSuccessResponse,
     ResolveAgentTypeByNamesRequest, ResolveAgentTypeByNamesResponse,
     ResolveAgentTypeByNamesSuccessResponse, ResolveComponentRequest, ResolveComponentResponse,
     ResolveComponentSuccessResponse, ResolveLatestAgentTypeByNamesRequest,
     ResolveLatestAgentTypeByNamesResponse, ResolveLatestAgentTypeByNamesSuccessResponse,
-    UpdateWorkerConnectionLimitRequest, UpdateWorkerConnectionLimitResponse,
-    UpdateWorkerLimitRequest, UpdateWorkerLimitResponse, authenticate_token_response,
-    batch_update_fuel_usage_response, download_component_response,
+    SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
+    UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
@@ -89,6 +91,8 @@ pub struct RegistryServiceGrpcApi {
     deployed_routes_service: Arc<DeployedRoutesService>,
     deployed_mcp_service: Arc<DeployedMcpService>,
     environment_state_service: Arc<EnvironmentStateService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    registry_change_repo: Arc<dyn RegistryChangeRepo>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -102,6 +106,8 @@ impl RegistryServiceGrpcApi {
         deployed_routes_service: Arc<DeployedRoutesService>,
         deployed_mcp_service: Arc<DeployedMcpService>,
         environment_state_service: Arc<EnvironmentStateService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        registry_change_repo: Arc<dyn RegistryChangeRepo>,
     ) -> Self {
         Self {
             auth_service,
@@ -113,6 +119,8 @@ impl RegistryServiceGrpcApi {
             deployed_routes_service,
             deployed_mcp_service,
             environment_state_service,
+            registry_change_notifier,
+            registry_change_repo,
         }
     }
 
@@ -508,6 +516,7 @@ impl RegistryServiceGrpcApi {
         Ok(ResolveAgentTypeByNamesSuccessResponse {
             agent_type: Some(resolved.registered_agent_type.into()),
             environment_id: Some(resolved.environment_id.into()),
+            deployment_revision: resolved.deployment_revision.get(),
         })
     }
 
@@ -1047,6 +1056,25 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         Ok(Response::new(GetCurrentEnvironmentStateResponse {
             result: Some(response),
         }))
+    }
+
+    type SubscribeRegistryInvalidationsStream = std::pin::Pin<
+        Box<dyn futures::Stream<Item = Result<RegistryInvalidationEvent, tonic::Status>> + Send>,
+    >;
+
+    async fn subscribe_registry_invalidations(
+        &self,
+        request: Request<SubscribeRegistryInvalidationsRequest>,
+    ) -> Result<Response<Self::SubscribeRegistryInvalidationsStream>, Status> {
+        let last_seen = request.into_inner().last_seen_event_id;
+
+        let stream = crate::services::registry_change_notifier::subscribe_registry_invalidations(
+            self.registry_change_repo.clone(),
+            self.registry_change_notifier.as_ref(),
+            last_seen,
+        );
+
+        Ok(Response::new(Box::pin(stream)))
     }
 }
 
