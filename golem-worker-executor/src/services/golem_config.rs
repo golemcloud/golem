@@ -52,6 +52,7 @@ pub struct GolemConfig {
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
+    pub storage: StorageConfig,
     pub rdbms: RdbmsConfig,
     pub resource_limits: ResourceLimitsConfig,
     pub component_cache: ComponentCacheConfig,
@@ -213,6 +214,7 @@ impl Default for GolemConfig {
             active_workers: ActiveWorkersConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
+            storage: StorageConfig::default(),
             rdbms: RdbmsConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
             component_cache: ComponentCacheConfig::default(),
@@ -1319,6 +1321,55 @@ impl Default for MemoryConfig {
                 multiplier: 2.0,
                 max_jitter_factor: None, // TODO: should we add jitter here?
             },
+        }
+    }
+}
+
+/// Configuration for the executor-wide worker storage semaphore.
+///
+/// The semaphore pool size is `total_worker_storage_bytes`. Workers acquire
+/// permits proportional to their estimated storage usage; when the pool is
+/// exhausted, idle workers are evicted to free space. Use
+/// `total_worker_storage_bytes_override` in tests to create a small,
+/// predictable pool.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageConfig {
+    /// Override the total storage pool size (bytes). When `None`, the default
+    /// of 10 GB is used. Set to a small value in tests to trigger eviction.
+    pub total_worker_storage_bytes_override: Option<u64>,
+    #[serde(with = "humantime_serde")]
+    pub acquire_retry_delay: Duration,
+}
+
+impl StorageConfig {
+    /// The total number of bytes available to the storage semaphore pool.
+    pub fn worker_storage(&self) -> usize {
+        self.total_worker_storage_bytes_override
+            .unwrap_or(10 * 1024 * 1024 * 1024) // 10 GB default
+            as usize
+    }
+}
+
+impl SafeDisplay for StorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        if let Some(ovrd) = &self.total_worker_storage_bytes_override {
+            let _ = writeln!(&mut result, "total worker storage bytes override: {ovrd}");
+        }
+        let _ = writeln!(
+            &mut result,
+            "acquire retry delay: {:?}",
+            self.acquire_retry_delay
+        );
+        result
+    }
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            total_worker_storage_bytes_override: None,
+            acquire_retry_delay: Duration::from_millis(500),
         }
     }
 }

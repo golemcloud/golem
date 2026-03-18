@@ -2008,6 +2008,11 @@ struct RunningWorker {
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     permit: OwnedSemaphorePermit,
+    /// Storage semaphore permits held by this worker. `None` until storage
+    /// space is first acquired (at startup or on first write). Dropped
+    /// automatically when `RunningWorker` is dropped, returning storage
+    /// permits to the pool.
+    storage_permit: Option<OwnedSemaphorePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
     snapshot_task: Option<JoinHandle<()>>,
@@ -2090,6 +2095,7 @@ impl RunningWorker {
             sender,
             queue,
             permit,
+            storage_permit: None,
             waiting_for_command,
             interrupt_signal,
             snapshot_task,
@@ -2098,6 +2104,16 @@ impl RunningWorker {
 
     pub fn merge_extra_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
         self.permit.merge(extra_permit);
+    }
+
+    /// Merge additional storage permits into this worker's storage permit. If
+    /// the worker does not yet hold a storage permit, the given permit becomes
+    /// the initial one. Additional calls merge into that initial permit.
+    pub fn merge_extra_storage_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
+        match &mut self.storage_permit {
+            Some(existing) => existing.merge(extra_permit),
+            None => self.storage_permit = Some(extra_permit),
+        }
     }
 
     pub fn stop(mut self) -> JoinHandle<()> {

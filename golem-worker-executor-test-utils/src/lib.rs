@@ -91,7 +91,7 @@ use golem_worker_executor::services::golem_config::{
     EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
     IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
     OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig, ShardManagerServiceConfig,
-    ShardManagerServiceSingleShardConfig, SnapshotPolicy,
+    ShardManagerServiceSingleShardConfig, SnapshotPolicy, StorageConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -394,7 +394,7 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, None, None).await
+    start_customized(deps, context, None, None, None, None, None, None).await
 }
 
 pub async fn start_with_snapshot_policy(
@@ -402,7 +402,7 @@ pub async fn start_with_snapshot_policy(
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, Some(snapshot_policy), None, None).await
+    start_customized(deps, context, None, None, None, Some(snapshot_policy), None, None).await
 }
 
 pub async fn start_with_http_client_config(
@@ -410,7 +410,7 @@ pub async fn start_with_http_client_config(
     context: &TestContext,
     http_client: HttpClientConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, Some(http_client), None).await
+    start_customized(deps, context, None, None, None, None, Some(http_client), None).await
 }
 
 pub async fn start_with_oplog_config(
@@ -418,13 +418,14 @@ pub async fn start_with_oplog_config(
     context: &TestContext,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, None, oplog_config_override).await
+    start_customized(deps, context, None, None, None, None, None, oplog_config_override).await
 }
 
 pub async fn start_customized(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     system_memory_override: Option<u64>,
+    system_storage_override: Option<u64>,
     retry_override: Option<RetryConfig>,
     snapshot_policy_override: Option<SnapshotPolicy>,
     http_client_override: Option<HttpClientConfig>,
@@ -461,6 +462,10 @@ pub async fn start_customized(
         ),
         memory: MemoryConfig {
             system_memory_override,
+            ..Default::default()
+        },
+        storage: StorageConfig {
+            total_worker_storage_bytes_override: system_storage_override,
             ..Default::default()
         },
         agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
@@ -1116,7 +1121,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
-        Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
+        Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory, &golem_config.storage))
     }
 
     fn create_environment_state_service(
@@ -1354,7 +1359,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     ) -> Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>> {
         Arc::new(ActiveWorkers::<
             golem_worker_executor::workerctx::default::Context,
-        >::new(&golem_config.memory))
+        >::new(&golem_config.memory, &golem_config.storage))
     }
 
     fn create_environment_state_service(
