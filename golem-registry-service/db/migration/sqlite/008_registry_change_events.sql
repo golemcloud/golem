@@ -9,4 +9,4 @@ CREATE TABLE registry_change_events (
     changed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX idx_registry_change_events_id ON registry_change_events (event_id);
+CREATE INDEX idx_registry_change_events_changed_at ON registry_change_events (changed_at);
