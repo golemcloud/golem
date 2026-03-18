@@ -599,6 +599,7 @@ impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
             domain: Domain(value.domain),
             agent_type_implementers: mcp_data.implementers,
             security_scheme: None,
+            registered_agent_types: Vec::new(),
         })
     }
 }
