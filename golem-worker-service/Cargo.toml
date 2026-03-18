@@ -46,6 +46,7 @@ chrono = { workspace = true }
 cookie = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
+scc = { workspace = true }
 desert_rust = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }

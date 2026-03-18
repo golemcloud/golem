@@ -38,6 +38,10 @@ database = "golem_service.db"
 foreign_keys = false
 max_connections = 10
 
+[deployment_events]
+cleanup_interval = "1h"
+retention = "1day"
+
 [domain_provisioner]
 type = "NoOp"
 

@@ -29,11 +29,13 @@ pub struct McpDeploymentDeployProperties {
 
 #[derive(Clone, Debug)]
 pub struct McpDeploymentAgentOptions {
-    // MCP agent configuration options coming soon
+    pub security_scheme: Option<String>,
 }
 
 impl McpDeploymentAgentOptions {
     pub fn to_diffable(&self) -> golem_common::model::diff::McpDeploymentAgentOptions {
-        golem_common::model::diff::McpDeploymentAgentOptions {}
+        golem_common::model::diff::McpDeploymentAgentOptions {
+            security_scheme: self.security_scheme.clone(),
+        }
     }
 }

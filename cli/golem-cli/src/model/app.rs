@@ -1852,7 +1852,9 @@ mod app_builder {
 
                                 let agents = mcp_deployment.agents
                                     .into_iter()
-                                    .map(|(k, _v)| (k, McpDeploymentAgentOptions {}))
+                                    .map(|(k, v)| (k, McpDeploymentAgentOptions {
+                                        security_scheme: v.security_scheme,
+                                    }))
                                     .collect();
 
                                 mcp_deployments.entry(mcp_deployment.domain.clone()).or_insert(WithSource::new(

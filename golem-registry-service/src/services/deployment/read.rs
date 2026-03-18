@@ -428,11 +428,16 @@ impl DeploymentService {
         )
         .map_err(|_| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
 
+        let deployment_revision: DeploymentRevision = record
+            .deployment_revision_id
+            .try_into()
+            .map_err(DeployRepoError::from)?;
         let deployed: DeployedRegisteredAgentType =
             record.try_into().map_err(DeploymentError::from)?;
         Ok(ResolvedAgentType {
             registered_agent_type: deployed.into(),
             environment_id,
+            deployment_revision,
         })
     }
 

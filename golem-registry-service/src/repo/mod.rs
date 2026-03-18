@@ -29,6 +29,7 @@ pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod plan;
 pub mod plugin;
+pub mod registry_change;
 pub mod report;
 pub mod security_scheme;
 pub mod token;

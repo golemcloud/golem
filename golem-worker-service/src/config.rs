@@ -46,6 +46,8 @@ pub struct WorkerServiceConfig {
     pub component_service: ComponentServiceConfig,
     pub auth_service: AuthServiceConfig,
     pub webhook_callback_handler: WebhookCallbackHandlerConfig,
+    #[serde(default)]
+    pub agent_resolution_cache: AgentResolutionCacheConfig,
 }
 
 impl WorkerServiceConfig {
@@ -124,6 +126,13 @@ impl SafeDisplay for WorkerServiceConfig {
             self.webhook_callback_handler.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "agent resolution cache:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.agent_resolution_cache.to_safe_string_indented()
+        );
+
         result
     }
 }
@@ -147,6 +156,7 @@ impl Default for WorkerServiceConfig {
             component_service: ComponentServiceConfig::default(),
             auth_service: AuthServiceConfig::default(),
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
+            agent_resolution_cache: AgentResolutionCacheConfig::default(),
         }
     }
 }
@@ -296,6 +306,35 @@ impl Default for RouteResolverConfig {
             router_cache_max_capacity: 1024,
             router_cache_ttl: Duration::from_mins(10),
             router_cache_eviction_period: Duration::from_mins(1),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentResolutionCacheConfig {
+    pub max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub eviction_period: Duration,
+}
+
+impl SafeDisplay for AgentResolutionCacheConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "max_capacity: {}", self.max_capacity);
+        let _ = writeln!(&mut result, "ttl: {:?}", self.ttl);
+        let _ = writeln!(&mut result, "eviction_period: {:?}", self.eviction_period);
+        result
+    }
+}
+
+impl Default for AgentResolutionCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_capacity: 10_000,
+            ttl: Duration::from_secs(3600),
+            eviction_period: Duration::from_secs(60),
         }
     }
 }

@@ -33,6 +33,7 @@ pub mod oauth2;
 pub mod oauth2_github_client;
 pub mod plan;
 pub mod plugin_registration;
+pub mod registry_change_notifier;
 pub mod reports;
 pub mod security_scheme;
 pub mod token;

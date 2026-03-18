@@ -46,6 +46,8 @@ pub struct RegistryServiceConfig {
     pub component_compilation: ComponentCompilationConfig,
     pub initial_accounts: HashMap<String, PrecreatedAccount>,
     pub initial_plans: HashMap<String, PrecreatedPlan>,
+    #[serde(default)]
+    pub deployment_events: DeploymentEventsConfig,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -87,6 +89,18 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "{}",
             self.component_compilation.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "deployment events:");
+        let _ = writeln!(
+            &mut result,
+            "  retention: {:?}",
+            self.deployment_events.retention
+        );
+        let _ = writeln!(
+            &mut result,
+            "  cleanup_interval: {:?}",
+            self.deployment_events.cleanup_interval
         );
 
         result
@@ -155,6 +169,7 @@ impl Default for RegistryServiceConfig {
             domain_provisioner: DomainProvisionerConfig::default(),
             initial_accounts,
             initial_plans,
+            deployment_events: DeploymentEventsConfig::default(),
         }
     }
 }
@@ -365,6 +380,25 @@ pub struct PrecreatedAccount {
     pub token: TokenSecret,
     pub plan_id: PlanId,
     pub role: AccountRole,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeploymentEventsConfig {
+    /// Retention period for outbox events
+    #[serde(with = "humantime_serde")]
+    pub retention: std::time::Duration,
+    /// How often to clean up old events
+    #[serde(with = "humantime_serde")]
+    pub cleanup_interval: std::time::Duration,
+}
+
+impl Default for DeploymentEventsConfig {
+    fn default() -> Self {
+        Self {
+            retention: std::time::Duration::from_secs(24 * 3600), // 24 hours
+            cleanup_interval: std::time::Duration::from_secs(3600), // 1 hour
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::{
-    AgentType, AgentTypeName, ConfigKeyValueType, ConfigValueType, ParsedAgentId,
-};
+use golem_common::model::agent::{AgentConfigSource, AgentType, AgentTypeName, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::worker::{ParsedWorkerAgentConfigEntry, WorkerAgentConfigEntry};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -40,25 +38,21 @@ pub fn ensure_required_agent_secrets_are_configured(
         .expect("Agent metadata for the parsed agent type was not part of component metadata");
 
     for config_entry in agent_type.config {
-        let ConfigKeyValueType {
-            key,
-            value: ConfigValueType::Shared(shared_config_declaration),
-        } = config_entry
-        else {
+        if config_entry.source != AgentConfigSource::Secret {
             continue;
-        };
+        }
 
         let canonical_agent_secret_path =
-            CanonicalAgentSecretPath::from_path_in_unknown_casing(&key);
+            CanonicalAgentSecretPath::from_path_in_unknown_casing(&config_entry.path);
 
         match agent_secrets.get(&canonical_agent_secret_path) {
             Some(agent_secret) => {
-                if agent_secret.secret_type != shared_config_declaration.value {
+                if agent_secret.secret_type != config_entry.value_type {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has invalid type. found: {:?}, expected: {:?}",
-                        key.join("."),
+                        config_entry.path.join("."),
                         agent_secret.secret_type,
-                        shared_config_declaration.value
+                        config_entry.value_type
                     )));
                 }
                 if agent_secret.secret_value.is_none()
@@ -66,15 +60,15 @@ pub fn ensure_required_agent_secrets_are_configured(
                 {
                     return Err(WorkerExecutorError::invalid_request(format!(
                         "Required agent secret {} has no configured value",
-                        key.join(".")
+                        config_entry.path.join(".")
                     )));
                 }
             }
-            None if matches!(shared_config_declaration.value, AnalysedType::Option(_)) => {}
+            None if matches!(config_entry.value_type, AnalysedType::Option(_)) => {}
             None => {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Required agent secret {} does not exist",
-                    key.join(".")
+                    config_entry.path.join(".")
                 )))
             }
         }
@@ -100,34 +94,30 @@ pub fn parse_worker_creation_agent_config(
     let mut initial_agent_config = Vec::new();
 
     for entry in worker_agent_config {
-        let config_key_type = agent_type
+        let config_declaration = agent_type
             .config
             .iter()
-            .find_map(|c| match c {
-                ConfigKeyValueType {
-                    key,
-                    value: ConfigValueType::Local(inner),
-                } if *key == *entry.path => Some(&inner.value),
-                _ => None,
-            })
+            .find(|c| c.source == AgentConfigSource::Local && c.path == entry.path)
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
-                    "Agent type does not declare config key {}",
+                    "Agent type does not declare local config {}",
                     entry.path.join(".")
                 ))
             })?;
 
         let parsed_value =
-            ValueAndType::parse_with_type(&entry.value, config_key_type).map_err(|err| {
-                WorkerExecutorError::invalid_request(format!(
-                    "config value for key {} does not match expected schema: [{}]",
-                    entry.path.join("."),
-                    err.join(", ")
-                ))
-            })?;
+            ValueAndType::parse_with_type(&entry.value, &config_declaration.value_type).map_err(
+                |err| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "config value for path {} does not match expected schema: [{}]",
+                        entry.path.join("."),
+                        err.join(", ")
+                    ))
+                },
+            )?;
 
         initial_agent_config.push(ParsedWorkerAgentConfigEntry {
-            key: entry.path,
+            path: entry.path,
             value: parsed_value,
         });
     }
@@ -164,7 +154,7 @@ pub fn effective_agent_config(
     }
 
     for entry in worker_agent_config {
-        result.insert(entry.key, entry.value);
+        result.insert(entry.path, entry.value);
     }
 
     result
@@ -175,26 +165,28 @@ pub fn validate_agent_config(
     agent_type: &AgentType,
 ) -> Result<(), WorkerExecutorError> {
     for entry in &agent_type.config {
-        if let ConfigValueType::Local(config_declaration) = &entry.value {
-            match agent_config.get(&entry.key) {
-                Some(config_value) => {
-                    if config_value.typ != config_declaration.value {
-                        // TODO: better rendering of analysed type.
-                        return Err(WorkerExecutorError::invalid_request(format!(
-                            "Type mismatch for config key {}. expected: {:?}; found: {:?}",
-                            entry.key.join("."),
-                            config_declaration.value,
-                            config_value.typ
-                        )));
-                    }
-                }
-                None if matches!(config_declaration.value, AnalysedType::Option(_)) => {}
-                None => {
+        if entry.source != AgentConfigSource::Local {
+            continue;
+        };
+
+        match agent_config.get(&entry.path) {
+            Some(config_value) => {
+                if config_value.typ != entry.value_type {
+                    // TODO: better rendering of analysed type.
                     return Err(WorkerExecutorError::invalid_request(format!(
-                        "Config key {} was not provided a value",
-                        entry.key.join(".")
-                    )))
+                        "Type mismatch for config {}. expected: {:?}; found: {:?}",
+                        entry.path.join("."),
+                        entry.value_type,
+                        config_value.typ
+                    )));
                 }
+            }
+            None if matches!(entry.value_type, AnalysedType::Option(_)) => {}
+            None => {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Config {} was not provided a value",
+                    entry.path.join(".")
+                )))
             }
         }
     }

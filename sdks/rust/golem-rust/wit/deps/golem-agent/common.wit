@@ -21,7 +21,7 @@ interface common {
     mode:            agent-mode,
     http-mount:      option<http-mount-details>,
     snapshotting:    snapshotting,
-    config:          list<config-key-value-type>,
+    config:       list<agent-config-declaration>,
   }
 
   /// Associates an agent type with a component that implements it
@@ -148,17 +148,6 @@ interface common {
     input-schema:  data-schema,
   }
 
-
-
-  /// Agent-level failures
-  variant agent-error {
-    invalid-input(string),
-    invalid-method(string),
-    invalid-type(string),
-    invalid-agent-id(string),
-    custom-error(value-and-type),
-  }
-
   variant snapshotting {
     disabled,
     enabled(snapshotting-config)
@@ -170,13 +159,28 @@ interface common {
     every-n-invocation(u16)
   }
 
-  record config-key-value-type {
-    key:   list<string>,
-    value: config-value-type,
+  enum agent-config-source {
+    local,
+    secret
   }
 
-  variant config-value-type {
-    local(wit-type),
-    shared(wit-type),
+  record agent-config-declaration {
+    source: agent-config-source,
+    path: list<string>,
+    value-type: wit-type,
+  }
+
+  record typed-agent-config-value {
+    path: list<string>,
+    value: value-and-type,
+  }
+
+  /// Agent-level failures
+  variant agent-error {
+    invalid-input(string),
+    invalid-method(string),
+    invalid-type(string),
+    invalid-agent-id(string),
+    custom-error(value-and-type),
   }
 }

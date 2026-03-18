@@ -202,14 +202,17 @@ impl OidcHandler {
             .store_pending_oidc_login(state.secret(), pending_login)
             .await?;
 
+        // Filter out "openid" — AuthenticationFlow::AuthorizationCode adds it automatically
+        let scopes: Vec<_> = security_scheme
+            .scopes
+            .iter()
+            .filter(|s| s.as_str() != "openid")
+            .cloned()
+            .collect();
+
         let auth_url = self
             .identity_provider
-            .get_authorization_url(
-                security_scheme,
-                security_scheme.scopes.clone(),
-                state,
-                nonce,
-            )
+            .get_authorization_url(security_scheme, scopes, state, nonce)
             .await?;
 
         let mut headers = std::collections::HashMap::new();
