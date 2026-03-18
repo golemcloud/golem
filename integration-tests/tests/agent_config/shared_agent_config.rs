@@ -465,7 +465,7 @@ async fn agent_reads_secret_with_different_casing(
     )
     .await?;
 
-    let agent_id = agent_id!("local-casing-shared-config-agent", "test-agent");
+    let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
@@ -519,7 +519,7 @@ async fn agent_reads_secret_with_mixed_case_path(
     )
     .await?;
 
-    let agent_id = agent_id!("local-casing-shared-config-agent", "test-agent");
+    let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
@@ -576,7 +576,7 @@ async fn agent_reads_secret_after_canonicalized_update(
     )
     .await?;
 
-    let agent_id = agent_id!("local-casing-shared-config-agent", "test-agent");
+    let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 

@@ -6,6 +6,11 @@ mcp_port = 9007
 port = 9005
 workspace = "release"
 
+[agent_resolution_cache]
+eviction_period = "1m"
+max_capacity = 10000
+ttl = "1h"
+
 [auth_service]
 auth_ctx_cache_eviction_period = "1m"
 auth_ctx_cache_max_capacity = 1024

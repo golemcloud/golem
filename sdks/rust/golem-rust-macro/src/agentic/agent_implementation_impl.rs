@@ -17,8 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_asyncness, has_async_trait_attribute, has_autoinject_attribute, is_constructor_method,
-    is_static_method, trim_type_parameter, Asyncness, AutoInjectAttrRemover, FunctionOutputInfo,
+    get_asyncness, has_agent_config_attr, has_async_trait_attr, is_constructor_method,
+    is_static_method, trim_type_parameter, AgentConfigAttrRemover, Asyncness, FunctionOutputInfo,
 };
 use syn::visit_mut::VisitMut;
 
@@ -28,7 +28,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         Err(e) => return e.to_compile_error().into(),
     };
 
-    let has_async_trait_attribute = has_async_trait_attribute(&impl_block);
+    let has_async_trait_attribute = has_async_trait_attr(&impl_block);
 
     if has_async_trait_attribute {
         return syn::Error::new_spanned(
@@ -145,7 +145,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let register_initiator_fn =
         generate_register_initiator_fn(&impl_block.self_ty, &trait_name_ident, &initiator_ident);
 
-    AutoInjectAttrRemover.visit_item_impl_mut(&mut impl_block);
+    AgentConfigAttrRemover.visit_item_impl_mut(&mut impl_block);
 
     quote! {
         #impl_block
@@ -197,7 +197,6 @@ fn build_match_arms(
 ) -> (Vec<proc_macro2::TokenStream>, Option<&syn::ImplItemFn>) {
     let mut match_arms = Vec::new();
     let mut constructor_method = None;
-    let mut method_index: usize = 0;
 
     for item in &impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
@@ -295,14 +294,10 @@ fn build_match_arms(
                 },
             };
 
-            let current_method_index = method_index;
-            method_index += 1;
-
             let method_param_extraction = generate_method_param_extraction(
                 &param_idents,
                 &agent_type_name,
                 method_name_str.as_str(),
-                current_method_index,
                 post_method_param_extraction_logic,
             );
 
@@ -321,19 +316,18 @@ fn generate_method_param_extraction(
     param_idents: &[syn::Ident],
     agent_type_name: &str,
     method_name: &str,
-    method_index: usize,
     post_method_param_extraction_logic: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let input_param_index_init = quote! {
       let mut input_param_index: usize = 0;
       let __agent_type_name = golem_rust::agentic::AgentTypeName(#agent_type_name.to_string());
-      let __param_schemas = golem_rust::agentic::get_method_parameter_types_by_index(
+      let __param_schemas = golem_rust::agentic::get_method_parameter_types(
           &__agent_type_name,
-          #method_index,
+          #method_name
       ).ok_or_else(|| {
           golem_rust::agentic::custom_error(format!(
-              "Internal Error: Parameter schemas not found for agent: {}, method index: {}",
-              #agent_type_name, #method_index
+              "Internal Error: Parameter schemas not found for agent: {}, method: {}",
+              #agent_type_name, #method_name
           ))
       })?;
     };
@@ -495,11 +489,10 @@ fn generate_constructor_extraction(
     };
 
     let extraction: Vec<proc_macro2::TokenStream> = ctor_params.iter().enumerate().map(|(constructor_param_index, (ident, pat_type))| {
-        if has_autoinject_attribute(pat_type) {
+        if has_agent_config_attr(pat_type) {
             let ty = &pat_type.ty;
             quote! {
-                let #ident: #ty = <#ty as ::golem_rust::agentic::AutoInjectable>::autoinject()
-                .map_err(|err| golem_rust::agentic::internal_error(format!("Failed loading config of type {}: {}",  err, stringify!(#ty))))?;
+                let #ident: #ty = ::golem_rust::agentic::Config::new();
             }
         } else {
             let ident_result = format_ident!("{}_result", ident);

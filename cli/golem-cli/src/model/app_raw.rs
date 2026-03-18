@@ -293,7 +293,8 @@ pub struct McpDeployment {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpDeploymentAgentOptions {
-    // MCP agent configuration options coming soon
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_scheme: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

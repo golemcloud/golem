@@ -20,8 +20,6 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
-import { loadConfigKey } from './internal/mapping/values/dataValue';
-import { Type } from '@golemcloud/golem-ts-types-core';
 import { setAgentId } from './internal/registry/agentId';
 
 export { BaseAgent } from './baseAgent';
@@ -30,23 +28,20 @@ export { description } from './decorators/description';
 export { agent, AgentDecoratorOptions, SnapshottingOption } from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
-
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
 export { Principal } from 'golem:agent/common@1.5.0';
-
 export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
-
 export * from './webhook';
-
 export * from './host/hostapi';
 export * from './host/guard';
 export * from './host/result';
 export * from './host/transaction';
+export { Config, Secret } from './agentConfig';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;
@@ -234,55 +229,3 @@ export const saveSnapshot: typeof bindings.saveSnapshot = {
 export const loadSnapshot: typeof bindings.loadSnapshot = {
   load,
 };
-
-export class Secret<T> {
-  private readonly path: string[];
-  private readonly type: Type.Type;
-
-  constructor(path: string[], type: Type.Type) {
-    this.path = path;
-    this.type = type;
-  }
-
-  /** Lazily loads or reloads the secret value */
-  get(): T {
-    return loadConfigKey(this.path, this.type);
-  }
-}
-
-export class Config<T> {
-  constructor(readonly properties: Type.ConfigProperty[]) {}
-
-  get value(): T {
-    return this.loadConfig();
-  }
-
-  private loadConfig(): T {
-    const root: Record<string, any> = {};
-
-    for (const prop of this.properties) {
-      const { path } = prop;
-      if (path.length === 0) continue;
-
-      let current = root;
-
-      for (let i = 0; i < path.length - 1; i++) {
-        const key = path[i];
-        if (!(key in current)) current[key] = {};
-        current = current[key];
-      }
-
-      const leafKey = path[path.length - 1];
-      let leafValue;
-      if (prop.secret) {
-        leafValue = new Secret(path, prop.type);
-      } else {
-        leafValue = loadConfigKey(path, prop.type);
-      }
-
-      current[leafKey] = leafValue;
-    }
-
-    return root as T;
-  }
-}

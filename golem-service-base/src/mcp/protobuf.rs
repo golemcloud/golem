@@ -1,6 +1,6 @@
 use crate::mcp::{AgentTypeImplementers, CompiledMcp};
 use golem_common::base_model::domain_registration::Domain;
-use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 
 impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
     fn from(value: CompiledMcp) -> Self {
@@ -21,6 +21,12 @@ impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
                         },
                     )
                 })
+                .collect(),
+            security_scheme: value.security_scheme.map(|s| s.into()),
+            registered_agent_types: value
+                .registered_agent_types
+                .into_iter()
+                .map(|rat| rat.into())
                 .collect(),
         }
     }
@@ -49,6 +55,12 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
             })
             .collect::<Result<_, String>>()?;
 
+        let registered_agent_types: Vec<RegisteredAgentType> = value
+            .registered_agent_types
+            .into_iter()
+            .map(|rat| rat.try_into())
+            .collect::<Result<_, String>>()?;
+
         Ok(Self {
             account_id: value
                 .account_id
@@ -66,6 +78,12 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
                 .map_err(|e| format!("Invalid deployment_revision: {}", e))?,
             domain: Domain(value.domain),
             agent_type_implementers,
+            security_scheme: value
+                .security_scheme
+                .map(|s| s.try_into())
+                .transpose()
+                .map_err(|e| format!("Invalid security_scheme: {}", e))?,
+            registered_agent_types,
         })
     }
 }

@@ -114,85 +114,68 @@ pub async fn get_agent_capabilities(
     let account_id = compiled_mcp.account_id;
     let environment_id = compiled_mcp.environment_id;
 
-    let agent_types = compiled_mcp.agent_types();
-
     tracing::info!(
-        "Found {} agent types for domain {}: {:?}",
-        agent_types.len(),
+        "Found {} registered agent types for domain {}: {:?}",
+        compiled_mcp.registered_agent_types.len(),
         domain.0,
-        agent_types
+        compiled_mcp
+            .registered_agent_types
             .iter()
-            .map(|at| at.0.clone())
+            .map(|rat| rat.agent_type.type_name.0.clone())
             .collect::<Vec<_>>()
     );
 
-    for agent_type_name in &agent_types {
-        match mcp_definition_lookup
-            .resolve_agent_type(domain, agent_type_name)
-            .await
-        {
-            Ok(registered_agent_type) => {
-                tracing::debug!(
-                    "Resolved agent type {} for domain {}: implemented by component {}, methods: {:?}",
-                    agent_type_name.0,
-                    domain.0,
-                    registered_agent_type.implemented_by.component_id.0,
-                    registered_agent_type
-                        .agent_type
-                        .methods
-                        .iter()
-                        .map(|m| m.name.clone())
-                        .collect::<Vec<_>>()
-                );
+    for registered_agent_type in &compiled_mcp.registered_agent_types {
+        tracing::debug!(
+            "Processing agent type {} for domain {}: implemented by component {}, methods: {:?}",
+            registered_agent_type.agent_type.type_name.0,
+            domain.0,
+            registered_agent_type.implemented_by.component_id.0,
+            registered_agent_type
+                .agent_type
+                .methods
+                .iter()
+                .map(|m| m.name.clone())
+                .collect::<Vec<_>>()
+        );
 
-                let agent_type = &registered_agent_type.agent_type;
+        let agent_type = &registered_agent_type.agent_type;
+        let component_id = registered_agent_type.implemented_by.component_id;
 
-                let component_id = registered_agent_type.implemented_by.component_id;
+        if let Some(prompt_hint) = &agent_type.constructor.prompt_hint {
+            prompts.push(AgentMcpPrompt::from_constructor_hint(
+                &agent_type.type_name,
+                &agent_type.description,
+                prompt_hint,
+            ));
+        }
 
-                if let Some(prompt_hint) = &agent_type.constructor.prompt_hint {
-                    prompts.push(AgentMcpPrompt::from_constructor_hint(
-                        &agent_type.type_name,
-                        &agent_type.description,
-                        prompt_hint,
-                    ));
-                }
-
-                for method in &agent_type.methods {
-                    if let Some(prompt_hint) = &method.prompt_hint {
-                        prompts.push(AgentMcpPrompt::from_method_hint(
-                            &agent_type.type_name,
-                            method,
-                            &agent_type.constructor,
-                            prompt_hint,
-                        ));
-                    }
-
-                    let agent_method_mcp = McpAgentCapability::from_agent_method(
-                        &account_id,
-                        &environment_id,
-                        &agent_type.type_name,
-                        method,
-                        &agent_type.constructor,
-                        component_id,
-                    );
-
-                    match agent_method_mcp {
-                        McpAgentCapability::Tool(agent_mcp_tool) => {
-                            tools.push(*agent_mcp_tool);
-                        }
-                        McpAgentCapability::Resource(agent_mcp_resource) => {
-                            resources.push(*agent_mcp_resource);
-                        }
-                    }
-                }
+        for method in &agent_type.methods {
+            if let Some(prompt_hint) = &method.prompt_hint {
+                prompts.push(AgentMcpPrompt::from_method_hint(
+                    &agent_type.type_name,
+                    method,
+                    &agent_type.constructor,
+                    prompt_hint,
+                ));
             }
-            Err(e) => {
-                tracing::error!(
-                    "Failed to resolve agent type {} for domain {}: {}",
-                    agent_type_name.0,
-                    domain.0,
-                    e
-                );
+
+            let agent_method_mcp = McpAgentCapability::from_agent_method(
+                &account_id,
+                &environment_id,
+                &agent_type.type_name,
+                method,
+                &agent_type.constructor,
+                component_id,
+            );
+
+            match agent_method_mcp {
+                McpAgentCapability::Tool(agent_mcp_tool) => {
+                    tools.push(*agent_mcp_tool);
+                }
+                McpAgentCapability::Resource(agent_mcp_resource) => {
+                    resources.push(*agent_mcp_resource);
+                }
             }
         }
     }

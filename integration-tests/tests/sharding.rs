@@ -923,7 +923,7 @@ mod tests {
         let (callback_url, received, _server) = start_callback_server().await;
 
         let plugin_component = user
-            .component(&env.id, "oplog-processor")
+            .component(&env.id, "oplog_processor_release")
             .store()
             .await
             .unwrap();
@@ -1045,7 +1045,7 @@ mod tests {
         let (callback_url, received, _server) = start_callback_server().await;
 
         let plugin_component = user
-            .component(&env.id, "oplog-processor")
+            .component(&env.id, "oplog_processor_release")
             .store()
             .await
             .unwrap();
@@ -1163,7 +1163,7 @@ mod tests {
         let (callback_url, received, _server) = start_callback_server().await;
 
         let plugin_component = user
-            .component(&env.id, "oplog-processor")
+            .component(&env.id, "oplog_processor_release")
             .store()
             .await
             .unwrap();
@@ -1283,7 +1283,7 @@ mod tests {
         let (callback_url, received, _server) = start_callback_server().await;
 
         let plugin_component = user
-            .component(&env.id, "oplog-processor")
+            .component(&env.id, "oplog_processor_release")
             .store()
             .await
             .unwrap();
