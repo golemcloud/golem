@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
-use anyhow::anyhow;
 use desert_rust::BinaryCodec;
 use golem_common::model::oplog::host_functions::{
     HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
@@ -33,6 +33,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
+use std::fmt;
 use std::str::FromStr;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::http::types::{
@@ -515,14 +516,23 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     }
                     Ok(Some(Ok(Err(error_code)))) => (
                         Ok(Some(Ok(Err(error_code.into())))),
-                        Err(error_code.to_string()),
+                        Err(HttpFailure::ErrorCode(error_code.clone())),
                     ),
-                    Ok(Some(Err(_))) => (Ok(Some(Err(()))), Err("Unknown error".to_string())),
+                    Ok(Some(Err(_))) => (
+                        Ok(Some(Err(()))),
+                        Err(HttpFailure::Other("Unknown error".to_string())),
+                    ),
                     Ok(None) => (Ok(None), Ok(())),
-                    Err(err) => (Err(err.to_string()), Err(err.to_string())),
+                    Err(err) => (
+                        Err(err.to_string()),
+                        Err(HttpFailure::Other(err.to_string())),
+                    ),
                 };
                 durability
-                    .try_trigger_retry(self, &for_retry)
+                    .try_trigger_retry(self, &for_retry, |err| match err {
+                        HttpFailure::ErrorCode(code) => classify_http_error_code(code),
+                        HttpFailure::Other(_) => HostFailureKind::Transient,
+                    })
                     .await
                     .map_err(wasmtime::Error::from_anyhow)?;
                 let _ = durability
@@ -746,23 +756,33 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 }
                 Ok(Some(Err(_))) => (
                     SerializableHttpResponse::InternalError(None),
-                    Err("Unknown error".to_string()),
+                    Err(HttpFailure::Other("Unknown error".to_string())),
                 ),
                 Ok(Some(Ok(Err(error_code)))) => (
                     SerializableHttpResponse::HttpError(error_code.clone().into()),
-                    Err(error_code.to_string()),
+                    Err(HttpFailure::ErrorCode(error_code.clone())),
                 ),
                 Err(err) => (
                     SerializableHttpResponse::InternalError(Some(err.to_string())),
-                    Err(err.to_string()),
+                    Err(HttpFailure::Other(err.to_string())),
                 ),
             };
 
-            if let Err(err) = for_retry {
-                self.state.current_retry_point = begin_index;
-                self.try_trigger_retry(anyhow!(err))
-                    .await
-                    .map_err(wasmtime::Error::from_anyhow)?;
+            if let Err(err) = &for_retry {
+                let kind = match err {
+                    HttpFailure::ErrorCode(code) => classify_http_error_code(code),
+                    HttpFailure::Other(_) => HostFailureKind::Transient,
+                };
+                if kind == HostFailureKind::Transient {
+                    self.state.current_retry_point = begin_index;
+                    let failure = anyhow::Error::new(ClassifiedHostError {
+                        kind,
+                        message: err.to_string(),
+                    });
+                    self.try_trigger_retry(failure)
+                        .await
+                        .map_err(wasmtime::Error::from_anyhow)?;
+                }
             }
 
             let is_pending = matches!(serializable_response, SerializableHttpResponse::Pending);
@@ -898,5 +918,79 @@ impl SerializableScheduleId {
 
     pub fn as_domain(&self) -> Result<ScheduleId, String> {
         golem_common::serialization::deserialize(&self.data)
+    }
+}
+
+/// Typed HTTP failure for retry classification, preserving the original `ErrorCode`
+/// so the classifier can distinguish transient from permanent errors.
+enum HttpFailure {
+    ErrorCode(ErrorCode),
+    Other(String),
+}
+
+impl fmt::Display for HttpFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HttpFailure::ErrorCode(code) => write!(f, "{code}"),
+            HttpFailure::Other(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+/// Classifies a WASI HTTP `ErrorCode` as transient or permanent for retry purposes.
+fn classify_http_error_code(code: &ErrorCode) -> HostFailureKind {
+    match code {
+        // DNS errors — transient (may resolve on retry)
+        ErrorCode::DnsTimeout | ErrorCode::DnsError(_) => HostFailureKind::Transient,
+
+        // Destination errors — transient (network routing may change)
+        ErrorCode::DestinationNotFound
+        | ErrorCode::DestinationUnavailable
+        | ErrorCode::DestinationIpProhibited
+        | ErrorCode::DestinationIpUnroutable => HostFailureKind::Transient,
+
+        // TLS errors — permanent (certificate/protocol issues won't change on retry)
+        ErrorCode::TlsProtocolError
+        | ErrorCode::TlsAlertReceived(_)
+        | ErrorCode::TlsCertificateError => HostFailureKind::Permanent,
+
+        // Connection errors — transient (network issues are typically transient)
+        ErrorCode::ConnectionRefused
+        | ErrorCode::ConnectionTerminated
+        | ErrorCode::ConnectionTimeout
+        | ErrorCode::ConnectionReadTimeout
+        | ErrorCode::ConnectionWriteTimeout
+        | ErrorCode::ConnectionLimitReached => HostFailureKind::Transient,
+
+        // HTTP protocol errors — permanent (deterministic for the same request)
+        ErrorCode::HttpRequestDenied
+        | ErrorCode::HttpRequestLengthRequired
+        | ErrorCode::HttpRequestBodySize(_)
+        | ErrorCode::HttpRequestMethodInvalid
+        | ErrorCode::HttpRequestUriInvalid
+        | ErrorCode::HttpRequestUriTooLong
+        | ErrorCode::HttpRequestHeaderSectionSize(_)
+        | ErrorCode::HttpRequestHeaderSize(_)
+        | ErrorCode::HttpRequestTrailerSectionSize(_)
+        | ErrorCode::HttpRequestTrailerSize(_)
+        | ErrorCode::HttpResponseHeaderSectionSize(_)
+        | ErrorCode::HttpResponseHeaderSize(_)
+        | ErrorCode::HttpResponseBodySize(_)
+        | ErrorCode::HttpResponseTrailerSectionSize(_)
+        | ErrorCode::HttpResponseTrailerSize(_)
+        | ErrorCode::HttpResponseTransferCoding(_)
+        | ErrorCode::HttpResponseContentCoding(_)
+        | ErrorCode::HttpProtocolError
+        | ErrorCode::HttpUpgradeFailed => HostFailureKind::Permanent,
+
+        // Timeout errors — transient (may succeed with more time)
+        ErrorCode::LoopDetected
+        | ErrorCode::ConfigurationError
+        | ErrorCode::HttpResponseTimeout => HostFailureKind::Transient,
+
+        // Incomplete/internal — transient (default)
+        ErrorCode::HttpResponseIncomplete | ErrorCode::InternalError(_) => {
+            HostFailureKind::Transient
+        }
     }
 }

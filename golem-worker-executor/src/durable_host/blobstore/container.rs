@@ -27,6 +27,7 @@ use golem_common::model::oplog::{
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
+use crate::durable_host::blobstore::classify_blob_store_error;
 use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
 };
@@ -96,10 +97,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     start,
                     end,
                 )
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
-            let result = HostResponseBlobStoreGetData { result };
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
+            let result = HostResponseBlobStoreGetData {
+                result: result.map_err(|err| err.to_string()),
+            };
             durability
                 .persist(
                     self,
@@ -155,10 +159,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .write_data(environment_id, container_name.clone(), name.clone(), data)
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
-            let result = HostResponseBlobStoreUnit { result };
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
+            let result = HostResponseBlobStoreUnit {
+                result: result.map_err(|err| err.to_string()),
+            };
             durability
                 .persist(
                     self,
@@ -196,10 +203,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .list_objects(environment_id, container_name.clone())
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
-            let result = HostResponseBlobStoreListObjects { result };
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
+            let result = HostResponseBlobStoreListObjects {
+                result: result.map_err(|err| err.to_string()),
+            };
             durability
                 .persist(
                     self,
@@ -248,10 +258,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .delete_object(environment_id, container_name.clone(), name.clone())
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
-            let result = HostResponseBlobStoreUnit { result };
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
+            let result = HostResponseBlobStoreUnit {
+                result: result.map_err(|err| err.to_string()),
+            };
             durability
                 .persist(
                     self,
@@ -295,10 +308,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .delete_objects(environment_id, container_name.clone(), names.clone())
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
-            let result = HostResponseBlobStoreUnit { result };
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
+            let result = HostResponseBlobStoreUnit {
+                result: result.map_err(|err| err.to_string()),
+            };
 
             durability
                 .persist(
@@ -338,10 +354,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .has_object(environment_id, container_name.clone(), name.clone())
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
-            let result = HostResponseBlobStoreContains { result };
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
+            let result = HostResponseBlobStoreContains {
+                result: result.map_err(|err| err.to_string()),
+            };
 
             durability
                 .persist(
@@ -381,11 +400,14 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .object_info(environment_id, container_name.clone(), name.clone())
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
 
-            let result = HostResponseBlobStoreObjectMetadata { result };
+            let result = HostResponseBlobStoreObjectMetadata {
+                result: result.map_err(|err| err.to_string()),
+            };
 
             durability
                 .persist(
@@ -432,11 +454,14 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .clear(environment_id, container_name.clone())
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
 
-            let result = HostResponseBlobStoreUnit { result };
+            let result = HostResponseBlobStoreUnit {
+                result: result.map_err(|err| err.to_string()),
+            };
 
             durability
                 .persist(

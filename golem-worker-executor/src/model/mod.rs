@@ -252,6 +252,8 @@ pub enum TrapType {
 
 impl TrapType {
     pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error, retry_from: OplogIndex) -> TrapType {
+        use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
+
         match error.root_cause().downcast_ref::<InterruptKind>() {
             Some(kind) => TrapType::Interrupt(*kind),
             None => match Ctx::is_exit(error) {
@@ -259,6 +261,22 @@ impl TrapType {
                 None => match error.root_cause().downcast_ref::<Trap>() {
                     Some(&Trap::StackOverflow) => TrapType::Error {
                         error: AgentError::StackOverflow,
+                        retry_from,
+                    },
+                    Some(
+                        &Trap::UnreachableCodeReached
+                        | &Trap::MemoryOutOfBounds
+                        | &Trap::TableOutOfBounds
+                        | &Trap::IndirectCallToNull
+                        | &Trap::BadSignature
+                        | &Trap::IntegerOverflow
+                        | &Trap::IntegerDivisionByZero
+                        | &Trap::BadConversionToInteger
+                        | &Trap::HeapMisaligned
+                        | &Trap::NullReference
+                        | &Trap::AtomicWaitNonSharedMemory,
+                    ) => TrapType::Error {
+                        error: AgentError::DeterministicTrap(format!("{error:#}")),
                         retry_from,
                     },
                     _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
@@ -289,10 +307,33 @@ impl TrapType {
                                     retry_from,
                                 }
                             }
-                            _ => TrapType::Error {
-                                error: AgentError::Unknown(format!("{error:#}")),
-                                retry_from,
-                            },
+                            _ => {
+                                // Search the full error chain for ClassifiedHostError
+                                if let Some(classified) = error
+                                    .chain()
+                                    .find_map(|e| e.downcast_ref::<ClassifiedHostError>())
+                                {
+                                    match classified.kind {
+                                        HostFailureKind::Transient => TrapType::Error {
+                                            error: AgentError::TransientError(
+                                                classified.message.clone(),
+                                            ),
+                                            retry_from,
+                                        },
+                                        HostFailureKind::Permanent => TrapType::Error {
+                                            error: AgentError::PermanentError(
+                                                classified.message.clone(),
+                                            ),
+                                            retry_from,
+                                        },
+                                    }
+                                } else {
+                                    TrapType::Error {
+                                        error: AgentError::Unknown(format!("{error:#}")),
+                                        retry_from,
+                                    }
+                                }
+                            }
                         },
                     },
                 },

@@ -9,6 +9,10 @@ message AgentError {
     InvalidRequest invalid_request = 3;
     UnknownError unknown_error = 4;
     ExceededMemoryLimit exceeded_memory_limit = 5;
+    InternalError internal_error = 6;
+    DeterministicTrap deterministic_trap = 7;
+    TransientError transient_error = 8;
+    PermanentError permanent_error = 9;
   }
 }
 
@@ -25,3 +29,19 @@ message UnknownError {
 }
 
 message ExceededMemoryLimit {}
+
+message InternalError {
+  string details = 1;
+}
+
+message DeterministicTrap {
+  string details = 1;
+}
+
+message TransientError {
+  string details = 1;
+}
+
+message PermanentError {
+  string details = 1;
+}

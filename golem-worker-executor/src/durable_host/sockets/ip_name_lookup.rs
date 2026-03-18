@@ -14,6 +14,7 @@
 
 use wasmtime::component::Resource;
 
+use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;
@@ -73,7 +74,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = if durability.is_live() {
             let result = resolve_and_drain_addresses(self, network, name.clone()).await;
             durability
-                .try_trigger_retry(self, &result)
+                .try_trigger_retry(self, &result, |err| match err.downcast_ref() {
+                    Some(
+                        ErrorCode::NameUnresolvable
+                        | ErrorCode::PermanentResolverFailure
+                        | ErrorCode::AccessDenied,
+                    ) => HostFailureKind::Permanent,
+                    _ => HostFailureKind::Transient,
+                })
                 .await
                 .map_err(|e| SocketError::trap(wasmtime::Error::from_anyhow(e)))?;
 
