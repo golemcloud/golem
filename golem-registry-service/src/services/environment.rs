@@ -92,7 +92,7 @@ pub struct EnvironmentService {
     application_service: Arc<ApplicationService>,
     account_usage_service: Arc<AccountUsageService>,
     plugin_repo: Arc<dyn PluginRepo>,
-    root_account_id: AccountId,
+    builtin_plugin_owner_account_id: AccountId,
 }
 
 impl EnvironmentService {
@@ -101,14 +101,14 @@ impl EnvironmentService {
         application_service: Arc<ApplicationService>,
         account_usage_service: Arc<AccountUsageService>,
         plugin_repo: Arc<dyn PluginRepo>,
-        root_account_id: AccountId,
+        builtin_plugin_owner_account_id: AccountId,
     ) -> Self {
         Self {
             environment_repo,
             application_service,
             account_usage_service,
             plugin_repo,
-            root_account_id,
+            builtin_plugin_owner_account_id,
         }
     }
 
@@ -139,7 +139,7 @@ impl EnvironmentService {
 
         let builtin_plugins = self
             .plugin_repo
-            .list_by_account(self.root_account_id.0)
+            .list_by_account(self.builtin_plugin_owner_account_id.0)
             .await?;
 
         let plugin_grants: Vec<EnvironmentPluginGrantRecord> = builtin_plugins

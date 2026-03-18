@@ -57,6 +57,8 @@ use tracing::Instrument;
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+const BUILTIN_PLUGIN_OWNER_TOKEN: &str =
+    golem_client::LOCAL_WELL_KNOWN_BUILTIN_PLUGIN_OWNER_TOKEN;
 
 // The otlp-exporter WASM is embedded at compile time from the plugins directory.
 // Build with `cargo make build-plugins` first to ensure this file exists.
@@ -217,6 +219,17 @@ fn registry_service_config(
                     token: TokenSecret::trusted(ADMIN_TOKEN.to_string()),
                     plan_id,
                     role: AccountRole::Admin,
+                },
+            );
+            accounts.insert(
+                "builtin-plugin-owner".to_string(),
+                PrecreatedAccount {
+                    id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
+                    name: "Builtin Plugin Owner".to_string(),
+                    email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
+                    token: TokenSecret::trusted(BUILTIN_PLUGIN_OWNER_TOKEN.to_string()),
+                    plan_id,
+                    role: AccountRole::BuiltinPluginOwner,
                 },
             );
             accounts

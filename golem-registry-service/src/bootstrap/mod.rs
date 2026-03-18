@@ -203,12 +203,14 @@ impl Services {
 
         let auth_service = Arc::new(AuthService::new(repos.account_repo.clone()));
 
-        let root_account_id = config
+        let builtin_plugin_owner_account_id = config
             .initial_accounts
             .values()
-            .find(|a| a.role == golem_common::model::auth::AccountRole::Admin)
+            .find(|a| a.role == golem_common::model::auth::AccountRole::BuiltinPluginOwner)
             .map(|a| a.id)
-            .ok_or(anyhow!("No admin account found in initial_accounts"))?;
+            .ok_or(anyhow!(
+                "No builtin-plugin-owner account found in initial_accounts"
+            ))?;
 
         let application_service = Arc::new(ApplicationService::new(
             repos.application_repo.clone(),
@@ -221,7 +223,7 @@ impl Services {
             application_service.clone(),
             account_usage_service.clone(),
             repos.plugin_repo.clone(),
-            root_account_id,
+            builtin_plugin_owner_account_id,
         ));
 
         let environment_share_service = Arc::new(EnvironmentShareService::new(
@@ -368,7 +370,7 @@ impl Services {
 
             if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
                 &builtin_plugins,
-                root_account_id,
+                builtin_plugin_owner_account_id,
                 &repos.plugin_repo,
                 &application_service,
                 &environment_service,

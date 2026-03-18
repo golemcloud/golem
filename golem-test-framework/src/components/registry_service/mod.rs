@@ -131,6 +131,26 @@ async fn env_vars(
             "GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN",
             admin_token.secret().to_string(),
         )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ID",
+            "adb2694f-cd9f-425d-905d-ca2888c9c5de",
+        )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__EMAIL",
+            "builtin-plugin-owner@golem.cloud",
+        )
+        .with(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__PLAN_ID",
+            default_plan_id.to_string(),
+        )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__TOKEN",
+            golem_client::LOCAL_WELL_KNOWN_BUILTIN_PLUGIN_OWNER_TOKEN,
+        )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ROLE",
+            "builtin-plugin-owner",
+        )
         // plans
         .with(
             "GOLEM__INITIAL_PLANS__DEFAULT__PLAN_ID",

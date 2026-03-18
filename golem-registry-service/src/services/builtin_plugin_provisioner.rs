@@ -43,7 +43,7 @@ const OTLP_PLUGIN_NAME: &str = "golem-otlp-exporter";
 
 pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
-    root_account_id: AccountId,
+    builtin_plugin_owner_account_id: AccountId,
     plugin_repo: &Arc<dyn PluginRepo>,
     application_service: &Arc<ApplicationService>,
     environment_service: &Arc<EnvironmentService>,
@@ -72,14 +72,14 @@ pub async fn provision_builtin_plugins(
     // 1. Create or find "golem-system" application
     let app_name = ApplicationName(SYSTEM_APP_NAME.to_string());
     let app = match application_service
-        .get_in_account(root_account_id, &app_name, &auth)
+        .get_in_account(builtin_plugin_owner_account_id, &app_name, &auth)
         .await
     {
         Ok(app) => app,
         Err(ApplicationError::ApplicationByNameNotFound(_)) => {
             match application_service
                 .create(
-                    root_account_id,
+                    builtin_plugin_owner_account_id,
                     ApplicationCreation {
                         name: app_name.clone(),
                     },
@@ -89,7 +89,7 @@ pub async fn provision_builtin_plugins(
             {
                 Ok(app) => app,
                 Err(ApplicationError::ApplicationWithNameAlreadyExists) => application_service
-                    .get_in_account(root_account_id, &app_name, &auth)
+                    .get_in_account(builtin_plugin_owner_account_id, &app_name, &auth)
                     .await
                     .map_err(|e| anyhow::anyhow!("Failed to re-read system application: {e}"))?,
                 Err(other) => {
@@ -223,7 +223,7 @@ pub async fn provision_builtin_plugins(
     // 4. Register "golem-otlp-exporter" plugin if not exists
     let _plugin = match plugin_registration_service
         .register_plugin(
-            root_account_id,
+            builtin_plugin_owner_account_id,
             PluginRegistrationCreation {
                 name: OTLP_PLUGIN_NAME.to_string(),
                 version: plugin_version.clone(),
@@ -242,7 +242,7 @@ pub async fn provision_builtin_plugins(
         Ok(plugin) => plugin,
         Err(PluginRegistrationError::PluginNameAndVersionAlreadyExists) => {
             let record = plugin_repo
-                .get_by_name_and_version(root_account_id.0, OTLP_PLUGIN_NAME, &plugin_version)
+                .get_by_name_and_version(builtin_plugin_owner_account_id.0, OTLP_PLUGIN_NAME, &plugin_version)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to look up existing plugin: {e}"))?
                 .ok_or_else(|| anyhow::anyhow!("Plugin exists but could not be loaded"))?;

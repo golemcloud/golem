@@ -119,7 +119,7 @@ impl SafeDisplay for RegistryServiceConfig {
 
 impl Default for RegistryServiceConfig {
     fn default() -> Self {
-        let mut initial_accounts = HashMap::with_capacity(2);
+        let mut initial_accounts = HashMap::with_capacity(3);
         initial_accounts.insert(
             "root".to_string(),
             PrecreatedAccount {
@@ -143,6 +143,19 @@ impl Default for RegistryServiceConfig {
                     "2dwnjEdx8a_bw8TTN7r6yqcvLY2jAQuoD1N6U3uRy9I".to_string(),
                 ),
                 role: AccountRole::MarketingAdmin,
+                plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+            },
+        );
+        initial_accounts.insert(
+            "builtin-plugin-owner".to_string(),
+            PrecreatedAccount {
+                id: AccountId(uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")),
+                name: "Builtin Plugin Owner".to_string(),
+                email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
+                token: TokenSecret::trusted(
+                    "32d6072d-64e9-4a4a-b8f9-fadf68bb446b".to_string(),
+                ),
+                role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
             },
         );
