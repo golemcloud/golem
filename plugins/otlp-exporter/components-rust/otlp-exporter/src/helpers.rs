@@ -1,5 +1,5 @@
 use golem_rust::bindings::golem::api::context::AttributeValue;
-use golem_rust::bindings::golem::api::oplog::{Timestamp, WorkerError};
+use golem_rust::bindings::golem::api::oplog::{Timestamp, WrappedFunctionType, WorkerError};
 use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
 use golem_rust::wasip2::clocks::wall_clock::Datetime;
 use std::collections::HashMap;
@@ -41,6 +41,28 @@ pub(crate) fn infer_span_kind(name: &str, attributes: &HashMap<String, String>) 
                 1 // INTERNAL
             }
         }
+    }
+}
+
+pub(crate) fn wrapped_function_type_name(t: &WrappedFunctionType) -> &'static str {
+    match t {
+        WrappedFunctionType::ReadLocal => "read-local",
+        WrappedFunctionType::WriteLocal => "write-local",
+        WrappedFunctionType::ReadRemote => "read-remote",
+        WrappedFunctionType::WriteRemote => "write-remote",
+        WrappedFunctionType::WriteRemoteBatched(_) => "write-remote-batched",
+        WrappedFunctionType::WriteRemoteTransaction(_) => "write-remote-transaction",
+    }
+}
+
+pub(crate) fn oplog_payload_size(
+    payload: &golem_rust::bindings::golem::api::oplog::OplogPayload,
+) -> Option<u64> {
+    match payload {
+        golem_rust::bindings::golem::api::oplog::OplogPayload::Inline(data) => {
+            Some(data.len() as u64)
+        }
+        golem_rust::bindings::golem::api::oplog::OplogPayload::External(_) => None,
     }
 }
 

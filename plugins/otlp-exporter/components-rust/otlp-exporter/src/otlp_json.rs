@@ -17,7 +17,7 @@ pub(crate) struct ResourceSpans {
     pub(crate) scope_spans: Vec<ScopeSpans>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OtlpResource {
     pub(crate) attributes: Vec<KeyValue>,
@@ -30,7 +30,7 @@ pub(crate) struct ScopeSpans {
     pub(crate) spans: Vec<OtlpSpan>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InstrumentationScope {
     pub(crate) name: String,
@@ -74,4 +74,102 @@ pub(crate) struct KeyValue {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OtlpValue {
     pub(crate) string_value: String,
+}
+
+// ── Logs (POST /v1/logs) ────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExportLogsServiceRequest {
+    pub(crate) resource_logs: Vec<ResourceLogs>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResourceLogs {
+    pub(crate) resource: OtlpResource,
+    pub(crate) scope_logs: Vec<ScopeLogs>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScopeLogs {
+    pub(crate) scope: InstrumentationScope,
+    pub(crate) log_records: Vec<OtlpLogRecord>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OtlpLogRecord {
+    pub(crate) time_unix_nano: String,
+    pub(crate) observed_time_unix_nano: String,
+    pub(crate) severity_number: u32,
+    pub(crate) severity_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) body: Option<OtlpValue>,
+    pub(crate) attributes: Vec<KeyValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) trace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) span_id: Option<String>,
+}
+
+// ── Metrics (POST /v1/metrics) ──────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExportMetricsServiceRequest {
+    pub(crate) resource_metrics: Vec<ResourceMetrics>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ResourceMetrics {
+    pub(crate) resource: OtlpResource,
+    pub(crate) scope_metrics: Vec<ScopeMetrics>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScopeMetrics {
+    pub(crate) scope: InstrumentationScope,
+    pub(crate) metrics: Vec<OtlpMetric>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OtlpMetric {
+    pub(crate) name: String,
+    pub(crate) unit: String,
+    pub(crate) description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sum: Option<OtlpSum>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) gauge: Option<OtlpGauge>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OtlpSum {
+    pub(crate) aggregation_temporality: u32,
+    pub(crate) is_monotonic: bool,
+    pub(crate) data_points: Vec<OtlpNumberDataPoint>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OtlpGauge {
+    pub(crate) data_points: Vec<OtlpNumberDataPoint>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OtlpNumberDataPoint {
+    pub(crate) start_time_unix_nano: String,
+    pub(crate) time_unix_nano: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) as_int: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) as_double: Option<f64>,
+    pub(crate) attributes: Vec<KeyValue>,
 }

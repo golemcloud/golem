@@ -1,7 +1,8 @@
 use crate::config::{ExporterConfig, ServiceNameMode};
 use crate::helpers::{format_uuid, infer_span_kind};
 use crate::otlp_json::{
-    ExportTraceServiceRequest, KeyValue, OtlpSpan, OtlpValue, SpanStatus,
+    ExportLogsServiceRequest, ExportMetricsServiceRequest, ExportTraceServiceRequest, KeyValue,
+    OtlpSpan, OtlpValue, SpanStatus,
 };
 use crate::state::PendingSpan;
 use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
@@ -122,20 +123,11 @@ pub(crate) fn build_resource_attributes(
     ]
 }
 
-pub(crate) fn send_spans(
-    config: &ExporterConfig,
-    request_body: ExportTraceServiceRequest,
-) -> Result<(), String> {
-    let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
-
+fn send_otlp_request(config: &ExporterConfig, path: &str, json: String) -> Result<(), String> {
     block_on(async {
-        let url = format!(
-            "{}/v1/traces",
-            config.endpoint.trim_end_matches('/')
-        );
+        let url = format!("{}{}", config.endpoint.trim_end_matches('/'), path);
 
-        let mut builder = Request::post(&url)
-            .header("Content-Type", "application/json");
+        let mut builder = Request::post(&url).header("Content-Type", "application/json");
 
         for (key, value) in &config.headers {
             builder = builder.header(key.as_str(), value.as_str());
@@ -156,4 +148,28 @@ pub(crate) fn send_spans(
 
         Ok(())
     })
+}
+
+pub(crate) fn send_spans(
+    config: &ExporterConfig,
+    request_body: ExportTraceServiceRequest,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
+    send_otlp_request(config, "/v1/traces", json)
+}
+
+pub(crate) fn send_logs(
+    config: &ExporterConfig,
+    request_body: ExportLogsServiceRequest,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
+    send_otlp_request(config, "/v1/logs", json)
+}
+
+pub(crate) fn send_metrics(
+    config: &ExporterConfig,
+    request_body: ExportMetricsServiceRequest,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&request_body).map_err(|e| e.to_string())?;
+    send_otlp_request(config, "/v1/metrics", json)
 }

@@ -6,10 +6,12 @@ mod processing;
 mod state;
 
 use config::ExporterConfig;
-use export::{build_resource_attributes, send_spans};
+use export::{build_resource_attributes, send_logs, send_metrics, send_spans};
 use helpers::worker_key;
 use otlp_json::{
-    ExportTraceServiceRequest, InstrumentationScope, OtlpResource, ResourceSpans, ScopeSpans,
+    ExportLogsServiceRequest, ExportMetricsServiceRequest, ExportTraceServiceRequest,
+    InstrumentationScope, OtlpResource, ResourceLogs, ResourceMetrics, ResourceSpans, ScopeLogs,
+    ScopeMetrics, ScopeSpans,
 };
 use processing::process_entries;
 use state::WORKER_STATES;
@@ -58,14 +60,19 @@ impl OplogProcessorGuest for OtlpExporterComponent {
                 implicit_spans: Vec::new(),
                 terminal_error: None,
                 inherited_span_parents: HashMap::new(),
+                invocation_start_ns: None,
+                total_memory_bytes: 0,
+                active_resources: 0,
             })
         });
 
-        let mut completed_spans: Vec<otlp_json::OtlpSpan> = Vec::new();
-        process_entries(&mut working_state, entries, &mut completed_spans);
+        let output = process_entries(&mut working_state, entries);
 
-        if completed_spans.is_empty() {
-            // No spans to send — commit state update (safe, nothing to retry)
+        let has_traces = exporter_config.signals.traces && !output.spans.is_empty();
+        let has_logs = exporter_config.signals.logs && !output.log_records.is_empty();
+        let has_metrics = exporter_config.signals.metrics && !output.metrics.is_empty();
+
+        if !has_traces && !has_logs && !has_metrics {
             WORKER_STATES.with(|states| {
                 let mut states = states.borrow_mut();
                 if working_state.is_empty() {
@@ -80,23 +87,55 @@ impl OplogProcessorGuest for OtlpExporterComponent {
         let resource_attrs =
             build_resource_attributes(&exporter_config, &component_id, &worker_id, &metadata);
 
-        let request_body = ExportTraceServiceRequest {
-            resource_spans: vec![ResourceSpans {
-                resource: OtlpResource {
-                    attributes: resource_attrs,
-                },
-                scope_spans: vec![ScopeSpans {
-                    scope: InstrumentationScope {
-                        name: "golem-otlp-exporter".to_string(),
-                        version: "1.5.0".to_string(),
-                    },
-                    spans: completed_spans,
-                }],
-            }],
+        let scope = InstrumentationScope {
+            name: "golem-otlp-exporter".to_string(),
+            version: "1.5.0".to_string(),
         };
 
-        // Only commit state after successful export
-        send_spans(&exporter_config, request_body)?;
+        if has_traces {
+            let request_body = ExportTraceServiceRequest {
+                resource_spans: vec![ResourceSpans {
+                    resource: OtlpResource {
+                        attributes: resource_attrs.clone(),
+                    },
+                    scope_spans: vec![ScopeSpans {
+                        scope: scope.clone(),
+                        spans: output.spans,
+                    }],
+                }],
+            };
+            send_spans(&exporter_config, request_body)?;
+        }
+
+        if has_logs {
+            let request_body = ExportLogsServiceRequest {
+                resource_logs: vec![ResourceLogs {
+                    resource: OtlpResource {
+                        attributes: resource_attrs.clone(),
+                    },
+                    scope_logs: vec![ScopeLogs {
+                        scope: scope.clone(),
+                        log_records: output.log_records,
+                    }],
+                }],
+            };
+            send_logs(&exporter_config, request_body)?;
+        }
+
+        if has_metrics {
+            let request_body = ExportMetricsServiceRequest {
+                resource_metrics: vec![ResourceMetrics {
+                    resource: OtlpResource {
+                        attributes: resource_attrs,
+                    },
+                    scope_metrics: vec![ScopeMetrics {
+                        scope,
+                        metrics: output.metrics,
+                    }],
+                }],
+            };
+            send_metrics(&exporter_config, request_body)?;
+        }
 
         WORKER_STATES.with(|states| {
             let mut states = states.borrow_mut();

@@ -2,6 +2,13 @@ pub(crate) struct ExporterConfig {
     pub(crate) endpoint: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) service_name_mode: ServiceNameMode,
+    pub(crate) signals: SignalConfig,
+}
+
+pub(crate) struct SignalConfig {
+    pub(crate) traces: bool,
+    pub(crate) logs: bool,
+    pub(crate) metrics: bool,
 }
 
 pub(crate) enum ServiceNameMode {
@@ -58,10 +65,45 @@ impl ExporterConfig {
             None => ServiceNameMode::AgentId,
         };
 
+        let signals = match config.iter().find(|(k, _)| k == "signals") {
+            Some((_, v)) if v.is_empty() => {
+                return Err("'signals' is configured but empty".to_string());
+            }
+            Some((_, v)) => {
+                let mut traces = false;
+                let mut logs = false;
+                let mut metrics = false;
+                for signal in v.split(',') {
+                    match signal.trim() {
+                        "traces" => traces = true,
+                        "logs" => logs = true,
+                        "metrics" => metrics = true,
+                        other => {
+                            return Err(format!(
+                                "unknown signal '{}', expected 'traces', 'logs', or 'metrics'",
+                                other
+                            ));
+                        }
+                    }
+                }
+                SignalConfig {
+                    traces,
+                    logs,
+                    metrics,
+                }
+            }
+            None => SignalConfig {
+                traces: true,
+                logs: false,
+                metrics: false,
+            },
+        };
+
         Ok(Some(ExporterConfig {
             endpoint,
             headers,
             service_name_mode,
+            signals,
         }))
     }
 }

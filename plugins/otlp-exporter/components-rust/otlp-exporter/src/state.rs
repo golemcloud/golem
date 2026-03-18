@@ -12,6 +12,12 @@ pub(crate) struct WorkerState {
     /// that was NOT inherited, i.e. exported by the originating worker). `None`
     /// means the inherited chain ends at a root / external span with no further parent.
     pub(crate) inherited_span_parents: HashMap<String, Option<String>>,
+    /// Timestamp (nanos) when the current invocation started, for duration metrics.
+    pub(crate) invocation_start_ns: Option<u128>,
+    /// Running total of linear memory in bytes (initial + sum of grow deltas).
+    pub(crate) total_memory_bytes: u64,
+    /// Running count of active resources (created - dropped).
+    pub(crate) active_resources: i64,
 }
 
 impl WorkerState {
