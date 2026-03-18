@@ -29,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
 use uuid::uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -96,9 +95,8 @@ impl SafeDisplay for RegistryServiceConfig {
 
         let _ = writeln!(
             &mut result,
-            "builtin plugins: enabled={}, wasm={}",
+            "builtin plugins: enabled={}",
             self.builtin_plugins.enabled,
-            self.builtin_plugins.otlp_exporter_wasm.is_some()
         );
 
         let _ = writeln!(&mut result, "deployment events:");
@@ -152,9 +150,7 @@ impl Default for RegistryServiceConfig {
                 id: AccountId(uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")),
                 name: "Builtin Plugin Owner".to_string(),
                 email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
-                token: TokenSecret::trusted(
-                    "32d6072d-64e9-4a4a-b8f9-fadf68bb446b".to_string(),
-                ),
+                token: TokenSecret::trusted("32d6072d-64e9-4a4a-b8f9-fadf68bb446b".to_string()),
                 role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
             },
@@ -399,9 +395,6 @@ impl ComponentCompilationEnabledConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct BuiltinPluginsConfig {
     pub enabled: bool,
-    #[serde(skip)]
-    pub otlp_exporter_wasm: Option<Arc<[u8]>>,
-    pub otlp_exporter_wasm_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

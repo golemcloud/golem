@@ -21,26 +21,52 @@ use crate::services::environment::{EnvironmentError, EnvironmentService};
 
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
 use golem_common::golem_version;
-use golem_common::model::diff;
 use golem_common::model::account::AccountId;
-use golem_common::model::application::{ApplicationCreation, ApplicationName};
+use golem_common::model::application::{
+    Application, ApplicationCreation, ApplicationId, ApplicationName,
+};
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentCreation, ComponentName, ComponentUpdate};
 use golem_common::model::deployment::{DeploymentCreation, DeploymentVersion};
-use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
-
+use golem_common::model::diff;
+use golem_common::model::environment::{
+    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
+};
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::component::Component;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
 const SYSTEM_APP_NAME: &str = "golem-system";
 const SYSTEM_ENV_NAME: &str = "builtin-plugins";
-const OTLP_COMPONENT_NAME: &str = "otlp:exporter";
-const OTLP_PLUGIN_NAME: &str = "golem-otlp-exporter";
+
+struct BuiltinPluginDescriptor {
+    component_name: &'static str,
+    plugin_name: &'static str,
+    description: &'static str,
+    wasm_bytes: &'static [u8],
+}
+
+impl BuiltinPluginDescriptor {
+    fn plugin_spec(&self, component: &Component) -> PluginSpecDto {
+        PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+            component_id: component.id,
+            component_revision: component.revision,
+        })
+    }
+}
+
+// Build with `cargo make build-plugins` first to ensure the WASM files exist.
+static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
+    component_name: "otlp:exporter",
+    plugin_name: "golem-otlp-exporter",
+    description: "Built-in OTLP exporter oplog processor plugin",
+    wasm_bytes: include_bytes!("../../../plugins/otlp-exporter.wasm"),
+}];
 
 pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
@@ -58,97 +84,154 @@ pub async fn provision_builtin_plugins(
         return Ok(());
     }
 
-    let wasm_bytes = match &config.otlp_exporter_wasm {
-        Some(bytes) => bytes.clone(),
-        None => {
-            tracing::debug!("No OTLP exporter WASM provided, skipping plugin provisioning");
-            return Ok(());
-        }
-    };
-
     let auth = AuthCtx::system();
     let plugin_version = golem_version().to_string();
-    let component_name = ComponentName(OTLP_COMPONENT_NAME.to_string());
 
-    // 1. Create or find "golem-system" application
-    let app_name = ApplicationName(SYSTEM_APP_NAME.to_string());
-    let app = match application_service
-        .get_in_account(builtin_plugin_owner_account_id, &app_name, &auth)
+    let app = get_or_create_application(
+        application_service,
+        builtin_plugin_owner_account_id,
+        &ApplicationName(SYSTEM_APP_NAME.to_string()),
+        &auth,
+    )
+    .await?;
+
+    let env = get_or_create_environment(
+        environment_service,
+        app.id,
+        &EnvironmentName(SYSTEM_ENV_NAME.to_string()),
+        &auth,
+    )
+    .await?;
+
+    let mut components = Vec::new();
+    for descriptor in BUILTIN_PLUGINS {
+        let component = upload_or_update_component(
+            component_service,
+            component_write_service,
+            env.id,
+            &ComponentName(descriptor.component_name.to_string()),
+            descriptor.wasm_bytes,
+            &auth,
+        )
+        .await?;
+        components.push((descriptor, component));
+    }
+
+    deploy_environment(deployment_service, deployment_write_service, env.id, &auth).await;
+
+    for (descriptor, component) in &components {
+        register_plugin(
+            plugin_registration_service,
+            plugin_repo,
+            builtin_plugin_owner_account_id,
+            descriptor,
+            &plugin_version,
+            component,
+            &auth,
+        )
+        .await?;
+    }
+
+    tracing::info!("Built-in plugins provisioned successfully");
+    Ok(())
+}
+
+async fn get_or_create_application(
+    application_service: &Arc<ApplicationService>,
+    account_id: AccountId,
+    app_name: &ApplicationName,
+    auth: &AuthCtx,
+) -> anyhow::Result<Application> {
+    match application_service
+        .get_in_account(account_id, app_name, auth)
         .await
     {
-        Ok(app) => app,
+        Ok(app) => Ok(app),
         Err(ApplicationError::ApplicationByNameNotFound(_)) => {
             match application_service
                 .create(
-                    builtin_plugin_owner_account_id,
+                    account_id,
                     ApplicationCreation {
                         name: app_name.clone(),
                     },
-                    &auth,
+                    auth,
                 )
                 .await
             {
-                Ok(app) => app,
+                Ok(app) => Ok(app),
                 Err(ApplicationError::ApplicationWithNameAlreadyExists) => application_service
-                    .get_in_account(builtin_plugin_owner_account_id, &app_name, &auth)
+                    .get_in_account(account_id, app_name, auth)
                     .await
-                    .map_err(|e| anyhow::anyhow!("Failed to re-read system application: {e}"))?,
-                Err(other) => {
-                    return Err(anyhow::anyhow!("Failed to create application: {other}"));
-                }
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to re-read application '{app_name}': {e}")
+                    }),
+                Err(other) => Err(anyhow::anyhow!(
+                    "Failed to create application '{app_name}': {other}"
+                )),
             }
         }
-        Err(other) => {
-            return Err(anyhow::anyhow!(
-                "Failed to look up system application: {other}"
-            ));
-        }
-    };
+        Err(other) => Err(anyhow::anyhow!(
+            "Failed to look up application '{app_name}': {other}"
+        )),
+    }
+}
 
-    // 2. Create or find "builtin-plugins" environment
-    let env_name = EnvironmentName(SYSTEM_ENV_NAME.to_string());
-    let env = match environment_service
-        .get_in_application(app.id, &env_name, &auth)
+async fn get_or_create_environment(
+    environment_service: &Arc<EnvironmentService>,
+    app_id: ApplicationId,
+    env_name: &EnvironmentName,
+    auth: &AuthCtx,
+) -> anyhow::Result<Environment> {
+    match environment_service
+        .get_in_application(app_id, env_name, auth)
         .await
     {
-        Ok(env) => env,
+        Ok(env) => Ok(env),
         Err(EnvironmentError::EnvironmentByNameNotFound(_)) => {
             match environment_service
                 .create(
-                    app.id,
+                    app_id,
                     EnvironmentCreation {
                         name: env_name.clone(),
                         compatibility_check: false,
                         version_check: false,
                         security_overrides: false,
                     },
-                    &auth,
+                    auth,
                 )
                 .await
             {
-                Ok(env) => env,
+                Ok(env) => Ok(env),
                 Err(EnvironmentError::EnvironmentWithNameAlreadyExists) => environment_service
-                    .get_in_application(app.id, &env_name, &auth)
+                    .get_in_application(app_id, env_name, auth)
                     .await
-                    .map_err(|e| anyhow::anyhow!("Failed to re-read system environment: {e}"))?,
-                Err(other) => {
-                    return Err(anyhow::anyhow!("Failed to create environment: {other}"));
-                }
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to re-read environment '{env_name}': {e}")
+                    }),
+                Err(other) => Err(anyhow::anyhow!(
+                    "Failed to create environment '{env_name}': {other}"
+                )),
             }
         }
-        Err(other) => {
-            return Err(anyhow::anyhow!(
-                "Failed to look up system environment: {other}"
-            ));
-        }
-    };
+        Err(other) => Err(anyhow::anyhow!(
+            "Failed to look up environment '{env_name}': {other}"
+        )),
+    }
+}
 
-    // 3. Upload "otlp-exporter" component, or update it if it already exists
-    let embedded_wasm_hash = diff::Hash::new(blake3::hash(&wasm_bytes));
+async fn upload_or_update_component(
+    component_service: &Arc<ComponentService>,
+    component_write_service: &Arc<ComponentWriteService>,
+    env_id: EnvironmentId,
+    component_name: &ComponentName,
+    wasm_bytes: &[u8],
+    auth: &AuthCtx,
+) -> anyhow::Result<Component> {
+    let embedded_wasm_hash = diff::Hash::new(blake3::hash(wasm_bytes));
 
-    let component = match component_write_service
+    match component_write_service
         .create(
-            env.id,
+            env_id,
             ComponentCreation {
                 component_name: component_name.clone(),
                 file_options: BTreeMap::new(),
@@ -160,22 +243,26 @@ pub async fn provision_builtin_plugins(
             },
             wasm_bytes.to_vec(),
             None,
-            &auth,
+            auth,
         )
         .await
     {
-        Ok(component) => component,
+        Ok(component) => Ok(component),
         Err(ComponentError::ComponentWithNameAlreadyExists(_)) => {
             let existing = component_service
-                .get_staged_component_by_name(env.id, &component_name, &auth)
+                .get_staged_component_by_name(env_id, component_name, auth)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to get existing OTLP component: {e}"))?;
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to get existing component '{component_name}': {e}")
+                })?;
 
             if existing.wasm_hash == embedded_wasm_hash {
-                tracing::info!("OTLP exporter component is already up to date, skipping update");
-                existing
+                tracing::info!(
+                    "Component '{component_name}' is already up to date, skipping update"
+                );
+                Ok(existing)
             } else {
-                tracing::info!("OTLP exporter component has changed, updating");
+                tracing::info!("Component '{component_name}' has changed, updating");
                 component_write_service
                     .update(
                         existing.id,
@@ -191,80 +278,99 @@ pub async fn provision_builtin_plugins(
                         },
                         Some(wasm_bytes.to_vec()),
                         None,
-                        &auth,
+                        auth,
                     )
                     .await
-                    .map_err(|e| anyhow::anyhow!("Failed to update OTLP component: {e}"))?
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to update component '{component_name}': {e}")
+                    })
             }
         }
-        Err(other) => {
-            return Err(anyhow::anyhow!("Failed to create OTLP component: {other}"));
+        Err(other) => Err(anyhow::anyhow!(
+            "Failed to create component '{component_name}': {other}"
+        )),
+    }
+}
+
+async fn deploy_environment(
+    deployment_service: &Arc<DeploymentService>,
+    deployment_write_service: &Arc<DeploymentWriteService>,
+    env_id: EnvironmentId,
+    auth: &AuthCtx,
+) {
+    let plan = match deployment_service
+        .get_current_deployment_plan(env_id, auth)
+        .await
+    {
+        Ok(plan) => plan,
+        Err(e) => {
+            tracing::warn!("Failed to get deployment plan for environment {env_id}: {e}");
+            return;
         }
     };
 
-    // 3b. Deploy the "builtin-plugins" environment so the component is available as deployed
-    let plan = deployment_service
-        .get_current_deployment_plan(env.id, &auth)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to get deployment plan: {e}"))?;
     match deployment_write_service
         .create_deployment(
-            env.id,
+            env_id,
             DeploymentCreation {
                 current_revision: plan.current_revision,
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion(Uuid::new_v4().to_string()),
                 agent_secret_defaults: Vec::new(),
             },
-            &auth,
+            auth,
         )
         .await
     {
         Ok(_) => {
-            tracing::info!("Deployed builtin-plugins environment");
+            tracing::info!("Deployed environment {env_id}");
         }
         Err(e) => {
-            tracing::warn!(
-                "Failed to deploy builtin-plugins environment (may already be deployed): {e}"
-            );
+            tracing::warn!("Failed to deploy environment {env_id} (may already be deployed): {e}");
         }
     }
+}
 
-    // 4. Register "golem-otlp-exporter" plugin if not exists
-    let _plugin = match plugin_registration_service
+async fn register_plugin(
+    plugin_registration_service: &Arc<PluginRegistrationService>,
+    plugin_repo: &Arc<dyn PluginRepo>,
+    account_id: AccountId,
+    descriptor: &BuiltinPluginDescriptor,
+    plugin_version: &str,
+    component: &Component,
+    auth: &AuthCtx,
+) -> anyhow::Result<()> {
+    let plugin_name = descriptor.plugin_name;
+    match plugin_registration_service
         .register_plugin(
-            builtin_plugin_owner_account_id,
+            account_id,
             PluginRegistrationCreation {
-                name: OTLP_PLUGIN_NAME.to_string(),
-                version: plugin_version.clone(),
-                description: "Built-in OTLP exporter oplog processor plugin".to_string(),
+                name: plugin_name.to_string(),
+                version: plugin_version.to_string(),
+                description: descriptor.description.to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.id,
-                    component_revision: component.revision,
-                }),
+                spec: descriptor.plugin_spec(component),
             },
-            &auth,
+            auth,
         )
         .await
     {
-        Ok(plugin) => plugin,
+        Ok(_) => Ok(()),
         Err(PluginRegistrationError::PluginNameAndVersionAlreadyExists) => {
-            let record = plugin_repo
-                .get_by_name_and_version(builtin_plugin_owner_account_id.0, OTLP_PLUGIN_NAME, &plugin_version)
+            let _record = plugin_repo
+                .get_by_name_and_version(account_id.0, plugin_name, plugin_version)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to look up existing plugin: {e}"))?
-                .ok_or_else(|| anyhow::anyhow!("Plugin exists but could not be loaded"))?;
-            record
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("Failed to convert plugin record: {e}"))?
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to look up existing plugin '{plugin_name}': {e}")
+                })?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Plugin '{plugin_name}' exists but could not be loaded")
+                })?;
+            Ok(())
         }
-        Err(other) => {
-            return Err(anyhow::anyhow!("Failed to register plugin: {other}"));
-        }
-    };
-
-    tracing::info!("Built-in plugins provisioned successfully");
-    Ok(())
+        Err(other) => Err(anyhow::anyhow!(
+            "Failed to register plugin '{plugin_name}': {other}"
+        )),
+    }
 }
