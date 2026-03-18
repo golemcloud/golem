@@ -224,9 +224,9 @@ impl TemplateHandler {
                     .unwrap_or_else(|| Path::new("."));
                 let application_dir = {
                     if application_path.is_absolute() {
-                        application_path.to_path_buf()
+                        fs::normalize_path_lexically(application_path)
                     } else {
-                        std::env::current_dir()?.join(application_path)
+                        fs::normalize_path_lexically(&std::env::current_dir()?.join(application_path))
                     }
                 };
                 let application_name_candidate = match application_name {

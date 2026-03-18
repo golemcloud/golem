@@ -361,7 +361,10 @@ fn transform(
             }
             Transform::ComponentDir => {
                 if let Some(component_dir) = &ctx.component_dir {
-                    replacements.insert("componentDir", fs::path_to_unix_str(component_dir)?);
+                    replacements.insert(
+                        "componentDir",
+                        fs::path_to_unix_str(&fs::normalize_path_lexically(component_dir))?,
+                    );
                 }
             }
             Transform::ManifestHints => {

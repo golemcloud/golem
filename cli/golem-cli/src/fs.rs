@@ -60,6 +60,33 @@ pub fn canonicalize_path(path: &Path) -> anyhow::Result<PathBuf> {
         .map_err(|err| anyhow!("Failed to canonicalize path ({}): {}", path.display(), err))
 }
 
+pub fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                Some(Component::ParentDir) | None => {
+                    if !normalized.has_root() {
+                        normalized.push("..");
+                    }
+                }
+                Some(Component::RootDir) | Some(Component::Prefix(_)) | Some(Component::CurDir) => {
+                }
+            },
+            Component::Normal(name) => normalized.push(name),
+        }
+    }
+
+    normalized
+}
+
 pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<bool> {
     let path = path.as_ref();
     if path.exists() {
@@ -725,6 +752,31 @@ mod test {
             fs::resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..")
                 .unwrap(),
             (base_dir.join("../../../"), "target/a".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_path_lexically_collapses_current_and_parent_segments() {
+        assert_eq!(
+            fs::normalize_path_lexically(Path::new("./a/./b/../c")),
+            PathBuf::from("a/c")
+        );
+    }
+
+    #[test]
+    fn normalize_path_lexically_keeps_leading_parent_segments_for_relative_paths() {
+        assert_eq!(
+            fs::normalize_path_lexically(Path::new("../../a/b")),
+            PathBuf::from("../../a/b")
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn normalize_path_lexically_handles_absolute_paths() {
+        assert_eq!(
+            fs::normalize_path_lexically(Path::new("/tmp/golem/./a/../b")),
+            PathBuf::from("/tmp/golem/b")
         );
     }
 
