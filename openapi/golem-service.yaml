@@ -12062,10 +12062,13 @@ components:
         retryFrom:
           type: integer
           format: uint64
+        insideAtomicRegion:
+          type: boolean
       required:
       - timestamp
       - error
       - retryFrom
+      - insideAtomicRegion
     r#ExitedParams:
       title: r#ExitedParams
       type: object
