@@ -208,9 +208,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     assert!(outputs.success_or_dump());
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("app-rust").join("golem.yaml"),
-        ),
+        ctx.cwd_path_join(Path::new("app-rust").join("golem.yaml")),
         indoc! {"
             components:
               app:rust:
@@ -243,9 +241,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     ]));
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("app-rust").join("golem.yaml"),
-        ),
+        ctx.cwd_path_join(Path::new("app-rust").join("golem.yaml")),
         indoc! {"
             components:
               app:rust:
