@@ -16,6 +16,7 @@ use super::optional_field_update::OptionalFieldUpdate;
 use crate::base_model::environment::EnvironmentId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use golem_wasm::analysis::AnalysedType;
+use std::fmt::Display;
 
 newtype_uuid!(
     AgentSecretId,
@@ -41,6 +42,12 @@ impl CanonicalAgentSecretPath {
     pub fn from_path_in_unknown_casing(value: &[String]) -> Self {
         use heck::ToLowerCamelCase;
         Self(value.iter().map(|s| s.to_lower_camel_case()).collect())
+    }
+}
+
+impl Display for CanonicalAgentSecretPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.join("."))
     }
 }
 

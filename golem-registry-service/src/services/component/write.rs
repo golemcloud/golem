@@ -720,7 +720,7 @@ fn validate_and_transform_agent_config_entries(
                 return Err(
                     ComponentError::AgentConfigProvidedSecretWhereOnlyLocalAllowed {
                         agent: agent_type.type_name.clone(),
-                        key: config_value.path,
+                        path: config_value.path,
                     },
                 );
             }
@@ -744,7 +744,7 @@ fn validate_and_transform_agent_config_entries(
             if !seen_agent_config_keys.insert(result.path.clone()) {
                 return Err(ComponentError::AgentConfigDuplicateValue {
                     agent: agent_type.type_name.clone(),
-                    key: result.path.clone(),
+                    path: result.path.clone(),
                 });
             }
 
@@ -777,7 +777,7 @@ fn check_transformed_agent_config_entries_match(
                 return Err(
                     ComponentError::AgentConfigProvidedSecretWhereOnlyLocalAllowed {
                         agent: agent_type.type_name.clone(),
-                        key: config_value.path.clone(),
+                        path: config_value.path.clone(),
                     },
                 );
             };
