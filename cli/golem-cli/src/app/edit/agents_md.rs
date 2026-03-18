@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub fn validate(_source: &str) -> anyhow::Result<()> {
     Ok(())
@@ -88,7 +88,8 @@ struct GuideSection {
 }
 
 fn extract_guide_sections(source: &str) -> Vec<GuideSection> {
-    let mut result = BTreeMap::new();
+    let mut result = Vec::new();
+    let mut seen_keys = BTreeSet::new();
 
     let mut cursor = 0;
     while let Some(start_idx_rel) = source[cursor..].find("<!-- golem-managed:guide:") {
@@ -123,21 +124,18 @@ fn extract_guide_sections(source: &str) -> Vec<GuideSection> {
             .trim_end_matches('\n')
             .to_string();
 
-        if !result.contains_key(&key) {
-            result.insert(key.clone(), (start_idx, section_end, content.clone()));
+        if seen_keys.insert(key.clone()) {
+            result.push(GuideSection {
+                key,
+                start: start_idx,
+                end: section_end,
+                content,
+            });
         }
         cursor = section_end;
     }
 
     result
-        .into_iter()
-        .map(|(key, (start, end, content))| GuideSection {
-            key,
-            start,
-            end,
-            content,
-        })
-        .collect()
 }
 
 fn extract_guide_key(marker: &str, suffix: &str) -> Option<String> {

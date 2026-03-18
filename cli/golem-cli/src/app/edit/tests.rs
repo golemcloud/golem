@@ -707,6 +707,28 @@ fn agents_md_merge_guides_updates_same_language_section() {
 }
 
 #[test]
+fn agents_md_merge_guides_handles_source_order_not_key_order() {
+    let ts_guide_v1 = make_managed_guide(GuestLanguage::TypeScript, "# TS guide\nV1");
+    let rust_guide_v1 = make_managed_guide(GuestLanguage::Rust, "# Rust guide\nV1");
+    let rust_guide_v2 = make_managed_guide(GuestLanguage::Rust, "# Rust guide\nV2");
+
+    let current = format!("{}\n{}", ts_guide_v1, rust_guide_v1);
+    let merged = agents_md::merge_guides(&current, &rust_guide_v2).unwrap();
+
+    let ts_idx = merged
+        .find("<!-- golem-managed:guide:ts:start -->")
+        .unwrap();
+    let rust_idx = merged
+        .find("<!-- golem-managed:guide:rust:start -->")
+        .unwrap();
+
+    assert!(ts_idx < rust_idx);
+    assert!(merged.contains("# TS guide\nV1"));
+    assert!(merged.contains("# Rust guide\nV2"));
+    assert!(!merged.contains("# Rust guide\nV1"));
+}
+
+#[test]
 fn package_json_rejects_json_comments() {
     let source = r#"{
   // comment
