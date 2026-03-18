@@ -347,81 +347,103 @@ fn transform(
     str: impl AsRef<str>,
     transforms: &[Transform],
 ) -> anyhow::Result<String> {
-    let transform_component = |str: &str| -> String {
-        match &ctx.component_name {
-            Some(component_name) => str
-                .replace("componentname", component_name.as_str())
-                .replace("component-name", &component_name.0.to_kebab_case())
-                .replace("component_name", &component_name.0.to_snake_case())
-                .replace("__cn__", "componentName"),
-            None => str.to_string(),
-        }
-    };
-
-    let transform_component_dir = |str: &str| -> anyhow::Result<String> {
-        Ok(match &ctx.component_dir {
-            Some(component_dir) => {
-                str.replace("componentDir", &fs::path_to_unix_str(component_dir)?)
-            }
-            None => str.to_string(),
-        })
-    };
-
-    let transform_manifest_hints = |str: &str| -> String {
-        str.replace("# golem-app-manifest-header\n", &APP_MANIFEST_HEADER)
-            .replace("    # golem-app-manifest-env-doc",
-                     concat!(
-                     "    # Component environment variables can reference system environment variables with minijinja syntax:\n",
-                     "    #\n",
-                     "    #   env:\n",
-                     "    #     ENV_VAR_1: \"{{ ENV_VAR_1 }}\"\n",
-                     "    #     RENAMED_VAR_2: \"{{ ENV_VAR_2 }}\"\n",
-                     "    #     COMPOSED_VAR_3: \"{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}\"\n",
-                     "    #",
-                     ),
-            )
-            .replace("    # golem-app-manifest-dep-env-vars-doc", &DEP_ENV_VARS_DOC)
-    };
-
-    let transform_app_name = |str: &str| -> String {
-        match &ctx.application_name {
-            Some(name) => str.replace("app-name", &name.0),
-            None => str.to_string(),
-        }
-    };
-
-    let transform_rust_sdk = |str: &str| -> String {
-        str.replace(
-            "GOLEM_RUST_VERSION_OR_PATH",
-            &ctx.sdk_overrides.golem_rust_dep(),
-        )
-    };
-
-    let transform_ts_sdk = |str: &str| -> String {
-        str.replace(
-            "GOLEM_TS_SDK_VERSION_OR_PATH",
-            &ctx.sdk_overrides.ts_package_dep("golem-ts-sdk"),
-        )
-        .replace(
-            "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-            &ctx.sdk_overrides.ts_package_dep("golem-ts-typegen"),
-        )
-    };
-
-    let mut transformed = str.as_ref().to_string();
+    let mut replacements: BTreeMap<&'static str, String> = BTreeMap::new();
 
     for transform in transforms {
-        transformed = match transform {
-            Transform::ComponentDir => transform_component_dir(&transformed)?,
-            Transform::ComponentName => transform_component(&transformed),
-            Transform::ManifestHints => transform_manifest_hints(&transformed),
-            Transform::TsSdk => transform_ts_sdk(&transformed),
-            Transform::RustSdk => transform_rust_sdk(&transformed),
-            Transform::ApplicationName => transform_app_name(&transformed),
-        };
+        match transform {
+            Transform::ComponentName => {
+                if let Some(component_name) = &ctx.component_name {
+                    replacements.insert("componentname", component_name.as_str().to_string());
+                    replacements.insert("component-name", component_name.0.to_kebab_case());
+                    replacements.insert("component_name", component_name.0.to_snake_case());
+                    replacements.insert("__cn__", "componentName".to_string());
+                }
+            }
+            Transform::ComponentDir => {
+                if let Some(component_dir) = &ctx.component_dir {
+                    replacements.insert("componentDir", fs::path_to_unix_str(component_dir)?);
+                }
+            }
+            Transform::ManifestHints => {
+                replacements.insert(
+                    "# golem-app-manifest-header\n",
+                    APP_MANIFEST_HEADER.to_string(),
+                );
+                replacements.insert(
+                    "    # golem-app-manifest-env-doc",
+                    concat!(
+                        "    # Component environment variables can reference system environment variables with minijinja syntax:\n",
+                        "    #\n",
+                        "    #   env:\n",
+                        "    #     ENV_VAR_1: \"{{ ENV_VAR_1 }}\"\n",
+                        "    #     RENAMED_VAR_2: \"{{ ENV_VAR_2 }}\"\n",
+                        "    #     COMPOSED_VAR_3: \"{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}\"\n",
+                        "    #",
+                    )
+                    .to_string(),
+                );
+                replacements.insert(
+                    "    # golem-app-manifest-dep-env-vars-doc",
+                    DEP_ENV_VARS_DOC.to_string(),
+                );
+            }
+            Transform::ApplicationName => {
+                if let Some(name) = &ctx.application_name {
+                    replacements.insert("app-name", name.0.clone());
+                }
+            }
+            Transform::RustSdk => {
+                replacements.insert(
+                    "GOLEM_RUST_VERSION_OR_PATH",
+                    ctx.sdk_overrides.golem_rust_dep(),
+                );
+            }
+            Transform::TsSdk => {
+                replacements.insert(
+                    "GOLEM_TS_SDK_VERSION_OR_PATH",
+                    ctx.sdk_overrides.ts_package_dep("golem-ts-sdk"),
+                );
+                replacements.insert(
+                    "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
+                    ctx.sdk_overrides.ts_package_dep("golem-ts-typegen"),
+                );
+            }
+        }
     }
 
-    Ok(transformed)
+    Ok(replace_all(str.as_ref(), &replacements))
+}
+
+// Keys are expected to be non-overlapping by prefix.
+fn replace_all(input: &str, replacements: &BTreeMap<&'static str, String>) -> String {
+    if replacements.is_empty() {
+        return input.to_string();
+    }
+
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+
+    while index < input.len() {
+        let remaining = &input[index..];
+        let matched = replacements
+            .iter()
+            .find(|(&key, _)| remaining.starts_with(key));
+
+        if let Some((key, value)) = matched {
+            out.push_str(value);
+            index += key.len();
+            continue;
+        }
+
+        let ch = remaining
+            .chars()
+            .next()
+            .expect("remaining slice must not be empty");
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+
+    out
 }
 
 fn transform_file_name(
@@ -505,6 +527,7 @@ fn get_contents<'a>(dir: &Dir<'a>, source: &'a Path) -> anyhow::Result<&'a str> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use test_r::test;
 
@@ -528,5 +551,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(transformed, PathBuf::from("services/agent-a/src/main.ts"));
+    }
+
+    #[test]
+    fn replace_all_does_not_rewrite_inserted_values() {
+        let mut replacements: BTreeMap<&'static str, String> = BTreeMap::new();
+        replacements.insert("componentname", "test-app-name:rust-main".to_string());
+        replacements.insert("app-name", "test-app-name".to_string());
+
+        let transformed = super::replace_all("components:\n  componentname:", &replacements);
+
+        assert_eq!(transformed, "components:\n  test-app-name:rust-main:");
+    }
+
+    #[test]
+    fn replace_all_replaces_multiple_non_overlapping_keys() {
+        let mut replacements: BTreeMap<&'static str, String> = BTreeMap::new();
+        replacements.insert("app-name", "Y".to_string());
+        replacements.insert("componentname", "my:comp".to_string());
+
+        let transformed = super::replace_all("app-name -> componentname", &replacements);
+
+        assert_eq!(transformed, "Y -> my:comp");
     }
 }
