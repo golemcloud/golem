@@ -1582,6 +1582,7 @@ impl ResourceLimits for FixedTableLimitResourceLimits {
             u64::MAX,
             usize::MAX,
             self.max_table_elements,
+            u64::MAX,
         )))
     }
 }
