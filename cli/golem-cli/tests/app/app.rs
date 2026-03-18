@@ -4,7 +4,6 @@ use crate::Tracing;
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
 use indoc::indoc;
-use std::path::Path;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
 
@@ -194,24 +193,21 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::NEW,
-            ".",
-            flag::TEMPLATE,
-            "rust",
-            flag::COMPONENT_NAME,
-            "app:rust",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-
     fs::write_str(
-        ctx.cwd_path_join(Path::new("app-rust").join("golem.yaml")),
+        ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+            app: test-app-name
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
             components:
-              app:rust:
+              test-app-name:rust-main:
                 templates: rust
                 presets:
                   debug:
@@ -237,14 +233,24 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         "+      /src/lib.rs:",
         "+        permissions: read-write",
         "Planning",
-        "- create component app:rust",
+        "- create component test-app-name:rust-main",
     ]));
 
     fs::write_str(
-        ctx.cwd_path_join(Path::new("app-rust").join("golem.yaml")),
+        ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+            app: test-app-name
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
             components:
-              app:rust:
+              test-app-name:rust-main:
                 templates: rust
                 presets:
                   debug:
@@ -271,7 +277,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         "-        permissions: read-write",
         "+        permissions: read-only",
         "Planning",
-        "- update component app:rust, changes:",
+        "- update component test-app-name:rust-main, changes:",
         "  - files",
         "    - delete file /Cargo.toml",
         "    - create file /Cargo2.toml",
@@ -284,52 +290,4 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     assert!(outputs.stdout_contains(
         "Finished deployment planning, no changes are required for the environment [UP-TO-DATE]"
     ));
-}
-
-// TODO: atomic: re-enable IF we will have any builtin subcommands for golem app
-#[ignore]
-#[test]
-async fn custom_app_subcommand_with_builtin_name() {
-    let mut ctx = TestContext::new();
-    let app_name = "test-app-name";
-
-    let outputs = ctx
-        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    ctx.cd(app_name);
-
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::NEW,
-            ".",
-            flag::TEMPLATE,
-            "rust",
-            flag::COMPONENT_NAME,
-            "app:rust",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    fs::append_str(
-        ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-
-            customCommands:
-              new:
-                - command: cargo tree
-
-        "},
-    )
-    .unwrap();
-
-    let outputs = ctx.cli(cmd::NO_ARGS).await;
-    assert!(!outputs.success());
-    assert!(outputs.stderr_contains(":new"));
-
-    let outputs = ctx.cli([":new"]).await;
-    assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Executing external command 'cargo tree'"));
 }
