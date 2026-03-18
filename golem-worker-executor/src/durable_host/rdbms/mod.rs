@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionHandler};
 use crate::services::rdbms::{DbResult, DbRow, RdbmsType};
@@ -36,6 +37,16 @@ pub mod mysql;
 pub mod postgres;
 pub mod serialized;
 pub mod types;
+
+fn classify_rdbms_error(error: &RdbmsError) -> HostFailureKind {
+    match error {
+        RdbmsError::ConnectionFailure(_) => HostFailureKind::Transient,
+        RdbmsError::QueryExecutionFailure(_) => HostFailureKind::Transient,
+        RdbmsError::QueryParameterFailure(_) => HostFailureKind::Permanent,
+        RdbmsError::QueryResponseFailure(_) => HostFailureKind::Permanent,
+        RdbmsError::Other(_) => HostFailureKind::Transient,
+    }
+}
 
 // Trait to map RdbmsType to the correct HostPayloadPair types for durability
 pub trait RdbmsDurabilityPairs {
@@ -158,7 +169,9 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
-        durability.try_trigger_retry(ctx, &result).await?;
+        durability
+            .try_trigger_retry(ctx, &result, classify_rdbms_error)
+            .await?;
 
         let result = result.map_err(|e| e.into());
         durability
@@ -195,7 +208,9 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_query(statement, params, ctx, entry).await;
-        durability.try_trigger_retry(ctx, &result).await?;
+        durability
+            .try_trigger_retry(ctx, &result, classify_rdbms_error)
+            .await?;
 
         let result = result.map(|result| result.into()).map_err(|e| e.into());
         durability
@@ -247,7 +262,9 @@ where
 
     let result = if durability.is_live() {
         let result = db_connection_query_stream(statement, params, ctx, entry);
-        durability.try_trigger_retry(ctx, &result).await?;
+        durability
+            .try_trigger_retry(ctx, &result, classify_rdbms_error)
+            .await?;
 
         let result = result.map(|request| request.into()).map_err(|e| e.into());
         durability
@@ -343,7 +360,9 @@ where
             Ok(query_stream) => query_stream.deref().get_columns().await,
             Err(error) => Err(error),
         };
-        durability.try_trigger_retry(ctx, &result).await?;
+        durability
+            .try_trigger_retry(ctx, &result, classify_rdbms_error)
+            .await?;
 
         let result = result
             .map(|columns| columns.into_iter().map(|c| c.into()).collect())
@@ -403,7 +422,9 @@ where
             Ok(query_stream) => query_stream.deref().get_next().await,
             Err(error) => Err(error),
         };
-        durability.try_trigger_retry(ctx, &result).await?;
+        durability
+            .try_trigger_retry(ctx, &result, classify_rdbms_error)
+            .await?;
 
         let result = result
             .map(|chunk| {
@@ -502,7 +523,9 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
-        durability.try_trigger_retry(ctx, &result).await?;
+        durability
+            .try_trigger_retry(ctx, &result, classify_rdbms_error)
+            .await?;
 
         let result = result.map(|result| result.into()).map_err(|err| err.into());
         durability
@@ -553,7 +576,9 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
-        durability.try_trigger_retry(ctx, &result).await?;
+        durability
+            .try_trigger_retry(ctx, &result, classify_rdbms_error)
+            .await?;
 
         let result = result.map_err(|e| e.into());
         durability
@@ -594,7 +619,9 @@ where
 
     let result = if durability.is_live() {
         let result = db_transaction_query_stream(statement, params, ctx, entry);
-        durability.try_trigger_retry(ctx, &result).await?;
+        durability
+            .try_trigger_retry(ctx, &result, classify_rdbms_error)
+            .await?;
 
         let result = result.map(|request| request.into()).map_err(|e| e.into());
         durability

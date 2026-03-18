@@ -14,7 +14,7 @@
 
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx, HostFailureKind};
 use crate::preview2::wasi::keyvalue::eventual_batch::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
@@ -58,7 +58,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .get_many(environment_id, bucket, keys)
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(self, input, HostResponseKVGetMany { result })
                 .await
@@ -114,7 +116,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .get_keys(environment_id, bucket.clone())
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(
                     self,
@@ -180,7 +184,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .set_many(environment_id, bucket, key_values)
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(self, input, HostResponseKVUnit { result })
                 .await
@@ -227,7 +233,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .delete_many(project_id, bucket, keys)
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(self, input, HostResponseKVUnit { result })
                 .await

@@ -958,12 +958,16 @@ fn is_worker_error_retriable(
     retry_count: u32,
 ) -> bool {
     match error {
-        AgentError::Unknown(_) => retry_count < retry_config.max_attempts,
+        AgentError::Unknown(_) | AgentError::TransientError(_) => {
+            retry_count < retry_config.max_attempts
+        }
         AgentError::InvalidRequest(_) => false,
         AgentError::StackOverflow => false,
         AgentError::OutOfMemory => true,
         AgentError::ExceededMemoryLimit => false,
         AgentError::InternalError(_) => false,
+        AgentError::DeterministicTrap(_) => false,
+        AgentError::PermanentError(_) => false,
     }
 }
 

@@ -888,6 +888,7 @@ async fn read_from_archive_impl(use_blob: bool) {
                 timestamp,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
+                inside_atomic_region: false,
             }
             .rounded()
         })
@@ -1153,6 +1154,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 timestamp,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
+                inside_atomic_region: false,
             }
             .rounded()
         })
@@ -1227,6 +1229,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 timestamp,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
+                inside_atomic_region: false,
             }
             .rounded()
         })
@@ -1302,6 +1305,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 timestamp,
                 error: AgentError::Unknown("last".to_string()),
                 retry_from: OplogIndex::NONE,
+                inside_atomic_region: false,
             }
             .rounded(),
         )
@@ -1333,6 +1337,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             timestamp,
             error: AgentError::Unknown("0".to_string()),
             retry_from: OplogIndex::NONE,
+            inside_atomic_region: false,
         }
         .rounded()
     );
@@ -1342,6 +1347,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             timestamp,
             error: AgentError::Unknown("99".to_string()),
             retry_from: OplogIndex::NONE,
+            inside_atomic_region: false,
         }
         .rounded()
     );
@@ -1351,6 +1357,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             timestamp,
             error: AgentError::Unknown("999".to_string()),
             retry_from: OplogIndex::NONE,
+            inside_atomic_region: false,
         }
         .rounded()
     );
@@ -1360,6 +1367,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             timestamp,
             error: AgentError::Unknown("last".to_string()),
             retry_from: OplogIndex::NONE,
+            inside_atomic_region: false,
         }
         .rounded()
     );
@@ -1433,6 +1441,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                     timestamp,
                     error: AgentError::Unknown(i.to_string()),
                     retry_from: OplogIndex::NONE,
+                    inside_atomic_region: false,
                 }
                 .rounded()
             })
@@ -1531,6 +1540,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 timestamp,
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
+                inside_atomic_region: false,
             }
             .rounded()
         })

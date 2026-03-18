@@ -463,7 +463,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
-                error: AgentError::Unknown(_),
+                error: AgentError::DeterministicTrap(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::PermanentError(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::Unknown(_) | AgentError::TransientError(_),
                 retry_from,
             } => {
                 let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
@@ -1631,7 +1639,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => current_idempotency_key.map(OplogEntry::cancel_pending_invocation),
             TrapType::Error { error, retry_from } => {
-                Some(OplogEntry::error(error.clone(), *retry_from))
+                let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
+                Some(OplogEntry::error(
+                    error.clone(),
+                    *retry_from,
+                    inside_atomic_region,
+                ))
             }
         };
 
@@ -1764,8 +1777,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_current_retry_point(&self) -> OplogIndex {
-        if let Some(idx) = self.state.active_atomic_regions.last() {
-            *idx
+        if let Some(region) = self.state.active_atomic_regions.last() {
+            region.begin_index
         } else {
             self.state.current_retry_point
         }
@@ -2864,6 +2877,12 @@ pub(crate) struct HttpOutputStreamState {
     pub request: HostRequestHttpRequest,
 }
 
+#[derive(Debug, Clone)]
+struct ActiveAtomicRegion {
+    begin_index: OplogIndex,
+    has_side_effects: bool,
+}
+
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -2944,7 +2963,7 @@ struct PrivateDurableWorkerState {
     /// persisted host call, if there is an active atomic region, the error is associated with that. Otherwise retried
     /// failures within atomic regions would not be grouped by the same retry point as the whole atomic region gets retried
     /// from scratch.
-    active_atomic_regions: Vec<OplogIndex>,
+    active_atomic_regions: Vec<ActiveAtomicRegion>,
 
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
@@ -3062,6 +3081,20 @@ impl PrivateDurableWorkerState {
             active_atomic_regions: Vec::new(),
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
+        }
+    }
+
+    /// Returns whether the outermost active atomic region has side effects
+    pub fn outermost_atomic_region_has_side_effects(&self) -> bool {
+        self.active_atomic_regions
+            .first()
+            .is_some_and(|region| region.has_side_effects)
+    }
+
+    /// Mark the outermost active atomic region as having side effects
+    pub fn mark_atomic_region_has_side_effects(&mut self) {
+        if let Some(region) = self.active_atomic_regions.first_mut() {
+            region.has_side_effects = true;
         }
     }
 

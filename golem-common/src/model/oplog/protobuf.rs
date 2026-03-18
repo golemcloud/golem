@@ -98,6 +98,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
             Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
             Error::ExceededMemoryLimit(_) => Ok(Self::ExceededMemoryLimit),
+            Error::InternalError(inner) => Ok(Self::InternalError(inner.details)),
+            Error::DeterministicTrap(inner) => Ok(Self::DeterministicTrap(inner.details)),
+            Error::TransientError(inner) => Ok(Self::TransientError(inner.details)),
+            Error::PermanentError(inner) => Ok(Self::PermanentError(inner.details)),
         }
     }
 }
@@ -119,7 +123,16 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
                 Error::ExceededMemoryLimit(grpc_worker::ExceededMemoryLimit {})
             }
             AgentError::InternalError(details) => {
-                Error::UnknownError(grpc_worker::UnknownError { details })
+                Error::InternalError(grpc_worker::InternalError { details })
+            }
+            AgentError::DeterministicTrap(details) => {
+                Error::DeterministicTrap(grpc_worker::DeterministicTrap { details })
+            }
+            AgentError::TransientError(details) => {
+                Error::TransientError(grpc_worker::TransientError { details })
+            }
+            AgentError::PermanentError(details) => {
+                Error::PermanentError(grpc_worker::PermanentError { details })
             }
         };
         Self { error: Some(error) }
@@ -306,6 +319,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
+                inside_atomic_region: false,
             })),
             oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(NoOpParams {
                 timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),

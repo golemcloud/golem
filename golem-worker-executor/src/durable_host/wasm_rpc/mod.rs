@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::preview2::golem::agent::host::{
@@ -57,6 +58,15 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
+    match err {
+        InternalRpcError::ProtocolError { .. }
+        | InternalRpcError::Denied { .. }
+        | InternalRpcError::NotFound { .. } => HostFailureKind::Permanent,
+        InternalRpcError::RemoteInternalError { .. } => HostFailureKind::Transient,
+    }
+}
 
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -191,7 +201,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     return Err(interrupt_kind.into());
                 }
             };
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, classify_rpc_error)
+                .await?;
 
             durability
                 .persist(
@@ -289,7 +301,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     stack,
                 )
                 .await;
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, classify_rpc_error)
+                .await?;
 
             let result = result.map_err(|err| err.into());
             durability
@@ -598,7 +612,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     let begin_index = *begin_index;
                     let message = "future-invoke-result already consumed";
                     (
-                        Err(anyhow::anyhow!(message)),
+                        Err(anyhow::Error::new(ClassifiedHostError {
+                            kind: HostFailureKind::Permanent,
+                            message: message.to_string(),
+                        })),
                         request.clone(),
                         SerializableInvokeResult::Failed(message.to_string()),
                         begin_index,
@@ -744,14 +761,27 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             };
 
             let for_retry = match &result {
-                Err(err) => Err(anyhow::anyhow!(err.to_string())),
-                Ok(Some(Err(err))) => Err(anyhow::anyhow!(err.to_string())),
-                _ => Ok(()),
+                Err(err) => {
+                    let kind = err
+                        .downcast_ref::<ClassifiedHostError>()
+                        .map(|c| c.kind)
+                        .unwrap_or(HostFailureKind::Transient);
+                    Some((err.to_string(), kind))
+                }
+                Ok(Some(Err(rpc_err))) => {
+                    let internal: InternalRpcError = rpc_err.clone().into();
+                    let kind = classify_rpc_error(&internal);
+                    Some((internal.to_string(), kind))
+                }
+                _ => None,
             };
 
-            if let Err(err) = for_retry {
-                self.state.current_retry_point = begin_index;
-                self.try_trigger_retry(err).await?;
+            if let Some((message, kind)) = for_retry {
+                if kind == HostFailureKind::Transient {
+                    self.state.current_retry_point = begin_index;
+                    let failure = anyhow::Error::new(ClassifiedHostError { kind, message });
+                    self.try_trigger_retry(failure).await?;
+                }
             }
 
             if self.state.snapshotting_mode.is_none() {

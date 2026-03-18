@@ -362,6 +362,9 @@ interface oplog {
         out-of-memory,
         exceeded-memory-limit,
         internal-error(string),
+        deterministic-trap(string),
+        transient-error(string),
+        permanent-error(string),
     }
 
     record raw-create-parameters {
@@ -407,7 +410,8 @@ interface oplog {
     record raw-error-parameters {
         timestamp: datetime,
         error: worker-error,
-        retry-from: oplog-index
+        retry-from: oplog-index,
+        inside-atomic-region: bool,
     }
 
     record raw-pending-agent-invocation-parameters {

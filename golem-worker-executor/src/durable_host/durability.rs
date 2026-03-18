@@ -35,6 +35,39 @@ use tracing::error;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
 
+/// Classification of host function failures for semantic retry decisions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostFailureKind {
+    /// Transient failure (network timeout, connection refused, etc.) - should be retried
+    Transient,
+    /// Permanent failure (invalid input, not found, etc.) - should NOT be retried
+    Permanent,
+}
+
+/// A wrapper error that carries semantic classification of a host function failure.
+/// This is detected during error chain traversal in TrapType::from_error to produce
+/// the appropriate AgentError variant.
+///
+/// IMPORTANT: This type must NOT delegate `source()` to its inner error, so that
+/// `downcast_ref::<ClassifiedHostError>()` on the anyhow chain finds this wrapper
+/// directly, not the inner error.
+#[derive(Debug)]
+pub struct ClassifiedHostError {
+    pub kind: HostFailureKind,
+    pub message: String,
+}
+
+impl std::fmt::Display for ClassifiedHostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ClassifiedHostError {
+    // Deliberately not implementing source() — we don't want to chain through
+    // to the original error, as that would prevent downcast_ref from finding us.
+}
+
 #[derive(Debug)]
 pub struct DurableExecutionState {
     pub is_live: bool,
@@ -103,6 +136,10 @@ pub trait DurabilityHost {
     /// If retrying is not possible, the function returns Ok(()) and the host function
     /// can continue persisting the failed result permanently.
     async fn try_trigger_retry(&mut self, failure: Error) -> anyhow::Result<()>;
+
+    /// Marks the outermost active atomic region (if any) as having produced side effects.
+    /// This is called when a non-hint oplog entry is persisted during live execution.
+    fn mark_atomic_region_side_effect(&mut self);
 }
 
 impl From<durability::DurableFunctionType> for DurableFunctionType {
@@ -401,7 +438,11 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             .worker()
             .get_non_detached_last_known_status()
             .await;
-        let current_retry_point = self.state.current_retry_point;
+        let current_retry_point = if let Some(region) = self.state.active_atomic_regions.last() {
+            region.begin_index
+        } else {
+            self.state.current_retry_point
+        };
 
         let default_retry_config = &self.state.config.retry;
         let retry_config = self
@@ -423,6 +464,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             | RetryDecision::ReacquirePermits => Err(failure),
             RetryDecision::None | RetryDecision::TryStop(_) => Ok(()),
         }
+    }
+
+    fn mark_atomic_region_side_effect(&mut self) {
+        self.state.mark_atomic_region_has_side_effects();
     }
 }
 
@@ -467,13 +512,32 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
     ///
     /// If retrying is not possible, the function returns Ok(()) and the host function
     /// can continue persisting the failed result permanently.
+    ///
+    /// The `classify` closure inspects the error and returns a `HostFailureKind` which determines
+    /// whether the error is wrapped as `AgentError::TransientError` or `AgentError::PermanentError`.
+    ///
+    /// When `Permanent`, the method returns `Ok(())` immediately (no retry, persist the failure).
+    /// When `Transient`, the inner `try_trigger_retry` is called, and if it triggers a retry,
+    /// the error is wrapped in a `ClassifiedHostError` so `TrapType::from_error` can detect it.
     pub async fn try_trigger_retry<Ok, Err: Display>(
         &self,
         ctx: &mut impl DurabilityHost,
         result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
     ) -> anyhow::Result<()> {
         if let Err(err) = result {
-            ctx.try_trigger_retry(Error::msg(err.to_string())).await
+            let kind = classify(err);
+            match kind {
+                HostFailureKind::Permanent => Ok(()),
+                HostFailureKind::Transient => {
+                    let message = err.to_string();
+                    let failure = Error::new(ClassifiedHostError {
+                        kind,
+                        message: message.clone(),
+                    });
+                    ctx.try_trigger_retry(failure).await
+                }
+            }
         } else {
             Ok(())
         }
@@ -498,6 +562,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         response: HostResponse,
     ) -> Result<HostResponse, WorkerExecutorError> {
         if self.durable_execution_state.snapshotting_mode.is_none() {
+            ctx.mark_atomic_region_side_effect();
             ctx.persist_durable_function_invocation(
                 Pair::HOST_FUNCTION_NAME,
                 &request,

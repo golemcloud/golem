@@ -313,6 +313,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             timestamp: error.timestamp,
             error: AgentError::Unknown(error.error),
             retry_from: error.retry_from,
+            inside_atomic_region: error.inside_atomic_region,
         }),
         PublicOplogEntry::NoOp(timestamp_parameter) => Ok(OplogEntry::NoOp {
             timestamp: timestamp_parameter.timestamp,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
@@ -152,7 +153,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 )
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(
                     self,
@@ -190,7 +193,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 )
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(
                     self,

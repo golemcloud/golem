@@ -384,10 +384,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 error,
                 retry_from,
+                inside_atomic_region,
             } => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp,
                 error: error.to_string(""),
                 retry_from,
+                inside_atomic_region,
             })),
             OplogEntry::NoOp { timestamp } => Ok(PublicOplogEntry::NoOp(NoOpParams { timestamp })),
             OplogEntry::Jump { timestamp, jump } => {

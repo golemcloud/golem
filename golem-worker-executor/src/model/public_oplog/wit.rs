@@ -117,6 +117,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 error,
                 retry_from,
+                inside_atomic_region: _,
             }) => Self::Error(oplog::ErrorParameters {
                 timestamp: timestamp.into(),
                 error: error.to_string(),
@@ -665,6 +666,9 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
             oplog::WorkerError::OutOfMemory => Self::OutOfMemory,
             oplog::WorkerError::ExceededMemoryLimit => Self::ExceededMemoryLimit,
             oplog::WorkerError::InternalError(msg) => Self::InternalError(msg),
+            oplog::WorkerError::DeterministicTrap(msg) => Self::DeterministicTrap(msg),
+            oplog::WorkerError::TransientError(msg) => Self::TransientError(msg),
+            oplog::WorkerError::PermanentError(msg) => Self::PermanentError(msg),
         }
     }
 }
@@ -834,6 +838,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 error: params.error.into(),
                 retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
+                inside_atomic_region: false,
             }),
             oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
                 timestamp: timestamp_from_datetime(ts.timestamp),
