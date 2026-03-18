@@ -255,6 +255,7 @@ impl Services {
             repos.environment_plugin_grant_repo.clone(),
             environment_service.clone(),
             plugin_registration_service.clone(),
+            builtin_plugin_owner_account_id,
         ));
 
         let component_write_service = Arc::new(ComponentWriteService::new(
