@@ -88,40 +88,27 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::NEW,
-            ".",
-            flag::TEMPLATE,
-            "rust",
-            flag::COMPONENT_NAME,
-            "app:rust",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-
     // First build
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
     check_component_metadata(
         &ctx.working_dir
-            .join("golem-temp/agents/app_rust_debug.wasm"),
-        "app:rust".to_string(),
+            .join("golem-temp/agents/test_app_name_rust_main_debug.wasm"),
+        "test-app-name:rust-main".to_string(),
         None,
     );
 
     // Rebuild - 1
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
     // Rebuild - 2
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
     // Rebuild - 3 - force, but cargo is smart to skip actual compile
     let outputs = ctx.cli([cmd::BUILD, flag::FORCE_BUILD]).await;
@@ -131,7 +118,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // Rebuild - 4
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
     // Clean
     let outputs = ctx.cli([cmd::BUILD]).await;
@@ -140,7 +127,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // Rebuild - 5
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 }
 
 #[test]
