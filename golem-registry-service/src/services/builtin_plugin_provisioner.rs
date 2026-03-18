@@ -21,6 +21,7 @@ use crate::services::environment::{EnvironmentError, EnvironmentService};
 
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
 use golem_common::golem_version;
+use golem_common::model::diff;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::base64::Base64;
@@ -143,6 +144,8 @@ pub async fn provision_builtin_plugins(
     };
 
     // 3. Upload "otlp-exporter" component, or update it if it already exists
+    let embedded_wasm_hash = diff::Hash::new(blake3::hash(&wasm_bytes));
+
     let component = match component_write_service
         .create(
             env.id,
@@ -167,25 +170,32 @@ pub async fn provision_builtin_plugins(
                 .get_staged_component_by_name(env.id, &component_name, &auth)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to get existing OTLP component: {e}"))?;
-            component_write_service
-                .update(
-                    existing.id,
-                    ComponentUpdate {
-                        current_revision: existing.revision,
-                        removed_files: Vec::new(),
-                        new_file_options: BTreeMap::new(),
-                        env: None,
-                        config_vars: None,
-                        agent_config: None,
-                        agent_types: None,
-                        plugin_updates: Vec::new(),
-                    },
-                    Some(wasm_bytes.to_vec()),
-                    None,
-                    &auth,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to update OTLP component: {e}"))?
+
+            if existing.wasm_hash == embedded_wasm_hash {
+                tracing::info!("OTLP exporter component is already up to date, skipping update");
+                existing
+            } else {
+                tracing::info!("OTLP exporter component has changed, updating");
+                component_write_service
+                    .update(
+                        existing.id,
+                        ComponentUpdate {
+                            current_revision: existing.revision,
+                            removed_files: Vec::new(),
+                            new_file_options: BTreeMap::new(),
+                            env: None,
+                            config_vars: None,
+                            agent_config: None,
+                            agent_types: None,
+                            plugin_updates: Vec::new(),
+                        },
+                        Some(wasm_bytes.to_vec()),
+                        None,
+                        &auth,
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to update OTLP component: {e}"))?
+            }
         }
         Err(other) => {
             return Err(anyhow::anyhow!("Failed to create OTLP component: {other}"));
