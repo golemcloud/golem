@@ -186,6 +186,10 @@ impl Context {
     pub fn get_max_memory(&self) -> usize {
         self.resource_limit_entry.max_memory_limit()
     }
+
+    pub fn get_max_table_elements(&self) -> usize {
+        self.resource_limit_entry.max_table_elements_limit()
+    }
 }
 
 impl DurableWorkerCtxView<Context> for Context {
@@ -346,10 +350,14 @@ impl ResourceLimiterAsync for Context {
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
+        let limit = self.get_max_table_elements();
         debug!(
-            "table_growing: current={}, desired={}, maximum={:?}",
-            current, desired, maximum
+            "table_growing: current={}, desired={}, maximum={:?}, account limit={}",
+            current, desired, maximum, limit
         );
+        if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
+            Err(GolemSpecificWasmTrap::WorkerExceededTableLimit)?;
+        }
         Ok(true)
     }
 }

@@ -963,6 +963,7 @@ fn is_worker_error_retriable(
         AgentError::StackOverflow => false,
         AgentError::OutOfMemory => true,
         AgentError::ExceededMemoryLimit => false,
+        AgentError::ExceededTableLimit => false,
         AgentError::InternalError(_) => false,
     }
 }

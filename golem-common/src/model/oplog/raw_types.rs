@@ -354,6 +354,8 @@ pub enum AgentError {
     // The worker tried to grow its memory beyond the limits of the plan
     ExceededMemoryLimit,
     InternalError(String),
+    // The worker tried to grow its function table beyond the limits of the plan
+    ExceededTableLimit,
 }
 
 impl AgentError {
@@ -365,6 +367,7 @@ impl AgentError {
             Self::OutOfMemory => "Out of memory",
             Self::ExceededMemoryLimit => "Exceeded plan memory limit",
             Self::InternalError(message) => message,
+            Self::ExceededTableLimit => "Exceeded plan function table limit",
         }
     }
 
