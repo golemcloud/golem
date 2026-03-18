@@ -103,6 +103,7 @@ enum CommandOutput {
 }
 
 pub struct Output {
+    quiet: bool,
     status: ExitStatus,
     output: Vec<CommandOutput>,
 }
@@ -161,6 +162,7 @@ impl Output {
         }
 
         Ok(Self {
+            quiet,
             status: child.wait().await?,
             output,
         })
@@ -202,7 +204,7 @@ impl Output {
     #[must_use]
     fn success_or_dump(&self) -> bool {
         let success = self.status.success();
-        if !success {
+        if !success && self.quiet {
             self.dump();
         }
         success
