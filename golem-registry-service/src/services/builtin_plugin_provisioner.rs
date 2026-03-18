@@ -18,9 +18,7 @@ use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
-use crate::services::environment_plugin_grant::{
-    EnvironmentPluginGrantError, EnvironmentPluginGrantService,
-};
+
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
 use golem_common::golem_version;
 use golem_common::model::account::AccountId;
@@ -29,7 +27,7 @@ use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentCreation, ComponentName, ComponentUpdate};
 use golem_common::model::deployment::{DeploymentCreation, DeploymentVersion};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
-use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
@@ -54,7 +52,6 @@ pub async fn provision_builtin_plugins(
     deployment_service: &Arc<DeploymentService>,
     deployment_write_service: &Arc<DeploymentWriteService>,
     plugin_registration_service: &Arc<PluginRegistrationService>,
-    environment_plugin_grant_service: &Arc<EnvironmentPluginGrantService>,
 ) -> anyhow::Result<()> {
     if !config.enabled {
         return Ok(());
@@ -224,7 +221,7 @@ pub async fn provision_builtin_plugins(
     }
 
     // 4. Register "golem-otlp-exporter" plugin if not exists
-    let plugin = match plugin_registration_service
+    let _plugin = match plugin_registration_service
         .register_plugin(
             root_account_id,
             PluginRegistrationCreation {
@@ -257,47 +254,6 @@ pub async fn provision_builtin_plugins(
             return Err(anyhow::anyhow!("Failed to register plugin: {other}"));
         }
     };
-
-    // 5. Grant plugin to all existing environments
-    let apps = application_service
-        .list_in_account(root_account_id, &auth)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to list applications: {e}"))?;
-
-    for app_entry in &apps {
-        let envs = match environment_service
-            .list_in_application(app_entry.id, &auth)
-            .await
-        {
-            Ok(envs) => envs,
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to list environments for app {}: {e}",
-                    app_entry.name
-                );
-                continue;
-            }
-        };
-
-        for env_entry in &envs {
-            match environment_plugin_grant_service
-                .create(
-                    env_entry.id,
-                    EnvironmentPluginGrantCreation {
-                        plugin_registration_id: plugin.id,
-                    },
-                    &auth,
-                )
-                .await
-            {
-                Ok(_) => {}
-                Err(EnvironmentPluginGrantError::GrantForPluginAlreadyExists) => {}
-                Err(e) => {
-                    tracing::warn!("Failed to grant plugin to env {}: {e}", env_entry.name);
-                }
-            }
-        }
-    }
 
     tracing::info!("Built-in plugins provisioned successfully");
     Ok(())

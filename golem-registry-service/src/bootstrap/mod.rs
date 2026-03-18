@@ -377,7 +377,6 @@ impl Services {
                 &deployment_service,
                 &deployment_write_service,
                 &plugin_registration_service,
-                &environment_plugin_grant_service,
             )
             .await
             {
