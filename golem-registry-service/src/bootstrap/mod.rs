@@ -294,12 +294,16 @@ impl Services {
             http_api_deployment_service.clone(),
             mcp_deployment_service.clone(),
             agent_secret_service.clone(),
+            security_scheme_service.clone(),
         ));
 
         let deployed_routes_service =
             Arc::new(DeployedRoutesService::new(repos.deployment_repo.clone()));
 
-        let deployed_mcp_service = Arc::new(DeployedMcpService::new(repos.deployment_repo.clone()));
+        let deployed_mcp_service = Arc::new(DeployedMcpService::new(
+            repos.deployment_repo.clone(),
+            security_scheme_service.clone(),
+        ));
 
         let environment_state_service = Arc::new(EnvironmentStateService::new(
             deployment_service.clone(),
