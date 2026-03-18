@@ -258,7 +258,10 @@ fn calculate_latest_worker_status(
         // For non-skipped errors, update the worker status based on the accumulated retry count
         if !deleted_regions.is_in_deleted_region(*idx) {
             if let OplogEntry::Error {
-                error, retry_from, ..
+                error,
+                retry_from,
+                inside_atomic_region,
+                ..
             } = entry
             {
                 let count = current_retry_count
@@ -271,6 +274,7 @@ fn calculate_latest_worker_status(
                         .unwrap_or(default_retry_policy),
                     error,
                     count,
+                    *inside_atomic_region,
                 ) {
                     current_status = AgentStatus::Retrying;
                 } else {
@@ -956,9 +960,13 @@ fn is_worker_error_retriable(
     retry_config: &RetryConfig,
     error: &AgentError,
     retry_count: u32,
+    inside_atomic_region: bool,
 ) -> bool {
     match error {
         AgentError::Unknown(_) | AgentError::TransientError(_) => {
+            retry_count < retry_config.max_attempts
+        }
+        AgentError::DeterministicTrap(_) if inside_atomic_region => {
             retry_count < retry_config.max_attempts
         }
         AgentError::InvalidRequest(_) => false,

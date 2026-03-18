@@ -435,6 +435,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         retry_config: &RetryConfig,
         previous_tries: &HashMap<OplogIndex, u32>,
         trap_type: &TrapType,
+        in_atomic_region: bool,
     ) -> RetryDecision {
         match trap_type {
             TrapType::Interrupt(InterruptKind::Interrupt(ts)) => RetryDecision::TryStop(*ts),
@@ -462,6 +463,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 error: AgentError::InternalError(_),
                 ..
             } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::DeterministicTrap(_),
+                retry_from,
+            } if in_atomic_region => {
+                let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
+                let retryable = previous_tries < retry_config.max_attempts;
+                if retryable {
+                    match get_delay(retry_config, previous_tries) {
+                        Some(delay) => RetryDecision::Delayed(delay),
+                        None => RetryDecision::None,
+                    }
+                } else {
+                    RetryDecision::None
+                }
+            }
             TrapType::Error {
                 error: AgentError::DeterministicTrap(_),
                 ..
@@ -1698,14 +1714,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .unwrap_or(default_retry_config)
             .clone();
 
+        let in_atomic_region = !self.state.active_atomic_regions.is_empty();
         let decision = Self::get_recovery_decision_on_trap(
             &retry_config,
             &latest_status.current_retry_count,
             trap_type,
+            in_atomic_region,
         );
 
         debug!(
-            "Recovery decision for {trap_type:?} with {:?} retries: {:?}",
+            "Recovery decision for {trap_type:?} with {:?} retries (in_atomic_region={in_atomic_region}): {:?}",
             latest_status.current_retry_count, decision
         );
 

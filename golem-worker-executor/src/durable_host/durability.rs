@@ -451,11 +451,13 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             .as_ref()
             .unwrap_or(default_retry_config)
             .clone();
+        let in_atomic_region = !self.state.active_atomic_regions.is_empty();
         let trap_type = TrapType::from_error::<Ctx>(&failure, current_retry_point);
         let decision = Self::get_recovery_decision_on_trap(
             &retry_config,
             &latest_status.current_retry_count,
             &trap_type,
+            in_atomic_region,
         );
 
         match decision {
