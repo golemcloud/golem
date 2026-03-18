@@ -283,4 +283,54 @@ steps:
     const spec = await ScenarioLoader.load(filePath);
     assert.equal(spec.steps[0].delete_agent?.name, "test-agent");
   });
+
+  // Tests for only_if/skip_if
+
+  it("loads step with only_if condition", async () => {
+    const filePath = await writeTempYaml(`
+name: "only-if-test"
+steps:
+  - id: "conditional"
+    prompt: "do something"
+    only_if:
+      agent: "claude-code"
+      language: "ts"
+      os: "macos"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.deepEqual(spec.steps[0].only_if, {
+      agent: "claude-code",
+      language: "ts",
+      os: "macos",
+    });
+  });
+
+  it("loads step with skip_if condition", async () => {
+    const filePath = await writeTempYaml(`
+name: "skip-if-test"
+steps:
+  - id: "skip-gemini"
+    prompt: "do something"
+    skip_if:
+      agent: "gemini"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.deepEqual(spec.steps[0].skip_if, { agent: "gemini" });
+  });
+
+  it("loads step with both only_if and skip_if", async () => {
+    const filePath = await writeTempYaml(`
+name: "both-conditions"
+steps:
+  - id: "combo"
+    prompt: "do something"
+    only_if:
+      language: "ts"
+    skip_if:
+      os: "windows"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.deepEqual(spec.steps[0].only_if, { language: "ts" });
+    assert.deepEqual(spec.steps[0].skip_if, { os: "windows" });
+  });
 });

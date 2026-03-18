@@ -60,6 +60,7 @@ async function main() {
       timeout: { type: "string" },
       skills: { type: "string", default: "../../skills" },
       help: { type: "boolean", short: "h", default: false },
+      "dry-run": { type: "boolean", default: false },
     },
   });
 
@@ -70,6 +71,7 @@ async function main() {
     timeout,
     skills: skillsDirRel,
     help,
+    "dry-run": dryRun,
   } = values;
   const agentArg = values.agent ?? "all";
   const languageArg = values.language ?? "all";
@@ -89,6 +91,7 @@ Options:
   --output <dir>        Results output directory (default: ./results)
   --timeout <seconds>   Global timeout per scenario step in seconds (default: ${DEFAULT_STEP_TIMEOUT_SECONDS})
   --skills <dir>        Path to skills directory (default: ../../skills)
+  --dry-run             Validate scenarios and print step summaries without executing
   -h, --help            Show this help message
 `.trim();
 
@@ -145,6 +148,64 @@ Options:
     (f) => f.endsWith(".yaml") || f.endsWith(".yml"),
   );
 
+  // Dry-run mode: validate and print step summaries, then exit
+  if (dryRun) {
+    console.log(chalk.bold("=== Dry Run ==="));
+    for (const file of scenarioFiles) {
+      const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
+      if (scenarioFilter && spec.name !== scenarioFilter) continue;
+
+      console.log(chalk.blue(`\nScenario: ${spec.name}`));
+      console.log(`  Steps: ${spec.steps.length}`);
+      for (let i = 0; i < spec.steps.length; i++) {
+        const step = spec.steps[i];
+        const label = step.id ?? `step-${i + 1}`;
+        const promptPreview = step.prompt
+          ? step.prompt.length > 60
+            ? step.prompt.slice(0, 57) + "..."
+            : step.prompt
+          : "(no prompt)";
+        const skills = step.expectedSkills?.join(", ") || "(none)";
+        const timeoutVal =
+          step.timeout ?? spec.settings?.timeout_per_subprompt ?? "default";
+        const conditions: string[] = [];
+        if (step.only_if) {
+          conditions.push(`only_if: ${JSON.stringify(step.only_if)}`);
+        }
+        if (step.skip_if) {
+          conditions.push(`skip_if: ${JSON.stringify(step.skip_if)}`);
+        }
+        console.log(`  [${label}] ${promptPreview}`);
+        console.log(
+          `    skills: ${skills} | timeout: ${typeof timeoutVal === "number" ? `${timeoutVal}s` : timeoutVal}`,
+        );
+        if (conditions.length > 0) {
+          console.log(`    conditions: ${conditions.join(", ")}`);
+        }
+      }
+    }
+    console.log(chalk.green("\nAll scenarios validated successfully."));
+    return;
+  }
+
+  // Set up graceful Ctrl+C handling
+  const abortController = new AbortController();
+  let interrupted = false;
+
+  process.on("SIGINT", () => {
+    if (interrupted) {
+      console.log(chalk.red("\nForce exit."));
+      process.exit(130);
+    }
+    interrupted = true;
+    console.log(
+      chalk.yellow(
+        "\nInterrupted. Finishing current step and writing partial results... (press Ctrl+C again to force exit)",
+      ),
+    );
+    abortController.abort();
+  });
+
   const scenarioReports: ScenarioReport[] = [];
   let hasFailures = false;
 
@@ -159,6 +220,14 @@ Options:
       );
 
       for (const file of scenarioFiles) {
+        // Check if interrupted before starting next scenario
+        if (interrupted) {
+          console.log(
+            chalk.yellow(`Skipping remaining scenarios due to interruption.`),
+          );
+          break;
+        }
+
         const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
 
         if (scenarioFilter && spec.name !== scenarioFilter) continue;
@@ -178,7 +247,12 @@ Options:
           watcher,
           workspace,
           skillsDir,
-          { globalTimeoutSeconds },
+          {
+            globalTimeoutSeconds,
+            agent: currentAgent,
+            language: currentLanguage,
+            abortSignal: abortController.signal,
+          },
         );
 
         const scenarioResult = await executor.execute(spec);
@@ -264,6 +338,39 @@ Options:
 
     const summaryPath = path.join(resultsDir, "summary.json");
     await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
+
+    // GitHub Actions job summary
+    const ghSummaryPath = process.env["GITHUB_STEP_SUMMARY"];
+    if (ghSummaryPath) {
+      const lines: string[] = [];
+      lines.push("## Skill Test Results");
+      lines.push("");
+      lines.push("| Scenario | Agent | Language | Status | Duration |");
+      lines.push("|----------|-------|----------|--------|----------|");
+      for (const r of scenarioReports) {
+        const icon = r.status === "pass" ? "\u2705" : "\u274c";
+        lines.push(
+          `| ${r.scenario} | ${r.matrix.agent} | ${r.matrix.language} | ${icon} ${r.status} | ${r.durationSeconds.toFixed(1)}s |`,
+        );
+      }
+      lines.push("");
+      lines.push(
+        `**Total:** ${totalScenarios} | **Passed:** ${passed} | **Failed:** ${failed} | **Duration:** ${totalDuration.toFixed(1)}s`,
+      );
+
+      if (worstFailures.length > 0) {
+        lines.push("");
+        lines.push("### Failures");
+        for (const f of worstFailures) {
+          const truncatedError =
+            f.error.length > 200 ? f.error.slice(0, 197) + "..." : f.error;
+          lines.push(`- **${f.scenario}**: ${truncatedError}`);
+        }
+      }
+      lines.push("");
+
+      await fs.appendFile(ghSummaryPath, lines.join("\n"));
+    }
 
     // Print summary
     console.log("");

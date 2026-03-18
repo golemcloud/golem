@@ -8,7 +8,6 @@ import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
-
 // --- Schemas ---
 
 const InvokeSchema = z.object({
@@ -37,6 +36,12 @@ const CreateAgentSchema = z.object({
 
 const DeleteAgentSchema = z.object({
   name: z.string(),
+});
+
+const StepConditionSchema = z.object({
+  agent: z.string().optional(),
+  language: z.string().optional(),
+  os: z.string().optional(),
 });
 
 const ACTION_FIELDS = [
@@ -71,6 +76,8 @@ const StepSpecSchema = z
     trigger: TriggerSchema.optional(),
     create_agent: CreateAgentSchema.optional(),
     delete_agent: DeleteAgentSchema.optional(),
+    only_if: StepConditionSchema.optional(),
+    skip_if: StepConditionSchema.optional(),
   })
   .refine(
     (step) => {
@@ -94,7 +101,6 @@ const SettingsSchema = z
     cleanup: z.boolean().optional(),
   })
   .optional();
-
 const PrerequisitesSchema = z
   .object({
     env: z.record(z.string()).optional(),
@@ -120,6 +126,8 @@ interface StepCommon {
     deploy?: boolean;
   };
   expect?: z.infer<typeof ExpectSchema>;
+  only_if?: StepCondition;
+  skip_if?: StepCondition;
 }
 
 type InvokeSpec = { agent: string; function: string; args?: string };
@@ -248,6 +256,57 @@ export interface ScenarioRunResult {
 
 export interface ScenarioExecutorOptions {
   globalTimeoutSeconds?: number;
+  agent?: string;
+  language?: string;
+  abortSignal?: AbortSignal;
+}
+
+// --- Template variable substitution ---
+
+export function substituteVariables(
+  text: string,
+  variables: Record<string, string>,
+): string {
+  return text.replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
+    return variables[name] ?? match;
+  });
+}
+
+// --- Conditional step execution ---
+
+export interface StepCondition {
+  agent?: string;
+  language?: string;
+  os?: string;
+}
+
+function normalizePlatform(platform: string): string {
+  if (platform === "darwin") return "macos";
+  if (platform === "win32") return "windows";
+  return platform;
+}
+
+export function shouldRunStep(
+  step: StepSpec,
+  context: { agent?: string; language?: string; os: string },
+): boolean {
+  const normalizedOs = normalizePlatform(context.os);
+
+  if (step.only_if) {
+    const cond = step.only_if;
+    if (cond.agent && cond.agent !== context.agent) return false;
+    if (cond.language && cond.language !== context.language) return false;
+    if (cond.os && cond.os !== normalizedOs) return false;
+  }
+
+  if (step.skip_if) {
+    const cond = step.skip_if;
+    if (cond.agent && cond.agent === context.agent) return false;
+    if (cond.language && cond.language === context.language) return false;
+    if (cond.os && cond.os === normalizedOs) return false;
+  }
+
+  return true;
 }
 
 export class ScenarioExecutor {
@@ -269,6 +328,64 @@ export class ScenarioExecutor {
     this.workspace = workspace;
     this.skillsDir = skillsDir;
     this.options = options ?? {};
+  }
+
+  private buildVariables(scenarioName: string): Record<string, string> {
+    const vars: Record<string, string> = {
+      workspace: this.workspace,
+      scenario: scenarioName,
+    };
+    if (this.options.agent) vars["agent"] = this.options.agent;
+    if (this.options.language) vars["language"] = this.options.language;
+    return vars;
+  }
+
+  private substituteStepVariables(
+    step: StepSpec,
+    variables: Record<string, string>,
+  ): StepSpec {
+    const sub = (s: string | undefined) =>
+      s ? substituteVariables(s, variables) : s;
+    const subArr = (arr: string[] | undefined) =>
+      arr?.map((s) => substituteVariables(s, variables));
+
+    return {
+      ...step,
+      prompt: sub(step.prompt),
+      shell: step.shell
+        ? {
+            command: substituteVariables(step.shell.command, variables),
+            args: subArr(step.shell.args),
+            cwd: sub(step.shell.cwd),
+          }
+        : step.shell,
+      invoke: step.invoke
+        ? {
+            agent: substituteVariables(step.invoke.agent, variables),
+            function: substituteVariables(step.invoke.function, variables),
+            args: sub(step.invoke.args),
+          }
+        : step.invoke,
+      trigger: step.trigger
+        ? {
+            agent: substituteVariables(step.trigger.agent, variables),
+            function: substituteVariables(step.trigger.function, variables),
+            args: sub(step.trigger.args),
+          }
+        : step.trigger,
+      create_agent: step.create_agent
+        ? {
+            ...step.create_agent,
+            name: substituteVariables(step.create_agent.name, variables),
+          }
+        : step.create_agent,
+      delete_agent: step.delete_agent
+        ? {
+            ...step.delete_agent,
+            name: substituteVariables(step.delete_agent.name, variables),
+          }
+        : step.delete_agent,
+    } as StepSpec;
   }
 
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
@@ -304,11 +421,37 @@ export class ScenarioExecutor {
 
     // Build extra env for commands from settings
     const commandEnv = this.buildCommandEnv(spec);
+    const variables = this.buildVariables(spec.name);
+    const conditionContext = {
+      agent: this.options.agent,
+      language: this.options.language,
+      os: process.platform,
+    };
 
     const startTime = Date.now();
     let isFirstPrompt = true;
     try {
-      for (const step of spec.steps) {
+      for (const originalStep of spec.steps) {
+        // Check abort signal
+        if (this.options.abortSignal?.aborted) break;
+
+        // Substitute template variables
+        const step = this.substituteStepVariables(originalStep, variables);
+
+        // Conditional execution
+        if (!shouldRunStep(step, conditionContext)) {
+          console.log(
+            `Step ${step.id ?? "(unnamed)"}: skipped (condition not met)`,
+          );
+          results.push({
+            step: originalStep,
+            success: true,
+            durationSeconds: 0,
+            expectedSkills: step.expectedSkills ?? [],
+            activatedSkills: [],
+          });
+          continue;
+        }
         const stepStartTime = Date.now();
         let stepSuccess = true;
         const stepErrors: string[] = [];
@@ -601,7 +744,7 @@ export class ScenarioExecutor {
         }
 
         results.push({
-          step,
+          step: originalStep,
           success: stepSuccess,
           durationSeconds: (Date.now() - stepStartTime) / 1000,
           expectedSkills: step.expectedSkills ?? [],
