@@ -14052,6 +14052,9 @@ components:
     McpDeploymentAgentOptions:
       title: McpDeploymentAgentOptions
       type: object
+      properties:
+        securityScheme:
+          type: string
     McpDeploymentCreation:
       title: McpDeploymentCreation
       type: object

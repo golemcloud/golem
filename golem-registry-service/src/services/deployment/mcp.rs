@@ -1,8 +1,11 @@
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
+use crate::services::security_scheme::SecuritySchemeService;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
 
@@ -27,11 +30,18 @@ error_forwarding!(DeployedMcpError, RepoError, DeployRepoError);
 
 pub struct DeployedMcpService {
     deployment_repo: Arc<dyn DeploymentRepo>,
+    security_scheme_service: Arc<SecuritySchemeService>,
 }
 
 impl DeployedMcpService {
-    pub fn new(deployment_repo: Arc<dyn DeploymentRepo>) -> Self {
-        Self { deployment_repo }
+    pub fn new(
+        deployment_repo: Arc<dyn DeploymentRepo>,
+        security_scheme_service: Arc<SecuritySchemeService>,
+    ) -> Self {
+        Self {
+            deployment_repo,
+            security_scheme_service,
+        }
     }
 
     pub async fn get_currently_active_mcp(
@@ -45,7 +55,26 @@ impl DeployedMcpService {
 
         match optional_deployment {
             Some(deployment) => {
-                let compiled_mcp = CompiledMcp::try_from(deployment)?;
+                let security_scheme_id = deployment.mcp_data.value().security_scheme_id;
+                let mut compiled_mcp = CompiledMcp::try_from(deployment)?;
+
+                if let Some(scheme_id) = security_scheme_id {
+                    let scheme = self
+                        .security_scheme_service
+                        .get(scheme_id, &AuthCtx::system())
+                        .await
+                        .ok();
+
+                    compiled_mcp.security_scheme = scheme.map(|s| SecuritySchemeDetails {
+                        id: s.id,
+                        name: s.name,
+                        provider_type: s.provider_type,
+                        client_id: s.client_id,
+                        client_secret: s.client_secret,
+                        redirect_url: s.redirect_url,
+                        scopes: s.scopes,
+                    });
+                }
 
                 Ok(compiled_mcp)
             }

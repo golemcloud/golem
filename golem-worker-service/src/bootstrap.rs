@@ -17,9 +17,9 @@ use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
 use crate::custom_api::call_agent::CallAgentHandler;
-use crate::custom_api::oidc::DefaultIdentityProvider;
 use crate::custom_api::oidc::handler::OidcHandler;
 use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, SqliteSessionStore};
+use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhoooks::WebhookCallbackHandler;
@@ -49,6 +49,8 @@ pub struct Services {
     pub registry_service: Arc<dyn RegistryService>,
     pub agent_resolution_cache: Arc<AgentResolutionCache>,
     pub route_resolver: Arc<RouteResolver>,
+    pub identity_provider: Arc<dyn IdentityProvider>,
+    pub session_store: Arc<dyn SessionStore>,
 }
 
 impl Services {
@@ -176,6 +178,8 @@ impl Services {
             registry_service: registry_service_client,
             agent_resolution_cache,
             route_resolver,
+            identity_provider,
+            session_store,
         })
     }
 }

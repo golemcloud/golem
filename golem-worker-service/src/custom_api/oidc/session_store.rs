@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::{PendingOidcLogin, SessionId};
+use super::model::{McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin, SessionId};
 use crate::custom_api::model::OidcSession;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -66,6 +66,28 @@ pub trait SessionStore: Send + Sync {
         &self,
         session_id: &SessionId,
     ) -> Result<Option<OidcSession>, SessionStoreError>;
+
+    async fn store_mcp_pending_auth(
+        &self,
+        state: &str,
+        pending: McpPendingAuth,
+    ) -> Result<(), SessionStoreError>;
+
+    async fn take_mcp_pending_auth(
+        &self,
+        state: &str,
+    ) -> Result<Option<McpPendingAuth>, SessionStoreError>;
+
+    async fn store_mcp_proxy_code(
+        &self,
+        code: &str,
+        entry: McpProxyCodeEntry,
+    ) -> Result<(), SessionStoreError>;
+
+    async fn take_mcp_proxy_code(
+        &self,
+        code: &str,
+    ) -> Result<Option<McpProxyCodeEntry>, SessionStoreError>;
 }
 
 #[derive(Clone)]
@@ -88,6 +110,14 @@ impl RedisSessionStore {
 
     fn redis_key_for_pending(state: &str) -> String {
         format!("oidc_pending_login:{}", state)
+    }
+
+    fn redis_key_for_mcp_pending(state: &str) -> String {
+        format!("mcp_pending_auth:{}", state)
+    }
+
+    fn redis_key_for_mcp_proxy_code(code: &str) -> String {
+        format!("mcp_proxy_code:{}", code)
     }
 }
 
@@ -193,6 +223,108 @@ impl SessionStore for RedisSessionStore {
             Ok(None)
         }
     }
+
+    async fn store_mcp_pending_auth(
+        &self,
+        state: &str,
+        pending: McpPendingAuth,
+    ) -> Result<(), SessionStoreError> {
+        let record = records::McpPendingAuthRecord::from(pending);
+        let serialized = golem_common::serialization::serialize(&record)
+            .map_err(|e| anyhow!("McpPendingAuth serialization error: {e}"))?;
+
+        let _: () = self
+            .redis
+            .with("session_store", "store_mcp_pending_auth")
+            .set(
+                Self::redis_key_for_mcp_pending(state),
+                serialized,
+                Some(self.pending_login_expiration.clone()),
+                None,
+                false,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn take_mcp_pending_auth(
+        &self,
+        state: &str,
+    ) -> Result<Option<McpPendingAuth>, SessionStoreError> {
+        let key = Self::redis_key_for_mcp_pending(state);
+        let maybe_bytes: Option<Bytes> = self
+            .redis
+            .with("session_store", "take_mcp_pending_auth")
+            .get(&key)
+            .await?;
+
+        if let Some(bytes) = maybe_bytes {
+            let record: records::McpPendingAuthRecord =
+                golem_common::serialization::deserialize(&bytes)
+                    .map_err(|e| anyhow!("McpPendingAuth deserialization error: {e}"))?;
+
+            let _: i32 = self
+                .redis
+                .with("session_store", "del_mcp_pending_auth")
+                .del(&key)
+                .await?;
+            Ok(Some(McpPendingAuth::from(record)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn store_mcp_proxy_code(
+        &self,
+        code: &str,
+        entry: McpProxyCodeEntry,
+    ) -> Result<(), SessionStoreError> {
+        let record = records::McpProxyCodeEntryRecord::from(entry);
+        let serialized = golem_common::serialization::serialize(&record)
+            .map_err(|e| anyhow!("McpProxyCodeEntry serialization error: {e}"))?;
+
+        let _: () = self
+            .redis
+            .with("session_store", "store_mcp_proxy_code")
+            .set(
+                Self::redis_key_for_mcp_proxy_code(code),
+                serialized,
+                Some(self.pending_login_expiration.clone()),
+                None,
+                false,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn take_mcp_proxy_code(
+        &self,
+        code: &str,
+    ) -> Result<Option<McpProxyCodeEntry>, SessionStoreError> {
+        let key = Self::redis_key_for_mcp_proxy_code(code);
+        let maybe_bytes: Option<Bytes> = self
+            .redis
+            .with("session_store", "take_mcp_proxy_code")
+            .get(&key)
+            .await?;
+
+        if let Some(bytes) = maybe_bytes {
+            let record: records::McpProxyCodeEntryRecord =
+                golem_common::serialization::deserialize(&bytes)
+                    .map_err(|e| anyhow!("McpProxyCodeEntry deserialization error: {e}"))?;
+
+            let _: i32 = self
+                .redis
+                .with("session_store", "del_mcp_proxy_code")
+                .del(&key)
+                .await?;
+            Ok(Some(McpProxyCodeEntry::from(record)))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 pub struct SqliteSessionStore {
@@ -238,6 +370,18 @@ impl SqliteSessionStore {
                     value BLOB NOT NULL,
                     expires_at INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS mcp_pending_auth (
+                    state TEXT PRIMARY KEY,
+                    value BLOB NOT NULL,
+                    expires_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS mcp_proxy_code (
+                    code TEXT PRIMARY KEY,
+                    value BLOB NOT NULL,
+                    expires_at INTEGER NOT NULL
+                );
                 "#,
             ))
             .await?;
@@ -275,6 +419,18 @@ impl SqliteSessionStore {
                             {
                                 error!("Failed to expire oidc sessions: {}", e);
                             }
+
+                            if let Err(e) =
+                                Self::cleanup_expired_mcp_pending_auth(db_pool.clone(), now).await
+                            {
+                                error!("Failed to expire mcp pending auths: {}", e);
+                            }
+
+                            if let Err(e) =
+                                Self::cleanup_expired_mcp_proxy_code(db_pool.clone(), now).await
+                            {
+                                error!("Failed to expire mcp proxy codes: {}", e);
+                            }
                         }
                     }
                 }
@@ -305,6 +461,34 @@ impl SqliteSessionStore {
             sqlx::query("DELETE FROM oidc_session WHERE expires_at < ?;").bind(current_time);
 
         pool.with_rw("session_store", "cleanup_expired_oidc_session")
+            .execute(query)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn cleanup_expired_mcp_pending_auth(
+        pool: SqlitePool,
+        current_time: i64,
+    ) -> anyhow::Result<()> {
+        let query =
+            sqlx::query("DELETE FROM mcp_pending_auth WHERE expires_at < ?;").bind(current_time);
+
+        pool.with_rw("session_store", "cleanup_expired_mcp_pending_auth")
+            .execute(query)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn cleanup_expired_mcp_proxy_code(
+        pool: SqlitePool,
+        current_time: i64,
+    ) -> anyhow::Result<()> {
+        let query =
+            sqlx::query("DELETE FROM mcp_proxy_code WHERE expires_at < ?;").bind(current_time);
+
+        pool.with_rw("session_store", "cleanup_expired_mcp_proxy_code")
             .execute(query)
             .await?;
 
@@ -433,12 +617,122 @@ impl SessionStore for SqliteSessionStore {
             Ok(None)
         }
     }
+
+    async fn store_mcp_pending_auth(
+        &self,
+        state: &str,
+        pending: McpPendingAuth,
+    ) -> Result<(), SessionStoreError> {
+        let record = records::McpPendingAuthRecord::from(pending);
+        let serialized = golem_common::serialization::serialize(&record)
+            .map_err(|e| SessionStoreError::InternalError(anyhow::anyhow!(e)))?;
+
+        let expiry = Utc::now()
+            .checked_add_signed(TimeDelta::seconds(self.pending_login_expiration))
+            .ok_or_else(|| anyhow!("Failed to compute expiry"))?
+            .timestamp();
+
+        self.pool
+            .with_rw("session_store", "store_mcp_pending_auth")
+            .execute(
+                sqlx::query("INSERT OR REPLACE INTO mcp_pending_auth (state, value, expires_at) VALUES (?, ?, ?)")
+                    .bind(state)
+                    .bind(serialized)
+                    .bind(expiry),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn take_mcp_pending_auth(
+        &self,
+        state: &str,
+    ) -> Result<Option<McpPendingAuth>, SessionStoreError> {
+        let row = self
+            .pool
+            .with_rw("session_store", "take_mcp_pending_auth")
+            .fetch_optional(
+                sqlx::query(
+                    "DELETE FROM mcp_pending_auth WHERE state = ? AND expires_at > ? RETURNING value",
+                )
+                .bind(state)
+                .bind(Self::current_time()),
+            )
+            .await?;
+
+        if let Some(row) = row {
+            let bytes: Vec<u8> = row.get(0);
+            let record: records::McpPendingAuthRecord =
+                golem_common::serialization::deserialize(&bytes)
+                    .map_err(|e| SessionStoreError::InternalError(anyhow::anyhow!(e)))?;
+
+            Ok(Some(McpPendingAuth::from(record)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn store_mcp_proxy_code(
+        &self,
+        code: &str,
+        entry: McpProxyCodeEntry,
+    ) -> Result<(), SessionStoreError> {
+        let record = records::McpProxyCodeEntryRecord::from(entry);
+        let serialized = golem_common::serialization::serialize(&record)
+            .map_err(|e| SessionStoreError::InternalError(anyhow::anyhow!(e)))?;
+
+        let expiry = Utc::now()
+            .checked_add_signed(TimeDelta::seconds(self.pending_login_expiration))
+            .ok_or_else(|| anyhow!("Failed to compute expiry"))?
+            .timestamp();
+
+        self.pool
+            .with_rw("session_store", "store_mcp_proxy_code")
+            .execute(
+                sqlx::query("INSERT OR REPLACE INTO mcp_proxy_code (code, value, expires_at) VALUES (?, ?, ?)")
+                    .bind(code)
+                    .bind(serialized)
+                    .bind(expiry),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn take_mcp_proxy_code(
+        &self,
+        code: &str,
+    ) -> Result<Option<McpProxyCodeEntry>, SessionStoreError> {
+        let row = self
+            .pool
+            .with_rw("session_store", "take_mcp_proxy_code")
+            .fetch_optional(
+                sqlx::query(
+                    "DELETE FROM mcp_proxy_code WHERE code = ? AND expires_at > ? RETURNING value",
+                )
+                .bind(code)
+                .bind(Self::current_time()),
+            )
+            .await?;
+
+        if let Some(row) = row {
+            let bytes: Vec<u8> = row.get(0);
+            let record: records::McpProxyCodeEntryRecord =
+                golem_common::serialization::deserialize(&bytes)
+                    .map_err(|e| SessionStoreError::InternalError(anyhow::anyhow!(e)))?;
+
+            Ok(Some(McpProxyCodeEntry::from(record)))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 mod records {
     use super::SessionStoreError;
     use crate::custom_api::model::OidcSession;
-    use crate::custom_api::oidc::model::PendingOidcLogin;
+    use crate::custom_api::oidc::model::{McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin};
     use anyhow::anyhow;
     use chrono::{DateTime, Utc};
     use desert_rust::BinaryCodec;
@@ -538,6 +832,62 @@ mod records {
                 scopes: value.scopes.into_iter().map(Scope::new).collect(),
                 expires_at: value.expires_at,
             })
+        }
+    }
+
+    #[derive(Debug, BinaryCodec)]
+    #[desert(evolution())]
+    pub struct McpPendingAuthRecord {
+        pub client_redirect_uri: String,
+        pub client_state: Option<String>,
+    }
+
+    impl From<McpPendingAuth> for McpPendingAuthRecord {
+        fn from(value: McpPendingAuth) -> Self {
+            Self {
+                client_redirect_uri: value.client_redirect_uri,
+                client_state: value.client_state,
+            }
+        }
+    }
+
+    impl From<McpPendingAuthRecord> for McpPendingAuth {
+        fn from(value: McpPendingAuthRecord) -> Self {
+            Self {
+                client_redirect_uri: value.client_redirect_uri,
+                client_state: value.client_state,
+            }
+        }
+    }
+
+    #[derive(Debug, BinaryCodec)]
+    #[desert(evolution())]
+    pub struct McpProxyCodeEntryRecord {
+        pub id_token: String,
+        pub refresh_token: Option<String>,
+        pub expires_in: Option<u64>,
+        pub token_type: String,
+    }
+
+    impl From<McpProxyCodeEntry> for McpProxyCodeEntryRecord {
+        fn from(value: McpProxyCodeEntry) -> Self {
+            Self {
+                id_token: value.id_token,
+                refresh_token: value.refresh_token,
+                expires_in: value.expires_in,
+                token_type: value.token_type,
+            }
+        }
+    }
+
+    impl From<McpProxyCodeEntryRecord> for McpProxyCodeEntry {
+        fn from(value: McpProxyCodeEntryRecord) -> Self {
+            Self {
+                id_token: value.id_token,
+                refresh_token: value.refresh_token,
+                expires_in: value.expires_in,
+                token_type: value.token_type,
+            }
         }
     }
 }

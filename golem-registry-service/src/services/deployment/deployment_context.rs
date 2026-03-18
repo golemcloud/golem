@@ -33,6 +33,8 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_wasm::ValueAndType;
@@ -232,6 +234,7 @@ impl DeploymentContext {
         &self,
         account_id: AccountId,
         deployment_revision: golem_common::model::deployment::DeploymentRevision,
+        security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
         errors: &mut Vec<DeployValidationError>,
     ) -> Vec<golem_service_base::mcp::CompiledMcp> {
         let mut all_compiled_mcps = Vec::new();
@@ -240,7 +243,8 @@ impl DeploymentContext {
             let mut agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
                 HashMap::new();
 
-            for agent_type in mcp_deployment.agents.keys() {
+            let mut unique_scheme_names: HashSet<&SecuritySchemeName> = HashSet::new();
+            for (agent_type, agent_options) in &mcp_deployment.agents {
                 let registered_agent_type = ok_or_continue!(
                     self.registered_agent_types.get(agent_type).ok_or(
                         DeployValidationError::McpDeploymentMissingAgentType {
@@ -258,7 +262,33 @@ impl DeploymentContext {
                         registered_agent_type.implemented_by.component_revision,
                     ),
                 );
+
+                if let Some(name) = &agent_options.security_scheme {
+                    unique_scheme_names.insert(name);
+                }
             }
+
+            let security_scheme = if unique_scheme_names.len() > 1 {
+                errors.push(
+                    DeployValidationError::McpDeploymentConflictingSecuritySchemes {
+                        mcp_deployment_domain: domain.clone(),
+                    },
+                );
+                None
+            } else if let Some(scheme_name) = unique_scheme_names.into_iter().next() {
+                match security_schemes.get(scheme_name) {
+                    Some(details) => Some(details.clone()),
+                    None => {
+                        errors.push(DeployValidationError::McpDeploymentUnknownSecurityScheme {
+                            mcp_deployment_domain: domain.clone(),
+                            security_scheme: scheme_name.clone(),
+                        });
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             let compiled_mcp = golem_service_base::mcp::CompiledMcp {
                 account_id,
@@ -266,6 +296,7 @@ impl DeploymentContext {
                 deployment_revision,
                 domain: domain.clone(),
                 agent_type_implementers,
+                security_scheme,
             };
             all_compiled_mcps.push(compiled_mcp);
         }

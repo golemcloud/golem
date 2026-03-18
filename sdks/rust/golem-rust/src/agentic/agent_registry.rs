@@ -204,14 +204,14 @@ pub fn get_method_parameter_type(
     extract_parameter_schema(&method.input_schema, parameter_index)
 }
 
-pub fn get_method_parameter_types_by_index(
+pub fn get_method_parameter_types(
     agent_type_name: &AgentTypeName,
-    method_index: usize,
+    method_name: &str,
 ) -> Option<Vec<EnrichedElementSchema>> {
     let state = get_state();
     let agent_types = state.agent_types.borrow();
     let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
-    let method = agent_type.methods.get(method_index)?;
+    let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
 
     Some(extract_all_parameter_schemas(&method.input_schema))
 }
