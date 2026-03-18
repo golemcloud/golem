@@ -46,6 +46,10 @@ CREATE UNIQUE INDEX plugins_name_version_uk ON plugins (account_id, name, versio
   CONSTRAINT accounts_pk PRIMARY KEY (account_id)
   ```
 
+## Column Types
+
+Use the same column types in PostgreSQL and SQLite whenever possible, to make it easier to write queries that work on both databases. Only use database-specific types (e.g., `BIGSERIAL` vs `INTEGER PRIMARY KEY AUTOINCREMENT`, `UUID` vs `TEXT`, `TIMESTAMPTZ` vs `TEXT`, `TEXT[]` vs `TEXT`) when there is no common alternative.
+
 ## Table Style
 
 - Use uppercase SQL keywords (`CREATE TABLE`, `NOT NULL`, `PRIMARY KEY`)
