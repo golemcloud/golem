@@ -165,9 +165,8 @@ async fn read_otlp_metric_records(path: &Path) -> anyhow::Result<Vec<OtlpMetricR
         if line.trim().is_empty() {
             continue;
         }
-        let request: FileExportMetricsRequest = serde_json::from_str(line).map_err(|e| {
-            anyhow::anyhow!("Failed to parse OTLP metrics line: {e}\nLine: {line}")
-        })?;
+        let request: FileExportMetricsRequest = serde_json::from_str(line)
+            .map_err(|e| anyhow::anyhow!("Failed to parse OTLP metrics line: {e}\nLine: {line}"))?;
         for rm in request.resource_metrics {
             for sm in rm.scope_metrics {
                 records.extend(sm.metrics);

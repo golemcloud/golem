@@ -19,10 +19,10 @@ use super::{
     PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalSpanData,
-    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicRetryConfig, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex, PublicRetryConfig,
+    PublicSnapshotData, PublicSpanData, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, StringAttributeValue,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::model::agent::DataValue;

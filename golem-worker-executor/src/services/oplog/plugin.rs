@@ -16,9 +16,9 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
-use crate::services::worker_event::WorkerEventService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
+use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     HasComponentService, HasOplogProcessorPlugin, HasShardService, HasWorkerActivator,
@@ -39,8 +39,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord,
-    IdempotencyKey, InvocationStatus, OwnedAgentId, ScanCursor, ShardId,
+    AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey, InvocationStatus,
+    OwnedAgentId, ScanCursor, ShardId,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -89,11 +89,7 @@ pub trait OplogProcessorPlugin: Send + Sync {
 
     /// Evicts the cached plugin worker for the given plugin, forcing a fresh
     /// instance to be created on the next `resolve_target` call.
-    async fn invalidate_target(
-        &self,
-        environment_id: EnvironmentId,
-        plugin: &InstalledPlugin,
-    );
+    async fn invalidate_target(&self, environment_id: EnvironmentId, plugin: &InstalledPlugin);
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
 
@@ -311,11 +307,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         Ok(())
     }
 
-    async fn invalidate_target(
-        &self,
-        environment_id: EnvironmentId,
-        plugin: &InstalledPlugin,
-    ) {
+    async fn invalidate_target(&self, environment_id: EnvironmentId, plugin: &InstalledPlugin) {
         let mut workers = self.workers.write().await;
         workers.remove(&(environment_id, plugin.plugin_registration_id));
     }
@@ -1181,9 +1173,7 @@ impl ForwardingOplogState {
             }
             Err(err) => {
                 // Pre-enqueue failure — permanent for this target instance
-                tracing::error!(
-                    "Failed to enqueue oplog entries to plugin {grant_id}: {err}"
-                );
+                tracing::error!("Failed to enqueue oplog entries to plugin {grant_id}: {err}");
                 if let Some(event_service) = &self.worker_event_service {
                     event_service.emit_event(
                         InternalWorkerEvent::plugin_error(

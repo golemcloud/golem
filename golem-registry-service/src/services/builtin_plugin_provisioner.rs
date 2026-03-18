@@ -16,11 +16,11 @@ use crate::config::BuiltinPluginsConfig;
 use crate::repo::plugin::PluginRepo;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
+use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
-use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
@@ -195,7 +195,9 @@ pub async fn provision_builtin_plugins(
             tracing::info!("Deployed builtin-plugins environment");
         }
         Err(e) => {
-            tracing::warn!("Failed to deploy builtin-plugins environment (may already be deployed): {e}");
+            tracing::warn!(
+                "Failed to deploy builtin-plugins environment (may already be deployed): {e}"
+            );
         }
     }
 

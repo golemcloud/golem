@@ -144,7 +144,10 @@ async fn otlp_basic_trace_export(
 
     info!("Found trace with {} spans", trace.spans.len());
 
-    assert!(!trace.spans.is_empty(), "Trace should have at least one span");
+    assert!(
+        !trace.spans.is_empty(),
+        "Trace should have at least one span"
+    );
     assert_eq!(trace.trace_id, jaeger_trace_id);
 
     let parent_span_id_str = format!("{parent_span_id}");
@@ -152,13 +155,22 @@ async fn otlp_basic_trace_export(
     trace.dump_spans(&external_parents);
 
     let unknown = trace.unknown_name_spans();
-    assert!(unknown.is_empty(), "Found spans with 'unknown' name: {unknown:?}");
+    assert!(
+        unknown.is_empty(),
+        "Found spans with 'unknown' name: {unknown:?}"
+    );
 
     let disconnected = trace.disconnected_spans(&external_parents);
-    assert!(disconnected.is_empty(), "Found disconnected spans: {disconnected:?}");
+    assert!(
+        disconnected.is_empty(),
+        "Found disconnected spans: {disconnected:?}"
+    );
 
     let errors = trace.error_spans();
-    assert!(errors.is_empty(), "Found spans with ERROR status: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "Found spans with ERROR status: {errors:?}"
+    );
 
     Ok(())
 }
@@ -237,7 +249,7 @@ async fn otlp_all_signals_export(
         r.body
             .as_ref()
             .and_then(|b| b.string_value.as_deref())
-            .map_or(false, |s| s.contains("Sending context"))
+            .is_some_and(|s| s.contains("Sending context"))
     });
     assert!(
         has_sending_context,

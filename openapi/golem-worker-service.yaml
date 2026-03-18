@@ -3022,14 +3022,6 @@ components:
           type: object
           additionalProperties:
             type: string
-    ProcessErrorMessage:
-      type: object
-      title: ProcessErrorMessage
-      required:
-      - message
-      properties:
-        message:
-          type: string
     ProcessOplogEntriesParameters:
       type: object
       title: ProcessOplogEntriesParameters
@@ -3043,7 +3035,7 @@ components:
       title: ProcessOplogEntriesResultParameters
       properties:
         error:
-          $ref: '#/components/schemas/PublicProcessError'
+          type: string
     PublicAgentInvocation:
       type: object
       oneOf:
@@ -3894,28 +3886,6 @@ components:
             - Suspend
             example: Suspend
       - $ref: '#/components/schemas/r#SuspendParams'
-    PublicProcessError:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PublicProcessError_ProcessErrorMessage'
-      - $ref: '#/components/schemas/PublicProcessError_ProcessErrorMessage'
-      discriminator:
-        propertyName: type
-        mapping:
-          Permanent: '#/components/schemas/PublicProcessError_ProcessErrorMessage'
-          Retriable: '#/components/schemas/PublicProcessError_ProcessErrorMessage'
-    PublicProcessError_ProcessErrorMessage:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Retriable
-            example: Retriable
-      - $ref: '#/components/schemas/ProcessErrorMessage'
     PublicRetryConfig:
       type: object
       title: PublicRetryConfig
