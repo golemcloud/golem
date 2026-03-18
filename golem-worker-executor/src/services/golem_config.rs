@@ -979,6 +979,10 @@ impl SafeDisplay for ResourceLimitsConfig {
 pub struct ResourceLimitsGrpcConfig {
     #[serde(with = "humantime_serde")]
     pub batch_update_interval: Duration,
+    /// How long a cached account entry may go without a server refresh before
+    /// it is considered stale.
+    #[serde(with = "humantime_serde")]
+    pub limit_refresh_interval: Duration,
 }
 
 impl SafeDisplay for ResourceLimitsGrpcConfig {
@@ -988,6 +992,11 @@ impl SafeDisplay for ResourceLimitsGrpcConfig {
             &mut result,
             "batch update interval: {:?}",
             self.batch_update_interval
+        );
+        let _ = writeln!(
+            &mut result,
+            "limit refresh interval: {:?}",
+            self.limit_refresh_interval
         );
         result
     }
@@ -1335,6 +1344,7 @@ impl Default for ResourceLimitsConfig {
     fn default() -> Self {
         Self::Grpc(ResourceLimitsGrpcConfig {
             batch_update_interval: Duration::from_secs(60),
+            limit_refresh_interval: Duration::from_secs(300),
         })
     }
 }
