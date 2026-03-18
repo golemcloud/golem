@@ -105,6 +105,7 @@ service:
                     "/etc/otelcol",
                 ))
                 .with_cmd(["--config", "/etc/otelcol/config.yaml"])
+                .with_user("0")
                 .with_startup_timeout(Duration::from_secs(120))
                 .start()
         })
