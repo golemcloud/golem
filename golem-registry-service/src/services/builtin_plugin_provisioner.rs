@@ -26,7 +26,7 @@ use golem_common::golem_version;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::base64::Base64;
-use golem_common::model::component::{ComponentCreation, ComponentName};
+use golem_common::model::component::{ComponentCreation, ComponentName, ComponentUpdate};
 use golem_common::model::deployment::{DeploymentCreation, DeploymentVersion};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
@@ -70,7 +70,7 @@ pub async fn provision_builtin_plugins(
 
     let auth = AuthCtx::system();
     let plugin_version = golem_version().to_string();
-    let component_name = ComponentName(format!("{OTLP_COMPONENT_NAME}:{plugin_version}"));
+    let component_name = ComponentName(OTLP_COMPONENT_NAME.to_string());
 
     // 1. Create or find "golem-system" application
     let app_name = ApplicationName(SYSTEM_APP_NAME.to_string());
@@ -145,7 +145,7 @@ pub async fn provision_builtin_plugins(
         }
     };
 
-    // 3. Upload "otlp-exporter" component if not exists
+    // 3. Upload "otlp-exporter" component, or update it if it already exists
     let component = match component_write_service
         .create(
             env.id,
@@ -165,10 +165,31 @@ pub async fn provision_builtin_plugins(
         .await
     {
         Ok(component) => component,
-        Err(ComponentError::ComponentWithNameAlreadyExists(_)) => component_service
-            .get_staged_component_by_name(env.id, &component_name, &auth)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to get existing OTLP component: {e}"))?,
+        Err(ComponentError::ComponentWithNameAlreadyExists(_)) => {
+            let existing = component_service
+                .get_staged_component_by_name(env.id, &component_name, &auth)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to get existing OTLP component: {e}"))?;
+            component_write_service
+                .update(
+                    existing.id,
+                    ComponentUpdate {
+                        current_revision: existing.revision,
+                        removed_files: Vec::new(),
+                        new_file_options: BTreeMap::new(),
+                        env: None,
+                        config_vars: None,
+                        agent_config: None,
+                        agent_types: None,
+                        plugin_updates: Vec::new(),
+                    },
+                    Some(wasm_bytes.to_vec()),
+                    None,
+                    &auth,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to update OTLP component: {e}"))?
+        }
         Err(other) => {
             return Err(anyhow::anyhow!("Failed to create OTLP component: {other}"));
         }

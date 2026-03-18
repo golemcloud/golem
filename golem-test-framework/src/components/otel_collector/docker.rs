@@ -93,7 +93,7 @@ service:
 
         let container: ContainerAsync<GenericImage> = tryhard::retry_fn(|| {
             GenericImage::new("otel/opentelemetry-collector-contrib", "0.120.0")
-                .with_wait_for(WaitFor::seconds(5))
+                .with_wait_for(WaitFor::message_on_stderr("Everything is ready."))
                 .with_exposed_port(Self::OTLP_HTTP_PORT.tcp())
                 .with_exposed_port(Self::HEALTH_PORT.tcp())
                 .with_mount(Mount::bind_mount(
@@ -105,6 +105,7 @@ service:
                     "/etc/otelcol",
                 ))
                 .with_cmd(["--config", "/etc/otelcol/config.yaml"])
+                .with_startup_timeout(Duration::from_secs(120))
                 .start()
         })
         .retries(5)
