@@ -85,9 +85,9 @@ impl SdkOverrides {
             SdkOverridesTestProfile::PublishedArtifacts => Self {
                 golem_path: None,
                 golem_rust_path: None,
-                golem_rust_version: Some(GOLEM_RUST_VERSION_DEFAULT.to_string()),
+                golem_rust_version: None,
                 ts_packages_path: None,
-                ts_version: Some(GOLEM_TS_VERSION_DEFAULT.to_string()),
+                ts_version: None,
             },
         }
     }
