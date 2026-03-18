@@ -408,6 +408,18 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'internal-error'
     val: string
+  } |
+  {
+    tag: 'deterministic-trap'
+    val: string
+  } |
+  {
+    tag: 'transient-error'
+    val: string
+  } |
+  {
+    tag: 'permanent-error'
+    val: string
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
@@ -449,6 +461,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     error: WorkerError;
     retryFrom: OplogIndex;
+    insideAtomicRegion: boolean;
   };
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;
