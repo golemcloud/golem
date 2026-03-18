@@ -1,4 +1,5 @@
 <!-- golem-managed:guide:rust:start -->
+<!-- Golem manages this section. Do not edit manually. -->
 
 # Golem Application Development Guide (Rust)
 

@@ -1,4 +1,5 @@
 <!-- golem-managed:guide:ts:start -->
+<!-- Golem manages this section. Do not edit manually. -->
 
 # Golem Application Development Guide (TypeScript)
 
