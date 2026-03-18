@@ -219,16 +219,26 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
     ctx.cli_interactive([cmd::REPL, flag::LANGUAGE, "ts", flag::YES], move |repl| {
         let agent_type_info_regex = indoc! {
             r#"(?sx)
-            Available\ agent\ client\ types:
+            Available\s+agent\s+client\s+types:
             .*
             (
-                SampleAgent\.get\(name: string, region: string, mode: "fast" \| "safe", complex: .*\)
+                SampleAgent\.get\(
+                    name:\s*string,\s*
+                    region:\s*string,\s*
+                    mode:\s*"fast"\s*\|\s*"safe",\s*
+                    complex:\s*.*
+                \)
                 .*
-                CounterAgent\.get\(name: string\)
+                CounterAgent\.get\(name:\s*string\)
             |
-                CounterAgent\.get\(name: string\)
+                CounterAgent\.get\(name:\s*string\)
                 .*
-                SampleAgent\.get\(name: string, region: string, mode: "fast" \| "safe", complex: .*\)
+                SampleAgent\.get\(
+                    name:\s*string,\s*
+                    region:\s*string,\s*
+                    mode:\s*"fast"\s*\|\s*"safe",\s*
+                    complex:\s*.*
+                \)
             )
             .*"#
         };
@@ -236,13 +246,13 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
         let methods_regex = indoc! {
             r#"(?sx)
             (
-                sampleMethod: \(\) => number
+                sampleMethod:\s*\(\)\s*=>\s*number
                 .*
-                increment: \(\) => number
+                increment:\s*\(\)\s*=>\s*number
             |
-                increment: \(\) => number
+                increment:\s*\(\)\s*=>\s*number
                 .*
-                sampleMethod: \(\) => number
+                sampleMethod:\s*\(\)\s*=>\s*number
             )"#
         };
 
