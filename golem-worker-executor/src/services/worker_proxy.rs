@@ -32,7 +32,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
 use golem_common::model::{
     AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, InvocationStatus,
     OwnedAgentId, PromiseId,
@@ -58,6 +58,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         principal: Principal,
     ) -> Result<(), WorkerProxyError>;
 
@@ -249,6 +250,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         principal: Principal,
     ) -> Result<(), WorkerProxyError> {
         debug!(owned_agent_id=%owned_agent_id, "Starting remote worker");
@@ -265,8 +267,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     name: owned_agent_id.agent_name(),
                     env: caller_env.clone(),
                     config_vars: caller_config_vars.clone().into_iter().collect(),
-                    // FIXME: agent-config
-                    agent_config: Vec::new(),
+                    agent_config: agent_config.clone().into_iter().map(Into::into).collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {

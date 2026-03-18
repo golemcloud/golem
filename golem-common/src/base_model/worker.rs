@@ -68,8 +68,7 @@ declare_unions! {
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct UntypedWorkerAgentConfigEntry {
-    // FIXME: agent-config rename to path
-    pub key: Vec<String>,
+    pub path: Vec<String>,
     pub value: golem_wasm::Value,
 }
 
@@ -83,8 +82,7 @@ declare_structs! {
     #[cfg_attr(feature = "full", wit(name = "local-agent-config-entry", owner = "golem:api@1.5.0/oplog"))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct ParsedWorkerAgentConfigEntry {
-        // FIXME: agent-config rename to path
-        pub key: Vec<String>,
+        pub path: Vec<String>,
         pub value: golem_wasm::ValueAndType
     }
 
@@ -178,7 +176,7 @@ declare_enums! {
 impl From<ParsedWorkerAgentConfigEntry> for UntypedWorkerAgentConfigEntry {
     fn from(value: ParsedWorkerAgentConfigEntry) -> Self {
         Self {
-            key: value.key,
+            path: value.path,
             value: value.value.value,
         }
     }
@@ -187,7 +185,7 @@ impl From<ParsedWorkerAgentConfigEntry> for UntypedWorkerAgentConfigEntry {
 impl From<ParsedWorkerAgentConfigEntry> for WorkerAgentConfigEntry {
     fn from(value: ParsedWorkerAgentConfigEntry) -> Self {
         Self {
-            path: value.key,
+            path: value.path,
             value: value
                 .value
                 .to_json_value()

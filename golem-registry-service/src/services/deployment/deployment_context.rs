@@ -24,8 +24,10 @@ use crate::services::deployment::route_compilation::{
 };
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::base_model::account::AccountId;
-use golem_common::model::agent::DeployedRegisteredAgentType;
-use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
+use golem_common::model::agent::{
+    AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
+    RegisteredAgentTypeImplementer,
+};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
@@ -315,8 +317,6 @@ impl DeploymentContext {
         Vec<DeploymentAgentSecretCreation>,
         Vec<DeploymentAgentSecretUpdate>,
     ) {
-        use golem_common::model::agent::{ConfigKeyValueType, ConfigValueType};
-
         let env_secrets: HashMap<&CanonicalAgentSecretPath, &AgentSecret> =
             agent_secrets_in_environment
                 .iter()
@@ -335,23 +335,19 @@ impl DeploymentContext {
 
         for agent_type in self.registered_agent_types.values() {
             for config in &agent_type.agent_type.config {
-                let ConfigKeyValueType {
-                    key,
-                    value: ConfigValueType::Shared(agent_secret_declaration),
-                } = config
-                else {
+                if config.source != AgentConfigSource::Secret {
                     continue;
-                };
+                }
 
                 let canonical_agent_secret_path =
-                    CanonicalAgentSecretPath::from_path_in_unknown_casing(key);
+                    CanonicalAgentSecretPath::from_path_in_unknown_casing(&config.path);
 
                 match seen_secrets.entry(canonical_agent_secret_path.clone()) {
                     hash_map::Entry::Vacant(e) => {
-                        e.insert(agent_secret_declaration.value.clone());
+                        e.insert(config.value_type.clone());
                     }
                     hash_map::Entry::Occupied(e) => {
-                        if *e.get() != agent_secret_declaration.value {
+                        if *e.get() != config.value_type {
                             ok_or_continue!(
                                 Err(DeployValidationError::AgentSecretTypeConflict {
                                     path: canonical_agent_secret_path
@@ -368,13 +364,11 @@ impl DeploymentContext {
                     env_secrets.get(&canonical_agent_secret_path)
                 {
                     // secret does exist in environment, we need to check that types are compatible with deployment
-                    if environment_agent_secret_declaration.secret_type
-                        != agent_secret_declaration.value
-                    {
+                    if environment_agent_secret_declaration.secret_type != config.value_type {
                         errors.push(
                             DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
                                 path: canonical_agent_secret_path.clone(),
-                                agent_secret_type: agent_secret_declaration.value.clone(),
+                                agent_secret_type: config.value_type.clone(),
                                 environment_secret_type: environment_agent_secret_declaration
                                     .secret_type
                                     .clone(),
@@ -391,7 +385,7 @@ impl DeploymentContext {
                             agent_secret_default
                                 .map(|sd| ValueAndType::parse_with_type(
                                     &sd.secret_value,
-                                    &agent_secret_declaration.value
+                                    &config.value_type
                                 ))
                                 .transpose()
                                 .map_err(|errors| {
@@ -414,14 +408,13 @@ impl DeploymentContext {
                     }
                 } else {
                     // secret does not yet exist in environment, create it with optional default.
-                    let agent_secret_type = &agent_secret_declaration.value;
                     let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
                     let agent_secret_value = ok_or_continue!(
                         agent_secret_default
                             .map(|sd| ValueAndType::parse_with_type(
                                 &sd.secret_value,
-                                agent_secret_type
+                                &config.value_type
                             ))
                             .transpose()
                             .map_err(|errors| {
@@ -436,7 +429,7 @@ impl DeploymentContext {
 
                     creations.push(DeploymentAgentSecretCreation {
                         path: canonical_agent_secret_path,
-                        secret_type: agent_secret_type.clone(),
+                        secret_type: config.value_type.clone(),
                         secret_value: agent_secret_value,
                     });
                 }

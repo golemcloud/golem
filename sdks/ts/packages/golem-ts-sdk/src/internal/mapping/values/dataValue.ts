@@ -37,7 +37,7 @@ import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
-import { Config } from '../../..';
+import { Config } from '../../../agentConfig';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { getConfigValue } from 'golem:agent/host@1.5.0';
 import * as WitType from '../types/WitType.js';
@@ -279,20 +279,7 @@ export function deserializeDataValue(
 }
 
 function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config' }): Config<any> {
-  // safe as the parent node is config
-  const properties = (typeInfoInternal.tsType as Type.Type & { kind: 'config' }).properties;
-  return new Config(properties);
-}
-
-export function loadConfigKey(path: string[], type: Type.Type): any {
-  const [witType, analysedType] = Either.getOrThrowWith(
-    WitType.fromTsType(type, undefined),
-    (err) => new Error(`Failed to analyse config type: ${err}`),
-  );
-
-  let witValue = getConfigValue(path, witType);
-
-  return WitValue.toTsValue(witValue, analysedType);
+  return new Config(typeInfoInternal.tsType.properties);
 }
 
 // Used to serialize the return type of a method back to DataValue
