@@ -110,7 +110,7 @@ async fn build_mixed_language_app() {
     let mut ctx = TestContext::new();
 
     let templates = GuestLanguage::iter()
-        .map(|language| match language {
+        .flat_map(|language| match language {
             GuestLanguage::TypeScript => {
                 vec!["ts", "ts/human-in-the-loop"]
             }
@@ -118,12 +118,11 @@ async fn build_mixed_language_app() {
                 vec!["rust/json", "rust/snapshotting"]
             }
         })
-        .flatten()
         .collect::<Vec<_>>();
 
     let app_name = "mixed-lang-templates-app";
 
-    fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
     ctx.cd(app_name);
 
     for template in &templates {
