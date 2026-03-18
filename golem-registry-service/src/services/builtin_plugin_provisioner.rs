@@ -22,6 +22,7 @@ use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
+use golem_common::golem_version;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::base64::Base64;
@@ -41,7 +42,6 @@ const SYSTEM_APP_NAME: &str = "golem-system";
 const SYSTEM_ENV_NAME: &str = "builtin-plugins";
 const OTLP_COMPONENT_NAME: &str = "otlp:exporter";
 const OTLP_PLUGIN_NAME: &str = "golem-otlp-exporter";
-const OTLP_PLUGIN_VERSION: &str = "1.5.0";
 
 pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
@@ -69,7 +69,8 @@ pub async fn provision_builtin_plugins(
     };
 
     let auth = AuthCtx::system();
-    let component_name = ComponentName(OTLP_COMPONENT_NAME.to_string());
+    let plugin_version = golem_version().to_string();
+    let component_name = ComponentName(format!("{OTLP_COMPONENT_NAME}:{plugin_version}"));
 
     // 1. Create or find "golem-system" application
     let app_name = ApplicationName(SYSTEM_APP_NAME.to_string());
@@ -207,7 +208,7 @@ pub async fn provision_builtin_plugins(
             root_account_id,
             PluginRegistrationCreation {
                 name: OTLP_PLUGIN_NAME.to_string(),
-                version: OTLP_PLUGIN_VERSION.to_string(),
+                version: plugin_version.clone(),
                 description: "Built-in OTLP exporter oplog processor plugin".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
@@ -223,7 +224,7 @@ pub async fn provision_builtin_plugins(
         Ok(plugin) => plugin,
         Err(PluginRegistrationError::PluginNameAndVersionAlreadyExists) => {
             let record = plugin_repo
-                .get_by_name_and_version(root_account_id.0, OTLP_PLUGIN_NAME, OTLP_PLUGIN_VERSION)
+                .get_by_name_and_version(root_account_id.0, OTLP_PLUGIN_NAME, &plugin_version)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to look up existing plugin: {e}"))?
                 .ok_or_else(|| anyhow::anyhow!("Plugin exists but could not be loaded"))?;
