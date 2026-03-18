@@ -38,7 +38,7 @@ use anyhow::Context;
 use colored::Colorize;
 use expectrl::Expect;
 use golem_cli::fs::{read_to_string, write_str};
-use golem_cli::sdk_overrides::SdkOverrides;
+use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
 use itertools::Itertools;
@@ -307,7 +307,9 @@ impl TestContext {
 
         env.insert("NO_COLOR".to_string(), "1".to_string());
 
-        env.extend(SdkOverrides::for_default_test_profile(&workspace_path()).to_env_vars());
+        let sdk_overrides = sdk_overrides().unwrap().to_env_vars();
+        println!("{} {:#?}", "> SDK Overrides:".bold(), sdk_overrides);
+        env.extend(sdk_overrides);
 
         let ctx = Self {
             quiet,

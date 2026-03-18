@@ -36,6 +36,9 @@ async fn test_rust_counter() {
         .await;
     assert!(outputs.success_or_dump());
 
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
     // Test with CLI invoke
     {
         let uuid = Uuid::new_v4().to_string();
@@ -44,7 +47,7 @@ async fn test_rust_counter() {
                 flag::YES,
                 cmd::AGENT,
                 cmd::INVOKE,
-                &format!("app:counter/CounterAgent(\"{uuid}\")"),
+                &format!("CounterAgent(\"{uuid}\")"),
                 "increment",
             ])
             .await;
@@ -172,7 +175,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("rust:agent/FooAgent(Some(\"{uuid}\"))");
+        let agent_constructor = format!("FooAgent(Some(\"{uuid}\"))");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -535,6 +538,9 @@ async fn test_ts_counter() {
         .await;
     assert!(outputs.success_or_dump());
 
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
     // Test with CLI invoke
     {
         let uuid = Uuid::new_v4().to_string();
@@ -543,7 +549,7 @@ async fn test_ts_counter() {
                 flag::YES,
                 cmd::AGENT,
                 cmd::INVOKE,
-                &format!("app:counter/CounterAgent(\"{uuid}\")"),
+                &format!("CounterAgent(\"{uuid}\")"),
                 "increment",
             ])
             .await;
@@ -674,7 +680,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("ts:agent/FooAgent(\"{uuid}\")");
+        let agent_constructor = format!("FooAgent(\"{uuid}\")");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -1212,6 +1218,9 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
 
     ctx.start_server().await;
 
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
     let outputs = ctx
         .cli([
             cmd::AGENT,
@@ -1290,6 +1299,9 @@ async fn test_naming_extremes() {
         &component_source_code,
     )
     .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx
         .cli([

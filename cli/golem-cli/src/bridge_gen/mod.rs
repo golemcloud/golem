@@ -16,7 +16,6 @@ pub mod rust;
 pub mod type_naming;
 pub mod typescript;
 
-use anyhow::anyhow;
 use camino::Utf8Path;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use heck::ToKebabCase;
@@ -30,12 +29,4 @@ pub trait BridgeGenerator {
 
 pub fn bridge_client_directory_name(agent_type_name: &AgentTypeName) -> String {
     format!("{}-client", agent_type_name.as_str().to_kebab_case())
-}
-
-fn workspace_root() -> anyhow::Result<std::path::PathBuf> {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .join("../..")
-        .canonicalize()
-        .map_err(|e| anyhow!("Failed to canonicalize workspace root: {e}"))
 }

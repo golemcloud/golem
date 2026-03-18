@@ -42,6 +42,7 @@ pub enum SdkOverridesTestProfile {
     PublishedArtifacts,
 }
 
+/// This should be `PublishedArtifacts` in RC and release phase, otherwise `LocalWorkspace`.
 pub const SDK_OVERRIDES_DEFAULT_TEST_PROFILE: SdkOverridesTestProfile =
     SdkOverridesTestProfile::LocalWorkspace;
 
@@ -67,17 +68,17 @@ pub fn sdk_overrides() -> anyhow::Result<&'static SdkOverrides> {
 }
 
 impl SdkOverrides {
-    pub fn for_test_profile(current_dir: &Path, profile: SdkOverridesTestProfile) -> Self {
+    fn for_test_profile(workspace_dir: &Path, profile: SdkOverridesTestProfile) -> Self {
         match profile {
             SdkOverridesTestProfile::LocalWorkspace => Self {
                 golem_path: None,
                 golem_rust_path: Some(join_path(
-                    &current_dir.to_string_lossy(),
+                    &workspace_dir.to_string_lossy(),
                     "sdks/rust/golem-rust",
                 )),
                 golem_rust_version: None,
                 ts_packages_path: Some(join_path(
-                    &current_dir.to_string_lossy(),
+                    &workspace_dir.to_string_lossy(),
                     "sdks/ts/packages",
                 )),
                 ts_version: None,
@@ -92,8 +93,8 @@ impl SdkOverrides {
         }
     }
 
-    pub fn for_default_test_profile(current_dir: &Path) -> Self {
-        Self::for_test_profile(current_dir, SDK_OVERRIDES_DEFAULT_TEST_PROFILE)
+    fn for_default_test_profile(workspace_dir: &Path) -> Self {
+        Self::for_test_profile(workspace_dir, SDK_OVERRIDES_DEFAULT_TEST_PROFILE)
     }
 
     pub fn ts_package_dep(&self, package_name: &str) -> String {
@@ -174,19 +175,21 @@ impl SdkOverrides {
         Ok(repo_root)
     }
 
-    pub fn to_env_vars(&self) -> HashMap<String, String> {
-        self.as_values()
-    }
-
     fn load() -> anyhow::Result<Self> {
         let current_dir = std::env::current_dir().context("Failed to resolve current directory")?;
         let file_values = Self::load_file_values(&current_dir)?;
-        let test_values = if running_under_test() {
-            Self::for_default_test_profile(&current_dir).as_values()
-        } else {
-            HashMap::new()
+
+        // For now, this is a heuristic for using the test mode
+        let test_values = {
+            if running_via_cargo() {
+                Self::for_default_test_profile(&workspace_root()?).to_env_vars()
+            } else {
+                HashMap::new()
+            }
         };
+
         let env_values = Self::load_env_values();
+
         Ok(Self::from_values_with_test(
             file_values,
             test_values,
@@ -232,7 +235,7 @@ impl SdkOverrides {
         }
     }
 
-    fn as_values(&self) -> HashMap<String, String> {
+    pub fn to_env_vars(&self) -> HashMap<String, String> {
         let mut values = HashMap::new();
         if let Some(value) = &self.golem_rust_path {
             values.insert(GOLEM_RUST_PATH.to_string(), value.clone());
@@ -307,6 +310,22 @@ impl RustDependency {
     }
 }
 
+pub fn workspace_root() -> anyhow::Result<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    fs::canonicalize_path(&manifest_dir.join("../.."))
+}
+
+fn running_via_cargo() -> bool {
+    let Some(runtime_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR").ok() else {
+        return false;
+    };
+    let runtime_manifest_dir = PathBuf::from(runtime_manifest_dir);
+    let Some(workspace_root) = workspace_root().ok() else {
+        return false;
+    };
+    runtime_manifest_dir.starts_with(workspace_root)
+}
+
 fn find_sdk_overrides_file(start_dir: &Path) -> Option<PathBuf> {
     start_dir
         .ancestors()
@@ -374,16 +393,6 @@ fn join_path(base: &str, suffix: &str) -> String {
 }
 
 #[cfg(test)]
-fn running_under_test() -> bool {
-    true
-}
-
-#[cfg(not(test))]
-fn running_under_test() -> bool {
-    false
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
@@ -443,7 +452,7 @@ mod tests {
             ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
             ts_version: None,
         }
-        .as_values();
+        .to_env_vars();
 
         let env_values = map(&[(GOLEM_RUST_PATH, "/custom/rust")]);
 
@@ -465,7 +474,7 @@ mod tests {
             &file,
             "GOLEM_PATH=..\nGOLEM_RUST_PATH=./rust-override\nGOLEM_TS_PACKAGES_PATH=../ts-override\n",
         )
-        .expect("failed to write overrides file");
+            .expect("failed to write overrides file");
 
         let values =
             parse_dotenv_with_relative_paths(&file).expect("failed to parse overrides file");

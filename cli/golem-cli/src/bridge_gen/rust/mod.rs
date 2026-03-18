@@ -15,9 +15,9 @@
 use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::type_naming::TypeNaming;
-use crate::bridge_gen::{bridge_client_directory_name, workspace_root, BridgeGenerator};
+use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use crate::fs;
-use crate::sdk_overrides::sdk_overrides;
+use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
@@ -94,7 +94,7 @@ impl RustBridgeGenerator {
     /// Generates the Cargo.toml manifest file
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
         let golem_source = if self.testing {
-            // In test mode, use local workspace path so we always test against the current code
+            // In test mode, use the local workspace path, so we always test against the current code
             GolemDependencySource::Path(workspace_root()?)
         } else {
             match sdk_overrides()?.golem_repo_root()? {
@@ -1993,6 +1993,7 @@ impl RustBridgeGenerator {
     }
 }
 
+// TODO: use published version when available
 enum GolemDependencySource {
     Path(std::path::PathBuf),
     GitMain,
@@ -2005,14 +2006,11 @@ impl GolemDependencySource {
                 let dependency_path = repo_root.join(crate_path);
                 Ok(path_dep(fs::path_to_str(&dependency_path)?, features))
             }
-            GolemDependencySource::GitMain => {
-                // TODO: use published version when available
-                Ok(git_dep(
-                    "https://github.com/golemcloud/golem",
-                    "main",
-                    features,
-                ))
-            }
+            GolemDependencySource::GitMain => Ok(git_dep(
+                "https://github.com/golemcloud/golem",
+                "main",
+                features,
+            )),
         }
     }
 }

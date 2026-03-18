@@ -26,9 +26,9 @@ use crate::bridge_gen::typescript::ts_writer::{
     indent, FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter,
 };
 use crate::bridge_gen::typescript::type_name::TypeScriptTypeName;
-use crate::bridge_gen::{bridge_client_directory_name, workspace_root, BridgeGenerator};
+use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use crate::fs;
-use crate::sdk_overrides::sdk_overrides;
+use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
