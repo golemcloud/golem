@@ -30,22 +30,36 @@ plugins/
 
 ## Building Plugins
 
+**Important:** Plugin builds require the `golem` CLI binary built from the current source tree. Always build it first and use the binary from `target/debug/`.
+
+### Step 1: Build the golem CLI
+
+```shell
+cargo make build
+```
+
+This compiles the `golem` binary to `target/debug/golem`.
+
+### Step 2: Build the plugin using the local golem binary
+
 ### Using cargo-make (preferred for CI / full builds)
 
 ```shell
 cargo make build-plugins
 ```
 
-This requires the `golem` CLI binary to be built first (it depends on `build` task). It runs:
-1. `golem build -P release --force-build` in `plugins/otlp-exporter/`
-2. `golem exec -P release copy` to copy the output WASM to `plugins/otlp-exporter.wasm`
+This runs:
+1. `target/debug/golem build -P release --force-build` in `plugins/otlp-exporter/`
+2. `target/debug/golem exec -P release copy` to copy the output WASM to `plugins/otlp-exporter.wasm`
 
 ### Manual build (for iterating on plugin code)
 
+Use the locally built binary (`GOLEM` below refers to the absolute path to `target/debug/golem`):
+
 ```shell
 cd plugins/otlp-exporter
-golem build -P release
-golem exec -P release copy
+../../target/debug/golem build -P release --force-build
+../../target/debug/golem exec -P release copy
 ```
 
 The `copy` custom command (defined in `components-rust/otlp-exporter/golem.yaml`) copies the release WASM from `golem-temp/agents/otlp_exporter_release.wasm` to `plugins/otlp-exporter.wasm`.
@@ -117,17 +131,19 @@ When updating the plugin, bump `OTLP_PLUGIN_VERSION` if the plugin spec changes.
 ### Modifying plugin logic
 
 1. Edit source files in `plugins/otlp-exporter/components-rust/otlp-exporter/src/`
-2. Build: `cd plugins/otlp-exporter && golem build -P release && golem exec -P release copy`
-3. Verify `plugins/otlp-exporter.wasm` was updated
-4. Commit the updated WASM file
-5. Rebuild the main project (`cargo make build`) if testing with the embedded CLI
+2. Build the golem CLI first: `cargo make build`
+3. Build the plugin: `cd plugins/otlp-exporter && ../../target/debug/golem build -P release --force-build && ../../target/debug/golem exec -P release copy`
+4. Verify `plugins/otlp-exporter.wasm` was updated
+5. Commit the updated WASM file
+6. Rebuild the main project (`cargo make build`) if testing with the embedded CLI
 
 ### Changing the plugin SDK dependency
 
 The plugin uses `golem-rust` from `sdks/rust/golem-rust` with the `export_oplog_processor` feature. If the SDK changes:
 1. Rebuild the SDK if needed (see `sdk-development` skill)
-2. Rebuild the plugin: `cd plugins/otlp-exporter && golem build -P release --force-build && golem exec -P release copy`
-3. Commit the updated WASM
+2. Build the golem CLI: `cargo make build`
+3. Rebuild the plugin: `cd plugins/otlp-exporter && ../../target/debug/golem build -P release --force-build && ../../target/debug/golem exec -P release copy`
+4. Commit the updated WASM
 
 ### Modifying provisioning logic
 

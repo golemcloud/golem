@@ -12460,6 +12460,7 @@ components:
       enum:
       - admin
       - marketing-admin
+      - builtin-plugin-owner
     AccountSetPlan:
       title: AccountSetPlan
       type: object

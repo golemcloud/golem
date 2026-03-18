@@ -119,6 +119,7 @@ async fn env_vars(
             "GOLEM__INITIAL_ACCOUNTS__ROOT__ID",
             admin_account_id.to_string(),
         )
+        .with_str("GOLEM__INITIAL_ACCOUNTS__ROOT__NAME", "Root")
         .with(
             "GOLEM__INITIAL_ACCOUNTS__ROOT__EMAIL",
             admin_account_email.to_string(),
@@ -131,9 +132,14 @@ async fn env_vars(
             "GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN",
             admin_token.secret().to_string(),
         )
+        .with_str("GOLEM__INITIAL_ACCOUNTS__ROOT__ROLE", "admin")
         .with_str(
             "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ID",
             "adb2694f-cd9f-425d-905d-ca2888c9c5de",
+        )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__NAME",
+            "Builtin Plugin Owner",
         )
         .with_str(
             "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__EMAIL",
