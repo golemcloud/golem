@@ -459,6 +459,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
+                error: AgentError::ExceededTableLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
                 error: AgentError::InternalError(_),
                 ..
             } => RetryDecision::None,
