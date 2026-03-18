@@ -19,8 +19,8 @@ import {
   AgentMode,
   Principal,
   Snapshotting,
-  ConfigKeyValueType,
-  ConfigValueType,
+  AgentConfigDeclaration,
+  AgentConfigSource,
 } from 'golem:agent/common@1.5.0';
 import { ResolvedAgent } from '../internal/resolvedAgent';
 import { ConstructorArg, TypeMetadata } from '@golemcloud/golem-ts-types-core';
@@ -325,10 +325,22 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor);
-    (ctor as any).newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
-
-    (ctor as any).getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
+    (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor, false);
+    (ctor as any).getWithConfig = getRemoteClient(agentClassName, agentType, ctor, true);
+    (ctor as any).newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor, false);
+    (ctor as any).newPhantomWithConfig = getNewPhantomRemoteClient(
+      agentClassName,
+      agentType,
+      ctor,
+      true,
+    );
+    (ctor as any).getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor, false);
+    (ctor as any).getPhantomWithConfig = getPhantomRemoteClient(
+      agentClassName,
+      agentType,
+      ctor,
+      true,
+    );
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue, principal: Principal) => {
@@ -384,8 +396,8 @@ export function agent(options?: AgentDecoratorOptions) {
 
 function getAgentConfigEntries(
   constructorParameters: ConstructorArg[],
-): Either.Either<ConfigKeyValueType[], string> {
-  const entries: ConfigKeyValueType[] = [];
+): Either.Either<AgentConfigDeclaration[], string> {
+  const entries: AgentConfigDeclaration[] = [];
 
   for (const param of constructorParameters) {
     if (param.type.kind !== 'config') continue;
@@ -397,16 +409,12 @@ function getAgentConfigEntries(
       );
       if (Either.isLeft(witTypeEither)) return witTypeEither;
 
-      let configValueType: ConfigValueType;
-      if (prop.secret) {
-        configValueType = { tag: 'shared', val: witTypeEither.val[0] };
-      } else {
-        configValueType = { tag: 'local', val: witTypeEither.val[0] };
-      }
+      let configSource: AgentConfigSource = prop.secret ? 'secret' : 'local';
 
       entries.push({
-        key: prop.path,
-        value: configValueType,
+        source: configSource,
+        path: prop.path,
+        valueType: witTypeEither.val[0],
       });
     }
   }

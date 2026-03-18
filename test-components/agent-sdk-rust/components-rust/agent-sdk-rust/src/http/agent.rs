@@ -94,16 +94,12 @@ pub enum MyMimeTypes {
 }
 
 
-struct HttpAgentImpl {
-    agent_name: String,
-}
+struct HttpAgentImpl;
 
 #[agent_implementation]
 impl HttpAgent for HttpAgentImpl {
-    fn new(agent_name: String) -> HttpAgentImpl {
-        HttpAgentImpl {
-            agent_name,
-        }
+    fn new(_agent_name: String) -> Self {
+        Self
     }
 
     fn string_path_var(&self, path_var: String) -> StringPathVarResponse {
@@ -258,16 +254,12 @@ pub trait CorsAgent {
     fn preflight(&self, body: PreflightRequest) -> PreflightResponse;
 }
 
-pub struct CorsAgentImpl {
-    pub agent_name: String,
-}
+pub struct CorsAgentImpl;
 
 #[agent_implementation]
 impl CorsAgent for CorsAgentImpl {
-    fn new(agent_name: String) -> CorsAgentImpl {
-        CorsAgentImpl {
-            agent_name,
-        }
+    fn new(_agent_name: String) -> Self {
+        Self
     }
 
     fn wildcard(&self) -> OkResponse {
@@ -300,7 +292,6 @@ pub trait WebhookAgent {
 }
 
 struct WebhookAgentImpl {
-    agent_name: String,
     test_server_url: Option<String>,
 }
 
@@ -314,9 +305,8 @@ pub struct WebhookUrl {
 
 #[agent_implementation]
 impl WebhookAgent for WebhookAgentImpl {
-    fn new(agent_name: String) -> Self {
+    fn new(_agent_name: String) -> Self {
         WebhookAgentImpl{
-            agent_name,
             test_server_url: None,
         }
     }

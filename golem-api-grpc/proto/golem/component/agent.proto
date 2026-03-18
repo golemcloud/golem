@@ -1,16 +1,16 @@
 syntax = "proto3";
 
+package golem.component;
+
+import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
+import "golem/component/component_id.proto";
+import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation_context.proto";
+import "golem/worker/worker_id.proto";
 import "wasm/rpc/type.proto";
 import "wasm/rpc/val.proto";
 import "wasm/rpc/value_and_type.proto";
-import "golem/common/account_id.proto";
-import "golem/component/component_id.proto";
-import "golem/worker/worker_id.proto";
-import "golem/worker/idempotency_key.proto";
-import "golem/worker/invocation_context.proto";
-
-package golem.component;
 
 enum AgentMode {
   DURABLE = 0;
@@ -49,7 +49,7 @@ message AgentType {
   AgentMode mode = 6;
   optional HttpMountDetails http_mount = 7;
   optional Snapshotting snapshotting = 8;
-  repeated ConfigKeyValueType config = 9;
+  repeated AgentConfigDeclaration config = 9;
   string source_language = 10;
 }
 
@@ -353,22 +353,14 @@ message ProcessOplogEntriesInvocation {
   golem.worker.IdempotencyKey idempotency_key = 1;
 }
 
-message ConfigKeyValueType {
-  repeated string key = 1;
-  ConfigValueType value = 2;
+enum AgentConfigSource {
+  AGENT_CONFIG_SOURCE_UNSPECIFIED = 0;
+  AGENT_CONFIG_SOURCE_LOCAL = 1;
+  AGENT_CONFIG_SOURCE_SECRET = 2;
 }
 
-message ConfigValueType {
-  oneof kind {
-    Local local = 1;
-    Shared shared = 2;
-  }
-
-  message Local {
-    wasm.rpc.Type value = 1;
-  }
-
-  message Shared {
-    wasm.rpc.Type value = 2;
-  }
+message AgentConfigDeclaration {
+  AgentConfigSource source = 1;
+  repeated string path = 2;
+  wasm.rpc.Type valueType = 3;
 }

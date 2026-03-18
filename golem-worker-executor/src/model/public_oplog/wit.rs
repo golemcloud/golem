@@ -74,7 +74,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 local_agent_config: local_agent_config
                     .into_iter()
                     .map(|lac| oplog::LocalAgentConfigEntry {
-                        key: lac.key,
+                        path: lac.path,
                         value: lac.value.into(),
                     })
                     .collect(),

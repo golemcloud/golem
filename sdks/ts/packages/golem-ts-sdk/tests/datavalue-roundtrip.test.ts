@@ -272,7 +272,7 @@ describe('DataValue: error paths', () => {
   it('throws when serializing Config type', () => {
     const configType: TypeInfoInternal = {
       tag: 'config',
-      tsType: dummyTsType,
+      tsType: dummyTsType as Type.Type & { kind: 'config' },
     };
     expect(() => serializeToDataValue({}, configType)).toThrow();
   });

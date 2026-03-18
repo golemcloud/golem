@@ -80,7 +80,7 @@ const configHandler: ConstructorParamHandler = {
   handle: (agentClassName, param, _, collection) => {
     AgentConstructorParamRegistry.setType(agentClassName, param.name, {
       tag: 'config',
-      tsType: param.type,
+      tsType: param.type as Type.Type & { kind: 'config' },
     });
 
     collection.addConfigParameter(param.name);

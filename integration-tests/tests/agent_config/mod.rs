@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod local_agent_config;
+mod rpc;
 mod shared_agent_config;
 
 use crate::Tracing;

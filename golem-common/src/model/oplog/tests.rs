@@ -73,7 +73,7 @@ fn create_serialization_poem_serde_equivalence() {
         created_by: AccountId::new(),
         config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
         local_agent_config: vec![ParsedWorkerAgentConfigEntry {
-            key: vec!["foo".to_string(), "bar".to_string()],
+            path: vec!["foo".to_string(), "bar".to_string()],
             value: 1.into_value_and_type(),
         }],
         environment_id: EnvironmentId::new(),
