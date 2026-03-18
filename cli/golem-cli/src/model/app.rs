@@ -2390,7 +2390,7 @@ mod test {
     use crate::model::app_raw;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
+    use std::path::Path;
     use test_r::test;
 
     #[test]
@@ -2432,13 +2432,15 @@ mod test {
         let component_name = "app:main".parse().unwrap();
         let component = app.component(&component_name);
 
-        assert_eq!(component.wasm(), PathBuf::from("./a.wasm"));
+        assert_eq!(component.wasm(), Path::new("/app-name/").join("a.wasm"));
     }
 
     fn load_app(source: &str, selector: &ComponentPresetSelector) -> Application {
-        let raw_app =
-            app_raw::ApplicationWithSource::from_yaml_string(PathBuf::from("golem.yaml"), source)
-                .unwrap();
+        let raw_app = app_raw::ApplicationWithSource::from_yaml_string(
+            Path::new("/app-name/").join("golem.yaml"),
+            source,
+        )
+        .unwrap();
         let raw_apps = vec![raw_app];
 
         let (app_name_and_envs, warns, errors) =
