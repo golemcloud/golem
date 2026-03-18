@@ -224,6 +224,7 @@ fn registry_service_config(
         builtin_plugins: BuiltinPluginsConfig {
             enabled: true,
             otlp_exporter_wasm: Some(Arc::from(OTLP_EXPORTER_WASM)),
+            otlp_exporter_wasm_path: None,
         },
         ..Default::default()
     }
@@ -308,6 +309,7 @@ fn worker_executor_config(
         },
         resource_limits: ResourceLimitsConfig::Grpc(ResourceLimitsGrpcConfig {
             batch_update_interval: Duration::from_secs(60),
+            limit_refresh_interval: Duration::from_secs(300),
         }),
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {

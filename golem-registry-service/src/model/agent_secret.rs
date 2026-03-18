@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent_secret::{AgentSecretId, AgentSecretRevision};
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
 use golem_wasm::analysis::AnalysedType;
 
 /// Agent secret creation done as part of deployment with checked internal type consistency.
 pub struct DeploymentAgentSecretCreation {
-    pub path: Vec<String>,
+    pub path: CanonicalAgentSecretPath,
     pub secret_type: AnalysedType,
     pub secret_value: Option<golem_wasm::Value>,
 }

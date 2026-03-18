@@ -31,11 +31,11 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::component::{AgentConfigEntry, PluginPriority};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     PluginInstallation, PluginInstallationAction,
 };
-use golem_common::model::component::{LocalAgentConfigEntry, PluginPriority};
 use golem_common::model::component_metadata::RawComponentMetadata;
 use golem_common::model::deployment::{
     CurrentDeployment, DeploymentAgentSecretDefault, DeploymentRevision,
@@ -47,7 +47,7 @@ use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareC
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
     AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget, UpdateRecord,
-    WorkerCreationLocalAgentConfigEntry,
+    WorkerAgentConfigEntry,
 };
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -126,7 +126,7 @@ pub trait TestDsl {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<LocalAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -212,7 +212,7 @@ pub trait TestDsl {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
-        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        agent_config: Option<Vec<AgentConfigEntry>>,
         plugin_updates: Vec<PluginInstallationAction>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -231,7 +231,7 @@ pub trait TestDsl {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
 
     async fn start_agent(
@@ -249,10 +249,10 @@ pub trait TestDsl {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> anyhow::Result<AgentId> {
         let result = self
-            .try_start_agent_with(component_id, id, env, config_vars, local_agent_config)
+            .try_start_agent_with(component_id, id, env, config_vars, agent_config)
             .await?;
         Ok(result?)
     }
@@ -692,7 +692,7 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     files: Vec<IFSEntry>,
     env: BTreeMap<String, String>,
     config_vars: BTreeMap<String, String>,
-    local_agent_config: Vec<LocalAgentConfigEntry>,
+    agent_config: Vec<AgentConfigEntry>,
     plugins: Vec<PluginInstallation>,
 }
 
@@ -708,7 +708,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             files: Vec::new(),
             env: BTreeMap::new(),
             config_vars: BTreeMap::new(),
-            local_agent_config: Vec::new(),
+            agent_config: Vec::new(),
             plugins: Vec::new(),
         }
     }
@@ -789,16 +789,13 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    pub fn with_local_agent_config(
-        mut self,
-        local_agent_config: Vec<LocalAgentConfigEntry>,
-    ) -> Self {
-        self.local_agent_config = local_agent_config;
+    pub fn with_agent_config(mut self, agent_config: Vec<AgentConfigEntry>) -> Self {
+        self.agent_config = agent_config;
         self
     }
 
-    pub fn add_local_agent_config(mut self, local_agent_config: LocalAgentConfigEntry) -> Self {
-        self.local_agent_config.push(local_agent_config);
+    pub fn add_agent_config(mut self, agent_config: AgentConfigEntry) -> Self {
+        self.agent_config.push(agent_config);
         self
     }
 
@@ -837,7 +834,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 self.files,
                 self.env,
                 self.config_vars,
-                self.local_agent_config,
+                self.agent_config,
                 self.plugins,
             )
             .await

@@ -53,6 +53,7 @@ export class Symbol {
     return this.valueDecl;
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getTypeAtLocation(_node: Node): Type {
     return this._typeAtLocation;
   }

@@ -39,7 +39,7 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::{ComponentCreation, ComponentUpdate, LocalAgentConfigEntry};
+use golem_common::model::component::{AgentConfigEntry, ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation, PluginInstallationAction,
@@ -52,7 +52,7 @@ use golem_common::model::environment::{
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
     AgentMetadataDto, AgentUpdateMode, FlatComponentFileSystemNode, RevertWorkerTarget,
-    WorkerCreationLocalAgentConfigEntry,
+    WorkerAgentConfigEntry,
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
@@ -74,6 +74,7 @@ use uuid::Uuid;
 pub struct NameResolutionCache {
     app_names: Cache<ApplicationId, (), ApplicationName, String>,
     env_names: Cache<EnvironmentId, (), EnvironmentName, String>,
+    component_revisions: Cache<(ComponentId, ComponentRevision), (), ComponentDto, String>,
 }
 
 impl Default for NameResolutionCache {
@@ -96,6 +97,12 @@ impl NameResolutionCache {
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
                 "env_names",
+            ),
+            component_revisions: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_revisions",
             ),
         }
     }
@@ -129,6 +136,25 @@ impl NameResolutionCache {
                     .await
                     .map_err(|e| e.to_string())?;
                 Ok(env.name)
+            })
+            .await
+            .map_err(|e| anyhow!(e))
+    }
+
+    pub async fn resolve_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+        client: &RegistryServiceClientLive,
+    ) -> anyhow::Result<ComponentDto> {
+        let key = (*component_id, revision);
+        self.component_revisions
+            .get_or_insert_simple(&key, async || {
+                let component = client
+                    .get_component_revision(&component_id.0, revision.get())
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(component)
             })
             .await
             .map_err(|e| anyhow!(e))
@@ -187,7 +213,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<LocalAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -243,7 +269,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     file_options,
                     env,
                     config_vars,
-                    local_agent_config,
+                    agent_config,
                     plugins,
                     agent_types,
                 },
@@ -289,7 +315,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
-        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        agent_config: Option<Vec<AgentConfigEntry>>,
         plugin_updates: Vec<PluginInstallationAction>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -342,7 +368,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     removed_files,
                     env,
                     config_vars,
-                    local_agent_config,
+                    agent_config,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
@@ -366,7 +392,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         let client = self
             .deps
@@ -380,8 +406,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &golem_client::model::AgentCreationRequest {
                     name: id.to_string(),
                     env,
-                    config_vars: Some(config_vars.into_iter().collect()),
-                    local_agent_config: Some(local_agent_config),
+                    config_vars,
+                    agent_config,
                 },
             )
             .await;
@@ -485,11 +511,15 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         match result.result {
             Some(untyped_json) => {
-                let worker_agent_id = AgentId::from_agent_id(component.id, agent_id)
-                    .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
-                let worker_metadata = self.get_worker_metadata(&worker_agent_id).await?;
+                let revision = ComponentRevision::new(
+                    result
+                        .component_revision
+                        .ok_or_else(|| anyhow!("Missing component_revision in response"))?,
+                )
+                .context("Invalid component_revision in response")?;
                 let component_at_rev = self
-                    .get_component_at_revision(&component.id, worker_metadata.component_revision)
+                    .name_cache
+                    .resolve_component_at_revision(&component.id, revision, &registry_client)
                     .await?;
                 let agent_type = component_at_rev
                     .metadata

@@ -205,8 +205,10 @@ pub trait WorkerCtx:
 ///passed to these functions.
 #[async_trait]
 pub trait FuelManagement {
-    /// Borrows some fuel to continue execution. Returns false if not enough fuel is available to continue execution and true otherwise.
-    fn borrow_fuel(&mut self, current_level: u64) -> bool;
+    /// Ensures fuel is available for continued execution, borrowing a new batch
+    /// from the account pool if the current pre-paid batch is exhausted.
+    /// Returns false if the account has no remaining fuel.
+    fn ensure_fuel(&mut self, current_level: u64) -> bool;
 
     /// Returns the amount of fuel consumed since the last call to return_fuel.
     fn return_fuel(&mut self, current_level: u64) -> u64;

@@ -26,12 +26,15 @@ use crate::services::deployment::write::DeployValidationError;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_wasm::ValueAndType;
@@ -231,6 +234,7 @@ impl DeploymentContext {
         &self,
         account_id: AccountId,
         deployment_revision: golem_common::model::deployment::DeploymentRevision,
+        security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
         errors: &mut Vec<DeployValidationError>,
     ) -> Vec<golem_service_base::mcp::CompiledMcp> {
         let mut all_compiled_mcps = Vec::new();
@@ -239,7 +243,8 @@ impl DeploymentContext {
             let mut agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
                 HashMap::new();
 
-            for agent_type in mcp_deployment.agents.keys() {
+            let mut unique_scheme_names: HashSet<&SecuritySchemeName> = HashSet::new();
+            for (agent_type, agent_options) in &mcp_deployment.agents {
                 let registered_agent_type = ok_or_continue!(
                     self.registered_agent_types.get(agent_type).ok_or(
                         DeployValidationError::McpDeploymentMissingAgentType {
@@ -257,7 +262,33 @@ impl DeploymentContext {
                         registered_agent_type.implemented_by.component_revision,
                     ),
                 );
+
+                if let Some(name) = &agent_options.security_scheme {
+                    unique_scheme_names.insert(name);
+                }
             }
+
+            let security_scheme = if unique_scheme_names.len() > 1 {
+                errors.push(
+                    DeployValidationError::McpDeploymentConflictingSecuritySchemes {
+                        mcp_deployment_domain: domain.clone(),
+                    },
+                );
+                None
+            } else if let Some(scheme_name) = unique_scheme_names.into_iter().next() {
+                match security_schemes.get(scheme_name) {
+                    Some(details) => Some(details.clone()),
+                    None => {
+                        errors.push(DeployValidationError::McpDeploymentUnknownSecurityScheme {
+                            mcp_deployment_domain: domain.clone(),
+                            security_scheme: scheme_name.clone(),
+                        });
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             let compiled_mcp = golem_service_base::mcp::CompiledMcp {
                 account_id,
@@ -265,6 +296,7 @@ impl DeploymentContext {
                 deployment_revision,
                 domain: domain.clone(),
                 agent_type_implementers,
+                security_scheme,
             };
             all_compiled_mcps.push(compiled_mcp);
         }
@@ -284,15 +316,16 @@ impl DeploymentContext {
     ) {
         use golem_common::model::agent::{ConfigKeyValueType, ConfigValueType};
 
-        let env_secrets: HashMap<&Vec<String>, &AgentSecret> = agent_secrets_in_environment
-            .iter()
-            .map(|s| (&s.path, s))
-            .collect();
+        let env_secrets: HashMap<&CanonicalAgentSecretPath, &AgentSecret> =
+            agent_secrets_in_environment
+                .iter()
+                .map(|s| (&s.path, s))
+                .collect();
 
-        let defaults: HashMap<&Vec<String>, &DeploymentAgentSecretDefault> =
+        let defaults: HashMap<CanonicalAgentSecretPath, &DeploymentAgentSecretDefault> =
             agent_secret_defaults_as_part_of_deployment
                 .iter()
-                .map(|d| (&d.path, d))
+                .map(|d| (d.path.clone().into(), d))
                 .collect();
 
         let mut creations = Vec::new();
@@ -309,7 +342,10 @@ impl DeploymentContext {
                     continue;
                 };
 
-                match seen_secrets.entry(key.clone()) {
+                let canonical_agent_secret_path =
+                    CanonicalAgentSecretPath::from_path_in_unknown_casing(key);
+
+                match seen_secrets.entry(canonical_agent_secret_path.clone()) {
                     hash_map::Entry::Vacant(e) => {
                         e.insert(agent_secret_declaration.value.clone());
                     }
@@ -317,7 +353,7 @@ impl DeploymentContext {
                         if *e.get() != agent_secret_declaration.value {
                             ok_or_continue!(
                                 Err(DeployValidationError::AgentSecretTypeConflict {
-                                    path: key.clone()
+                                    path: canonical_agent_secret_path
                                 }),
                                 errors
                             );
@@ -327,16 +363,18 @@ impl DeploymentContext {
                     }
                 }
 
-                if let Some(environment_level_secret_declaration) = env_secrets.get(key) {
+                if let Some(environment_agent_secret_declaration) =
+                    env_secrets.get(&canonical_agent_secret_path)
+                {
                     // secret does exist in environment, we need to check that types are compatible with deployment
-                    if environment_level_secret_declaration.secret_type
+                    if environment_agent_secret_declaration.secret_type
                         != agent_secret_declaration.value
                     {
                         errors.push(
                             DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
-                                path: key.clone(),
+                                path: canonical_agent_secret_path.clone(),
                                 agent_secret_type: agent_secret_declaration.value.clone(),
-                                environment_secret_type: environment_level_secret_declaration
+                                environment_secret_type: environment_agent_secret_declaration
                                     .secret_type
                                     .clone(),
                             },
@@ -345,11 +383,11 @@ impl DeploymentContext {
 
                     // declaration exists in environment but has no value.
                     // if default was provided as part of deployment we can set it now.
-                    if environment_level_secret_declaration.secret_value.is_none() {
-                        let secret_default = defaults.get(key);
+                    if environment_agent_secret_declaration.secret_value.is_none() {
+                        let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
-                        let secret_value = ok_or_continue!(
-                            secret_default
+                        let agent_secret_value = ok_or_continue!(
+                            agent_secret_default
                                 .map(|sd| ValueAndType::parse_with_type(
                                     &sd.secret_value,
                                     &agent_secret_declaration.value
@@ -357,7 +395,7 @@ impl DeploymentContext {
                                 .transpose()
                                 .map_err(|errors| {
                                     DeployValidationError::AgentSecretDefaultTypeMismatch {
-                                        path: key.clone(),
+                                        path: canonical_agent_secret_path,
                                         errors,
                                     }
                                 }),
@@ -365,26 +403,29 @@ impl DeploymentContext {
                         )
                         .map(|vat| vat.value);
 
-                        if let Some(secret_value) = secret_value {
+                        if let Some(secret_value) = agent_secret_value {
                             updates.push(DeploymentAgentSecretUpdate {
-                                agent_secret_id: environment_level_secret_declaration.id,
-                                current_revision: environment_level_secret_declaration.revision,
+                                agent_secret_id: environment_agent_secret_declaration.id,
+                                current_revision: environment_agent_secret_declaration.revision,
                                 new_secret_value: secret_value,
                             });
                         }
                     }
                 } else {
                     // secret does not yet exist in environment, create it with optional default.
-                    let secret_type = &agent_secret_declaration.value;
-                    let secret_default = defaults.get(key);
+                    let agent_secret_type = &agent_secret_declaration.value;
+                    let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
-                    let secret_value = ok_or_continue!(
-                        secret_default
-                            .map(|sd| ValueAndType::parse_with_type(&sd.secret_value, secret_type))
+                    let agent_secret_value = ok_or_continue!(
+                        agent_secret_default
+                            .map(|sd| ValueAndType::parse_with_type(
+                                &sd.secret_value,
+                                agent_secret_type
+                            ))
                             .transpose()
                             .map_err(|errors| {
                                 DeployValidationError::AgentSecretDefaultTypeMismatch {
-                                    path: key.clone(),
+                                    path: canonical_agent_secret_path.clone(),
                                     errors,
                                 }
                             }),
@@ -393,9 +434,9 @@ impl DeploymentContext {
                     .map(|vat| vat.value);
 
                     creations.push(DeploymentAgentSecretCreation {
-                        path: key.clone(),
-                        secret_type: secret_type.clone(),
-                        secret_value,
+                        path: canonical_agent_secret_path,
+                        secret_type: agent_secret_type.clone(),
+                        secret_value: agent_secret_value,
                     });
                 }
             }

@@ -1720,11 +1720,11 @@ components:
           default: {}
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
+            $ref: '#/components/schemas/WorkerAgentConfigEntry'
     AgentEnvFilter:
       type: object
       title: AgentEnvFilter
@@ -1967,6 +1967,9 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
+        componentRevision:
+          type: integer
+          format: uint64
     AgentMetadataDto:
       type: object
       title: AgentMetadataDto
@@ -1976,6 +1979,7 @@ components:
       - createdBy
       - env
       - configVars
+      - agentConfig
       - status
       - componentRevision
       - retryCount
@@ -2005,6 +2009,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        agentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
         status:
           $ref: '#/components/schemas/AgentStatus'
         componentRevision:
@@ -2955,9 +2963,9 @@ components:
         end:
           type: integer
           format: uint64
-    ParsedWorkerCreationLocalAgentConfigEntry:
+    ParsedWorkerAgentConfigEntry:
       type: object
-      title: ParsedWorkerCreationLocalAgentConfigEntry
+      title: ParsedWorkerAgentConfigEntry
       required:
       - key
       - value
@@ -4625,14 +4633,14 @@ components:
       properties:
         version:
           type: string
-    WorkerCreationLocalAgentConfigEntry:
+    WorkerAgentConfigEntry:
       type: object
-      title: WorkerCreationLocalAgentConfigEntry
+      title: WorkerAgentConfigEntry
       required:
-      - key
+      - path
       - value
       properties:
-        key:
+        path:
           type: array
           items:
             type: string
@@ -4878,7 +4886,7 @@ components:
         localAgentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/ParsedWorkerCreationLocalAgentConfigEntry'
+            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid

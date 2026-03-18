@@ -153,7 +153,7 @@ pub async fn provision_builtin_plugins(
                 file_options: BTreeMap::new(),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
-                local_agent_config: Vec::new(),
+                agent_config: Vec::new(),
                 agent_types: Vec::new(),
                 plugins: Vec::new(),
             },

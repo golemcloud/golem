@@ -25,7 +25,7 @@ pub mod service;
 
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::mcp::GolemAgentMcpServer;
+use crate::mcp::{GolemAgentMcpServer, McpBearerAuth, oauth_proxy_routes};
 use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -233,6 +233,9 @@ impl WorkerService {
             .port();
 
         let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
+        let mcp_capability_lookup_for_auth = mcp_capability_lookup.clone();
+        let identity_provider = self.services.identity_provider.clone();
+        let identity_provider_for_auth = identity_provider.clone();
 
         let worker_service = self.services.worker_service.clone();
 
@@ -247,8 +250,32 @@ impl WorkerService {
             StreamableHttpServerConfig::default(),
         );
 
-        let route = Route::new()
-            .nest("/mcp", service.compat())
+        let oauth_routes = oauth_proxy_routes(
+            mcp_capability_lookup_for_auth.clone(),
+            identity_provider.clone(),
+            self.services.session_store.clone(),
+        );
+
+        let mcp_with_auth = service.compat().with(McpBearerAuth::new(
+            mcp_capability_lookup_for_auth,
+            identity_provider_for_auth,
+        ));
+
+        // OAuth routes use .at() so they take priority over .nest("/mcp", ...)
+        let route = oauth_routes
+            .nest("/mcp", mcp_with_auth)
+            .with(
+                Cors::new()
+                    .allow_methods(vec!["GET", "POST", "DELETE", "OPTIONS"])
+                    .allow_headers(vec![
+                        "Content-Type",
+                        "Authorization",
+                        "Mcp-Session-Id",
+                        "Accept",
+                        "Last-Event-ID",
+                    ])
+                    .expose_headers(vec!["Mcp-Session-Id"]),
+            )
             .with(OpenTelemetryMetrics::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())

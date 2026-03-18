@@ -41,7 +41,7 @@ pub enum InvocationMode {
 use golem_wasm::validate_value_matches_type;
 use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm::{FromValue, IntoValue, Value};
-use tracing::debug;
+use tracing::{debug, span, Instrument, Level};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
@@ -194,10 +194,14 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             .await?;
 
     if let InvocationMode::Live(invocation) = mode {
-        store
-            .data_mut()
-            .on_agent_invocation_started(invocation)
-            .await?;
+        async {
+            store
+                .data_mut()
+                .on_agent_invocation_started(invocation)
+                .await
+        }
+        .instrument(span!(Level::INFO, "on_agent_invocation_started"))
+        .await?;
     }
 
     store.data_mut().set_running();

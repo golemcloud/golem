@@ -7200,6 +7200,21 @@ components:
           type: string
         email:
           type: string
+    AgentConfigEntry:
+      type: object
+      title: AgentConfigEntry
+      required:
+      - agent
+      - path
+      - value
+      properties:
+        agent:
+          type: string
+        path:
+          type: array
+          items:
+            type: string
+        value: {}
     AgentConstructor:
       type: object
       title: AgentConstructor
@@ -7279,6 +7294,9 @@ components:
       properties:
         path:
           type: array
+          title: |-
+            Agent secret path in any casing. All agent secret paths
+            are converted to the same casing internally to allow easier cross-language use.
           items:
             type: string
         secretType:
@@ -7302,6 +7320,7 @@ components:
           format: uuid
         path:
           type: array
+          title: Canonical representation of an agent secret path (segments are each camelCase)
           items:
             type: string
         revision:
@@ -7851,11 +7870,11 @@ components:
           default: {}
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         agentTypes:
           type: array
           default: []
@@ -7884,7 +7903,7 @@ components:
       - installedPlugins
       - env
       - configVars
-      - localAgentConfig
+      - agentConfig
       - wasmHash
       properties:
         id:
@@ -7931,10 +7950,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         wasmHash:
           type: string
           format: hash
@@ -8023,10 +8042,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/LocalAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntry'
         agentTypes:
           type: array
           items:
@@ -8209,6 +8228,9 @@ components:
       properties:
         path:
           type: array
+          title: |-
+            Agent secret path in any casing. All agent secret paths
+            are converted to the same casing internally to allow easier cross-language use.
           items:
             type: string
         secretValue: {}
@@ -9031,21 +9053,6 @@ components:
       properties:
         value:
           type: string
-    LocalAgentConfigEntry:
-      type: object
-      title: LocalAgentConfigEntry
-      required:
-      - agent
-      - key
-      - value
-      properties:
-        agent:
-          type: string
-        key:
-          type: array
-          items:
-            type: string
-        value: {}
     McpDeployment:
       type: object
       title: McpDeployment
@@ -9082,6 +9089,9 @@ components:
     McpDeploymentAgentOptions:
       type: object
       title: McpDeploymentAgentOptions
+      properties:
+        securityScheme:
+          type: string
     McpDeploymentCreation:
       type: object
       title: McpDeploymentCreation

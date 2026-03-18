@@ -29,10 +29,11 @@ use golem_common::model::component::{
     ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::clients::registry::RegistryService;
@@ -73,7 +74,7 @@ impl WorkerService {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -89,7 +90,7 @@ impl WorkerService {
             component,
             environment_variables,
             config_vars,
-            local_agent_config,
+            agent_config,
             ignore_already_existing,
             auth_ctx,
             invocation_context,
@@ -105,7 +106,7 @@ impl WorkerService {
         component: Component,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -127,7 +128,7 @@ impl WorkerService {
                 agent_id,
                 environment_variables,
                 config_vars,
-                local_agent_config,
+                agent_config,
                 ignore_already_existing,
                 environment_auth_details.account_id_owning_environment,
                 component.environment_id,
@@ -713,16 +714,22 @@ impl WorkerService {
         invocation_context: Option<InvocationContext>,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        known_environment_id: Option<EnvironmentId>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let component = self
-            .component_service
-            .get_latest_by_id(agent_id.component_id)
-            .await?;
+        let environment_id = match known_environment_id {
+            Some(id) => id,
+            None => {
+                self.component_service
+                    .get_latest_by_id(agent_id.component_id)
+                    .await?
+                    .environment_id
+            }
+        };
 
         let environment_auth_details = self
             .auth_service
             .authorize_environment_actions(
-                component.environment_id,
+                environment_id,
                 EnvironmentAction::UpdateWorker,
                 &auth_ctx,
             )
@@ -737,7 +744,7 @@ impl WorkerService {
                 schedule_at,
                 idempotency_key,
                 invocation_context,
-                component.environment_id,
+                environment_id,
                 environment_auth_details.account_id_owning_environment,
                 auth_ctx,
                 principal,
@@ -765,7 +772,7 @@ impl WorkerService {
             })
             .transpose()?;
 
-        let registered_agent_type = self
+        let resolved = self
             .registry_service
             .resolve_agent_type_by_names(
                 &request.app_name,
@@ -777,27 +784,13 @@ impl WorkerService {
             )
             .await?;
 
+        let registered_agent_type = resolved.registered_agent_type;
+        let environment_id = resolved.environment_id;
         let component_id = registered_agent_type.implemented_by.component_id;
-        let component_metadata = self
-            .component_service
-            .get_revision(
-                component_id,
-                registered_agent_type.implemented_by.component_revision,
-            )
-            .await?;
-
-        let agent_type = component_metadata
-            .metadata
-            .find_agent_type_by_name(&request.agent_type_name)
-            .ok_or_else(|| {
-                WorkerServiceError::Internal(format!(
-                    "Agent type {} not found in component metadata",
-                    request.agent_type_name
-                ))
-            })?;
+        let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters: DataValue = DataValue::try_from_untyped_json(
-            request.parameters.clone(),
+            request.parameters,
             agent_type.constructor.input_schema.clone(),
         )
         .map_err(|err| {
@@ -816,7 +809,7 @@ impl WorkerService {
         })?;
 
         let agent_id = AgentId {
-            component_id: component_metadata.id,
+            component_id,
             agent_id: agent_id.to_string(),
         };
 
@@ -876,6 +869,7 @@ impl WorkerService {
                 None,
                 auth,
                 principal,
+                Some(environment_id),
             )
             .await?;
 
@@ -888,7 +882,7 @@ impl WorkerService {
                     .unwrap_or(registered_agent_type.implemented_by.component_revision);
                 let component_metadata_for_decode = self
                     .component_service
-                    .get_revision(component_metadata.id, decode_revision)
+                    .get_revision(component_id, decode_revision)
                     .await?;
                 let decode_agent_type = component_metadata_for_decode
                     .metadata
@@ -916,9 +910,13 @@ impl WorkerService {
                 })?;
                 Ok(AgentInvocationResult {
                     result: Some(typed_data_value.into()),
+                    component_revision: Some(decode_revision),
                 })
             }
-            _ => Ok(AgentInvocationResult { result: None }),
+            _ => Ok(AgentInvocationResult {
+                result: None,
+                component_revision: output.component_revision,
+            }),
         }
     }
 }

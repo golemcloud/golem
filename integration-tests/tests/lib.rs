@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_config;
 mod api;
 mod custom_api;
 mod fork;
 mod otlp_plugin;
 mod plugins;
 mod worker;
-mod worker_local_agent_config;
-mod worker_shared_agent_config;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
