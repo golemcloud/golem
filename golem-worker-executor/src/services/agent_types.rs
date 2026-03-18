@@ -40,6 +40,9 @@ pub trait AgentTypesService: Send + Sync {
         component_revision: ComponentRevision,
         name: &AgentTypeName,
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError>;
+
+    async fn invalidate_environment(&self, _environment_id: EnvironmentId) {}
+    async fn invalidate_all(&self) {}
 }
 
 pub fn configured(
@@ -137,6 +140,23 @@ impl AgentTypesService for CachedAgentTypes {
             Ok(result) => Ok(Some(result)),
             Err(None) => Ok(None),
             Err(Some(err)) => Err(err),
+        }
+    }
+
+    async fn invalidate_environment(&self, environment_id: EnvironmentId) {
+        let keys = self.cached_registered_agent_types.keys().await;
+        for key in keys
+            .into_iter()
+            .filter(|(env_id, _, _, _)| *env_id == environment_id)
+        {
+            self.cached_registered_agent_types.remove(&key).await;
+        }
+    }
+
+    async fn invalidate_all(&self) {
+        let keys = self.cached_registered_agent_types.keys().await;
+        for key in keys {
+            self.cached_registered_agent_types.remove(&key).await;
         }
     }
 }

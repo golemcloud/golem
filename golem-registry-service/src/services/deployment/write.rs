@@ -15,12 +15,14 @@
 use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
+use crate::repo::registry_change::RegistryChangeEvent;
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::route_compilation::render_http_method;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
+use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use crate::services::security_scheme::SecuritySchemeService;
 use futures::TryFutureExt;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, HttpMethod};
@@ -239,6 +241,7 @@ pub struct DeploymentWriteService {
     http_api_deployment_service: Arc<HttpApiDeploymentService>,
     mcp_deployment_service: Arc<McpDeploymentService>,
     agent_secrets_service: Arc<AgentSecretService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     security_scheme_service: Arc<SecuritySchemeService>,
 }
 
@@ -250,6 +253,7 @@ impl DeploymentWriteService {
         http_api_deployment_service: Arc<HttpApiDeploymentService>,
         mcp_deployment_service: Arc<McpDeploymentService>,
         agent_secrets_service: Arc<AgentSecretService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         security_scheme_service: Arc<SecuritySchemeService>,
     ) -> DeploymentWriteService {
         Self {
@@ -259,6 +263,7 @@ impl DeploymentWriteService {
             http_api_deployment_service,
             mcp_deployment_service,
             agent_secrets_service,
+            registry_change_notifier,
             security_scheme_service,
         }
     }
@@ -427,7 +432,7 @@ impl DeploymentWriteService {
             auth.account_id(),
         )?;
 
-        let deployment: CurrentDeployment = self
+        let (ext_revision, change_event_id) = self
             .deployment_repo
             .deploy(record, deployment_context.environment.version_check)
             .await
@@ -446,8 +451,17 @@ impl DeploymentWriteService {
                     DeploymentWriteError::VersionAlreadyExists { version }
                 }
                 other => other.into(),
-            })?
-            .try_into()?;
+            })?;
+
+        let deployment: CurrentDeployment = ext_revision.try_into()?;
+
+        // Notify subscribers (event was already recorded in the deploy transaction)
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::DeploymentChanged {
+                event_id: change_event_id,
+                environment_id: environment_id.0,
+                deployment_revision_id: deployment.revision.into(),
+            });
 
         Ok(deployment)
     }
@@ -497,7 +511,7 @@ impl DeploymentWriteService {
             ))?
             .try_into()?;
 
-        let current_deployment: CurrentDeployment = self
+        let (revision_record, change_event_id) = self
             .deployment_repo
             .set_current_deployment(
                 auth.account_id().0,
@@ -510,8 +524,18 @@ impl DeploymentWriteService {
                     DeploymentWriteError::ConcurrentDeployment
                 }
                 other => other.into(),
-            })?
+            })?;
+
+        let current_deployment: CurrentDeployment = revision_record
             .into_model(target_deployment.version, target_deployment.deployment_hash)?;
+
+        // Notify subscribers (event was already recorded in the rollback transaction)
+        self.registry_change_notifier
+            .notify(RegistryChangeEvent::DeploymentChanged {
+                event_id: change_event_id,
+                environment_id: environment_id.0,
+                deployment_revision_id: payload.deployment_revision.into(),
+            });
 
         Ok(current_deployment)
     }

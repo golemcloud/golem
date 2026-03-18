@@ -27,6 +27,7 @@ use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
+use golem_registry_service::repo::registry_change::DbRegistryChangeRepo;
 use golem_service_base::db;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
@@ -94,6 +95,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         full_deployment_repo: Box::new(DbDeploymentRepo::logged(db.pool.clone())),
         environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(db.pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
+        registry_change_repo: Box::new(DbRegistryChangeRepo::new(db.pool.clone())),
     };
     deps.setup().await;
     deps
@@ -194,4 +196,29 @@ async fn test_mcp_deployment_create_and_update(deps: &Deps) {
 #[test]
 async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
     crate::repo::common::test_mcp_deployment_list_and_delete(deps).await;
+}
+
+#[test]
+async fn test_registry_change_record_and_query(deps: &Deps) {
+    crate::repo::common::test_registry_change_record_and_query(deps).await;
+}
+
+#[test]
+async fn test_registry_change_cleanup(deps: &Deps) {
+    crate::repo::common::test_registry_change_cleanup(deps).await;
+}
+
+#[test]
+async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
+    crate::repo::common::test_registry_change_replay_and_broadcast(deps).await;
+}
+
+#[test]
+async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
+    crate::repo::common::test_registry_change_cursor_expired_detection(deps).await;
+}
+
+#[test]
+async fn test_registry_change_mixed_event_types(deps: &Deps) {
+    crate::repo::common::test_registry_change_mixed_event_types(deps).await;
 }

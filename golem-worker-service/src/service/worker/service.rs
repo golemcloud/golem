@@ -15,6 +15,7 @@
 use super::WorkerResult;
 use super::{ConnectWorkerStream, WorkerClient, WorkerServiceError};
 use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult};
+use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
@@ -36,7 +37,6 @@ use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
-use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
@@ -45,27 +45,27 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
 pub struct WorkerService {
-    registry_service: Arc<dyn RegistryService>,
     component_service: Arc<dyn ComponentService>,
     auth_service: Arc<dyn AuthService>,
     limit_service: Arc<dyn LimitService>,
     worker_client: Arc<dyn WorkerClient>,
+    agent_resolution_cache: Arc<AgentResolutionCache>,
 }
 
 impl WorkerService {
     pub fn new(
-        registry_service: Arc<dyn RegistryService>,
         component_service: Arc<dyn ComponentService>,
         auth_service: Arc<dyn AuthService>,
         limit_service: Arc<dyn LimitService>,
         worker_client: Arc<dyn WorkerClient>,
+        agent_resolution_cache: Arc<AgentResolutionCache>,
     ) -> Self {
         Self {
-            registry_service,
             component_service,
             auth_service,
             limit_service,
             worker_client,
+            agent_resolution_cache,
         }
     }
 
@@ -772,17 +772,31 @@ impl WorkerService {
             })
             .transpose()?;
 
-        let resolved = self
-            .registry_service
-            .resolve_agent_type_by_names(
-                &request.app_name,
-                &request.env_name,
-                &request.agent_type_name,
-                deployment_revision,
-                request.owner_account_email.as_deref(),
-                &auth,
-            )
-            .await?;
+        let resolved = match deployment_revision {
+            None => {
+                self.agent_resolution_cache
+                    .resolve(
+                        &request.app_name,
+                        &request.env_name,
+                        &request.agent_type_name,
+                        request.owner_account_email.as_deref(),
+                        &auth,
+                    )
+                    .await?
+            }
+            Some(rev) => {
+                self.agent_resolution_cache
+                    .resolve_pinned(
+                        &request.app_name,
+                        &request.env_name,
+                        &request.agent_type_name,
+                        rev,
+                        request.owner_account_email.as_deref(),
+                        &auth,
+                    )
+                    .await?
+            }
+        };
 
         let registered_agent_type = resolved.registered_agent_type;
         let environment_id = resolved.environment_id;

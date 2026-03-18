@@ -34,6 +34,9 @@ use crate::repo::model::deployment::{
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
+use crate::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -88,11 +91,13 @@ pub trait DeploymentRepo: Send + Sync {
         revision_id: i64,
     ) -> RepoResult<Option<DeployedDeploymentIdentity>>;
 
+    /// Deploy and record a change event in the same transaction.
+    /// Returns the deployment record and the outbox event_id.
     async fn deploy(
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
+    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError>;
 
     async fn list_active_compiled_routes_for_domain(
         &self,
@@ -160,12 +165,14 @@ pub trait DeploymentRepo: Send + Sync {
         owner_email: Option<&str>,
     ) -> RepoResult<Option<ResolvedAgentTypeRecord>>;
 
+    /// Set the current deployment and record a change event in the same transaction.
+    /// Returns the deployment record and the outbox event_id.
     async fn set_current_deployment(
         &self,
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
+    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -297,7 +304,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
+    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError> {
         let span = Self::span_user_and_env(
             deployment_creation.user_account_id,
             deployment_creation.environment_id,
@@ -486,7 +493,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError> {
         self.repo
             .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
             .instrument(info_span!(
@@ -695,7 +702,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
+    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError> {
         if version_check
             && self
                 .version_exists(
@@ -709,55 +716,59 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             });
         }
 
-        self.with_tx_err("deploy", |tx| {
-            async move {
-                let environment_id = deployment_creation.environment_id;
-                let deployment_revision_id = deployment_creation.deployment_revision_id;
+        let result = self
+            .with_tx_err("deploy", |tx| {
+                async move {
+                    let environment_id = deployment_creation.environment_id;
+                    let deployment_revision_id = deployment_creation.deployment_revision_id;
 
-                let deployment_revision = Self::create_deployment_revision(
-                    tx,
-                    deployment_creation.user_account_id,
-                    environment_id,
-                    deployment_creation.deployment_revision_id,
-                    deployment_creation.version,
-                    deployment_creation.hash,
-                )
-                .await?;
-
-                for component in &deployment_creation.components {
-                    Self::create_deployment_component_revision(
+                    let deployment_revision = Self::create_deployment_revision(
                         tx,
+                        deployment_creation.user_account_id,
                         environment_id,
-                        deployment_revision_id,
-                        component,
+                        deployment_creation.deployment_revision_id,
+                        deployment_creation.version,
+                        deployment_creation.hash,
                     )
-                    .await?
-                }
+                    .await?;
 
-                for deployment in &deployment_creation.http_api_deployments {
-                    Self::create_deployment_http_api_deployment_revision(tx, deployment).await?
-                }
+                    for component in &deployment_creation.components {
+                        Self::create_deployment_component_revision(
+                            tx,
+                            environment_id,
+                            deployment_revision_id,
+                            component,
+                        )
+                        .await?
+                    }
 
-                for deployment in &deployment_creation.mcp_deployments {
-                    Self::create_deployment_mcp_deployment_revision(tx, deployment).await?
-                }
+                    for deployment in &deployment_creation.http_api_deployments {
+                        Self::create_deployment_http_api_deployment_revision(tx, deployment).await?
+                    }
 
-                for compiled_route in &deployment_creation.compiled_routes {
-                    Self::create_deployment_compiled_route(tx, compiled_route).await?
-                }
+                    for deployment in &deployment_creation.mcp_deployments {
+                        Self::create_deployment_mcp_deployment_revision(tx, deployment).await?
+                    }
 
-                for registered_agent_type in &deployment_creation.registered_agent_types {
-                    Self::create_deployment_registered_agent_type(tx, registered_agent_type)
-                        .await?;
-                }
+                    for compiled_route in &deployment_creation.compiled_routes {
+                        Self::create_deployment_compiled_route(tx, compiled_route).await?
+                    }
 
-                for compiled_mcp in &deployment_creation.compiled_mcp {
-                    Self::create_deployment_mcp(tx, compiled_mcp).await?;
-                }
+                    for registered_agent_type in &deployment_creation.registered_agent_types {
+                        Self::create_deployment_registered_agent_type(tx, registered_agent_type)
+                            .await?;
+                    }
 
-                for agent_secret in deployment_creation.created_agent_secrets {
-                    let agent_secret_path = agent_secret.path.0.clone();
-                    DbAgentSecretRepo::<PostgresPool>::create_within_transaction(tx, agent_secret)
+                    for compiled_mcp in &deployment_creation.compiled_mcp {
+                        Self::create_deployment_mcp(tx, compiled_mcp).await?;
+                    }
+
+                    for agent_secret in deployment_creation.created_agent_secrets {
+                        let agent_secret_path = agent_secret.path.0.clone();
+                        DbAgentSecretRepo::<PostgresPool>::create_within_transaction(
+                            tx,
+                            agent_secret,
+                        )
                         .await
                         .map_err(|err| match err {
                             AgentSecretRepoError::SecretViolatesUniqueness => {
@@ -770,10 +781,13 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             }
                             other => other.into(),
                         })?;
-                }
+                    }
 
-                for agent_secret in deployment_creation.updated_agent_secrets {
-                    DbAgentSecretRepo::<PostgresPool>::update_within_transaction(tx, agent_secret)
+                    for agent_secret in deployment_creation.updated_agent_secrets {
+                        DbAgentSecretRepo::<PostgresPool>::update_within_transaction(
+                            tx,
+                            agent_secret,
+                        )
                         .await
                         .map_err(|err| match err {
                             AgentSecretRepoError::ConcurrentModification => {
@@ -781,27 +795,42 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             }
                             other => other.into(),
                         })?;
+                    }
+
+                    let revision = Self::set_current_deployment_internal(
+                        tx,
+                        deployment_creation.user_account_id,
+                        deployment_revision.environment_id,
+                        deployment_revision.revision_id,
+                    )
+                    .await?;
+
+                    let change_event = NewRegistryChangeEvent::deployment_changed(
+                        environment_id,
+                        deployment_revision_id,
+                    );
+                    let change_event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx,
+                            &change_event,
+                        )
+                        .await?;
+
+                    let ext_revision = CurrentDeploymentExtRevisionRecord {
+                        revision,
+                        deployment_version: deployment_revision.version,
+                        deployment_hash: deployment_revision.hash,
+                    };
+
+                    Ok::<_, DeployRepoError>((ext_revision, change_event_id))
                 }
+                .boxed()
+            })
+            .await?;
 
-                let revision = Self::set_current_deployment_internal(
-                    tx,
-                    deployment_creation.user_account_id,
-                    deployment_revision.environment_id,
-                    deployment_revision.revision_id,
-                )
-                .await?;
+        self.db_pool.notify_change_event(result.1).await;
 
-                let ext_revision = CurrentDeploymentExtRevisionRecord {
-                    revision,
-                    deployment_version: deployment_revision.version,
-                    deployment_hash: deployment_revision.hash,
-                };
-
-                Ok(ext_revision)
-            }
-            .boxed()
-        })
-        .await
+        Ok(result)
     }
 
     async fn get_active_mcp_for_domain(
@@ -1192,19 +1221,37 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
-        self.with_tx_err("set_current_deployment", |tx| {
-            Box::pin(async move {
-                Self::set_current_deployment_internal(
-                    tx,
-                    user_account_id,
-                    environment_id,
-                    deployment_revision_id,
-                )
-                .await
+    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError> {
+        let result = self
+            .with_tx_err("set_current_deployment", |tx| {
+                Box::pin(async move {
+                    let revision = Self::set_current_deployment_internal(
+                        tx,
+                        user_account_id,
+                        environment_id,
+                        deployment_revision_id,
+                    )
+                    .await?;
+
+                    let change_event = NewRegistryChangeEvent::deployment_changed(
+                        environment_id,
+                        deployment_revision_id,
+                    );
+                    let change_event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx,
+                            &change_event,
+                        )
+                        .await?;
+
+                    Ok::<_, DeployRepoError>((revision, change_event_id))
+                })
             })
-        })
-        .await
+            .await?;
+
+        self.db_pool.notify_change_event(result.1).await;
+
+        Ok(result)
     }
 
     async fn get_latest_deployed_agent_type_by_component_revision(
