@@ -16,6 +16,7 @@ use crate::log::LogColorize;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::ScanCursor;
+use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::worker::WorkerAgentConfigEntry;
 
 pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
@@ -34,11 +35,15 @@ pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
 pub fn parse_worker_agent_config(s: &str) -> anyhow::Result<WorkerAgentConfigEntry> {
     let (path, value) = split_worker_agent_config_path_and_value(s)?;
 
-    let path = parse_worker_agent_config_path(path)?;
+    let path = parse_agent_config_path(path)?;
 
     let value: serde_json::Value = serde_json::from_str(value)?;
 
     Ok(WorkerAgentConfigEntry { path, value })
+}
+
+pub fn parse_agent_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
+    Ok(AgentSecretPath(parse_agent_config_path(input)?))
 }
 
 fn split_worker_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
@@ -67,7 +72,7 @@ fn split_worker_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str
     Err(anyhow!("expected unescaped '=' separating key and value"))
 }
 
-fn parse_worker_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
+fn parse_agent_config_path(input: &str) -> anyhow::Result<Vec<String>> {
     let mut keys = Vec::new();
     let mut buf = String::new();
 
@@ -141,7 +146,7 @@ pub fn parse_instant(
 
 #[cfg(test)]
 mod parse_worker_agent_config_tests {
-    use super::{parse_worker_agent_config, parse_worker_agent_config_path};
+    use super::{parse_agent_config_path, parse_worker_agent_config};
     use golem_common::model::worker::WorkerAgentConfigEntry;
     use serde_json::json;
     use test_r::test;
@@ -238,13 +243,13 @@ mod parse_worker_agent_config_tests {
 
     #[test]
     fn unterminated_quote_in_path() {
-        let err = parse_worker_agent_config_path(r#""foo.bar.baz"#).unwrap_err();
+        let err = parse_agent_config_path(r#""foo.bar.baz"#).unwrap_err();
         assert!(err.to_string().contains("unterminated quote"));
     }
 
     #[test]
     fn dangling_escape() {
-        let err = parse_worker_agent_config_path(r#"foo.bar\"#).unwrap_err();
+        let err = parse_agent_config_path(r#"foo.bar\"#).unwrap_err();
         assert!(err.to_string().contains("dangling escape"));
     }
 }

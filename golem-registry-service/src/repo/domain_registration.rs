@@ -32,27 +32,16 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait DomainRegistrationRepo: Send + Sync {
-    async fn create(
-        &self,
-        record: DomainRegistrationRecord,
-    ) -> Result<DomainRegistrationRecord, DomainRegistrationRepoError>;
-
     /// Create a domain registration and record a change event in the same transaction.
     /// Returns the created record and the outbox event_id.
-    async fn create_and_record_event(
+    async fn create(
         &self,
         record: DomainRegistrationRecord,
     ) -> Result<(DomainRegistrationRecord, ChangeEventId), DomainRegistrationRepoError>;
 
-    async fn delete(
-        &self,
-        domain_registration_id: Uuid,
-        actor: Uuid,
-    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError>;
-
     /// Delete a domain registration and record a change event in the same transaction.
     /// Returns the deleted record and the outbox event_id, or None if not found.
-    async fn delete_and_record_event(
+    async fn delete(
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
@@ -100,35 +89,12 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
     async fn create(
         &self,
         record: DomainRegistrationRecord,
-    ) -> Result<DomainRegistrationRecord, DomainRegistrationRepoError> {
+    ) -> Result<(DomainRegistrationRecord, ChangeEventId), DomainRegistrationRepoError> {
         let span = Self::span_id(record.domain_registration_id);
         self.repo.create(record).instrument(span).await
     }
 
-    async fn create_and_record_event(
-        &self,
-        record: DomainRegistrationRecord,
-    ) -> Result<(DomainRegistrationRecord, ChangeEventId), DomainRegistrationRepoError> {
-        let span = Self::span_id(record.domain_registration_id);
-        self.repo
-            .create_and_record_event(record)
-            .instrument(span)
-            .await
-    }
-
     async fn delete(
-        &self,
-        domain_registration_id: Uuid,
-        actor: Uuid,
-    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
-        let span = Self::span_id(domain_registration_id);
-        self.repo
-            .delete(domain_registration_id, actor)
-            .instrument(span)
-            .await
-    }
-
-    async fn delete_and_record_event(
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
@@ -136,7 +102,7 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
     {
         let span = Self::span_id(domain_registration_id);
         self.repo
-            .delete_and_record_event(domain_registration_id, actor)
+            .delete(domain_registration_id, actor)
             .instrument(span)
             .await
     }
@@ -198,10 +164,6 @@ impl<DBP: Pool> DbDomainRegistrationRepo<DBP> {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
 
-    fn with_rw(&self, api_name: &'static str) -> DBP::LabelledApi {
-        self.db_pool.with_rw(METRICS_SVC_NAME, api_name)
-    }
-
     async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, E>
     where
         R: Send,
@@ -223,37 +185,12 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
     async fn create(
         &self,
         record: DomainRegistrationRecord,
-    ) -> Result<DomainRegistrationRecord, DomainRegistrationRepoError> {
-        self.with_rw("create")
-            .fetch_one_as(
-                sqlx::query_as(indoc! {r#"
-                INSERT INTO domain_registrations (
-                    domain_registration_id, environment_id, domain,
-                    created_at, created_by, deleted_at, deleted_by
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING
-                    domain_registration_id, environment_id, domain,
-                    created_at, created_by, deleted_at, deleted_by
-            "#})
-                .bind(record.domain_registration_id)
-                .bind(record.environment_id)
-                .bind(record.domain)
-                .bind_immutable_audit(record.audit),
-            )
-            .await
-            .to_error_on_unique_violation(DomainRegistrationRepoError::DomainAlreadyExists)
-    }
-
-    async fn create_and_record_event(
-        &self,
-        record: DomainRegistrationRecord,
     ) -> Result<(DomainRegistrationRecord, ChangeEventId), DomainRegistrationRepoError> {
         let environment_id = record.environment_id;
         let domain = record.domain.clone();
 
         let result = self
-            .with_tx_err("create_and_record_event", |tx| {
+            .with_tx_err("create", |tx| {
                 async move {
                     let created: DomainRegistrationRecord = tx
                         .fetch_one_as(
@@ -302,40 +239,10 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
-    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
-        let deleted_at = SqlDateTime::now();
-
-        let result = self
-            .with_ro("get_by_id")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! {r#"
-                    UPDATE domain_registrations
-                    SET
-                        deleted_at = $2, deleted_by = $3
-                    WHERE
-                        domain_registration_id = $1
-                        AND deleted_at IS NULL
-                    RETURNING
-                        domain_registration_id, environment_id, domain,
-                        created_at, created_by, deleted_at, deleted_by
-                "#})
-                .bind(domain_registration_id)
-                .bind(deleted_at)
-                .bind(actor),
-            )
-            .await?;
-
-        Ok(result)
-    }
-
-    async fn delete_and_record_event(
-        &self,
-        domain_registration_id: Uuid,
-        actor: Uuid,
     ) -> Result<Option<(DomainRegistrationRecord, ChangeEventId)>, DomainRegistrationRepoError>
     {
         let result = self
-            .with_tx_err("delete_and_record_event", |tx| {
+            .with_tx_err("delete", |tx| {
                 async move {
                     let deleted_at = SqlDateTime::now();
 

@@ -95,15 +95,15 @@ pub enum ComponentError {
         key: Vec<String>,
         errors: Vec<String>,
     },
-    #[error("Config for agent {agent} at key {rendered_key} is secret and cannot be provided here", rendered_key = key.join("."))]
+    #[error("Config for agent {agent} at path {rendered_key} is secret and cannot be provided here", rendered_key = path.join("."))]
     AgentConfigProvidedSecretWhereOnlyLocalAllowed {
         agent: AgentTypeName,
-        key: Vec<String>,
+        path: Vec<String>,
     },
-    #[error("Multiple config values for agent {agent} at config key {rendered_key} provided", rendered_key = key.join("."))]
+    #[error("Multiple config values for agent {agent} at config path {rendered_key} provided", rendered_key = path.join("."))]
     AgentConfigDuplicateValue {
         agent: AgentTypeName,
-        key: Vec<String>,
+        path: Vec<String>,
     },
     #[error("Old config value for agent {agent} at config key {rendered_key} is no longer valid due to an updated agent.", rendered_key = key.join("."))]
     AgentConfigOldConfigNotValid {
