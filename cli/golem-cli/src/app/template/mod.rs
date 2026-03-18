@@ -22,8 +22,9 @@ mod template;
 
 pub use metadata::AppTemplateMetadata;
 pub use plan::{
-    SafeTemplatePlan, SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TemplatePlanStep,
-    UnsafeTemplatePlan, UnsafeTemplatePlanStep,
+    MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
+    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TemplatePlanStep, UnsafeTemplatePlan,
+    UnsafeTemplatePlanStep,
 };
 pub use repo::AppTemplateRepo;
 pub use template::{

@@ -427,3 +427,31 @@ fn validate_yaml(source: &str) -> anyhow::Result<()> {
     serde_yaml::from_str::<YamlValue>(source)?;
     Ok(())
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MultiComponentLayoutUpgradePlanStep {
+    Move { source: PathBuf, target: PathBuf },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MultiComponentLayoutUpgradePlan {
+    steps: Vec<MultiComponentLayoutUpgradePlanStep>,
+}
+
+impl MultiComponentLayoutUpgradePlan {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add(&mut self, step: MultiComponentLayoutUpgradePlanStep) {
+        self.steps.push(step);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    pub fn steps(&self) -> &[MultiComponentLayoutUpgradePlanStep] {
+        &self.steps
+    }
+}

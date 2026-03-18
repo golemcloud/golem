@@ -14,7 +14,8 @@
 
 use crate::app::context::validated_to_anyhow;
 use crate::app::template::{
-    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName, SafeTemplatePlan,
+    AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName,
+    MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
     SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, UnsafeTemplatePlan,
 };
 use crate::command_handler::app::AppCommandHandler;
@@ -51,7 +52,7 @@ struct ExistingComponent {
 #[derive(Debug)]
 struct NewCommandContext {
     pub application_name_candidate: String,
-    pub app_dir: PathBuf,
+    pub application_path: PathBuf,
     pub existing_components: BTreeMap<ComponentName, ExistingComponent>,
 }
 
@@ -73,34 +74,6 @@ struct NewTemplateInputs {
     pub component_templates: BTreeMap<ComponentName, AppTemplateComponent>,
     pub agent_templates: BTreeMap<AppTemplateName, AppTemplateAgent>,
     pub all_component_directories: BTreeMap<ComponentName, PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum MultiComponentLayoutUpgradePlanStep {
-    Move { source: PathBuf, target: PathBuf },
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct MultiComponentLayoutUpgradePlan {
-    steps: Vec<MultiComponentLayoutUpgradePlanStep>,
-}
-
-impl MultiComponentLayoutUpgradePlan {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn add(&mut self, step: MultiComponentLayoutUpgradePlanStep) {
-        self.steps.push(step);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.steps.is_empty()
-    }
-
-    fn steps(&self) -> &[MultiComponentLayoutUpgradePlanStep] {
-        &self.steps
-    }
 }
 
 pub struct TemplateHandler {
@@ -147,7 +120,7 @@ impl TemplateHandler {
 
         let template_inputs = self.resolve_new_template_inputs(
             &selections.application_name,
-            &context.app_dir,
+            &context.application_path,
             &selections.template_names,
             &template_mapping.template_to_component,
             &context.existing_components,
@@ -155,7 +128,7 @@ impl TemplateHandler {
 
         let template_plan = self.build_new_template_plan(
             &selections.application_name,
-            &context.app_dir,
+            &context.application_path,
             &template_mapping.template_to_component,
             &template_inputs,
         )?;
@@ -241,7 +214,7 @@ impl TemplateHandler {
 
                 Ok(NewCommandContext {
                     application_name_candidate: app_ctx.application().application_name().0.clone(),
-                    app_dir: app_ctx.application().app_root_dir().to_path_buf(),
+                    application_path: app_ctx.application().app_root_dir().to_path_buf(),
                     existing_components,
                 })
             }
@@ -249,7 +222,7 @@ impl TemplateHandler {
                 let application_path = application_path
                     .as_deref()
                     .unwrap_or_else(|| Path::new("."));
-                let application_path = {
+                let application_dir = {
                     if application_path.is_absolute() {
                         application_path.to_path_buf()
                     } else {
@@ -258,12 +231,12 @@ impl TemplateHandler {
                 };
                 let application_name_candidate = match application_name {
                     Some(application_name) => application_name.0,
-                    None => fs::file_name_to_str(&application_path)?.to_string(),
+                    None => fs::file_name_to_str(&application_dir)?.to_string(),
                 };
 
                 Ok(NewCommandContext {
                     application_name_candidate,
-                    app_dir: application_path,
+                    application_path: application_dir,
                     existing_components: BTreeMap::new(),
                 })
             }
@@ -412,7 +385,7 @@ impl TemplateHandler {
     fn resolve_new_template_inputs(
         &self,
         application_name: &ApplicationName,
-        app_dir: &Path,
+        application_path: &Path,
         template_names: &[AppTemplateName],
         template_to_component: &BTreeMap<AppTemplateName, ComponentName>,
         existing_components: &BTreeMap<ComponentName, ExistingComponent>,
@@ -504,7 +477,7 @@ impl TemplateHandler {
                         None => component_name.as_str().to_kebab_case(),
                     };
 
-                    let full_new_component_dir = app_dir.join(&new_component_dir);
+                    let full_new_component_dir = application_path.join(&new_component_dir);
                     if full_new_component_dir.exists() {
                         bail!(
                             "Failed to apply template(s): cannot promote application component {} to multi-component layout: directory {} already exists!",
@@ -518,7 +491,7 @@ impl TemplateHandler {
 
                 match existing_components.get(component_name) {
                     Some(component) => {
-                        if component.component_dir != app_dir {
+                        if component.component_dir != application_path {
                             all_component_directories
                                 .insert(component_name.clone(), component.dir.clone());
                             continue;
@@ -536,7 +509,7 @@ impl TemplateHandler {
                             app_template_repo.component_template(component.language)?;
                         let upgrade_plan = self.build_multi_component_layout_upgrade_plan(
                             component,
-                            app_dir,
+                            application_path,
                             &new_component_dir,
                             component_template.as_ref(),
                         )?;
@@ -595,7 +568,7 @@ impl TemplateHandler {
     fn build_new_template_plan(
         &self,
         application_name: &ApplicationName,
-        app_dir: &Path,
+        application_path: &Path,
         template_to_component: &BTreeMap<AppTemplateName, ComponentName>,
         template_inputs: &NewTemplateInputs,
     ) -> anyhow::Result<TemplatePlan> {
@@ -604,7 +577,11 @@ impl TemplateHandler {
         for (common_template_name, common_template) in &template_inputs.common_templates {
             template_plan_builder.add(
                 common_template_name.as_str(),
-                &common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())?,
+                &common_template.generate(
+                    application_name,
+                    application_path,
+                    self.ctx.sdk_overrides(),
+                )?,
             );
         }
 
@@ -623,7 +600,7 @@ impl TemplateHandler {
                 component_template.0.name.as_str(),
                 &component_template.generate(
                     application_name,
-                    app_dir,
+                    application_path,
                     component_name,
                     component_dir,
                     self.ctx.sdk_overrides(),
@@ -656,7 +633,7 @@ impl TemplateHandler {
                 agent_template_name.as_str(),
                 &agent_template.generate(
                     application_name,
-                    app_dir,
+                    application_path,
                     component_name,
                     component_dir,
                     self.ctx.sdk_overrides(),
@@ -672,7 +649,7 @@ impl TemplateHandler {
     fn build_multi_component_layout_upgrade_plan(
         &self,
         component: &ExistingComponent,
-        app_dir: &Path,
+        application_path: &Path,
         new_component_dir: &Path,
         _component_template: Option<&AppTemplateComponent>,
     ) -> anyhow::Result<MultiComponentLayoutUpgradePlan> {
@@ -680,30 +657,30 @@ impl TemplateHandler {
 
         match component.language {
             GuestLanguage::TypeScript => {
-                let target_root = app_dir.join(new_component_dir);
+                let target_root = application_path.join(new_component_dir);
 
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: app_dir.join("src"),
+                    source: application_path.join("src"),
                     target: target_root.join("src"),
                 });
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: app_dir.join("tsconfig.json"),
+                    source: application_path.join("tsconfig.json"),
                     target: target_root.join("tsconfig.json"),
                 });
             }
             GuestLanguage::Rust => {
-                let target_root = app_dir.join(new_component_dir);
+                let target_root = application_path.join(new_component_dir);
 
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: app_dir.join("Cargo.toml"),
+                    source: application_path.join("Cargo.toml"),
                     target: target_root.join("Cargo.toml"),
                 });
                 upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: app_dir.join("src"),
+                    source: application_path.join("src"),
                     target: target_root.join("src"),
                 });
 
-                let cargo_target_dir = app_dir.join("target");
+                let cargo_target_dir = application_path.join("target");
                 if cargo_target_dir.exists() {
                     upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
                         source: cargo_target_dir,
