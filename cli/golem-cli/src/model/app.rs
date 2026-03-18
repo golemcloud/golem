@@ -2386,11 +2386,12 @@ mod app_builder {
 
 #[cfg(test)]
 mod test {
+    use crate::fs;
     use crate::model::app::{Application, ApplicationNameAndEnvironments, ComponentPresetSelector};
     use crate::model::app_raw;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
-    use std::path::Path;
+    use tempfile::TempDir;
     use test_r::test;
 
     #[test]
@@ -2421,7 +2422,7 @@ mod test {
 
         "# };
 
-        let app = load_app(
+        let (app, app_tmp_dir) = load_app(
             source,
             &ComponentPresetSelector {
                 environment: "local".parse().unwrap(),
@@ -2432,15 +2433,16 @@ mod test {
         let component_name = "app:main".parse().unwrap();
         let component = app.component(&component_name);
 
-        assert_eq!(component.wasm(), Path::new("/app-name/").join("a.wasm"));
+        assert_eq!(component.wasm(), app_tmp_dir.path().join("a.wasm"));
     }
 
-    fn load_app(source: &str, selector: &ComponentPresetSelector) -> Application {
-        let raw_app = app_raw::ApplicationWithSource::from_yaml_string(
-            Path::new("/app-name/").join("golem.yaml"),
-            source,
-        )
-        .unwrap();
+    fn load_app(source: &str, selector: &ComponentPresetSelector) -> (Application, TempDir) {
+        let tmp_dir = tempfile::tempdir().unwrap();
+
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+
+        let raw_app = app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap();
         let raw_apps = vec![raw_app];
 
         let (app_name_and_envs, warns, errors) =
@@ -2465,6 +2467,6 @@ mod test {
         .into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
-        app.unwrap()
+        (app.unwrap(), tmp_dir)
     }
 }

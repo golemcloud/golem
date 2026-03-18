@@ -1,6 +1,5 @@
 use crate::app::{cmd, flag, TestContext};
 use crate::Tracing;
-use itertools::Itertools;
 
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
@@ -68,7 +67,7 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
-    let outputs = ctx.cli([cmd::DEPLOY, flag::FORMAT, "json"]).await;
+    let outputs = ctx.cli([cmd::LIST_AGENT_TYPES, flag::FORMAT, "json"]).await;
     let deployed_agent_types = outputs
         .stdout_json::<Vec<DeployedRegisteredAgentType>>()
         .into_iter()

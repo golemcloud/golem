@@ -30,7 +30,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 use url::Url;
@@ -62,8 +62,8 @@ pub struct ApplicationWithSource {
 }
 
 impl ApplicationWithSource {
-    pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
-        Self::from_yaml_string(file.clone(), &fs::read_to_string(file.clone())?)
+    pub fn from_yaml_file(file: &Path) -> anyhow::Result<Self> {
+        Self::from_yaml_string(file.to_path_buf(), &fs::read_to_string(file)?)
             .with_context(|| anyhow!("Failed to load source {}", file.log_color_highlight()))
     }
 

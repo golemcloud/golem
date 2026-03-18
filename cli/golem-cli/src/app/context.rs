@@ -636,14 +636,13 @@ fn ensure_on_demand_commons(
 
     for language in languages {
         if let Some(template) = app_template_repo.common_on_demand_template(*language)? {
-            // TODO: FCL: would be nice to use absolute paths
-            let app_dir = Path::new(".");
+            let app_dir = std::env::current_dir()?;
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
-            template.generate(app_dir, &target_dir, sdk_overrides)?;
+            template.generate(&app_dir, &target_dir, sdk_overrides)?;
             let golem_yaml_path = target_dir.join("golem.yaml");
             if golem_yaml_path.exists() {
                 on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(
-                    golem_yaml_path,
+                    &golem_yaml_path,
                 )?);
             }
         }
@@ -661,7 +660,7 @@ fn load_raw_apps(source_mode: ApplicationSourceMode) -> Option<ValidatedResult<L
                     .into_iter()
                     .map(|source| {
                         ValidatedResult::from_result(
-                            app_raw::ApplicationWithSource::from_yaml_file(source),
+                            app_raw::ApplicationWithSource::from_yaml_file(&source),
                         )
                     })
                     .collect::<ValidatedResult<Vec<_>>>()
