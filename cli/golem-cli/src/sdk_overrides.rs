@@ -179,9 +179,8 @@ impl SdkOverrides {
         let current_dir = std::env::current_dir().context("Failed to resolve current directory")?;
         let file_values = Self::load_file_values(&current_dir)?;
 
-        // For now, this is a heuristic for using the test mode
         let test_values = {
-            if running_via_cargo() {
+            if running_from_golem_workspace_checkout() {
                 Self::for_default_test_profile(&workspace_root()?).to_env_vars()
             } else {
                 HashMap::new()
@@ -315,15 +314,29 @@ pub fn workspace_root() -> anyhow::Result<PathBuf> {
     fs::canonicalize_path(&manifest_dir.join("../.."))
 }
 
-fn running_via_cargo() -> bool {
-    let Some(runtime_manifest_dir) = std::env::var("CARGO_MANIFEST_DIR").ok() else {
-        return false;
-    };
-    let runtime_manifest_dir = PathBuf::from(runtime_manifest_dir);
+fn running_from_golem_workspace_checkout() -> bool {
     let Some(workspace_root) = workspace_root().ok() else {
         return false;
     };
-    runtime_manifest_dir.starts_with(workspace_root)
+
+    if !has_local_workspace_sdks(&workspace_root) {
+        return false;
+    }
+
+    let current_dir = std::env::current_dir().ok();
+    let current_exe = std::env::current_exe().ok();
+
+    current_dir
+        .as_deref()
+        .is_some_and(|path| path.starts_with(&workspace_root))
+        || current_exe
+            .as_deref()
+            .is_some_and(|path| path.starts_with(&workspace_root))
+}
+
+fn has_local_workspace_sdks(workspace_root: &Path) -> bool {
+    workspace_root.join("sdks/rust/golem-rust").is_dir()
+        && workspace_root.join("sdks/ts/packages").is_dir()
 }
 
 fn find_sdk_overrides_file(start_dir: &Path) -> Option<PathBuf> {
