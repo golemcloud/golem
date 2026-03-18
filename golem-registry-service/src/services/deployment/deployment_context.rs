@@ -297,6 +297,7 @@ impl DeploymentContext {
                 domain: domain.clone(),
                 agent_type_implementers,
                 security_scheme,
+                registered_agent_types: Vec::new(),
             };
             all_compiled_mcps.push(compiled_mcp);
         }

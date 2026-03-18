@@ -14,23 +14,16 @@
 
 use async_trait::async_trait;
 use golem_common::base_model::domain_registration::Domain;
-use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::mcp::CompiledMcp;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[async_trait]
 pub trait McpCapabilityLookup: Send + Sync {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError>;
-
-    // Cache this so that multiple MCP clients using the same server can make use of the cache
-    // This can be moved to the deployment level too if needed, but result in more storage.
-    async fn resolve_agent_type(
-        &self,
-        domain: &Domain,
-        agent_type_name: &AgentTypeName,
-    ) -> Result<RegisteredAgentType, McpCapabilitiesLookupError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -52,15 +45,30 @@ impl SafeDisplay for McpCapabilitiesLookupError {
     }
 }
 
-// Note: No caching here, the caching is part of MCP session
+/// TTL-based in-memory cache for compiled MCP lookups, consistent with
+/// how HTTP uses `RouteResolver`'s `domain_api_cache`.
+const MCP_CACHE_MAX_CAPACITY: usize = 1024;
+const MCP_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const MCP_CACHE_EVICTION_PERIOD: Duration = Duration::from_secs(60);
+
 pub struct RegistryServiceMcpCapabilityLookup {
     registry_service_client: Arc<dyn RegistryService>,
+    cache: Cache<Domain, (), CompiledMcp, ()>,
 }
 
 impl RegistryServiceMcpCapabilityLookup {
     pub fn new(registry_service_client: Arc<dyn RegistryService>) -> Self {
         Self {
             registry_service_client,
+            cache: Cache::new(
+                Some(MCP_CACHE_MAX_CAPACITY),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::OlderThan {
+                    ttl: MCP_CACHE_TTL,
+                    period: MCP_CACHE_EVICTION_PERIOD,
+                },
+                "mcp_capability_lookup",
+            ),
         }
     }
 }
@@ -68,39 +76,21 @@ impl RegistryServiceMcpCapabilityLookup {
 #[async_trait]
 impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError> {
-        self.registry_service_client
-            .get_active_compiled_mcps_for_domain(domain)
+        let registry_client = self.registry_service_client.clone();
+        let domain_clone = domain.clone();
+        self.cache
+            .get_or_insert_simple(domain, async move || {
+                registry_client
+                    .get_active_compiled_mcps_for_domain(&domain_clone)
+                    .await
+                    .map_err(|_| ())
+            })
             .await
-            .map_err(|e| e.into())
-    }
-
-    async fn resolve_agent_type(
-        &self,
-        domain: &Domain,
-        agent_type_name: &AgentTypeName,
-    ) -> Result<RegisteredAgentType, McpCapabilitiesLookupError> {
-        let compiled_mcp = self.get(domain).await?;
-
-        let (component_id, component_revision) = compiled_mcp
-            .agent_type_implementers
-            .get(agent_type_name)
-            .copied()
-            .ok_or_else(|| {
+            .map_err(|_| {
                 McpCapabilitiesLookupError::InternalError(anyhow::anyhow!(
-                    "Agent type {} not found in MCP for domain {}",
-                    agent_type_name.0,
+                    "Failed to get compiled MCP for domain {}",
                     domain.0
                 ))
-            })?;
-
-        self.registry_service_client
-            .get_agent_type(
-                compiled_mcp.environment_id,
-                component_id,
-                component_revision,
-                agent_type_name,
-            )
-            .await
-            .map_err(|e| e.into())
+            })
     }
 }
