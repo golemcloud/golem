@@ -79,7 +79,7 @@ impl DeployedMcpService {
                 }
 
                 let mut registered_agent_types = Vec::new();
-                for (agent_type_name, _) in &compiled_mcp.agent_type_implementers {
+                for agent_type_name in compiled_mcp.agent_type_implementers.keys() {
                     match self
                         .deployment_repo
                         .get_deployed_agent_type(environment_id, &agent_type_name.0)
