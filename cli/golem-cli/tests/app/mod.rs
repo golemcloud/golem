@@ -26,6 +26,7 @@ sequential_suite!(app);
 tag_suite!(plugins, group1);
 sequential_suite!(plugins);
 
+tag_suite!(build_and_deploy_all, group2);
 sequential_suite!(build_and_deploy_all);
 
 tag_suite!(agents, group3);
@@ -40,6 +41,7 @@ use golem_client::api::HealthCheckClient;
 use golem_client::Security;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io;
@@ -68,6 +70,7 @@ mod cmd {
     pub static GET: &str = "get";
     pub static INVOKE: &str = "invoke";
     pub static LIST: &str = "list";
+    pub static LIST_AGENT_TYPES: &str = "list-agent-types";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
@@ -168,6 +171,20 @@ impl Output {
             CommandOutput::Stdout(line) => Some(line.as_str()),
             CommandOutput::Stderr(_) => None,
         })
+    }
+
+    fn stdout_json<T: DeserializeOwned>(&self) -> Vec<T> {
+        self.output
+            .iter()
+            .filter_map(|output| match output {
+                CommandOutput::Stdout(line) => {
+                    Some(serde_json::from_str::<T>(line).unwrap_or_else(|err| {
+                        panic!("Failed to parse line as JSON: {err}, input line:\n{}", line)
+                    }))
+                }
+                CommandOutput::Stderr(_) => None,
+            })
+            .collect()
     }
 
     fn stderr(&self) -> impl Iterator<Item = &str> {
