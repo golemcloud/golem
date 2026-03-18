@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::api::agent_secret::AgentSecretSubcommand;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
@@ -786,6 +787,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
     },
+    /// Manage Agent Secrets
+    AgentSecret {
+        #[clap(subcommand)]
+        subcommand: AgentSecretSubcommand,
+    },
     /// Generate shell completion
     Completion {
         /// Selects shell
@@ -1308,6 +1314,56 @@ pub mod api {
                 domain: String,
             },
             /// List API deployment for API definition
+            List,
+        }
+    }
+
+    pub mod agent_secret {
+        use crate::args::parse_agent_secret_path;
+        use clap::Subcommand;
+        use golem_common::model::agent_secret::{
+            AgentSecretId, AgentSecretPath, AgentSecretRevision,
+        };
+
+        #[derive(Debug, Subcommand)]
+        pub enum AgentSecretSubcommand {
+            /// Create Agent Secret in the environment
+            Create {
+                /// Path of the secret to create. The casing of path segments will be normalized during creation.
+                #[arg(long, value_parser = parse_agent_secret_path)]
+                path: AgentSecretPath,
+                /// Description of the agent type in json
+                #[arg(long)]
+                secret_type: String,
+                /// Value of the secret in json
+                #[arg(long)]
+                secret_value: Option<String>,
+            },
+
+            /// Update Agent Secret
+            UpdateValue {
+                /// Id of the secret to update
+                #[arg(long)]
+                id: AgentSecretId,
+                /// Current revision of the agent secret
+                #[arg(long)]
+                current_revision: AgentSecretRevision,
+                /// Value of the secret in json
+                #[arg(long)]
+                secret_value: Option<String>,
+            },
+
+            /// Update Agent Secret
+            Delete {
+                /// Id of the secret to delete
+                #[arg(long)]
+                id: AgentSecretId,
+                /// Current revision of the agent secret
+                #[arg(long)]
+                current_revision: AgentSecretRevision,
+            },
+
+            /// List Agent Secrets
             List,
         }
     }

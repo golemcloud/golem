@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod agent;
+pub mod agent_secret;
 pub mod component;
 pub mod deployment;
 pub mod diff;
