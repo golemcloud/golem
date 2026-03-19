@@ -1306,12 +1306,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
         } else {
-            let is_pending = self
-                .pending_invocations()
-                .await
+            let status = self.last_known_status.read().await;
+            let is_pending = status
+                .pending_invocations
                 .iter()
                 .any(|entry| entry.invocation.has_idempotency_key(key));
-            if is_pending {
+            let is_current = status.current_idempotency_key.as_ref() == Some(key);
+            if is_pending || is_current {
                 LookupResult::Pending
             } else {
                 LookupResult::New
@@ -1436,6 +1437,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 run_loop_handle.await.expect("Failed to join run loop");
 
                 let mut instance_guard = self.instance.lock().await;
+                let is_deleting = match &*instance_guard {
+                    WorkerInstance::Stopping(stopping) => {
+                        matches!(stopping.final_state, FinalWorkerState::Deleting)
+                    }
+                    _ => false,
+                };
+
+                // After the invocation loop has fully exited, fail any remaining
+                // unresolved invocations (e.g. the currently running one that was
+                // in progress when deletion was requested).
+                if is_deleting {
+                    drop(instance_guard);
+                    self.fail_pending_invocations(WorkerExecutorError::invalid_request(
+                        "Worker is being deleted",
+                    ))
+                    .await;
+                    instance_guard = self.instance.lock().await;
+                }
+
                 match std::mem::replace(
                     &mut *instance_guard,
                     WorkerInstance::Unloaded {
@@ -1474,33 +1494,45 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        // Also handle pending invocations from last_known_status
+        // Collect all idempotency keys to fail: pending invocations + currently running invocation
         let status = self.last_known_status.read().await.clone();
-        let mut invocation_results = self.invocation_results.write().await;
-        for invocation in &status.pending_invocations {
-            if let Some(idempotency_key) = invocation.invocation.idempotency_key() {
-                invocation_results.insert(
-                    idempotency_key.clone(),
-                    InvocationResult::Cached {
-                        result: Err(FailedInvocationResult {
-                            trap_type: TrapType::Error {
-                                error: golem_common::model::oplog::AgentError::Unknown(
-                                    error.to_string(),
-                                ),
-                                retry_from: OplogIndex::INITIAL,
-                            },
-                            stderr: String::new(),
-                        }),
-                    },
-                );
-                self.events().publish(Event::InvocationCompleted {
-                    agent_id: self.owned_agent_id.agent_id(),
-                    idempotency_key: idempotency_key.clone(),
-                    result: Err(error.clone()),
-                });
-                // Clean up the span entry
-                spans_map.remove(idempotency_key);
+        let mut keys_to_fail: Vec<IdempotencyKey> = status
+            .pending_invocations
+            .iter()
+            .filter_map(|inv| inv.invocation.idempotency_key().cloned())
+            .collect();
+        if let Some(current_key) = &status.current_idempotency_key {
+            if !keys_to_fail.contains(current_key) {
+                keys_to_fail.push(current_key.clone());
             }
+        }
+
+        let mut invocation_results = self.invocation_results.write().await;
+        for idempotency_key in &keys_to_fail {
+            if invocation_results.contains_key(idempotency_key) {
+                continue;
+            }
+            invocation_results.insert(
+                idempotency_key.clone(),
+                InvocationResult::Cached {
+                    result: Err(FailedInvocationResult {
+                        trap_type: TrapType::Error {
+                            error: golem_common::model::oplog::AgentError::Unknown(
+                                error.to_string(),
+                            ),
+                            retry_from: OplogIndex::INITIAL,
+                        },
+                        stderr: String::new(),
+                    }),
+                },
+            );
+            self.events().publish(Event::InvocationCompleted {
+                agent_id: self.owned_agent_id.agent_id(),
+                idempotency_key: idempotency_key.clone(),
+                result: Err(error.clone()),
+            });
+            // Clean up the span entry
+            spans_map.remove(idempotency_key);
         }
     }
 
