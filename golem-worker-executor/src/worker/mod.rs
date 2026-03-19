@@ -376,6 +376,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
                     this.memory_requirement().await?,
+                    this.storage_requirement().await?,
                     oom_retry_count,
                 ));
                 Ok(true)
@@ -758,6 +759,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let c = 2.0;
         let x = self.worker_estimate_coefficient;
         Ok((x * (ml + c * sw)) as u64)
+    }
+
+    /// Gets the storage requirement of the worker based on the last known status.
+    /// Used by `WaitingWorker::new` to pre-acquire storage semaphore permits.
+    pub async fn storage_requirement(&self) -> Result<u64, WorkerExecutorError> {
+        let metadata = self.get_latest_worker_metadata().await;
+        Ok(metadata.last_known_status.current_storage_usage)
     }
 
     /// Returns true if the worker is running, but it is not performing any invocations at the moment
@@ -1928,6 +1936,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
+        storage_permit: Option<OwnedSemaphorePermit>,
         oom_retry_count: u32,
         start_attempt: Uuid,
     ) {
@@ -1936,16 +1945,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
-                *instance_guard = WorkerInstance::Running(
-                    RunningWorker::new(
-                        this.owned_agent_id.clone(),
-                        this.queue.clone(),
-                        this.clone(),
-                        permit,
-                        oom_retry_count,
-                    )
-                    .await,
-                );
+                let mut running = RunningWorker::new(
+                    this.owned_agent_id.clone(),
+                    this.queue.clone(),
+                    this.clone(),
+                    permit,
+                    oom_retry_count,
+                )
+                .await;
+                if let Some(sp) = storage_permit {
+                    running.merge_extra_storage_permits(sp);
+                }
+                *instance_guard = WorkerInstance::Running(running);
             }
             _ => {
                 debug!("worker was not waiting for permit anymore, not starting");
@@ -2014,6 +2025,7 @@ impl WaitingWorker {
     pub fn new<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
         memory_requirement: u64,
+        storage_requirement: u64,
         oom_retry_count: u32,
     ) -> Self {
         let span = span!(
@@ -2034,8 +2046,29 @@ impl WaitingWorker {
         let handle = tokio::task::spawn(
             async move {
                 let permit = parent.active_workers().acquire(memory_requirement).await;
+                // Pre-acquire storage permits from the last-known usage so that
+                // replay can skip re-acquiring them (acquire_storage_space is a
+                // no-op during replay). Uses the blocking acquire so that the worker
+                // waits until storage is available, allowing eviction if needed.
+                let storage_permit = if storage_requirement > 0 {
+                    Some(
+                        parent
+                            .active_workers()
+                            .acquire_storage(storage_requirement)
+                            .await,
+                    )
+                } else {
+                    None
+                };
                 debug!("Attempting to start worker after acquiring enough permits");
-                Worker::start_waiting_worker(parent, permit, oom_retry_count, start_attempt).await;
+                Worker::start_waiting_worker(
+                    parent,
+                    permit,
+                    storage_permit,
+                    oom_retry_count,
+                    start_attempt,
+                )
+                .await;
                 // If we do not start the worker here we will drop the permits here, which will release them to the host.
             }
             .instrument(span),
@@ -2320,6 +2353,7 @@ impl RunningWorker {
             AgentConfig::new(
                 skipped_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
+                worker_metadata.last_known_status.current_storage_usage,
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.config_vars,
