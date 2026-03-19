@@ -23,13 +23,26 @@ Key concepts:
 ## Project Structure
 
 ```
-golem.yaml                        # Root application manifest
-Cargo.toml                        # Workspace Cargo.toml
-components-rust/                  # Component crates (each becomes a WASM component)
-  <component-name>/
-    src/lib.rs                    # Agent definitions and implementations
-    Cargo.toml                    # Must use crate-type = ["cdylib"]
-    golem.yaml                    # Component-level manifest (templates, env, dependencies)
+# Single-component app
+golem.yaml                        # Golem Application Manifest (contains components.<name>.dir = ".")
+Cargo.toml                        # Component crate manifest
+src/
+  lib.rs                          # Module entry point; re-exports of agents
+  <agent_name>.rs                 # Agent definitions and implementations
+
+# Multi-component app
+golem.yaml                        # Golem Application Manifest (components map with explicit dir per component)
+<component-a>/
+  Cargo.toml                      # Component crate manifest (must use crate-type = ["cdylib"])
+  src/
+    lib.rs                        # Module entry point; re-exports of agents
+    <agent_name>.rs               # Agent definitions and implementations
+<component-b>/
+  Cargo.toml                      # Component crate manifest (must use crate-type = ["cdylib"])
+  src/
+    lib.rs                        # Module entry point; re-exports of agents
+    <agent_name>.rs               # Agent definitions and implementations
+
 golem-temp/                       # Build artifacts (gitignored)
   common/                         # Shared Golem templates (generated on-demand)
     rust/                         # Shared Golem Rust templates
@@ -372,22 +385,26 @@ tx.execute(op1, "input".to_string());
 golem component new rust my:new-component
 ```
 
-This creates a new directory under `components-rust/` with the standard structure.
+This updates the root `golem.yaml` components map and creates a Rust component directory with its own `Cargo.toml` and `src/lib.rs`.
+
+Component layout rules:
+- Single-component apps use `dir: "."` in root `golem.yaml`
+- Multi-component apps use explicit directories per component (for example `dir: "my-new-component"`)
 
 ## Application Manifest (golem.yaml)
 
-- Root `golem.yaml`: app name, includes, witDeps, environments
-- `golem-temp/common-rust/golem.yaml`: build templates (debug/release profiles) shared by all Rust components
-- `components-rust/<name>/golem.yaml`: component-specific config (templates reference, env vars, dependencies)
+- Root `golem.yaml`: app name, includes, witDeps, environments, and `components` entries
+- `golem-temp/common/rust/golem.yaml`: generated on-demand build templates (debug/release profiles) shared by all Rust components
 
-Key fields in component manifest:
+Key fields in each `components.<name>` entry:
+- `dir`: component directory (`"."` for single-component apps)
 - `templates`: references a template from common golem.yaml (e.g., `rust`)
 - `env`: environment variables passed to agents at runtime
 - `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
 
 ## Available Libraries
 
-From workspace `Cargo.toml`:
+From your component (or shared workspace) `Cargo.toml`:
 - `golem-rust` (with `export_golem_agentic` feature) — agent framework, durability, transactions
 - `wstd` — WASI standard library (HTTP client via `wstd::http`, async I/O, etc.)
 - `log` — logging (uses `wasi-logger` backend, logs visible via `golem agent stream`)

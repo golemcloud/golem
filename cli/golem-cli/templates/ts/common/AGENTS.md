@@ -23,14 +23,28 @@ Key concepts:
 ## Project Structure
 
 ```
-golem.yaml                            # Root application manifest
-package.json                          # Root package.json (npm workspaces)
-components-ts/                        # Component directories (each becomes a WASM component)
-  <component-name>/
-    src/main.ts                       # Agent definitions and implementations
-    package.json                      # Component-level package.json
-    tsconfig.json                     # TypeScript config
-    golem.yaml                        # Component-level manifest (templates, env, dependencies)
+# Single-component app
+golem.yaml                            # Golem Application Manifest (contains components.<name>.dir = ".")
+package.json                          # Root npm dependencies
+tsconfig.json                         # Component TypeScript config
+src/
+  main.ts                             # Module entry point; re-exports of agents
+  <agent_name>.ts                     # Agent definitions and implementations
+
+# Multi-component app
+golem.yaml                            # Golem Application Manifest (components map with explicit dir per component)
+package.json                          # NPM dependencies (shared for all components)
+<component-a>/
+  tsconfig.json                       # Component TypeScript config
+  src/
+    main.ts                           # Module entry point; re-exports of agents
+    <agent_name>.ts                   # Agent definitions and implementations
+<component-b>/
+  tsconfig.json                       # Component TypeScript config
+  src/
+    main.ts                           # Module entry point; re-exports of agents
+    <agent_name>.ts                   # Agent definitions and implementations
+
 golem-temp/                           # Build artifacts (gitignored)
   common/                             # Shared Golem templates and configuration (generated on-demand)
     ts/                               # Shared TypeScript Golem templates and configuration
@@ -377,15 +391,19 @@ const result2 = infallibleTransaction((tx) => {
 golem component new ts my:new-component
 ```
 
-This creates a new directory under `components-ts/` with the standard structure.
+This updates the root `golem.yaml` components map and creates a TypeScript component directory with `tsconfig.json` and `src/main.ts`.
+
+Component layout rules:
+- Single-component apps use `dir: "."` in root `golem.yaml`
+- Multi-component apps use explicit directories per component (for example `dir: "my-new-component"`)
 
 ## Application Manifest (golem.yaml)
 
-- Root `golem.yaml`: app name, includes, environments
-- `golem-temp/common/ts/golem.yaml`: build templates (TypeScript compilation, Rollup bundling, WASM composition) shared by all TS components
-- `components-ts/<name>/golem.yaml`: component-specific config (templates reference, env vars, dependencies)
+- Root `golem.yaml`: app name, includes, environments, and `components` entries
+- `golem-temp/common/ts/golem.yaml`: generated on-demand build templates (TypeScript compilation, Rollup bundling, WASM composition) shared by all TS components
 
-Key fields in component manifest:
+Key fields in each `components.<name>` entry:
+- `dir`: component directory (`"."` for single-component apps)
 - `templates`: references a template from common golem.yaml (e.g., `ts`)
 - `env`: environment variables passed to agents at runtime
 - `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
