@@ -1361,6 +1361,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         match previous_instance_state {
             WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
+                if let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations(error.clone()).await;
+                }
                 **instance_guard = final_state.into_instance();
                 StopResult::Stopped
             }
@@ -1377,6 +1380,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // If we're stopping for deletion, upgrade the final state
                 if matches!(final_state, FinalWorkerState::Deleting) {
                     stopping.final_state = FinalWorkerState::Deleting;
+                    if let Some(ref error) = fail_pending_invocations {
+                        self.fail_pending_invocations(error.clone()).await;
+                    }
                 }
                 let notify = stopping.notify.clone();
                 **instance_guard = WorkerInstance::Stopping(stopping);
@@ -1470,8 +1476,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // Also handle pending invocations from last_known_status
         let status = self.last_known_status.read().await.clone();
+        let mut invocation_results = self.invocation_results.write().await;
         for invocation in &status.pending_invocations {
             if let Some(idempotency_key) = invocation.invocation.idempotency_key() {
+                invocation_results.insert(
+                    idempotency_key.clone(),
+                    InvocationResult::Cached {
+                        result: Err(FailedInvocationResult {
+                            trap_type: TrapType::Error {
+                                error: golem_common::model::oplog::AgentError::Unknown(
+                                    error.to_string(),
+                                ),
+                                retry_from: OplogIndex::INITIAL,
+                            },
+                            stderr: String::new(),
+                        }),
+                    },
+                );
                 self.events().publish(Event::InvocationCompleted {
                     agent_id: self.owned_agent_id.agent_id(),
                     idempotency_key: idempotency_key.clone(),
