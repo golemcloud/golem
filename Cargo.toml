@@ -24,9 +24,7 @@ members = [
 
 exclude = [
     "cli/desktop-app/src-tauri",
-    "test-components/host-api-tests",
-    "test-components/http-tests",
-    "test-components/oplog-processor",
+    "test-components",
     "sdks/golem-rust"
 ]
 
@@ -208,7 +206,7 @@ reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "quer
 reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_30"] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
-rmcp = {version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
 rsa = "0.9.7"
 
 rustc-hash = "2.1.1"

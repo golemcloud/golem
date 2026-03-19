@@ -1,0 +1,21 @@
+[package]
+name = "benchmark_agent_rust"
+version = "0.0.1"
+edition = "2021"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[dependencies]
+wit-bindgen-rt = { version = "0.42.1", features = ["bitflags"] }
+
+async-trait = "0.1.89"
+common-lib = { path = "../common-rust/common-lib" }
+ctor = "0.6.1"
+golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_load_snapshot", "export_save_snapshot", "export_oplog_processor", "export_golem_agentic"] }
