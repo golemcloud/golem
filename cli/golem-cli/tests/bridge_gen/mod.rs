@@ -12,5 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod extraction;
-pub mod view;
+pub mod fixtures;
+pub mod rust;
+pub mod type_naming;
+pub mod typescript;

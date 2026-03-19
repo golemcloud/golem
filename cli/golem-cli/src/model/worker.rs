@@ -24,13 +24,14 @@ use colored::control::SHOULD_COLORIZE;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::worker::{UpdateRecord, WorkerAgentConfigEntry};
 use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, Timestamp};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+
+// TODO: move things to model/agent
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct RawAgentId(pub String);
@@ -89,7 +90,7 @@ impl FromStr for AgentUpdateMode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerMetadataView {
+pub struct AgentMetadataView {
     pub component_name: ComponentName,
     pub agent_name: RawAgentId,
     pub created_by: AccountId,
@@ -111,15 +112,9 @@ pub struct WorkerMetadataView {
     pub source_language: SourceLanguage,
 }
 
-impl TrimDateTime for WorkerMetadataView {
-    fn trim_date_time_ms(self) -> Self {
-        self
-    }
-}
-
-impl From<WorkerMetadata> for WorkerMetadataView {
-    fn from(value: WorkerMetadata) -> Self {
-        WorkerMetadataView {
+impl From<AgentMetadata> for AgentMetadataView {
+    fn from(value: AgentMetadata) -> Self {
+        AgentMetadataView {
             component_name: value.component_name,
             agent_name: value.agent_id.agent_id.into(),
             created_by: value.created_by,
@@ -141,7 +136,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
     }
 }
 
-impl WorkerMetadataView {
+impl AgentMetadataView {
     pub fn with_source_language(mut self, source_language: SourceLanguage) -> Self {
         self.source_language = source_language;
         self
@@ -149,7 +144,7 @@ impl WorkerMetadataView {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct WorkerMetadata {
+pub struct AgentMetadata {
     pub agent_id: AgentId,
     pub component_name: ComponentName,
     pub environment_id: EnvironmentId,
@@ -169,12 +164,12 @@ pub struct WorkerMetadata {
     pub exported_resource_instances: HashMap<String, AgentResourceDescription>,
 }
 
-impl WorkerMetadata {
+impl AgentMetadata {
     pub fn from(
         component_name: ComponentName,
         value: golem_client::model::AgentMetadataDto,
     ) -> Self {
-        WorkerMetadata {
+        AgentMetadata {
             agent_id: value.agent_id,
             component_name,
             created_by: value.created_by,
@@ -202,18 +197,9 @@ impl WorkerMetadata {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WorkersMetadataResponseView {
-    pub workers: Vec<WorkerMetadataView>,
+pub struct AgentsMetadataResponseView {
+    pub agents: Vec<AgentMetadataView>,
     pub cursors: BTreeMap<String, String>,
-}
-
-impl TrimDateTime for WorkersMetadataResponseView {
-    fn trim_date_time_ms(self) -> Self {
-        Self {
-            workers: self.workers.trim_date_time_ms(),
-            ..self
-        }
-    }
 }
 
 pub trait HasVerbosity {
@@ -240,7 +226,7 @@ impl From<StreamArgs> for AgentLogStreamOptions {
     }
 }
 
-pub struct WorkerNameMatch {
+pub struct AgentNameMatch {
     pub environment: ResolvedEnvironmentIdentity,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
@@ -248,7 +234,7 @@ pub struct WorkerNameMatch {
     pub source_language: SourceLanguage,
 }
 
-impl WorkerNameMatch {
+impl AgentNameMatch {
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
         match &self.environment.source {
             ResolvedEnvironmentIdentitySource::Reference(reference) => Some(reference),

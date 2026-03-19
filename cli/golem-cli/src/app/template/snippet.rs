@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{app_manifest_version, GOLEM_AI_SUFFIX, GOLEM_AI_VERSION};
+use crate::app_manifest_version;
+use crate::sdk_versions::{GOLEM_AI_SUFFIX, GOLEM_AI_VERSION};
 use indoc::formatdoc;
 use std::sync::LazyLock;
 

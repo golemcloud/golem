@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["components-rust/*"]
+exclude = ["golem-temp"]
 
 [profile.release]
 opt-level = "s"

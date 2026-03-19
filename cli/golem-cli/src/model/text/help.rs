@@ -44,57 +44,33 @@ impl MessageWithFields for WorkerNameHelp {
             "<AGENT>",
             &indoc!(
                 "
-                    Standalone agent name, usable when only one component is selected based on the
-                    current application directory.
+                    Standalone agent name.
                     "
             ),
         );
         fields.field(
-            "<COMPONENT>/<AGENT>",
-            &indoc!(
-                    "
-                        Component specific agent name.
-
-                        When used in an application (sub)directory then the given component name is fuzzy
-                        matched against the application component names. If no matches are found, then
-                        a the component name is used as is.
-
-                        When used in a directory without application manifest(s), then the full component
-                        name is expected.
-
-                    "
-                ),
-        );
-        fields.field(
-            "<ENVIRONMENT/<COMPONENT>/<AGENT>",
+            "<ENVIRONMENT>/<AGENT>",
             &indoc!(
                 "
-                    Environment and component specific agent name.
-
-                    Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
-                    specific environment.
-
+                        Environment specific agent name.
                     "
             ),
         );
         fields.field(
-            "<APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>",
+            "<APPLICATION>/<ENVIRONMENT>/<AGENT>",
             &indoc!(
                 "
-                    Application, environment and component specific agent name.
-
-                    It can refer to components in a specific application and environment, always
-                    expects the component name to be fully qualified.
+                    Application, environment specific agent name.
                     "
             ),
         );
         fields.field(
-            "<ACCOUNT>/<APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>",
+            "<ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT>",
             &indoc!(
                 "
-                    Account, application, environment and component specific agent name.
+                    Account, application, environment specific agent name.
 
-                    Behaves the same as <APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>, except it can
+                    Behaves the same as <APPLICATION>/<ENVIRONMENT>/<AGENT>, except it can
                     refer to any account.
                     "
             ),
