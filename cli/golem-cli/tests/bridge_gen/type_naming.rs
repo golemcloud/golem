@@ -12,35 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use golem_cli::bridge_gen::type_naming::*;
+
+use crate::bridge_gen::fixtures::code_first_snippets_agent_type;
 use crate::bridge_gen::type_naming::{TypeName, TypeNaming};
-use crate::model::agent::test::code_first_snippets_agent_type;
-use crate::model::GuestLanguage;
+use golem_cli::model::GuestLanguage;
 
 pub(crate) fn test_type_naming<TN: TypeName>(language: GuestLanguage, agent_name: &str) {
     let agent_type = code_first_snippets_agent_type(language, agent_name);
     TypeNaming::<TN>::new(&agent_type, false).unwrap();
-
-    /*
-    println!("Collected anonymous types:");
-    for (typ, locations) in &type_naming.anonymous_type_locations {
-        println!("- {:?}", typ);
-        for location in locations {
-            println!("  - {}", location);
-        }
-    }
-    println!("Collected named types:");
-    for (name, types) in &type_naming.named_type_locations {
-        println!("- {}", name);
-        for (typ, locations) in types {
-            println!("  - {:?}", typ);
-            for location in locations {
-                println!("    - {}", location);
-            }
-        }
-    }
-    println!("Final named types:");
-    for (typ, name) in type_naming.types {
-        println!("- {}: {:?}", name, typ);
-    }
-    */
 }

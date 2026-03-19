@@ -27,9 +27,6 @@ pub(crate) mod analyzed_type_ext;
 mod builder;
 mod type_location;
 
-#[cfg(test)]
-pub(crate) mod tests;
-
 pub trait TypeName: Debug + Display + Clone + PartialEq + Eq + Hash {
     // This is intended to be used for custom or special mappings. If this method returns some
     // result for a type, then no further type naming will be attempted.

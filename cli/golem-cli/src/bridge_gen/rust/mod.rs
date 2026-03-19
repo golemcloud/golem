@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::bridge_gen::rust::rust::to_rust_ident;
-use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::type_naming::TypeNaming;
 use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use crate::fs;
@@ -34,9 +33,9 @@ use tracing::debug;
 
 #[allow(clippy::module_inception)]
 mod rust;
-#[cfg(test)]
-mod tests;
 mod type_name;
+
+pub use type_name::RustTypeName;
 
 #[allow(dead_code)]
 pub struct RustBridgeGenerator {

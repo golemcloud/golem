@@ -17,15 +17,13 @@ mod javascript;
 mod ts_writer;
 mod type_name;
 
-#[cfg(test)]
-mod tests;
+pub use type_name::TypeScriptTypeName;
 
 use crate::bridge_gen::type_naming::TypeNaming;
 use crate::bridge_gen::typescript::javascript::escape_js_ident;
 use crate::bridge_gen::typescript::ts_writer::{
     indent, FunctionWriter, TsAnonymousFunctionWriter, TsFunctionWriter, TsWriter,
 };
-use crate::bridge_gen::typescript::type_name::TypeScriptTypeName;
 use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
