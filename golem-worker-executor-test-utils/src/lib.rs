@@ -423,8 +423,10 @@ pub async fn start_with_oplog_config(
 /// Overrides for customizing the test executor. Allows wrapping services with
 /// failure-injecting wrappers and modifying the GolemConfig.
 type ConfigureFn = dyn Fn(&mut GolemConfig) + Send + Sync;
-type WrapKeyValueServiceFn = dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
-type WrapBlobStoreServiceFn = dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+type WrapKeyValueServiceFn =
+    dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
+type WrapBlobStoreServiceFn =
+    dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 
 #[derive(Clone, Default)]
 pub struct TestExecutorOverrides {
