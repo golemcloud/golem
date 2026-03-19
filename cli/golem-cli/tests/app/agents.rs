@@ -175,7 +175,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("rust:agent/FooAgent(Some(\"{uuid}\"))");
+        let agent_constructor = format!("rust-code-first:rust-main/FooAgent(Some(\"{uuid}\"))");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -186,7 +186,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "get_id", &[]).await;
 
-    run_and_assert(&ctx, "rust:agent/FooAgent.{fun_string}", &["\"sample\""]).await;
+    run_and_assert(&ctx, "rust-code-first:rust-main/FooAgent.{fun_string}", &["\"sample\""]).await;
 
     // A char type
     run_and_assert(&ctx, "fun_char", &[r#"'a'"#]).await;
@@ -194,7 +194,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     // Testing trigger invocation
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_string_fire_and_forget}",
+        "rust-code-first:rust-main/FooAgent.{fun_string_fire_and_forget}",
         &["\"sample\""],
     )
     .await;
@@ -202,7 +202,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     // Testing scheduled invocation
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_string_later}",
+        "rust-code-first:rust-main/FooAgent.{fun_string_later}",
         &["\"sample\""],
     )
     .await;
@@ -388,34 +388,34 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     // cli invoke gets confused with `fun-result` and `fun-result-unit-left` etc, and therefore fully qualified function name.
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_result}",
+        "rust-code-first:rust-main/FooAgent.{fun_result}",
         &["Ok(\"success\")"],
     )
     .await;
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_result}",
+        "rust-code-first:rust-main/FooAgent.{fun_result}",
         &["Err(\"failed\")"],
     )
     .await;
 
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_result_unit_ok}",
+        "rust-code-first:rust-main/FooAgent.{fun_result_unit_ok}",
         &["Ok(())"],
     )
     .await;
 
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_result_unit_err}",
+        "rust-code-first:rust-main/FooAgent.{fun_result_unit_err}",
         &["Err(())"],
     )
     .await;
 
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_result_unit_both}",
+        "rust-code-first:rust-main/FooAgent.{fun_result_unit_both}",
         &["Ok(())"],
     )
     .await;
@@ -440,7 +440,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_option}",
+        "rust-code-first:rust-main/FooAgent.{fun_option}",
         &["Some(\"optional value\")"],
     )
     .await;
@@ -463,7 +463,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(
         &ctx,
-        "rust:agent/FooAgent.{fun_option_complex}",
+        "rust-code-first:rust-main/FooAgent.{fun_option_complex}",
         &[option_complex_arg],
     )
     .await;
@@ -473,49 +473,49 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/FooAgent.{fun_multi_modal}",
+    //     "rust-code-first:rust-main/FooAgent.{fun_multi_modal}",
     //     &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/FooAgent.{fun_multi_modal_basic}",
+    //     "rust-code-first:rust-main/FooAgent.{fun_multi_modal_basic}",
     //     &[r#"[text(url("foo"))]"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/FooAgent.{fun_unstructured_text}",
+    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_text}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/FooAgent.{fun_unstructured_text}",
+    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_text}",
     //     &[r#"inline({data: "foo", text-type: none})"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/FooAgent.{fun_unstructured_text_lc}",
+    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_text_lc}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/FooAgent.{fun_unstructured_text_lc}",
+    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_text_lc}",
     //     &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust:agent/FooAgent.{fun_unstructured_binary}",
+    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_binary}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
