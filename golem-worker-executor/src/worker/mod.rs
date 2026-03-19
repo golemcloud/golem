@@ -426,7 +426,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Running(running) => {
                 if is_running_agent_idle(running).await {
                     let stop_result = self
-                        .stop_internal_locked(&mut instance_guard, false, None)
+                        .stop_internal_locked(
+                            &mut instance_guard,
+                            false,
+                            None,
+                            FinalWorkerState::Unloaded {
+                                startup_failure: None,
+                            },
+                        )
                         .await;
 
                     Some(stop_result)
@@ -454,18 +461,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Rejects all new invocations and stops any running execution.
     pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
-        let mut instance_guard = self.lock_stopped_worker(Some(error.clone())).await;
-        match &*instance_guard {
-            WorkerInstance::Unloaded { .. } => {
-                *instance_guard = WorkerInstance::Deleting;
-                // More invocations might have been enqueued since the worker has stopped
-                self.fail_pending_invocations(error).await;
-            }
-            WorkerInstance::Deleting => {}
-            _ => panic!("impossible status after lock_stopped_worker"),
-        };
-
-        // TODO: Not sure what to do with execution status here.
+        self.stop_internal(false, Some(error), FinalWorkerState::Deleting)
+            .await;
         Ok(())
     }
 
@@ -1183,7 +1180,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let instance_guard = self.lock_stopped_worker(None).await;
+        let instance_guard = self.lock_stopped_worker().await;
         match &*instance_guard {
             WorkerInstance::Unloaded { .. } => {}
             WorkerInstance::Deleting => {
@@ -1326,6 +1323,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         called_from_invocation_loop: bool,
         fail_pending_invocations: Option<WorkerExecutorError>,
+        final_state: FinalWorkerState,
     ) {
         let mut instance_guard = self.instance.lock().await;
 
@@ -1334,6 +1332,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &mut instance_guard,
                 called_from_invocation_loop,
                 fail_pending_invocations,
+                final_state,
             )
             .await;
 
@@ -1349,6 +1348,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         called_from_invocation_loop: bool,
         // Only respected when this is the call that triggered the stop
         fail_pending_invocations: Option<WorkerExecutorError>,
+        final_state: FinalWorkerState,
     ) -> StopResult {
         // Temporarily set the instance to unloaded so we can work with the old value.
         // This is not visible to anyone as long as we are holding the lock.
@@ -1361,6 +1361,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         match previous_instance_state {
             WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
+                **instance_guard = final_state.into_instance();
                 StopResult::Stopped
             }
             WorkerInstance::Deleting => {
@@ -1372,9 +1373,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 **instance_guard = previous_instance_state;
                 StopResult::Stopped
             }
-            WorkerInstance::Stopping(stopping) => StopResult::AlreadyStopping {
-                notify: stopping.notify.clone(),
-            },
+            WorkerInstance::Stopping(mut stopping) => {
+                // If we're stopping for deletion, upgrade the final state
+                if matches!(final_state, FinalWorkerState::Deleting) {
+                    stopping.final_state = FinalWorkerState::Deleting;
+                }
+                let notify = stopping.notify.clone();
+                **instance_guard = WorkerInstance::Stopping(stopping);
+                StopResult::AlreadyStopping { notify }
+            }
             WorkerInstance::Running(running) => {
                 debug!(
                     "Stopping running worker ({called_from_invocation_loop}) ({})",
@@ -1387,17 +1394,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations(error.clone()).await;
                 };
 
-                // Store the startup failure so that subsequent enqueue attempts
-                // on this Unloaded worker fail fast instead of hanging forever.
-                **instance_guard = WorkerInstance::Unloaded {
-                    startup_failure: fail_pending_invocations,
-                };
-
                 // Make sure the oplog is committed
                 self.oplog.commit(CommitLevel::Always).await;
 
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
+                    **instance_guard = final_state.into_instance();
                     StopResult::Stopped
                 } else {
                     // drop the running worker, this signals to the invocation loop to start exiting.
@@ -1405,6 +1407,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let notify = OneShotEvent::new();
                     **instance_guard = WorkerInstance::Stopping(StoppingWorker {
                         notify: notify.clone(),
+                        final_state,
                     });
                     StopResult::NeedsWaitForLoopExit {
                         run_loop_handle,
@@ -1427,10 +1430,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 run_loop_handle.await.expect("Failed to join run loop");
 
                 let mut instance_guard = self.instance.lock().await;
-                assert!(matches!(*instance_guard, WorkerInstance::Stopping(_)));
-                *instance_guard = WorkerInstance::Unloaded {
-                    startup_failure: None,
-                };
+                match std::mem::replace(
+                    &mut *instance_guard,
+                    WorkerInstance::Unloaded {
+                        startup_failure: None,
+                    },
+                ) {
+                    WorkerInstance::Stopping(stopping) => {
+                        *instance_guard = stopping.final_state.into_instance();
+                    }
+                    other => panic!("expected Stopping, got {other:?}"),
+                }
                 drop(instance_guard);
 
                 notify.set();
@@ -1490,13 +1500,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     // Lock a worker in either Unloaded or Deleting state.
-    async fn lock_stopped_worker(
-        &self,
-        fail_pending_invocations: Option<WorkerExecutorError>,
-    ) -> MutexGuard<'_, WorkerInstance> {
+    async fn lock_stopped_worker(&self) -> MutexGuard<'_, WorkerInstance> {
         loop {
-            self.stop_internal(false, fail_pending_invocations.clone())
-                .await;
+            self.stop_internal(
+                false,
+                None,
+                FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+            )
+            .await;
             let instance_guard = self.instance.lock().await;
 
             if let WorkerInstance::Deleting | WorkerInstance::Unloaded { .. } = &*instance_guard {
@@ -1511,7 +1524,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         delay: Option<Duration>,
         oom_retry_count: u32,
     ) -> Result<bool, WorkerExecutorError> {
-        this.stop_internal(called_from_invocation_loop, None).await;
+        this.stop_internal(
+            called_from_invocation_loop,
+            None,
+            FinalWorkerState::Unloaded {
+                startup_failure: None,
+            },
+        )
+        .await;
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
         }
@@ -1936,7 +1956,14 @@ enum WorkerInstance {
 
 impl WorkerInstance {
     fn is_deleting(&self) -> bool {
-        matches!(self, Self::Deleting)
+        matches!(
+            self,
+            Self::Deleting
+                | Self::Stopping(StoppingWorker {
+                    final_state: FinalWorkerState::Deleting,
+                    ..
+                })
+        )
     }
 
     fn startup_failure(&self) -> Option<&WorkerExecutorError> {
@@ -2349,8 +2376,28 @@ impl RunningWorker {
 }
 
 #[derive(Debug)]
+pub(crate) enum FinalWorkerState {
+    Unloaded {
+        startup_failure: Option<WorkerExecutorError>,
+    },
+    Deleting,
+}
+
+impl FinalWorkerState {
+    fn into_instance(self) -> WorkerInstance {
+        match self {
+            FinalWorkerState::Unloaded { startup_failure } => {
+                WorkerInstance::Unloaded { startup_failure }
+            }
+            FinalWorkerState::Deleting => WorkerInstance::Deleting,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct StoppingWorker {
     notify: OneShotEvent,
+    final_state: FinalWorkerState,
 }
 
 #[derive(Debug, Clone)]
