@@ -290,14 +290,14 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
 
 #[test]
 #[tracing::instrument]
-async fn resource_resurrection_reuses_id_and_increments_revision(
+async fn resource_recreation_with_same_type(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let client = deps.registry_service().client(&user.token).await;
 
-    let creation = ResourceDefinitionCreation {
+    let mut creation = ResourceDefinitionCreation {
         name: ResourceName("resurrect_me".to_string()),
         limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 100 }),
         enforcement_action: EnforcementAction::Throttle,
@@ -311,15 +311,15 @@ async fn resource_resurrection_reuses_id_and_increments_revision(
 
     let r2 = client.create_resource(&env.id.0, &creation).await?;
 
-    assert_eq!(r1.id, r2.id);
-    assert_eq!(r2.revision, r1.revision.next()?.next()?);
+    assert_ne!(r1.id, r2.id);
+    assert_eq!(r2.revision, ResourceDefinitionRevision::INITIAL);
 
     Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn resource_resurrection_does_not_resurrect_when_limit_types_do_not_match(
+async fn resource_recreation_with_different_types(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;

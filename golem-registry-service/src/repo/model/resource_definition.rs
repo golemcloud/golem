@@ -110,20 +110,6 @@ pub struct ResourceDefinitionRevisionRecord {
 }
 
 impl ResourceDefinitionRevisionRecord {
-    pub(in crate::repo) fn for_recreation(
-        mut self,
-        resource_definition_id: Uuid,
-        revision_id: i64,
-    ) -> Result<Self, ResourceDefinitionRepoError> {
-        let revision: ResourceDefinitionRevision = revision_id.try_into()?;
-        let next_revision_id = revision.next()?.into();
-
-        self.resource_definition_id = resource_definition_id;
-        self.revision_id = next_revision_id;
-
-        Ok(self)
-    }
-
     pub fn from_model(value: ResourceDefinition, audit: DeletableRevisionAuditFields) -> Self {
         let mut value = Self {
             resource_definition_id: value.id.0,

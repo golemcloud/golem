@@ -18,7 +18,7 @@ use super::model::resource_definition::{
 };
 use crate::repo::model::BindFields;
 use crate::repo::model::resource_definition::{
-    ResourceDefinitionRecord, ResourceDefinitionRevisionIdentityRecord,
+    ResourceDefinitionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -281,9 +281,9 @@ impl DbResourceDefinitionRepo<PostgresPool> {
                     (
                         resource_definition_id,
                         revision_id,
-                        hash, 
-                        created_at, 
-                        created_by, 
+                        hash,
+                        created_at,
+                        created_by,
                         deleted,
                         limit_value,
                         limit_period,
@@ -292,7 +292,7 @@ impl DbResourceDefinitionRepo<PostgresPool> {
                         units
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                    RETURNING 
+                    RETURNING
                         resource_definition_id,
                         revision_id,
                         hash,
@@ -327,31 +327,6 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
         &self,
         args: ResourceDefinitionCreationArgs,
     ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError> {
-        let opt_deleted_revision: Option<ResourceDefinitionRevisionIdentityRecord> = self.with_ro("create - get opt deleted").fetch_optional_as(
-            sqlx::query_as(indoc! { r#"
-                SELECT 
-                    r.resource_definition_id,
-                    rr.revision_id,
-                    r.limit_type,
-                    r.name,
-                    rr.hash
-                FROM resource_definitions r
-                JOIN resource_definition_revisions rr ON rr.resource_definition_id = r.resource_definition_id AND rr.revision_id = r.current_revision_id
-                WHERE r.environment_id = $1 AND r.limit_type = $2 AND r.name = $3 AND r.deleted_at IS NOT NULL
-            "#})
-                .bind(args.environment_id)
-                .bind(args.limit_type)
-                .bind(&args.name)
-        ).await?;
-
-        if let Some(deleted_revision) = opt_deleted_revision {
-            let recreated_revision = args.revision.for_recreation(
-                deleted_revision.resource_definition_id,
-                deleted_revision.revision_id,
-            )?;
-            return self.update(recreated_revision).await;
-        };
-
         let environment_id = args.environment_id;
         let limit_type = args.limit_type;
         let name = args.name.to_owned();
@@ -472,7 +447,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
         self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT 
+                    SELECT
                         r.environment_id,
                         r.limit_type,
                         r.name,
@@ -506,7 +481,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
         self.with_ro("get_staged_by_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT 
+                    SELECT
                         r.environment_id,
                         r.limit_type,
                         r.name,
@@ -541,7 +516,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
         self.with_ro("get_by_id_and_revision")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT 
+                    SELECT
                         r.environment_id,
                         r.limit_type,
                         r.name,
@@ -575,7 +550,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
         self.with_ro("list_staged")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT 
+                    SELECT
                         r.environment_id,
                         r.limit_type,
                         r.name,

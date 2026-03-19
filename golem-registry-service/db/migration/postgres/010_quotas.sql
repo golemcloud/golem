@@ -21,9 +21,6 @@ CREATE TABLE resource_definitions
 CREATE UNIQUE INDEX resource_definitions_name_uk
     ON resource_definitions (environment_id, name) WHERE deleted_at IS NULL;
 
-CREATE UNIQUE INDEX resource_definitions_kind_name_uk
-    ON resource_definitions (environment_id, limit_type, name);
-
 CREATE TABLE resource_definition_revisions
 (
     resource_definition_id UUID NOT NULL,
@@ -37,9 +34,9 @@ CREATE TABLE resource_definition_revisions
 
     limit_value NUMERIC NOT NULL,
     limit_period TEXT,
-    
+
     enforcement_action TEXT NOT NULL,
-    
+
     unit TEXT NOT NULL,
     units TEXT NOT NULL,
 
