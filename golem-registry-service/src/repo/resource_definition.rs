@@ -17,9 +17,7 @@ use super::model::resource_definition::{
     ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
 };
 use crate::repo::model::BindFields;
-use crate::repo::model::resource_definition::{
-    ResourceDefinitionRecord,
-};
+use crate::repo::model::resource_definition::ResourceDefinitionRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;

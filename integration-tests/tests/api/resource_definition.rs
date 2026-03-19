@@ -290,14 +290,12 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
 
 #[test]
 #[tracing::instrument]
-async fn resource_recreation_with_same_type(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
+async fn resource_recreation_with_same_type(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let client = deps.registry_service().client(&user.token).await;
 
-    let mut creation = ResourceDefinitionCreation {
+    let creation = ResourceDefinitionCreation {
         name: ResourceName("resurrect_me".to_string()),
         limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 100 }),
         enforcement_action: EnforcementAction::Throttle,
