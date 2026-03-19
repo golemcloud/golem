@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bridge_gen::type_naming::tests::test_type_naming;
-use crate::bridge_gen::typescript::type_name::TypeScriptTypeName;
-use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
-use crate::bridge_gen::BridgeGenerator;
-use crate::model::agent::test::{
+use crate::bridge_gen::fixtures::{
     code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
 };
-use crate::model::GuestLanguage;
+use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
+use golem_cli::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptTypeName};
+use golem_cli::bridge_gen::BridgeGenerator;
+use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,

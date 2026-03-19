@@ -25,7 +25,6 @@ use crate::config::{
 use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
-use crate::model::app::RustDependencyOverride;
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app::{
     ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName, WithSource,
@@ -38,7 +37,6 @@ use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
-use crate::SdkOverrides;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::EnvironmentPluginGrantWithDetails;
@@ -79,7 +77,6 @@ pub struct Context {
     dev_mode: bool,
     server_no_limit_change: bool,
     should_colorize: bool,
-    sdk_overrides: SdkOverrides,
 
     file_download_client: reqwest::Client,
 
@@ -104,16 +101,6 @@ impl Context {
         {
             bail!(ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags);
         }
-
-        let sdk_overrides = SdkOverrides {
-            golem_rust_path: global_flags
-                .golem_rust_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            golem_rust_version: global_flags.golem_rust_version.clone(),
-            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
-            ts_version: global_flags.golem_ts_version.clone(),
-        };
 
         let (environment_reference, env_ref_can_be_builtin_profile) = {
             if let Some(environment) = &global_flags.environment {
@@ -140,7 +127,6 @@ impl Context {
         let preloaded_app = ApplicationContext::preload_application(
             ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags),
             global_flags.dev_mode,
-            &sdk_overrides,
         )?;
 
         if preloaded_app.loaded_with_warnings
@@ -286,36 +272,34 @@ impl Context {
         let file_download_client =
             new_reqwest_client(&client_config.file_download_http_client_config)?;
 
-        let app_context_config = {
-            manifest_environment
-                .as_ref()
-                .zip(application_name_and_environments)
-                .map(
-                    |(selected_environment, application_name_and_environments)| {
-                        ApplicationContextConfig::new(
-                            &global_flags,
-                            application_name_and_environments,
-                            ComponentPresetSelector {
-                                environment: selected_environment.environment_name.clone(),
-                                presets: {
-                                    if global_flags.preset.is_empty() {
-                                        selected_environment
-                                            .environment
-                                            .component_presets
-                                            .clone()
-                                            .into_vec()
-                                            .into_iter()
-                                            .map(ComponentPresetName)
-                                            .collect::<Vec<_>>()
-                                    } else {
-                                        global_flags.preset.clone()
-                                    }
-                                },
+        let app_context_config = manifest_environment
+            .as_ref()
+            .zip(application_name_and_environments)
+            .map(
+                |(selected_environment, application_name_and_environments)| {
+                    ApplicationContextConfig::new(
+                        &global_flags,
+                        application_name_and_environments,
+                        ComponentPresetSelector {
+                            environment: selected_environment.environment_name.clone(),
+                            presets: {
+                                if global_flags.preset.is_empty() {
+                                    selected_environment
+                                        .environment
+                                        .component_presets
+                                        .clone()
+                                        .into_vec()
+                                        .into_iter()
+                                        .map(ComponentPresetName)
+                                        .collect::<Vec<_>>()
+                                } else {
+                                    global_flags.preset.clone()
+                                }
                             },
-                        )
-                    },
-                )
-        };
+                        },
+                    )
+                },
+            );
 
         Ok(Self {
             config_dir: global_flags.config_dir(),
@@ -335,7 +319,6 @@ impl Context {
             show_sensitive: global_flags.show_sensitive,
             server_no_limit_change: global_flags.server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
-            sdk_overrides,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
@@ -558,10 +541,6 @@ impl Context {
         AppTemplateRepo::get(self.dev_mode)
     }
 
-    pub fn sdk_overrides(&self) -> &SdkOverrides {
-        &self.sdk_overrides
-    }
-
     fn log_context_selection_once(&self) {
         self.selected_context_logging.get_or_init(|| {
             if self.help_mode {
@@ -667,7 +646,6 @@ struct ApplicationContextConfig {
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
     component_presets: ComponentPresetSelector,
-    golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
     dev_mode: bool,
     enable_wasmtime_fs_cache: bool,
@@ -685,10 +663,6 @@ impl ApplicationContextConfig {
             application_name: application_name_and_environments.application_name,
             environments: application_name_and_environments.environments,
             component_presets,
-            golem_rust_override: RustDependencyOverride {
-                path_override: global_flags.golem_rust_path.clone(),
-                version_override: global_flags.golem_rust_version.clone(),
-            },
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             dev_mode: global_flags.dev_mode,
             enable_wasmtime_fs_cache: global_flags.enable_wasmtime_fs_cache,
@@ -760,7 +734,6 @@ impl ApplicationContextState {
 
         let app_config = ApplicationConfig {
             offline: config.wasm_rpc_client_build_offline,
-            golem_rust_override: config.golem_rust_override.clone(),
             dev_mode: config.dev_mode,
             enable_wasmtime_fs_cache: config.enable_wasmtime_fs_cache,
         };

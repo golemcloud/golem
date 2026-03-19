@@ -17,8 +17,8 @@ use crate::app::template::generator::{
     generate_on_demand_commons_by_template, InMemoryFs, StdFs,
 };
 use crate::app::template::metadata::AppTemplateMetadata;
+use crate::fs;
 use crate::model::GuestLanguage;
-use crate::{fs, SdkOverrides};
 use golem_common::base_model::application::ApplicationName;
 use golem_common::base_model::component::ComponentName;
 use serde_derive::{Deserialize, Serialize};
@@ -139,30 +139,16 @@ impl AppTemplate {
         &self,
         application_name: &ApplicationName,
         target_path: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
-        generate_commons_by_template(
-            self,
-            application_name,
-            target_path,
-            sdk_overrides,
-            InMemoryFs::new(),
-        )
+        generate_commons_by_template(self, application_name, target_path, InMemoryFs::new())
     }
 
     fn generate_on_demand_commons(
         &self,
         application_dir: &Path,
         target_path: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
-        generate_on_demand_commons_by_template(
-            self,
-            application_dir,
-            target_path,
-            sdk_overrides,
-            StdFs,
-        )
+        generate_on_demand_commons_by_template(self, application_dir, target_path, StdFs)
     }
 
     fn generate_component(
@@ -171,7 +157,6 @@ impl AppTemplate {
         application_dir: &Path,
         component_name: &ComponentName,
         component_dir: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
         generate_component_by_template(
             self,
@@ -179,7 +164,6 @@ impl AppTemplate {
             application_dir,
             component_name,
             component_dir,
-            sdk_overrides,
             InMemoryFs::new(),
         )
     }
@@ -187,18 +171,16 @@ impl AppTemplate {
     fn generate_agent(
         &self,
         application_name: &ApplicationName,
-        applcation_dir: &Path,
+        application_dir: &Path,
         component_name: &ComponentName,
         component_dir: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
         generate_agent_by_template(
             self,
             application_name,
-            applcation_dir,
+            application_dir,
             component_name,
             component_dir,
-            sdk_overrides,
             InMemoryFs::new(),
         )
     }
@@ -212,10 +194,8 @@ impl AppTemplateCommon {
         &self,
         application_name: &ApplicationName,
         target_path: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
-        self.0
-            .generate_commons(application_name, target_path, sdk_overrides)
+        self.0.generate_commons(application_name, target_path)
     }
 }
 
@@ -223,14 +203,9 @@ impl AppTemplateCommon {
 pub struct AppTemplateCommonOnDemand(pub AppTemplate);
 
 impl AppTemplateCommonOnDemand {
-    pub fn generate(
-        &self,
-        application_dir: &Path,
-        target_path: &Path,
-        sdk_overrides: &SdkOverrides,
-    ) -> anyhow::Result<()> {
+    pub fn generate(&self, application_dir: &Path, target_path: &Path) -> anyhow::Result<()> {
         self.0
-            .generate_on_demand_commons(application_dir, target_path, sdk_overrides)
+            .generate_on_demand_commons(application_dir, target_path)
     }
 }
 
@@ -244,14 +219,12 @@ impl AppTemplateComponent {
         application_dir: &Path,
         component_name: &ComponentName,
         component_dir: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
         self.0.generate_component(
             application_name,
             application_dir,
             component_name,
             component_dir,
-            sdk_overrides,
         )
     }
 }
@@ -266,14 +239,12 @@ impl AppTemplateAgent {
         application_dir: &Path,
         component_name: &ComponentName,
         component_dir: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<InMemoryFs> {
         self.0.generate_agent(
             application_name,
             application_dir,
             component_name,
             component_dir,
-            sdk_overrides,
         )
     }
 }

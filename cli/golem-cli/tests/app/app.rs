@@ -4,6 +4,8 @@ use crate::Tracing;
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
 use indoc::indoc;
+use std::path::Path;
+use std::time::Duration;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
 
@@ -166,6 +168,170 @@ async fn completion(_tracing: &Tracing) {
 
     let outputs = ctx.cli([cmd::COMPLETION, "zsh"]).await;
     assert!(outputs.success(), "zsh");
+}
+
+#[test]
+async fn ts_repl_interactive(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-repl-interactive";
+
+    ctx.start_server().await;
+
+    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:ts-main"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:ts-extra"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join(
+            Path::new("components-ts")
+                .join("app-ts-extra")
+                .join("src")
+                .join("main.ts"),
+        ),
+        indoc! {
+            r#"
+            import {
+                BaseAgent,
+                agent,
+                prompt,
+                description
+            } from '@golemcloud/golem-ts-sdk';
+
+            @agent({})
+            class SampleAgent extends BaseAgent {
+                private readonly name: string;
+                private readonly region: string;
+                private readonly mode: "fast" | "safe";
+                private readonly complex: { a: number, b: string };
+                private value: number = 0;
+
+                constructor(name: string, region: string, mode: "fast" | "safe", complex?: { a: number, b: string }) {
+                    super()
+                    this.name = name;
+                    this.region = region;
+                    this.mode = mode;
+                    this.complex = complex ?? { a: 0, b: "default" };
+                }
+
+                @prompt("Run sample method")
+                @description("Runs the sample method and returns the new value")
+                async sampleMethod(): Promise<number> {
+                    this.value += 1;
+                    return this.value;
+                }
+            }
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cli_interactive([cmd::REPL, flag::LANGUAGE, "ts", flag::YES], move |repl| {
+        let agent_type_info_regex = indoc! {
+            r#"(?sx)
+            Available\s+agent\s+client\s+types:
+            .*
+            (
+                SampleAgent\.get\(
+                    name:\s*string,\s*
+                    region:\s*string,\s*
+                    mode:\s*"fast"\s*\|\s*"safe",\s*
+                    complex:\s*.*
+                \)
+                .*
+                CounterAgent\.get\(name:\s*string\)
+            |
+                CounterAgent\.get\(name:\s*string\)
+                .*
+                SampleAgent\.get\(
+                    name:\s*string,\s*
+                    region:\s*string,\s*
+                    mode:\s*"fast"\s*\|\s*"safe",\s*
+                    complex:\s*.*
+                \)
+            )
+            .*"#
+        };
+
+        let methods_regex = indoc! {
+            r#"(?sx)
+            (
+                sampleMethod:\s*\(\)\s*=>\s*number
+                .*
+                increment:\s*\(\)\s*=>\s*number
+            |
+                increment:\s*\(\)\s*=>\s*number
+                .*
+                sampleMethod:\s*\(\)\s*=>\s*number
+            )"#
+        };
+
+        repl.set_expect_timeout(Some(Duration::from_secs(30)));
+        repl.expect_str("golem-ts-repl[test-app-repl-interactive][local]>")?;
+        repl.send_line_and_expect_regex(".agent-type-info", agent_type_info_regex)?;
+        repl.expect_regex(methods_regex)?;
+
+        repl.set_expect_timeout(Some(Duration::from_secs(2)));
+
+        // Hints on "enter"
+        {
+            repl.send_line_and_expect_str("Counter", "CounterAgent")?;
+            repl.send_line_and_expect_regex("CounterAgent.", "get .* getPhantom ")?;
+            repl.send_line_and_expect_str(
+                "CounterAgent.get",
+                "(method) CounterAgent.get(name: string): CounterAgent",
+            )?;
+            repl.send_line_and_expect_str("CounterAgent.get(", "\"?\"")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\")", "> CounterAgent")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\").", "increment")?;
+        }
+
+        // Hints on "tab"
+        {
+            repl.send_tab_complete_expect_str("Counter", "Agent")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex("CounterAgent.", "get .* getPhantom ")?;
+            repl.send_line("")?;
+
+            repl.send_tab_complete_expect_str("CounterAgent.g", "et")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex("CounterAgent.get", "get .* getPhantom")?;
+            repl.send_line("")?;
+
+            repl.send_tab_complete_expect_str("CounterAgent.get(", "\"?\"")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex("CounterAgent.get(\"xyz\").", "increment")?;
+            repl.send_line("")?;
+
+            repl.send_tab_complete_expect_str("Sample", "Agent")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex(
+                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).",
+                "sampleMethod",
+            )?;
+            repl.send_line("")?;
+        }
+
+        Ok(())
+    })
+    .await;
 }
 
 #[test]

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::fs;
-use crate::model::GuestLanguage;
+use crate::workspace_path;
+use golem_cli::model::GuestLanguage;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
@@ -23,7 +23,6 @@ use golem_common::model::Empty;
 use golem_wasm::analysis::analysed_type::{
     case, field, list, option, r#enum, record, str, u32, unit_case, variant,
 };
-use std::path::Path;
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
     vec![AgentType {
@@ -246,11 +245,11 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
 
 // Use `cargo make cli-integration-tests-update-golden-files` to update the reference extracted types
 pub fn code_first_snippets_agent_types(language: GuestLanguage) -> Vec<AgentType> {
-    let goldenfile = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("test-data/goldenfiles/extracted-agent-types")
+    let goldenfile = workspace_path()
+        .join("cli/golem-cli/test-data/goldenfiles/extracted-agent-types")
         .join(format!("code_first_snippets_{}.json", language.id()));
 
-    serde_json::from_str(&fs::read_to_string(&goldenfile).unwrap()).unwrap_or_else(|err| {
+    serde_json::from_str(&std::fs::read_to_string(&goldenfile).unwrap()).unwrap_or_else(|err| {
         panic!(
             "Failed to deserialize golden file {}: {err}",
             goldenfile.display()

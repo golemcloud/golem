@@ -199,20 +199,6 @@ pub struct GolemCliGlobalFlags {
     #[command(flatten)]
     verbosity: Verbosity,
 
-    // The flags below can only be set through env vars, as they are mostly
-    // useful for testing, so we do not want to pollute the flag space with them
-    #[arg(skip)]
-    pub golem_rust_path: Option<PathBuf>,
-
-    #[arg(skip)]
-    pub golem_rust_version: Option<String>,
-
-    #[arg(skip)]
-    pub golem_ts_packages_path: Option<String>,
-
-    #[arg(skip)]
-    pub golem_ts_version: Option<String>,
-
     #[arg(skip)]
     pub wasm_rpc_offline: bool,
 
@@ -280,30 +266,6 @@ impl GolemCliGlobalFlags {
                 .parse::<LenientBool>()
                 .map(|b| b.into())
                 .unwrap_or_default()
-        }
-
-        if self.golem_rust_path.is_none() {
-            if let Ok(golem_rust_path) = std::env::var("GOLEM_RUST_PATH") {
-                self.golem_rust_path = Some(PathBuf::from(golem_rust_path));
-            }
-        }
-
-        if self.golem_rust_version.is_none() {
-            if let Ok(version) = std::env::var("GOLEM_RUST_VERSION") {
-                self.golem_rust_version = Some(version);
-            }
-        }
-
-        if self.golem_ts_packages_path.is_none() {
-            if let Ok(golem_ts_packages_path) = std::env::var("GOLEM_TS_PACKAGES_PATH") {
-                self.golem_ts_packages_path = Some(golem_ts_packages_path);
-            }
-        }
-
-        if self.golem_ts_version.is_none() {
-            if let Ok(version) = std::env::var("GOLEM_TS_VERSION") {
-                self.golem_ts_version = Some(version);
-            }
         }
 
         if let Ok(batch_size) = std::env::var("GOLEM_HTTP_BATCH_SIZE") {
@@ -871,9 +833,9 @@ pub mod shared_args {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
         /// Agent ID, accepted formats:
         ///   - <AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         #[arg(verbatim_doc_comment)]
         pub agent_id: RawAgentId,
     }

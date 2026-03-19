@@ -17,6 +17,7 @@ use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
 use crate::app::template::AppTemplateRepo;
+use crate::fs;
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
@@ -28,7 +29,6 @@ use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::{fs, SdkOverrides};
 use anyhow::anyhow;
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
@@ -156,11 +156,10 @@ impl ApplicationContext {
     pub fn preload_application(
         source_mode: ApplicationSourceMode,
         dev_mode: bool,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
-        match preload_app(source_mode, dev_mode, sdk_overrides) {
+        match preload_app(source_mode, dev_mode) {
             Some(environments) => validated_to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,
@@ -260,32 +259,41 @@ impl ApplicationContext {
         log_action("Selecting", "components");
         let _indent = LogIndent::new();
 
-        let current_dir = std::env::current_dir()?.canonicalize()?;
+        let current_dir = fs::canonicalize_path(&std::env::current_dir()?)?;
 
         let selected_component_names: ValidatedResult<BTreeSet<ComponentName>> =
             match component_select_mode {
                 ApplicationComponentSelectMode::CurrentDir => {
-                    let called_from_project_root = self.calling_working_dir == current_dir;
-                    if called_from_project_root {
+                    let all_components = || {
                         ValidatedResult::Ok(
                             self.application
                                 .component_names()
                                 .map(|cn| cn.to_owned())
                                 .collect(),
                         )
+                    };
+
+                    let called_from_project_root = self.calling_working_dir == current_dir;
+                    if called_from_project_root {
+                        all_components()
                     } else {
-                        ValidatedResult::Ok(
-                            self.application
-                                .component_names()
-                                .filter(|component_name| {
-                                    self.application
-                                        .component(component_name)
-                                        .component_dir()
-                                        .starts_with(self.calling_working_dir.as_path())
-                                })
-                                .cloned()
-                                .collect(),
-                        )
+                        let components_by_dir = self
+                            .application
+                            .component_names()
+                            .filter(|component_name| {
+                                self.application
+                                    .component(component_name)
+                                    .component_dir()
+                                    .starts_with(self.calling_working_dir.as_path())
+                            })
+                            .cloned()
+                            .collect::<BTreeSet<_>>();
+
+                        if components_by_dir.is_empty() {
+                            all_components()
+                        } else {
+                            ValidatedResult::Ok(components_by_dir)
+                        }
                     }
                 }
                 ApplicationComponentSelectMode::All => ValidatedResult::Ok(
@@ -581,7 +589,6 @@ fn load_app(
 fn preload_app(
     source_mode: ApplicationSourceMode,
     dev_mode: bool,
-    sdk_overrides: &SdkOverrides,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|loaded_raw_apps| {
         loaded_raw_apps.and_then(|loaded_raw_apps| {
@@ -593,7 +600,6 @@ fn preload_app(
                     ValidatedResult::from_result(ensure_on_demand_commons(
                         &used_language_templates,
                         dev_mode,
-                        sdk_overrides,
                     ))
                     .map(|on_demand_common_raw_apps| {
                         (on_demand_common_raw_apps, application_name_and_environments)
@@ -628,7 +634,6 @@ fn preload_app(
 fn ensure_on_demand_commons(
     languages: &HashSet<GuestLanguage>,
     dev_mode: bool,
-    sdk_overrides: &SdkOverrides,
 ) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
     let app_template_repo = AppTemplateRepo::get(dev_mode)?;
 
@@ -638,7 +643,7 @@ fn ensure_on_demand_commons(
         if let Some(template) = app_template_repo.common_on_demand_template(*language)? {
             let app_dir = std::env::current_dir()?;
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
-            template.generate(&app_dir, &target_dir, sdk_overrides)?;
+            template.generate(&app_dir, &target_dir)?;
             let golem_yaml_path = target_dir.join("golem.yaml");
             if golem_yaml_path.exists() {
                 on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(

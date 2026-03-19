@@ -102,16 +102,9 @@ impl BuildConfig {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RustDependencyOverride {
-    pub path_override: Option<PathBuf>,
-    pub version_override: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 pub struct ApplicationConfig {
     pub offline: bool,
-    pub golem_rust_override: RustDependencyOverride,
     pub dev_mode: bool,
     pub enable_wasmtime_fs_cache: bool,
 }

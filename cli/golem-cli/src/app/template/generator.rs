@@ -15,7 +15,8 @@
 use crate::app::template::repo::TEMPLATES_DIR;
 use crate::app::template::snippet::{APP_MANIFEST_HEADER, DEP_ENV_VARS_DOC};
 use crate::app::template::AppTemplate;
-use crate::{fs, SdkOverrides};
+use crate::fs;
+use crate::sdk_overrides::sdk_overrides;
 use anyhow::{anyhow, bail};
 use golem_common::base_model::application::ApplicationName;
 use golem_common::base_model::component::ComponentName;
@@ -105,14 +106,12 @@ struct GeneratorContext<'a> {
     component_name: Option<&'a ComponentName>,
     component_dir: Option<&'a Path>,
     target_path: &'a Path,
-    sdk_overrides: &'a SdkOverrides,
 }
 
 pub fn generate_commons_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
     application_name: &ApplicationName,
     target_path: &Path,
-    sdk_overrides: &SdkOverrides,
     mut target: T,
 ) -> anyhow::Result<T::Output> {
     if !template.metadata.is_common() {
@@ -128,7 +127,6 @@ pub fn generate_commons_by_template<T: TemplateGeneratorTargetFs>(
             component_name: None,
             component_dir: None,
             target_path,
-            sdk_overrides,
         },
     )?;
     Ok(target.finish())
@@ -138,7 +136,6 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
     template: &AppTemplate,
     application_dir: &Path,
     target_path: &Path,
-    sdk_overrides: &SdkOverrides,
     mut target: T,
 ) -> anyhow::Result<T::Output> {
     if !template.metadata.is_common_on_demand() {
@@ -169,7 +166,6 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
             component_name: None,
             component_dir: None,
             target_path,
-            sdk_overrides,
         },
     )?;
 
@@ -187,7 +183,6 @@ pub fn generate_component_by_template<T: TemplateGeneratorTargetFs>(
     application_dir: &Path,
     component_name: &ComponentName,
     component_dir: &Path,
-    sdk_overrides: &SdkOverrides,
     mut target: T,
 ) -> anyhow::Result<T::Output> {
     if !template.metadata.is_component() {
@@ -203,7 +198,6 @@ pub fn generate_component_by_template<T: TemplateGeneratorTargetFs>(
             application_dir,
             component_dir: Some(component_dir),
             target_path: application_dir,
-            sdk_overrides,
         },
     )?;
     Ok(target.finish())
@@ -215,7 +209,6 @@ pub fn generate_agent_by_template<T: TemplateGeneratorTargetFs>(
     application_dir: &Path,
     component_name: &ComponentName,
     component_dir: &Path,
-    sdk_overrides: &SdkOverrides,
     mut target: T,
 ) -> anyhow::Result<T::Output> {
     if !template.metadata.is_agent() {
@@ -231,7 +224,6 @@ pub fn generate_agent_by_template<T: TemplateGeneratorTargetFs>(
             component_name: Some(component_name),
             component_dir: Some(component_dir),
             target_path: application_dir,
-            sdk_overrides,
         },
     )?;
     Ok(target.finish())
@@ -347,6 +339,7 @@ fn transform(
     str: impl AsRef<str>,
     transforms: &[Transform],
 ) -> anyhow::Result<String> {
+    let sdk_overrides = sdk_overrides()?;
     let mut replacements: BTreeMap<&'static str, String> = BTreeMap::new();
 
     for transform in transforms {
@@ -396,19 +389,16 @@ fn transform(
                 }
             }
             Transform::RustSdk => {
-                replacements.insert(
-                    "GOLEM_RUST_VERSION_OR_PATH",
-                    ctx.sdk_overrides.golem_rust_dep(),
-                );
+                replacements.insert("GOLEM_RUST_VERSION_OR_PATH", sdk_overrides.golem_rust_dep());
             }
             Transform::TsSdk => {
                 replacements.insert(
                     "GOLEM_TS_SDK_VERSION_OR_PATH",
-                    ctx.sdk_overrides.ts_package_dep("golem-ts-sdk"),
+                    sdk_overrides.ts_package_dep("golem-ts-sdk"),
                 );
                 replacements.insert(
                     "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-                    ctx.sdk_overrides.ts_package_dep("golem-ts-typegen"),
+                    sdk_overrides.ts_package_dep("golem-ts-typegen"),
                 );
             }
         }

@@ -579,11 +579,7 @@ impl TemplateHandler {
         for (common_template_name, common_template) in &template_inputs.common_templates {
             template_plan_builder.add(
                 common_template_name.as_str(),
-                &common_template.generate(
-                    application_name,
-                    application_path,
-                    self.ctx.sdk_overrides(),
-                )?,
+                &common_template.generate(application_name, application_path)?,
             );
         }
 
@@ -605,7 +601,6 @@ impl TemplateHandler {
                     application_path,
                     component_name,
                     component_dir,
-                    self.ctx.sdk_overrides(),
                 )?,
             );
         }
@@ -638,7 +633,6 @@ impl TemplateHandler {
                     application_path,
                     component_name,
                     component_dir,
-                    self.ctx.sdk_overrides(),
                 )?,
             );
         }

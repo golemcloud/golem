@@ -25,6 +25,7 @@ use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::model::GuestLanguage;
 use crate::process::{CommandExt, ExitStatusExt};
+use crate::sdk_overrides::sdk_overrides;
 use crate::{binary_path_to_string, fs};
 use golem_common::model::agent::DataSchema;
 use golem_common::model::component::ComponentName;
@@ -182,7 +183,7 @@ impl TypeScriptRepl {
           "workspaces": workspaces,
           "dependencies": dependencies,
           "devDependencies": {
-            "@golem/golem-ts-repl": self.ctx.sdk_overrides().ts_package_dep("golem-ts-repl"),
+            "@golem/golem-ts-repl": sdk_overrides()?.ts_package_dep("golem-ts-repl"),
             "tsx": "^4.7",
             "typescript": "^5.9"
           }

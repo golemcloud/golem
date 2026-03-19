@@ -51,6 +51,7 @@ colored = { workspace = true }
 crossbeam-channel = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
+dotenvy = { workspace = true }
 evcxr = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
@@ -123,6 +124,7 @@ openssl-sys = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+expectrl = { workspace = true }
 goldenfile = { workspace = true }
 golem-wasm = { workspace = true, features = ["proptest"] }
 log = { workspace = true }

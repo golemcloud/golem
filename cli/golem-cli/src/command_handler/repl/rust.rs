@@ -18,6 +18,7 @@ use crate::evcxr_repl::{ReplConfig, REPL_CONFIG_FILE_NAME};
 use crate::log::{log_action, logln, set_log_output, LogIndent, Output};
 use crate::model::repl::{BridgeReplArgs, ReplScriptSource};
 use crate::process::ExitStatusExt;
+use crate::sdk_overrides::sdk_overrides;
 use crate::{binary_path_to_string, fs, GOLEM_EVCXR_REPL};
 use std::sync::Arc;
 use tokio::process::Command;
@@ -72,7 +73,7 @@ impl RustRepl {
             )?
             .to_string(),
             repl_metadata_json_path: fs::path_to_str(&args.repl_metadata_json_path)?.to_string(),
-            golem_client_dependency: self.ctx.sdk_overrides().golem_client_dep()?,
+            golem_client_dependency: sdk_overrides()?.golem_client_dep()?,
         };
         fs::write(&config_path, serde_json::to_string(&config)?)?;
         Ok(())

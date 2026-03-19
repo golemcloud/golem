@@ -46,6 +46,9 @@ async fn test_rust_counter() {
         .await;
     assert!(outputs.success_or_dump());
 
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
     // Test with CLI invoke
     {
         let uuid = Uuid::new_v4().to_string();
@@ -54,7 +57,7 @@ async fn test_rust_counter() {
                 flag::YES,
                 cmd::AGENT,
                 cmd::INVOKE,
-                &format!("app:counter/CounterAgent(\"{uuid}\")"),
+                &format!("CounterAgent(\"{uuid}\")"),
                 "increment",
             ])
             .await;
@@ -83,24 +86,23 @@ async fn test_rust_counter() {
         assert!(!outputs.stderr_contains("error"));
     }
 
-    // TODO: fix "no debug for future"
     // Test with Rust REPL
-    // {
-    //     let uuid = Uuid::new_v4().to_string();
-    //     let outputs = ctx
-    //         .cli([
-    //             cmd::REPL,
-    //             flag::LANGUAGE,
-    //             "rust",
-    //             flag::SCRIPT,
-    //             &format!("CounterAgent::get(\"{uuid}\").increment()"),
-    //         ])
-    //         .await;
-    //     assert!(outputs.success_or_dump());
-    //     assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
-    //     assert!(!outputs.stdout_contains("error"));
-    //     assert!(!outputs.stderr_contains("error"));
-    // }
+    {
+        let uuid = Uuid::new_v4().to_string();
+        let outputs = ctx
+            .cli([
+                cmd::REPL,
+                flag::LANGUAGE,
+                "rust",
+                flag::SCRIPT,
+                &format!("CounterAgent::get(\"{uuid}\".to_string()).increment().await"),
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
+        assert!(!outputs.stdout_contains("error"));
+        assert!(!outputs.stderr_contains("error"));
+    }
 }
 
 #[test]
@@ -175,7 +177,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("rust-code-first:rust-main/FooAgent(Some(\"{uuid}\"))");
+        let agent_constructor = format!("FooAgent(Some(\"{uuid}\"))");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -186,12 +188,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "get_id", &[]).await;
 
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_string}",
-        &["\"sample\""],
-    )
-    .await;
+    run_and_assert(&ctx, "FooAgent.{fun_string}", &["\"sample\""]).await;
 
     // A char type
     run_and_assert(&ctx, "fun_char", &[r#"'a'"#]).await;
@@ -199,18 +196,13 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     // Testing trigger invocation
     run_and_assert(
         &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_string_fire_and_forget}",
+        "FooAgent.{fun_string_fire_and_forget}",
         &["\"sample\""],
     )
     .await;
 
     // Testing scheduled invocation
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_string_later}",
-        &["\"sample\""],
-    )
-    .await;
+    run_and_assert(&ctx, "FooAgent.{fun_string_later}", &["\"sample\""]).await;
 
     run_and_assert(&ctx, "fun_u8", &["42"]).await;
 
@@ -391,39 +383,14 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "fun_simple_enum", &["I64(-12345)"]).await;
 
     // cli invoke gets confused with `fun-result` and `fun-result-unit-left` etc, and therefore fully qualified function name.
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_result}",
-        &["Ok(\"success\")"],
-    )
-    .await;
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_result}",
-        &["Err(\"failed\")"],
-    )
-    .await;
+    run_and_assert(&ctx, "FooAgent.{fun_result}", &["Ok(\"success\")"]).await;
+    run_and_assert(&ctx, "FooAgent.{fun_result}", &["Err(\"failed\")"]).await;
 
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_result_unit_ok}",
-        &["Ok(())"],
-    )
-    .await;
+    run_and_assert(&ctx, "FooAgent.{fun_result_unit_ok}", &["Ok(())"]).await;
 
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_result_unit_err}",
-        &["Err(())"],
-    )
-    .await;
+    run_and_assert(&ctx, "FooAgent.{fun_result_unit_err}", &["Err(())"]).await;
 
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_result_unit_both}",
-        &["Ok(())"],
-    )
-    .await;
+    run_and_assert(&ctx, "FooAgent.{fun_result_unit_both}", &["Ok(())"]).await;
 
     let result_complex_arg = r#"
     Ok({
@@ -443,12 +410,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_result_complex", &[result_complex_arg]).await;
 
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_option}",
-        &["Some(\"optional value\")"],
-    )
-    .await;
+    run_and_assert(&ctx, "FooAgent.{fun_option}", &["Some(\"optional value\")"]).await;
 
     let option_complex_arg = r#"
     Some({
@@ -466,61 +428,56 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     })
     "#;
 
-    run_and_assert(
-        &ctx,
-        "rust-code-first:rust-main/FooAgent.{fun_option_complex}",
-        &[option_complex_arg],
-    )
-    .await;
+    run_and_assert(&ctx, "FooAgent.{fun_option_complex}", &[option_complex_arg]).await;
 
     run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
     // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
     // run_and_assert(
     //     &ctx,
-    //     "rust-code-first:rust-main/FooAgent.{fun_multi_modal}",
+    //     "FooAgent.{fun_multi_modal}",
     //     &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust-code-first:rust-main/FooAgent.{fun_multi_modal_basic}",
+    //     "FooAgent.{fun_multi_modal_basic}",
     //     &[r#"[text(url("foo"))]"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_text}",
+    //     "FooAgent.{fun_unstructured_text}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_text}",
+    //     "FooAgent.{fun_unstructured_text}",
     //     &[r#"inline({data: "foo", text-type: none})"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_text_lc}",
+    //     "FooAgent.{fun_unstructured_text_lc}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_text_lc}",
+    //     "FooAgent.{fun_unstructured_text_lc}",
     //     &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "rust-code-first:rust-main/FooAgent.{fun_unstructured_binary}",
+    //     "FooAgent.{fun_unstructured_binary}",
     //     &[r#"url("foo")"#],
     // )
     // .await;
@@ -553,6 +510,9 @@ async fn test_ts_counter() {
         .await;
     assert!(outputs.success_or_dump());
 
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
     // Test with CLI invoke
     {
         let uuid = Uuid::new_v4().to_string();
@@ -561,7 +521,7 @@ async fn test_ts_counter() {
                 flag::YES,
                 cmd::AGENT,
                 cmd::INVOKE,
-                &format!("app:counter/CounterAgent(\"{uuid}\")"),
+                &format!("CounterAgent(\"{uuid}\")"),
                 "increment",
             ])
             .await;
@@ -590,24 +550,23 @@ async fn test_ts_counter() {
         assert!(!outputs.stderr_contains("error"));
     }
 
-    // TODO: fix "no debug for future"
     // Test with Rust REPL
-    // {
-    //     let uuid = Uuid::new_v4().to_string();
-    //     let outputs = ctx
-    //         .cli([
-    //             cmd::REPL,
-    //             flag::LANGUAGE,
-    //             "rust",
-    //             flag::SCRIPT,
-    //             &format!("CounterAgent::get(\"{uuid}\").increment()"),
-    //         ])
-    //         .await;
-    //     assert!(outputs.success_or_dump());
-    //     assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
-    //     assert!(!outputs.stdout_contains("error"));
-    //     assert!(!outputs.stderr_contains("error"));
-    // }
+    {
+        let uuid = Uuid::new_v4().to_string();
+        let outputs = ctx
+            .cli([
+                cmd::REPL,
+                flag::LANGUAGE,
+                "rust",
+                flag::SCRIPT,
+                &format!("CounterAgent::get(\"{uuid}\".to_string()).increment().await"),
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
+        assert!(!outputs.stdout_contains("error"));
+        assert!(!outputs.stderr_contains("error"));
+    }
 }
 
 // Invocations on code-first typescript agents, with complex types / functions.
@@ -689,7 +648,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("ts-code-first:ts-main/FooAgent(\"{uuid}\")");
+        let agent_constructor = format!("FooAgent(\"{uuid}\")");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -707,7 +666,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // function optional (that has null, defined as union)
     run_and_assert(
         &ctx,
-        "ts-code-first:ts-main/FooAgent.{funOptional}",
+        "FooAgent.{funOptional}",
         &[
             r#"{tag: "case1", value: "foo"}"#,
             r#"{a: "foo"}"#,
@@ -772,14 +731,14 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // // Multimodal
     // run_and_assert(
     //     &ctx,
-    //     "ts-code-first:ts-main/FooAgent.{funMultimodal}",
+    //     "FooAgent.{funMultimodal}",
     //     &["[text(inline({data: \"data\", text-type: none}))]"],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "ts-code-first:ts-main/FooAgent.{funMultimodalAdvanced}",
+    //     "FooAgent.{funMultimodalAdvanced}",
     //     &["[text(\"foo\")]"],
     // )
     // .await;
@@ -1244,6 +1203,9 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
 
     ctx.start_server().await;
 
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
     let outputs = ctx
         .cli([
             cmd::AGENT,
@@ -1326,6 +1288,9 @@ async fn test_naming_extremes() {
         &component_source_code,
     )
     .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx
         .cli([

@@ -39,9 +39,10 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
+use std::thread::JoinHandle;
 use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -239,8 +240,7 @@ impl Repl {
         let history_path = PathBuf::from(&self.config.base_config.history_file);
         editor.load_history(&history_path)?;
 
-        spawn_printer_output_task(outputs.stdout, editor.create_external_printer()?);
-        spawn_printer_output_task(outputs.stderr, editor.create_external_printer()?);
+        let buffered_output = BufferedEvalOutput::start(outputs.stdout, outputs.stderr);
         let mut printer = editor.create_external_printer()?;
 
         let prompt = {
@@ -274,6 +274,7 @@ impl Repl {
                     }
 
                     let result = {
+                        let command_started_at = buffered_output.mark_cutoff();
                         let line_start = line.trim_start();
                         let is_builtin = line_start.starts_with(':') || line_start.starts_with('.');
 
@@ -288,11 +289,13 @@ impl Repl {
                             "Waiting for result...",
                             true,
                         );
-                        self.command_context.borrow_mut().execute(&command)
+                        let result = self.command_context.borrow_mut().execute(&command);
+                        let buffered_lines = buffered_output.collect_since(command_started_at);
+                        (result, buffered_lines)
                     };
 
                     match result {
-                        Ok(output) => {
+                        (Ok(output), _) => {
                             if let Some(text) = output.get("text/plain") {
                                 logln(text);
                             }
@@ -311,10 +314,12 @@ impl Repl {
                                 }
                             }
                         }
-                        Err(evcxr::Error::CompilationErrors(errors)) => {
+                        (Err(evcxr::Error::CompilationErrors(errors)), buffered_lines) => {
+                            print_buffered_eval_output(buffered_lines);
                             Self::log_errors(prompt.len(), &line, errors);
                         }
-                        Err(err) => {
+                        (Err(err), buffered_lines) => {
+                            print_buffered_eval_output(buffered_lines);
                             logln(err.to_string().bright_red());
                         }
                     }
@@ -505,7 +510,7 @@ impl SpinnerGuard {
         let handle = std::thread::spawn(move || {
             let frames: Vec<String> = {
                 if SHOULD_COLORIZE.should_colorize() {
-                    vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+                    vec!["⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"]
                         .into_iter()
                         .map(|s| s.dimmed().to_string())
                         .collect()
@@ -659,20 +664,6 @@ impl Completer for ReplRustyLineEditorHelper {
     }
 }
 
-// TODO: handle fallbacks + decide output based on scrip mode
-fn spawn_printer_output_task(
-    receiver: crossbeam_channel::Receiver<String>,
-    mut printer: impl ExternalPrinter + Send + 'static,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        for line in receiver.iter() {
-            if printer.print(format!("{line}\n")).is_err() {
-                break;
-            };
-        }
-    })
-}
-
 fn spawn_logger_output_task(
     receiver: crossbeam_channel::Receiver<String>,
 ) -> std::thread::JoinHandle<()> {
@@ -681,6 +672,133 @@ fn spawn_logger_output_task(
             logln(line);
         }
     })
+}
+
+#[derive(Clone, Copy)]
+enum StreamTag {
+    Stdout,
+    Stderr,
+}
+
+struct BufferedLine {
+    tag: StreamTag,
+    text: String,
+}
+
+enum BufferedEvent {
+    Marker(u64),
+    Output(BufferedLine),
+}
+
+struct BufferedEvalOutput {
+    stop: Arc<AtomicBool>,
+    events: Arc<Mutex<Vec<BufferedEvent>>>,
+    marker_counter: AtomicU64,
+    handles: Vec<JoinHandle<()>>,
+}
+
+impl BufferedEvalOutput {
+    fn start(
+        stdout: crossbeam_channel::Receiver<String>,
+        stderr: crossbeam_channel::Receiver<String>,
+    ) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let events = Arc::new(Mutex::new(Vec::new()));
+
+        let handles = vec![
+            spawn_buffering_task(
+                StreamTag::Stdout,
+                stdout,
+                Arc::clone(&events),
+                Arc::clone(&stop),
+            ),
+            spawn_buffering_task(
+                StreamTag::Stderr,
+                stderr,
+                Arc::clone(&events),
+                Arc::clone(&stop),
+            ),
+        ];
+
+        Self {
+            stop,
+            events,
+            marker_counter: AtomicU64::new(1),
+            handles,
+        }
+    }
+
+    fn mark_cutoff(&self) -> u64 {
+        let marker_id = self.marker_counter.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut guard) = self.events.lock() {
+            guard.push(BufferedEvent::Marker(marker_id));
+        }
+        marker_id
+    }
+
+    fn collect_since(&self, marker_id: u64) -> Vec<BufferedLine> {
+        let events = {
+            let mut guard = self.events.lock().expect("buffer lock poisoned");
+            std::mem::take(&mut *guard)
+        };
+
+        let mut after_marker = false;
+        let mut lines = Vec::new();
+        for event in events {
+            match event {
+                BufferedEvent::Marker(id) if id == marker_id => {
+                    after_marker = true;
+                }
+                BufferedEvent::Output(line) if after_marker => {
+                    lines.push(line);
+                }
+                _ => {}
+            }
+        }
+
+        lines
+    }
+}
+
+impl Drop for BufferedEvalOutput {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        for handle in self.handles.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn spawn_buffering_task(
+    tag: StreamTag,
+    receiver: crossbeam_channel::Receiver<String>,
+    events: Arc<Mutex<Vec<BufferedEvent>>>,
+    stop: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            match receiver.recv_timeout(Duration::from_millis(50)) {
+                Ok(text) => {
+                    let line = BufferedEvent::Output(BufferedLine { tag, text });
+                    if let Ok(mut guard) = events.lock() {
+                        guard.push(line);
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    })
+}
+
+fn print_buffered_eval_output(lines: Vec<BufferedLine>) {
+    for line in lines {
+        let stream = match line.tag {
+            StreamTag::Stdout => "stdout",
+            StreamTag::Stderr => "stderr",
+        };
+        logln(format!("[evcxr {stream}] {}", line.text).dimmed());
+    }
 }
 
 fn toml_string_literal(s: impl AsRef<str>) -> anyhow::Result<String> {
