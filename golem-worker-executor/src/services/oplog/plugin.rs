@@ -707,6 +707,7 @@ impl ForwardingOplog {
             components,
             inner: inner.clone(),
             plugin_state,
+            pending_direct_commits: BTreeMap::new(),
             worker_event_service: None,
             monitor_tasks: Vec::new(),
         }));
@@ -780,7 +781,7 @@ impl Oplog for ForwardingOplog {
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         let mut state = self.state.lock().await;
-        let result = self.inner.commit(level).await;
+        let mut result = self.inner.commit(level).await;
         // Update last_committed_idx from committed entries
         if let Some(max_idx) = result.keys().max() {
             if *max_idx > state.last_committed_idx {
@@ -791,6 +792,9 @@ impl Oplog for ForwardingOplog {
         if state.commit_count >= self.max_commit_count {
             state.try_flush().await;
         }
+        // Merge entries committed directly to inner during flush
+        // so the Worker folds them into AgentStatusRecord
+        result.append(&mut state.pending_direct_commits);
         result
     }
 
@@ -853,6 +857,10 @@ struct ForwardingOplogState {
     components: Arc<dyn ComponentService>,
     inner: Arc<dyn Oplog>,
     plugin_state: HashMap<EnvironmentPluginGrantId, LivePluginState>,
+    /// Entries committed directly to inner (bypassing `ForwardingOplog::commit()`),
+    /// to be surfaced in the next `ForwardingOplog::commit()` return value
+    /// so the Worker folds them into `AgentStatusRecord`.
+    pending_direct_commits: BTreeMap<OplogIndex, OplogEntry>,
     worker_event_service: Option<Arc<dyn WorkerEventService>>,
     monitor_tasks: Vec<JoinHandle<()>>,
 }
@@ -1047,11 +1055,14 @@ impl ForwardingOplogState {
         }
 
         // If ALL entries are checkpoint entries, skip — nothing meaningful to deliver.
+        // Advance the cursor past them so we don't re-read the same range forever.
         if entries
             .iter()
             .all(|e| matches!(e, OplogEntry::OplogProcessorCheckpoint { .. }))
         {
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                s.confirmed_up_to = batch_end;
+                s.sending_up_to = batch_end;
                 s.send_in_progress = false;
             }
             return;
@@ -1244,14 +1255,15 @@ impl ForwardingOplogState {
             last_batch_start,
         };
         self.buffer.push_back(checkpoint.clone());
-        self.inner.add(checkpoint).await;
+        let idx = self.inner.add(checkpoint).await;
+        self.last_oplog_idx = idx;
         let committed = self.inner.commit(CommitLevel::Always).await;
-        self.last_oplog_idx = self.last_oplog_idx.next();
-        if let Some(max_idx) = committed.keys().max() {
-            if *max_idx > self.last_committed_idx {
-                self.last_committed_idx = *max_idx;
-            }
+        if let Some(max_idx) = committed.keys().max().copied() {
+            self.last_committed_idx = self.last_committed_idx.max(max_idx);
         }
+        // Track all directly committed entries so ForwardingOplog::commit()
+        // can surface them to the Worker for status folding
+        self.pending_direct_commits.extend(committed);
     }
 
     /// Prune buffer: drain entries that ALL active/in-flight plugins have confirmed past.
@@ -1926,6 +1938,7 @@ mod tests {
                     last_batch_start: OplogIndex::NONE,
                 },
             )]),
+            pending_direct_commits: BTreeMap::new(),
             worker_event_service: None,
             monitor_tasks: Vec::new(),
         };
@@ -1967,6 +1980,7 @@ mod tests {
             components,
             inner,
             plugin_state: HashMap::new(),
+            pending_direct_commits: BTreeMap::new(),
             worker_event_service: None,
             monitor_tasks: Vec::new(),
         };
@@ -2028,6 +2042,7 @@ mod tests {
                     last_batch_start: OplogIndex::NONE,
                 },
             )]),
+            pending_direct_commits: BTreeMap::new(),
             worker_event_service: None,
             monitor_tasks: Vec::new(),
         };
