@@ -113,6 +113,12 @@ pub struct InFunctionRetryState {
     retry_count: u32,
 }
 
+impl Default for InFunctionRetryState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InFunctionRetryState {
     pub fn new() -> Self {
         Self { retry_count: 0 }
@@ -740,10 +746,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
             return Ok(InternalRetryResult::Persist);
         }
 
-        let decision = self
-            .retry_state
-            .decide_retry(ctx, Pair::FQFN)
-            .await;
+        let decision = self.retry_state.decide_retry(ctx, Pair::FQFN).await;
 
         match decision {
             AsyncRetryDecision::RetryAfterDelay(delay) => {
@@ -778,9 +781,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
             DurableFunctionType::ReadRemote
             | DurableFunctionType::ReadLocal
             | DurableFunctionType::WriteLocal => true,
-            DurableFunctionType::WriteRemote => {
-                self.durable_execution_state.assume_idempotence
-            }
+            DurableFunctionType::WriteRemote => self.durable_execution_state.assume_idempotence,
             DurableFunctionType::WriteRemoteBatched(_)
             | DurableFunctionType::WriteRemoteTransaction(_) => false,
         }
@@ -1003,7 +1004,7 @@ mod tests {
         }
 
         fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
-            if let Some(kind) = self.interrupt_signal.clone() {
+            if let Some(kind) = self.interrupt_signal {
                 // Resolve immediately
                 Box::pin(async move { kind })
             } else {
