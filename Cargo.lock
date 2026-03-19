@@ -4565,6 +4565,7 @@ dependencies = [
  "test-r",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite 0.25.0",
  "tokio-util",
  "tonic 0.14.5",
  "tonic-health",
