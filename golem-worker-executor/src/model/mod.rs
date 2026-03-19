@@ -274,6 +274,14 @@ impl TrapType {
                             error: AgentError::ExceededTableLimit,
                             retry_from,
                         },
+                        Some(GolemSpecificWasmTrap::WorkerOutOfStorage) => TrapType::Error {
+                            error: AgentError::OutOfStorage,
+                            retry_from,
+                        },
+                        Some(GolemSpecificWasmTrap::WorkerExceededStorageLimit) => TrapType::Error {
+                            error: AgentError::ExceededStorageLimit,
+                            retry_from,
+                        },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {

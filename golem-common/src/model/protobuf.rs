@@ -574,6 +574,7 @@ impl From<InitialComponentFile> for golem::component::InitialComponentFile {
             content_hash: Some(value.content_hash.0.into()),
             path: value.path.to_string(),
             permissions: permissions.into(),
+            size: value.size,
         }
     }
 }
@@ -597,6 +598,7 @@ impl TryFrom<golem::component::InitialComponentFile> for InitialComponentFile {
             content_hash: ComponentFileContentHash(content_hash),
             path,
             permissions,
+            size: value.size,
         })
     }
 }

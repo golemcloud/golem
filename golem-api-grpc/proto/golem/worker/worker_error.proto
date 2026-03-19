@@ -10,6 +10,8 @@ message AgentError {
     UnknownError unknown_error = 4;
     ExceededMemoryLimit exceeded_memory_limit = 5;
     ExceededTableLimit exceeded_table_limit = 6;
+    OutOfStorage out_of_storage = 7;
+    ExceededStorageLimit exceeded_storage_limit = 8;
   }
 }
 
@@ -28,3 +30,7 @@ message UnknownError {
 message ExceededMemoryLimit {}
 
 message ExceededTableLimit {}
+
+message OutOfStorage {}
+
+message ExceededStorageLimit {}

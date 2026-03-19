@@ -218,6 +218,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
         .await?;
 
+        // Acquire storage semaphore permits for all initial component files.
+        // The permit is held by the RunningWorker and released when it stops.
+        if let Some(worker) = invocation_queue.upgrade() {
+            let total_initial_bytes: u64 = component_metadata.files.iter().map(|f| f.size).sum();
+            worker
+                .acquire_initial_storage(total_initial_bytes)
+                .await
+                .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
+        }
+
         let config_vars = effective_config_vars(
             worker_config.initial_config_vars.clone(),
             component_metadata.config_vars.clone(),
@@ -460,6 +470,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => RetryDecision::None,
             TrapType::Error {
                 error: AgentError::ExceededTableLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::OutOfStorage,
+                ..
+            } => RetryDecision::ReacquirePermits,
+            TrapType::Error {
+                error: AgentError::ExceededStorageLimit,
                 ..
             } => RetryDecision::None,
             TrapType::Error {

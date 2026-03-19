@@ -14,11 +14,11 @@
 
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
-use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::AgentError;
 use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
+use golem_common::SafeDisplay;
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
@@ -899,6 +899,12 @@ pub enum GolemSpecificWasmTrap {
     WorkerOutOfMemory,
     WorkerExceededMemoryLimit,
     WorkerExceededTableLimit,
+    /// The executor-wide storage semaphore pool is exhausted. The worker should
+    /// be suspended and retried once another worker releases storage permits.
+    WorkerOutOfStorage,
+    /// The worker has exceeded the per-worker storage limit imposed by its plan.
+    /// This is a permanent failure — the worker should not be retried.
+    WorkerExceededStorageLimit,
 }
 
 impl Display for GolemSpecificWasmTrap {
@@ -908,6 +914,10 @@ impl Display for GolemSpecificWasmTrap {
             Self::WorkerExceededMemoryLimit => write!(f, "Worker exceeded plan memory limits"),
             Self::WorkerExceededTableLimit => {
                 write!(f, "Worker exceeded plan function table limits")
+            }
+            Self::WorkerOutOfStorage => write!(f, "Worker cannot acquire more storage space"),
+            Self::WorkerExceededStorageLimit => {
+                write!(f, "Worker exceeded plan storage limits")
             }
         }
     }

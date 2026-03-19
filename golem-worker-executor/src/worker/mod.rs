@@ -828,6 +828,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Acquire storage semaphore permits for the total size of all initial
+    /// component files. Called once from `DurableWorkerCtx::create` after
+    /// `prepare_filesystem` has loaded the files. Merges the acquired permits
+    /// into the running worker's `storage_permit` so they are released
+    /// automatically when the worker stops.
+    ///
+    /// Uses the non-blocking priority path (`try_acquire_storage`). If the
+    /// semaphore pool is full, idle workers are evicted by the semaphore's own
+    /// logic; the permit is returned as `None` and the caller should propagate
+    /// a retriable `WorkerOutOfStorage` error.
+    ///
+    /// Should only be called from the invocation loop.
+    pub async fn acquire_initial_storage(
+        &self,
+        total_bytes: u64,
+    ) -> Result<(), GolemSpecificWasmTrap> {
+        if total_bytes == 0 {
+            return Ok(());
+        }
+        match &mut *self.instance.lock().await {
+            WorkerInstance::Running(ref mut running) => {
+                if let Some(permit) = self.active_workers().try_acquire_storage(total_bytes).await
+                {
+                    running.merge_extra_storage_permits(permit);
+                    Ok(())
+                } else {
+                    Err(GolemSpecificWasmTrap::WorkerOutOfStorage)
+                }
+            }
+            // Worker stopped between create and acquire — no-op, permits will be
+            // re-acquired on next startup from AgentStatusRecord.
+            _ => Ok(()),
+        }
+    }
+
     /// Enqueue invocation of an exported function
     async fn enqueue_worker_invocation(
         &self,

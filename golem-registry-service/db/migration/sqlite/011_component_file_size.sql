@@ -1,0 +1,2 @@
+ALTER TABLE component_files ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE original_component_files ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0;

@@ -99,6 +99,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
             Error::ExceededMemoryLimit(_) => Ok(Self::ExceededMemoryLimit),
             Error::ExceededTableLimit(_) => Ok(Self::ExceededTableLimit),
+            Error::OutOfStorage(_) => Ok(Self::OutOfStorage),
+            Error::ExceededStorageLimit(_) => Ok(Self::ExceededStorageLimit),
         }
     }
 }
@@ -124,6 +126,10 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
             }
             AgentError::ExceededTableLimit => {
                 Error::ExceededTableLimit(grpc_worker::ExceededTableLimit {})
+            }
+            AgentError::OutOfStorage => Error::OutOfStorage(grpc_worker::OutOfStorage {}),
+            AgentError::ExceededStorageLimit => {
+                Error::ExceededStorageLimit(grpc_worker::ExceededStorageLimit {})
             }
         };
         Self { error: Some(error) }

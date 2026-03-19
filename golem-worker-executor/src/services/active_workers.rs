@@ -32,20 +32,151 @@ use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
+/// Executor-wide storage semaphore. One permit = `STORAGE_PERMIT_SIZE_KB` KB.
+///
+/// Extracted as a standalone struct so it can be unit-tested independently of
+/// the `WorkerCtx`-generic `ActiveWorkers`.
+pub(crate) struct StorageSemaphore {
+    semaphore: Arc<Semaphore>,
+    /// Held during non-blocking priority acquires to interrupt any in-progress
+    /// blocking `acquire` loops, preventing starvation of high-priority callers.
+    priority_lock: Arc<Mutex<()>>,
+    acquire_retry_delay: Duration,
+}
+
+impl StorageSemaphore {
+    pub(crate) fn new(pool_bytes: usize, acquire_retry_delay: Duration) -> Self {
+        let permits = storage_pool_bytes_to_permits(pool_bytes);
+        Self {
+            semaphore: Arc::new(Semaphore::new(permits)),
+            priority_lock: Arc::new(Mutex::new(())),
+            acquire_retry_delay,
+        }
+    }
+
+    /// Available bytes remaining in the pool (rounded down to KB boundary).
+    #[cfg(test)]
+    pub(crate) fn available_bytes(&self) -> u64 {
+        self.semaphore.available_permits() as u64 * STORAGE_PERMIT_SIZE_KB * 1024
+    }
+
+    /// Blocking acquire. Loops until `storage_bytes` are available, calling
+    /// `try_free_up` each time permits are exhausted. If `try_free_up` returns
+    /// `false` (nothing to evict), sleeps `acquire_retry_delay` before retrying.
+    pub(crate) async fn acquire<F, Fut>(
+        &self,
+        storage_bytes: u64,
+        try_free_up: F,
+    ) -> OwnedSemaphorePermit
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let permits = bytes_to_storage_permits(storage_bytes);
+        loop {
+            let available = self.semaphore.available_permits();
+            let lock = self.priority_lock.lock().await;
+            let result = self.semaphore.clone().try_acquire_many_owned(permits);
+            drop(lock);
+            match result {
+                Ok(permit) => {
+                    debug!(
+                        "Acquired {} storage permits ({} bytes) of {}, new available: {}, permit size: {}",
+                        permits,
+                        storage_bytes,
+                        available,
+                        self.semaphore.available_permits(),
+                        permit.num_permits()
+                    );
+                    break permit;
+                }
+                Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
+                Err(TryAcquireError::NoPermits) => {
+                    debug!(
+                        "Not enough storage to allocate {} permits (available: {}), trying to free some up",
+                        permits,
+                        self.semaphore.available_permits()
+                    );
+                    if try_free_up().await {
+                        debug!("Freed up some storage, retrying");
+                        continue;
+                    } else {
+                        debug!("Could not free up storage, retrying after some time");
+                        tokio::time::sleep(self.acquire_retry_delay).await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Non-blocking priority acquire. Grabs the priority lock to interrupt any
+    /// in-progress blocking `acquire` loops, then attempts once.
+    ///
+    /// Returns `None` if `storage_bytes` are not available even after
+    /// interrupting waiting acquires.
+    pub(crate) async fn try_acquire(&self, storage_bytes: u64) -> Option<OwnedSemaphorePermit> {
+        let permits = bytes_to_storage_permits(storage_bytes);
+        let mut lock = None;
+        loop {
+            match self.semaphore.clone().try_acquire_many_owned(permits) {
+                Ok(permit) => {
+                    debug!(
+                        "Acquired {} storage permits ({} bytes), available now: {}",
+                        permits,
+                        storage_bytes,
+                        self.semaphore.available_permits()
+                    );
+                    break Some(permit);
+                }
+                Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
+                Err(TryAcquireError::NoPermits) => {
+                    if lock.is_none() {
+                        debug!(
+                            "Not enough storage to acquire {} permits (available: {}), cancelling waiting acquires and retry",
+                            permits,
+                            self.semaphore.available_permits()
+                        );
+                        lock = Some(self.priority_lock.lock().await);
+                        continue;
+                    } else {
+                        debug!(
+                            "Not enough storage to acquire {} permits (available: {})",
+                            permits,
+                            self.semaphore.available_permits()
+                        );
+                        break None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Release a number of bytes back to the pool without dropping the entire
+    /// permit. Used when a file is partially freed (e.g. truncation).
+    ///
+    /// Adds `storage_bytes` worth of permits back to the semaphore directly.
+    /// The caller is responsible for ensuring they don't release more than they
+    /// acquired (no underflow protection at this level).
+    pub(crate) fn release(&self, storage_bytes: u64) {
+        let permits = bytes_to_storage_permits(storage_bytes);
+        if permits > 0 {
+            self.semaphore.add_permits(permits as usize);
+        }
+    }
+}
+
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     worker_memory: Arc<Semaphore>,
-    worker_storage: Arc<Semaphore>,
+    worker_storage: Arc<StorageSemaphore>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
-    storage_acquire_retry_delay: Duration,
 }
 
 impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub fn new(memory_config: &MemoryConfig, storage_config: &StorageConfig) -> Self {
         let worker_memory_size = memory_config.worker_memory();
-        let worker_storage_permits = storage_pool_bytes_to_permits(storage_config.worker_storage());
         Self {
             workers: Cache::new(
                 None,
@@ -54,9 +185,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 "active_workers",
             ),
             worker_memory: Arc::new(Semaphore::new(worker_memory_size)),
-            worker_storage: Arc::new(Semaphore::new(worker_storage_permits)),
+            worker_storage: Arc::new(StorageSemaphore::new(
+                storage_config.worker_storage(),
+                storage_config.acquire_retry_delay,
+            )),
             acquire_retry_delay: memory_config.acquire_retry_delay,
-            storage_acquire_retry_delay: storage_config.acquire_retry_delay,
             priority_allocation_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -249,46 +382,14 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     /// Blocking acquire of storage semaphore permits. Loops until the requested
     /// number of bytes is available, evicting idle workers as needed.
-    ///
-    /// One semaphore permit represents `STORAGE_PERMIT_SIZE_KB` kilobytes.
-    /// Bytes are rounded up to the nearest permit boundary before acquiring.
     pub async fn acquire_storage(&self, storage_bytes: u64) -> OwnedSemaphorePermit {
-        let permits = bytes_to_storage_permits(storage_bytes);
-
-        loop {
-            let available = self.worker_storage.available_permits();
-            let lock = self.priority_allocation_lock.lock().await;
-            let result = self.worker_storage.clone().try_acquire_many_owned(permits);
-            drop(lock);
-            match result {
-                Ok(permit) => {
-                    debug!(
-                        "Acquired {} storage permits ({} bytes) of {}, new available: {}, permit size: {}",
-                        permits,
-                        storage_bytes,
-                        available,
-                        self.worker_storage.available_permits(),
-                        permit.num_permits()
-                    );
-                    break permit;
-                }
-                Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
-                Err(TryAcquireError::NoPermits) => {
-                    debug!(
-                        "Not enough storage to allocate {} permits (available: {}), trying to free some up",
-                        permits,
-                        self.worker_storage.available_permits()
-                    );
-                    if self.try_free_up_storage(storage_bytes).await {
-                        debug!("Freed up some storage, retrying");
-                        continue;
-                    } else {
-                        debug!("Could not free up storage, retrying after some time");
-                        tokio::time::sleep(self.storage_acquire_retry_delay).await;
-                    }
-                }
-            }
-        }
+        let workers = self.workers.clone();
+        self.worker_storage
+            .acquire(storage_bytes, || {
+                let workers = workers.clone();
+                async move { Self::try_free_up_storage_inner(&workers, storage_bytes).await }
+            })
+            .await
     }
 
     /// Non-blocking, priority storage acquire. Grabs the allocation lock to
@@ -297,91 +398,46 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     /// Returns `None` if the requested storage is not available even after
     /// interrupting waiting acquires.
     pub async fn try_acquire_storage(&self, storage_bytes: u64) -> Option<OwnedSemaphorePermit> {
-        let permits = bytes_to_storage_permits(storage_bytes);
-        let mut lock = None;
-        loop {
-            match self.worker_storage.clone().try_acquire_many_owned(permits) {
-                Ok(permit) => {
-                    debug!(
-                        "Acquired {} storage permits ({} bytes), available now: {}",
-                        permits,
-                        storage_bytes,
-                        self.worker_storage.available_permits()
-                    );
-                    break Some(permit);
-                }
-                Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
-                Err(TryAcquireError::NoPermits) => {
-                    if lock.is_none() {
-                        debug!(
-                            "Not enough storage to acquire {} permits (available: {}), cancelling waiting acquires and retry",
-                            permits,
-                            self.worker_storage.available_permits()
-                        );
-                        lock = Some(self.priority_allocation_lock.lock().await);
-                        continue;
-                    } else {
-                        debug!(
-                            "Not enough storage to acquire {} permits (available: {})",
-                            permits,
-                            self.worker_storage.available_permits()
-                        );
-                        break None;
-                    }
-                }
-            }
-        }
+        self.worker_storage.try_acquire(storage_bytes).await
     }
 
-    async fn try_free_up_storage(&self, storage_bytes: u64) -> bool {
-        let permits_needed = bytes_to_storage_permits(storage_bytes);
-        let current_avail = self.worker_storage.available_permits() as u64;
-        let permits_needed_u64 = permits_needed as u64;
+    async fn try_free_up_storage_inner(
+        workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+        storage_bytes: u64,
+    ) -> bool {
+        let permits_needed = bytes_to_storage_permits(storage_bytes) as u64;
+        let mut possibilities = Vec::new();
 
-        if current_avail < permits_needed_u64 {
-            let mut possibilities = Vec::new();
-
-            debug!("Collecting storage eviction possibilities");
-            let pairs = self.workers.iter().await;
-            for (agent_id, worker) in pairs {
-                if worker.is_currently_idle_but_running().await {
-                    // Use memory_requirement as a proxy for "this worker is idle and
-                    // worth evicting"; actual storage freed comes from dropping its
-                    // storage_permit (Phase 3 wires this up properly).
-                    if let Ok(memory) = worker.memory_requirement().await {
-                        let last_changed = worker.last_execution_state_change();
-                        possibilities.push((agent_id, worker, memory, last_changed));
-                    }
+        debug!("Collecting storage eviction possibilities");
+        for (agent_id, worker) in workers.iter().await {
+            if worker.is_currently_idle_but_running().await {
+                if let Ok(memory) = worker.memory_requirement().await {
+                    let last_changed = worker.last_execution_state_change();
+                    possibilities.push((agent_id, worker, memory, last_changed));
                 }
             }
-
-            possibilities
-                .sort_by_key(|(_agent_id, _worker, _memory, last_changed)| {
-                    last_changed.to_millis()
-                });
-            possibilities.reverse();
-
-            let mut evicted = 0u32;
-
-            while (evicted as u64) < permits_needed_u64 && !possibilities.is_empty() {
-                let (agent_id, worker, _memory, _) = possibilities.pop().unwrap();
-
-                debug!("Trying to stop {agent_id} to free up storage");
-                if worker.stop_if_idle().await {
-                    debug!("Stopped {agent_id} to free up storage");
-                    evicted += 1;
-                }
-            }
-
-            if evicted > 0 {
-                debug!("Evicted {evicted} worker(s) to free storage; re-checking availability");
-            }
-            // Re-check how much storage is actually available now (storage_permit dropped on stop)
-            self.worker_storage.available_permits() as u64 >= permits_needed_u64
-        } else {
-            debug!("Storage was freed up in the meantime");
-            true
         }
+
+        // Evict oldest-idle first
+        possibilities
+            .sort_by_key(|(_agent_id, _worker, _memory, last_changed)| last_changed.to_millis());
+        possibilities.reverse();
+
+        let mut evicted = 0u64;
+        while evicted < permits_needed && !possibilities.is_empty() {
+            let (agent_id, worker, _memory, _) = possibilities.pop().unwrap();
+            debug!("Trying to stop {agent_id} to free up storage");
+            if worker.stop_if_idle().await {
+                debug!("Stopped {agent_id} to free up storage");
+                evicted += 1;
+            }
+        }
+
+        if evicted > 0 {
+            debug!("Evicted {evicted} worker(s) to free storage; re-checking availability");
+        }
+        // Actual freed bytes come from storage_permit being dropped on stop
+        evicted >= permits_needed
     }
 }
 
@@ -412,15 +468,12 @@ mod tests {
 
     #[test]
     fn bytes_to_permits_exact_kb_boundary() {
-        // Exactly 1 KB → 1 permit
         assert_eq!(bytes_to_storage_permits(1024), 1);
     }
 
     #[test]
     fn bytes_to_permits_rounds_up_partial_kb() {
-        // 1 byte → 1 permit (rounds up)
         assert_eq!(bytes_to_storage_permits(1), 1);
-        // 1025 bytes → 2 permits (rounds up from 1.000977 KB)
         assert_eq!(bytes_to_storage_permits(1025), 2);
     }
 
@@ -431,28 +484,135 @@ mod tests {
 
     #[test]
     fn bytes_to_permits_1gb() {
-        // 1 GB = 1_048_576 KB → 1_048_576 permits
         assert_eq!(bytes_to_storage_permits(1024 * 1024 * 1024), 1_048_576);
     }
 
     #[test]
     fn bytes_to_permits_very_large_saturates_at_u32_max() {
-        // Values that would exceed u32::MAX permits are clamped to u32::MAX
-        let huge: u64 = u64::MAX;
-        assert_eq!(bytes_to_storage_permits(huge), u32::MAX);
+        assert_eq!(bytes_to_storage_permits(u64::MAX), u32::MAX);
     }
 
     #[test]
     fn bytes_to_permits_just_under_4tb() {
-        // ~4 TB - 1 KB = 4_294_967_295 KB = exactly u32::MAX permits
         let just_under: u64 = (u32::MAX as u64) * 1024;
         assert_eq!(bytes_to_storage_permits(just_under), u32::MAX);
     }
 
     #[test]
     fn storage_pool_permits_10gb() {
-        // 10 GB pool → 10_485_760 permits
         let ten_gb: usize = 10 * 1024 * 1024 * 1024;
         assert_eq!(storage_pool_bytes_to_permits(ten_gb), 10 * 1024 * 1024);
+    }
+
+    fn storage_semaphore(pool_bytes: usize) -> StorageSemaphore {
+        StorageSemaphore::new(pool_bytes, Duration::from_millis(1))
+    }
+
+    #[test]
+    async fn try_acquire_succeeds_when_space_available() {
+        let storage_semaphore = storage_semaphore(4 * 1024); // 4 KB pool
+        let permit = storage_semaphore.try_acquire(2 * 1024).await; // ask for 2 KB
+        assert!(permit.is_some());
+        assert_eq!(storage_semaphore.available_bytes(), 2 * 1024);
+    }
+
+    #[test]
+    async fn try_acquire_returns_none_when_pool_exhausted() {
+        let storage_semaphore = storage_semaphore(2 * 1024); // 2 KB pool
+        let _permit = storage_semaphore.try_acquire(2 * 1024).await.unwrap(); // exhaust it
+        let second = storage_semaphore.try_acquire(1024).await; // no space left
+        assert!(second.is_none());
+    }
+
+    #[test]
+    async fn try_acquire_zero_bytes_always_succeeds() {
+        let storage_semaphore = storage_semaphore(0); // empty pool — 0 bytes → 0 permits
+        let permit = storage_semaphore.try_acquire(0).await;
+        assert!(permit.is_some());
+    }
+
+    #[test]
+    async fn dropping_permit_returns_space_to_pool() {
+        let storage_semaphore = storage_semaphore(4 * 1024);
+        {
+            let _permit = storage_semaphore.try_acquire(4 * 1024).await.unwrap();
+            assert_eq!(storage_semaphore.available_bytes(), 0);
+        } // permit dropped here
+        assert_eq!(storage_semaphore.available_bytes(), 4 * 1024);
+    }
+
+    #[test]
+    async fn multiple_permits_are_independent() {
+        let storage_semaphore = storage_semaphore(6 * 1024); // 6 KB pool
+        let p1 = storage_semaphore.try_acquire(2 * 1024).await.unwrap();
+        let p2 = storage_semaphore.try_acquire(2 * 1024).await.unwrap();
+        assert_eq!(storage_semaphore.available_bytes(), 2 * 1024);
+        drop(p1);
+        assert_eq!(storage_semaphore.available_bytes(), 4 * 1024);
+        drop(p2);
+        assert_eq!(storage_semaphore.available_bytes(), 6 * 1024);
+    }
+
+    #[test]
+    async fn try_acquire_rounds_up_to_kb_boundary() {
+        let storage_semaphore = storage_semaphore(2 * 1024); // 2 KB = 2 permits
+                                                             // 1 byte rounds up to 1 KB = 1 permit; should leave 1 KB
+        let _p = storage_semaphore.try_acquire(1).await.unwrap();
+        assert_eq!(storage_semaphore.available_bytes(), 1024);
+    }
+
+    #[test]
+    async fn release_returns_bytes_without_dropping_permit() {
+        let storage_semaphore = storage_semaphore(4 * 1024);
+        let _permit = storage_semaphore.try_acquire(4 * 1024).await.unwrap(); // exhaust pool
+        assert_eq!(storage_semaphore.available_bytes(), 0);
+        storage_semaphore.release(2 * 1024); // release half back
+        assert_eq!(storage_semaphore.available_bytes(), 2 * 1024);
+    }
+
+    #[test]
+    async fn release_zero_is_a_noop() {
+        let storage_semaphore = storage_semaphore(4 * 1024);
+        let _permit = storage_semaphore.try_acquire(2 * 1024).await.unwrap();
+        let before = storage_semaphore.available_bytes();
+        storage_semaphore.release(0);
+        assert_eq!(storage_semaphore.available_bytes(), before);
+    }
+
+    #[test]
+    async fn acquire_succeeds_immediately_when_space_available() {
+        let storage_semaphore = storage_semaphore(4 * 1024);
+        // pool has space so it succeeds on the first try without invoking free_up
+        let permit = storage_semaphore
+            .acquire(2 * 1024, || async { false })
+            .await;
+        assert_eq!(permit.num_permits(), 2); // 2 KB = 2 permits
+        assert_eq!(storage_semaphore.available_bytes(), 2 * 1024);
+    }
+
+    #[test]
+    async fn acquire_succeeds_after_free_up_releases_space() {
+        let storage_semaphore = storage_semaphore(4 * 1024);
+        let _held = storage_semaphore.try_acquire(4 * 1024).await.unwrap(); // exhaust pool
+
+        // Share the inner semaphore Arc with the closure so it can add permits
+        // back to simulate a worker releasing its storage on eviction.
+        let sem_arc = storage_semaphore.semaphore.clone();
+        let released = std::sync::atomic::AtomicBool::new(false);
+        let permit = storage_semaphore
+            .acquire(2 * 1024, || {
+                let sem = sem_arc.clone();
+                let already = released.fetch_or(true, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if !already {
+                        sem.add_permits(2); // 2 permits = 2 KB freed
+                        true
+                    } else {
+                        false
+                    }
+                }
+            })
+            .await;
+        assert_eq!(permit.num_permits(), 2);
     }
 }
