@@ -33,19 +33,6 @@ async fn test_rust_counter() {
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::NEW,
-            ".",
-            flag::TEMPLATE,
-            "rust",
-            flag::COMPONENT_NAME,
-            "app:counter",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
-
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
@@ -496,19 +483,6 @@ async fn test_ts_counter() {
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
-
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::NEW,
-            ".",
-            flag::TEMPLATE,
-            "ts",
-            flag::COMPONENT_NAME,
-            "app:counter",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
