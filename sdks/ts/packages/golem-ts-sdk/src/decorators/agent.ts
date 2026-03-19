@@ -40,7 +40,6 @@ import { AgentConstructorRegistry } from '../internal/registry/agentConstructorR
 import { deserializeDataValue, ParameterDetail } from '../internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from '../host/hostapi';
 import { getHttpMountDetails } from '../internal/http/mount';
-import { validateHttpMount } from '../internal/http/validation';
 import { getAgentConstructorSchema } from '../internal/schema/constructor';
 import { getAgentMethodSchema } from '../internal/schema/method';
 import ms from 'ms';
@@ -281,9 +280,8 @@ export function agent(options?: AgentDecoratorOptions) {
       inputSchema: constructorDataSchema,
     };
 
-    if (httpMount) {
-      validateHttpMount(agentClassName.value, httpMount, constructor);
-    }
+    // HTTP mount/endpoint validation is deferred to initialization time
+    // for better error messages (via AgentError instead of WASM instantiation errors)
 
     const agentConfigEntries = Either.getOrThrowWith(
       getAgentConfigEntries(classMetadata.constructorArgs),
