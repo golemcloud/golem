@@ -34,7 +34,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
     RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    StorageUsageUpdateParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -536,6 +536,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     delta,
                 }))
             }
+            OplogEntry::StorageUsageUpdate { timestamp, delta } => Ok(
+                PublicOplogEntry::StorageUsageUpdate(StorageUsageUpdateParams { timestamp, delta }),
+            ),
             OplogEntry::CreateResource {
                 timestamp,
                 id,

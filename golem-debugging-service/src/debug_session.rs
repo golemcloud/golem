@@ -22,7 +22,7 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::public_oplog_entry::{
     AgentInvocationFinishedParams, AgentInvocationStartedParams, CreateParams,
     CreateResourceParams, DropResourceParams, FailedUpdateParams, GrowMemoryParams, HostCallParams,
-    LogParams, PublicAgentInvocationResult, RawSnapshotData,
+    LogParams, PublicAgentInvocationResult, RawSnapshotData, StorageUsageUpdateParams,
 };
 use golem_common::model::oplog::{
     AgentError, DurableFunctionType, OplogEntry, OplogIndex, OplogPayload,
@@ -397,6 +397,9 @@ fn get_oplog_entry_from_public_oplog_entry(
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {
             Ok(OplogEntry::GrowMemory { timestamp, delta })
+        }
+        PublicOplogEntry::StorageUsageUpdate(StorageUsageUpdateParams { timestamp, delta }) => {
+            Ok(OplogEntry::StorageUsageUpdate { timestamp, delta })
         }
         PublicOplogEntry::CreateResource(CreateResourceParams {
             timestamp,

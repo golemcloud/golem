@@ -38,7 +38,7 @@ use crate::model::oplog::public_oplog_entry::{
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
     RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    StorageUsageUpdateParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
@@ -445,6 +445,15 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     delta: grow_memory.delta,
                 }))
             }
+            oplog_entry::Entry::StorageUsageUpdate(storage_usage_update) => Ok(
+                PublicOplogEntry::StorageUsageUpdate(StorageUsageUpdateParams {
+                    timestamp: storage_usage_update
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    delta: storage_usage_update.delta,
+                }),
+            ),
             oplog_entry::Entry::CreateResource(create_resource) => {
                 Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
                     timestamp: create_resource
@@ -851,6 +860,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
                             timestamp: Some(grow_memory.timestamp.into()),
                             delta: grow_memory.delta,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::StorageUsageUpdate(storage_usage_update) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::StorageUsageUpdate(
+                        golem_api_grpc::proto::golem::worker::StorageUsageUpdateParameters {
+                            timestamp: Some(storage_usage_update.timestamp.into()),
+                            delta: storage_usage_update.delta,
                         },
                     )),
                 }

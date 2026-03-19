@@ -27,8 +27,8 @@ use golem_common::model::oplog::public_oplog_entry::{
     PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType,
     PublicRetryConfig, PublicSpanData, RestartParams, RevertParams,
     RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    StorageUsageUpdateParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, PublicOplogEntry,
@@ -201,6 +201,12 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             }),
             PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {
                 Self::GrowMemory(oplog::GrowMemoryParameters {
+                    timestamp: timestamp.into(),
+                    delta,
+                })
+            }
+            PublicOplogEntry::StorageUsageUpdate(StorageUsageUpdateParams { timestamp, delta }) => {
+                Self::StorageUsageUpdate(oplog::StorageUsageUpdateParameters {
                     timestamp: timestamp.into(),
                     delta,
                 })
@@ -924,6 +930,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 details: params.details,
             }),
             oplog::OplogEntry::GrowMemory(params) => Ok(Self::GrowMemory {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                delta: params.delta,
+            }),
+            oplog::OplogEntry::StorageUsageUpdate(params) => Ok(Self::StorageUsageUpdate {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 delta: params.delta,
             }),

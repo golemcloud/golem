@@ -662,6 +662,17 @@ impl TextView for PublicOplogEntry {
                     format_id(&format_binary_size(&params.delta)),
                 ));
             }
+            PublicOplogEntry::StorageUsageUpdate(params) => {
+                logln(format_message_highlight("STORAGE USAGE UPDATE"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}delta:             {}",
+                    format_id(&params.delta.to_string()),
+                ));
+            }
             PublicOplogEntry::CreateResource(params) => {
                 logln(format_message_highlight("CREATE RESOURCE"));
                 logln(format!(

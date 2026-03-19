@@ -141,7 +141,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // Release permits if the truncation succeeded and actually shrank the file.
         if result.is_ok() && size < current_size {
-            self.release_storage_space(current_size - size);
+            self.release_storage_space(current_size - size).await;
         }
 
         result
@@ -546,7 +546,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // Only release permits if the unlink actually succeeded.
         if result.is_ok() {
-            self.release_storage_space(file_size);
+            self.release_storage_space(file_size).await;
         }
 
         result

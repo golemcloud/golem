@@ -183,6 +183,12 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         &new_entries,
     );
 
+    let current_storage_usage = calculate_current_storage_usage(
+        last_known.current_storage_usage,
+        &skipped_regions,
+        &new_entries,
+    );
+
     let owned_resources =
         collect_resources(last_known.owned_resources, &skipped_regions, &new_entries);
 
@@ -214,6 +220,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         component_size,
         owned_resources,
         total_linear_memory_size,
+        current_storage_usage,
         active_plugins,
         oplog_processor_checkpoints,
         deleted_regions,
@@ -334,6 +341,7 @@ fn calculate_latest_worker_status(
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
             OplogEntry::GrowMemory { .. } => {}
+            OplogEntry::StorageUsageUpdate { .. } => {}
             OplogEntry::CreateResource { .. } => {}
             OplogEntry::DropResource { .. } => {}
             OplogEntry::Log { .. } => {
@@ -792,6 +800,38 @@ fn calculate_total_linear_memory_size(
     result
 }
 
+/// Accumulates `StorageUsageUpdate` hint entries to reconstruct the current
+/// storage usage at any point in the oplog. Used to populate
+/// `AgentStatusRecord::current_storage_usage` for pre-acquiring storage permits
+/// when a worker restarts.
+///
+/// Mirrors `calculate_total_linear_memory_size`: entries in skipped regions
+/// are excluded, and `Create` resets the counter to zero (a newly created worker
+/// has no written files yet).
+fn calculate_current_storage_usage(
+    current: u64,
+    skipped_regions: &DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> u64 {
+    let mut result = current as i64;
+    for (idx, entry) in entries {
+        if skipped_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        match entry {
+            OplogEntry::Create { .. } => {
+                result = 0;
+            }
+            OplogEntry::StorageUsageUpdate { delta, .. } => {
+                result = result.saturating_add(*delta);
+            }
+            _ => {}
+        }
+    }
+    result.max(0) as u64
+}
+
 fn collect_resources(
     initial: HashMap<AgentResourceId, AgentResourceDescription>,
     skipped_regions: &DeletedRegions,
@@ -1011,6 +1051,39 @@ mod test {
     #[test]
     async fn empty() {
         let test_case = TestCase::builder(0).build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn storage_usage_accumulated_from_deltas() {
+        let test_case = TestCase::builder(0)
+            .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
+            .storage_usage_update(1024)
+            .storage_usage_update(2048)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn storage_usage_decremented_on_negative_delta() {
+        let test_case = TestCase::builder(0)
+            .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
+            .storage_usage_update(1024)
+            .storage_usage_update(-512)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn storage_usage_clamped_at_zero_on_underflow() {
+        let test_case = TestCase::builder(0)
+            .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
+            .storage_usage_update(100)
+            .storage_usage_update(-9999) // larger than total acquired
+            .build();
 
         run_test_case(test_case).await;
     }
@@ -1716,6 +1789,21 @@ mod test {
                 },
                 |mut status| {
                     status.total_linear_memory_size += delta;
+                    status
+                },
+            )
+        }
+
+        pub fn storage_usage_update(self, delta: i64) -> Self {
+            self.add(
+                OplogEntry::StorageUsageUpdate {
+                    timestamp: Timestamp::now_utc(),
+                    delta,
+                },
+                |mut status| {
+                    status.current_storage_usage = (status.current_storage_usage as i64)
+                        .saturating_add(delta)
+                        .max(0) as u64;
                     status
                 },
             )

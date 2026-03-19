@@ -476,6 +476,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         self.public_state
             .worker()
+            .add_to_oplog(OplogEntry::storage_usage_update(new_bytes as i64))
+            .await;
+        self.public_state
+            .worker()
             .acquire_storage_space(new_bytes)
             .await?;
         self.state.current_storage_usage += new_bytes;
@@ -485,7 +489,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Release `freed_bytes` back to the executor semaphore pool.
     /// Called when files are deleted or truncated (Phase 5).
     /// During replay this is a no-op.
-    pub fn release_storage_space(&mut self, freed_bytes: u64) {
+    pub async fn release_storage_space(&mut self, freed_bytes: u64) {
         if self.state.is_replay() {
             return;
         }
@@ -493,6 +497,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if freed_bytes == 0 {
             return;
         }
+        self.public_state
+            .worker()
+            .add_to_oplog(OplogEntry::storage_usage_update(-(freed_bytes as i64)))
+            .await;
         self.public_state
             .worker()
             .release_storage_space(freed_bytes);

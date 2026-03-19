@@ -1813,7 +1813,17 @@ pub async fn start_with_executor_storage_pool(
     context: &TestContext,
     pool_bytes: u64,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, Some(pool_bytes), None, None, None, None).await
+    start_customized(
+        deps,
+        context,
+        None,
+        Some(pool_bytes),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
 }
 
 #[derive(Clone)]

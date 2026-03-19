@@ -287,6 +287,10 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     delta: bigint;
   };
+  export type StorageUsageUpdateParameters = {
+    timestamp: Datetime;
+    delta: bigint;
+  };
   export type AgentResourceId = bigint;
   export type CreateResourceParameters = {
     timestamp: Datetime;
@@ -659,6 +663,11 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'grow-memory'
     val: GrowMemoryParameters
   } |
+  /** Updated storage usage by a signed delta */
+  {
+    tag: 'storage-usage-update'
+    val: StorageUsageUpdateParameters
+  } |
   /** Created a resource instance */
   {
     tag: 'create-resource'
@@ -876,6 +885,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'grow-memory'
     val: GrowMemoryParameters
+  } |
+  /** Updated storage usage by a signed delta */
+  {
+    tag: 'storage-usage-update'
+    val: StorageUsageUpdateParameters
   } |
   /** Created a resource instance */
   {
