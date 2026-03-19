@@ -3,6 +3,10 @@ name = "component_name"
 version = "0.0.1"
 edition = "2021"
 
+[profile.release]
+opt-level = "s"
+lto = true
+
 [lib]
 crate-type = ["cdylib"]
 path = "src/lib.rs"
