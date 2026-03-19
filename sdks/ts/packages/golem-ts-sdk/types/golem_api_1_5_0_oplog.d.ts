@@ -411,6 +411,12 @@ declare module 'golem:api/oplog@1.5.0' {
   } |
   {
     tag: 'exceeded-table-limit'
+  } |
+  {
+    tag: 'out-of-storage'
+  } |
+  {
+    tag: 'exceeded-storage-limit'
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
