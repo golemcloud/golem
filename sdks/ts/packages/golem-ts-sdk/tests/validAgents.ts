@@ -367,6 +367,7 @@ class BarAgent extends BaseAgent {
     listComplexType: Types.ListComplexType,
     objectType: Types.ObjectType,
     unionWithLiterals: UnionWithLiterals,
+    unionWithBooleanInMiddle: Types.UnionWithBooleanInMiddle,
     textType: UnstructuredText,
     eitherXType: EitherX,
     eitherYType: EitherY,

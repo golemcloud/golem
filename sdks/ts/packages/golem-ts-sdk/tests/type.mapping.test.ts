@@ -23,6 +23,7 @@ import {
   getStringType,
   getPromiseType,
   getUnionWithLiterals,
+  getUnionWithBooleanInMiddle,
 } from './testUtils';
 
 import {
@@ -165,6 +166,12 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
           {
             name: 'UnionType3',
             typ: {
+              kind: 'bool',
+            },
+          },
+          {
+            name: 'UnionType4',
+            typ: {
               kind: 'record',
               value: {
                 fields: [
@@ -190,12 +197,6 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
                 name: 'ObjectType',
                 owner: undefined,
               },
-            },
-          },
-          {
-            name: 'UnionType4',
-            typ: {
-              kind: 'bool',
             },
           },
         ],
@@ -236,6 +237,45 @@ test('Union with literals to AnalysedType', () => {
   };
 
   expect(unionWithLiterals).toEqual(expectedAnalysedType);
+});
+
+test('Union with true|false in the middle preserves boolean case position', () => {
+  const [unionWithBooleanInMiddle] = getUnionWithBooleanInMiddle();
+  const expectedAnalysedType = {
+    kind: 'variant',
+    taggedTypes: [],
+    value: {
+      name: 'UnionWithBooleanInMiddle',
+      owner: undefined,
+      cases: [
+        {
+          name: 'UnionWithBooleanInMiddle1',
+          typ: {
+            kind: 'string',
+          },
+        },
+        {
+          name: 'UnionWithBooleanInMiddle2',
+          typ: {
+            kind: 'bool',
+          },
+        },
+        {
+          name: 'UnionWithBooleanInMiddle3',
+          typ: {
+            kind: 'record',
+            value: {
+              fields: [{ name: 'n', typ: { kind: 'f64' } }],
+              name: undefined,
+              owner: undefined,
+            },
+          },
+        },
+      ],
+    },
+  };
+
+  expect(unionWithBooleanInMiddle).toEqual(expectedAnalysedType);
 });
 
 function checkPrimitiveFields(fields: any[]) {
@@ -301,6 +341,12 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
           {
             name: 'UnionComplexType3',
             typ: {
+              kind: 'bool',
+            },
+          },
+          {
+            name: 'UnionComplexType4',
+            typ: {
               kind: 'record',
               value: {
                 fields: [
@@ -329,7 +375,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             },
           },
           {
-            name: 'UnionComplexType4',
+            name: 'UnionComplexType5',
             typ: {
               kind: 'list',
               mapType: undefined,
@@ -344,7 +390,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             },
           },
           {
-            name: 'UnionComplexType5',
+            name: 'UnionComplexType6',
             typ: {
               kind: 'tuple',
               emptyType: undefined,
@@ -366,7 +412,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             },
           },
           {
-            name: 'UnionComplexType6',
+            name: 'UnionComplexType7',
             typ: {
               kind: 'record',
               value: {
@@ -384,7 +430,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             },
           },
           {
-            name: 'UnionComplexType7',
+            name: 'UnionComplexType8',
             typ: {
               kind: 'record',
               value: {
@@ -459,6 +505,12 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                           {
                             name: 'UnionType3',
                             typ: {
+                              kind: 'bool',
+                            },
+                          },
+                          {
+                            name: 'UnionType4',
+                            typ: {
                               kind: 'record',
                               value: {
                                 fields: [
@@ -484,12 +536,6 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                                 name: 'ObjectType',
                                 owner: undefined,
                               },
-                            },
-                          },
-                          {
-                            name: 'UnionType4',
-                            typ: {
-                              kind: 'bool',
                             },
                           },
                         ],
@@ -676,7 +722,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             },
           },
           {
-            name: 'UnionComplexType8',
+            name: 'UnionComplexType9',
             typ: {
               kind: 'tuple',
               emptyType: undefined,
@@ -722,7 +768,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             },
           },
           {
-            name: 'UnionComplexType9',
+            name: 'UnionComplexType10',
             typ: {
               kind: 'list',
               mapType: {
@@ -753,7 +799,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             },
           },
           {
-            name: 'UnionComplexType10',
+            name: 'UnionComplexType11',
             typ: {
               kind: 'list',
               typedArray: undefined,
@@ -791,12 +837,6 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
               },
             },
           },
-          {
-            name: 'UnionComplexType11',
-            typ: {
-              kind: 'bool',
-            },
-          },
         ],
         owner: undefined,
       },
@@ -820,8 +860,9 @@ function checkUnionFields(fields: any[]) {
         cases: [
           { name: 'UnionType1', typ: { kind: 'string' } },
           { name: 'UnionType2', typ: { kind: 'f64' } },
+          { name: 'UnionType3', typ: { kind: 'bool' } },
           {
-            name: 'UnionType3',
+            name: 'UnionType4',
             typ: {
               kind: 'record',
               value: {
@@ -835,7 +876,6 @@ function checkUnionFields(fields: any[]) {
               },
             },
           },
-          { name: 'UnionType4', typ: { kind: 'bool' } },
         ],
       },
     },
@@ -1040,6 +1080,12 @@ function checkObjectComplexFields(fields: any[]) {
             {
               name: 'UnionType3',
               typ: {
+                kind: 'bool',
+              },
+            },
+            {
+              name: 'UnionType4',
+              typ: {
                 kind: 'record',
                 value: {
                   fields: [
@@ -1065,12 +1111,6 @@ function checkObjectComplexFields(fields: any[]) {
                   name: 'ObjectType',
                   owner: undefined,
                 },
-              },
-            },
-            {
-              name: 'UnionType4',
-              typ: {
-                kind: 'bool',
               },
             },
           ],

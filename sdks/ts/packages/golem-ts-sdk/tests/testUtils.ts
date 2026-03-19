@@ -101,6 +101,11 @@ export function getUnionWithLiterals(): [AnalysedType, Type.Type] {
 }
 
 // Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
+export function getUnionWithBooleanInMiddle(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('UnionWithBooleanInMiddle');
+}
+
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getUnionWithOnlyLiterals(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('UnionWithOnlyLiterals');
 }

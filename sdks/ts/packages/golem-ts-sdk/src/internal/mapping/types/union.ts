@@ -290,13 +290,25 @@ function normalizeBooleanUnion(types: TsType[]): TsType[] {
 
   if (!hasTrue || !hasFalse) return types;
 
+  const firstBooleanLiteralIdx = types.findIndex(
+    (t) => t.kind === 'literal' && (t.literalValue === 'true' || t.literalValue === 'false'),
+  );
+
+  const optional = types.some(
+    (t) => t.kind === 'literal' && (t.literalValue === 'true' || t.literalValue === 'false') && t.optional,
+  );
+
   const withoutBoolLiterals = types.filter(
     (t) => !(t.kind === 'literal' && (t.literalValue === 'true' || t.literalValue === 'false')),
   );
 
-  const optional = withoutBoolLiterals.find((t) => t.kind === 'literal')?.optional ?? false;
+  const insertAt = Math.min(firstBooleanLiteralIdx, withoutBoolLiterals.length);
 
-  return [...withoutBoolLiterals, { kind: 'boolean', optional }];
+  return [
+    ...withoutBoolLiterals.slice(0, insertAt),
+    { kind: 'boolean', optional },
+    ...withoutBoolLiterals.slice(insertAt),
+  ];
 }
 
 function getFirstEmptyType(unionTypes: TsType[]): EmptyType | undefined {

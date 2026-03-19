@@ -264,8 +264,8 @@ describe('Agent decorator should register the agent class and its methods into A
             val: [
               ['UnionType1', 1],
               ['UnionType2', 2],
-              ['UnionType3', 5],
-              ['UnionType4', 3],
+              ['UnionType3', 3],
+              ['UnionType4', 5],
             ],
           },
         },
@@ -411,6 +411,7 @@ describe('Agent decorator should register the agent class and its methods into A
         },
         { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
         { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
         {
           name: 'ObjectType',
           owner: undefined,
@@ -419,11 +420,10 @@ describe('Agent decorator should register the agent class and its methods into A
             val: [
               ['a', 2],
               ['b', 3],
-              ['c', 5],
+              ['c', 4],
             ],
           },
         },
-        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
       ],
     };
 
@@ -451,6 +451,7 @@ describe('Agent decorator should register the agent class and its methods into A
         },
         { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
         { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
         {
           name: 'ObjectType',
           owner: undefined,
@@ -459,11 +460,10 @@ describe('Agent decorator should register the agent class and its methods into A
             val: [
               ['a', 2],
               ['b', 3],
-              ['c', 5],
+              ['c', 4],
             ],
           },
         },
-        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
       ],
     };
 

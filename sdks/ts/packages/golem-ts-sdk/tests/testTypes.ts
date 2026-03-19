@@ -32,6 +32,8 @@ export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
 
 export type UnionWithLiterals = 'a' | 'b' | 'c' | { n: number };
 
+export type UnionWithBooleanInMiddle = string | true | false | { n: number };
+
 // user defined result type, with exact shape of wit result
 export type ResultTypeExactBoth = { tag: 'ok'; val: number } | { tag: 'err'; val: string };
 
