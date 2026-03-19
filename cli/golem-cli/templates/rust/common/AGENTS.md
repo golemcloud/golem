@@ -379,17 +379,82 @@ tx.execute(op1, "input".to_string());
 });
 ```
 
-## Adding New Components
+## Using `golem new`
+
+Use `golem new` to create new applications and to add new components or agents to existing applications.
+
+### Create a new application
 
 ```shell
-golem component new rust my:new-component
+golem new my-app --template rust
 ```
 
-This updates the root `golem.yaml` components map and creates a Rust component directory with its own `Cargo.toml` and `src/lib.rs`.
+This creates a new application directory, initializes `golem.yaml`, and creates the first Rust component with a default agent template.
 
-Component layout rules:
-- Single-component apps use `dir: "."` in root `golem.yaml`
-- Multi-component apps use explicit directories per component (for example `dir: "my-new-component"`)
+You can also run `golem new .` in an empty directory to initialize the current folder as a new application.
+
+If the folder name is not a valid Golem application name (lowercase kebab-case), specify one explicitly:
+
+```shell
+golem new . --application-name my-app --template rust
+```
+
+### Add to an existing application
+
+From inside an existing application, use `.` as the path:
+
+```shell
+golem new . --template rust
+```
+
+By default this applies the Rust template to a matching Rust component, or creates one if needed.
+
+### Create or target a specific component
+
+```shell
+golem new . --template rust --component-name my-app:billing
+```
+
+- If `my-app:billing` exists and is Rust, the template is applied there.
+- If it does not exist, `golem new` creates the component and applies the template.
+
+### Applying multiple templates
+
+You can apply multiple templates to the same component in one command:
+
+```shell
+golem new . --template rust --template my:agent-template --component-name my-app:billing
+```
+
+You can also apply templates incrementally by running `golem new` multiple times for the same component.
+
+If multiple templates affect the same files, `golem new` merges the changes and shows the planned updates before applying them.
+
+### Component directory behavior
+
+- If the application has exactly one component, its `dir` in `golem.yaml` is `.`.
+- If the application has multiple components, each component has an explicit `dir` in `golem.yaml`.
+- When needed, `golem new` can promote an existing root component layout into explicit per-component directories.
+
+### Choosing one vs multiple components
+
+In most cases, prefer a single component with multiple agents.
+
+Use multiple components only when you have a technical reason, for example:
+- using different guest languages in the same application (for example Rust + TypeScript)
+- separating components with distinct operational or ownership constraints
+
+### Useful flags
+
+- `--template <name>`: can be used multiple times to apply and merge several templates into one component (in non-interactive mode, at least one template is required)
+- `--component-name <namespace:name>`: target or create a specific component
+- `--application-name <name>`: set the application name when creating a new application
+
+To discover available templates:
+
+```shell
+golem templates
+```
 
 ## Application Manifest (golem.yaml)
 
