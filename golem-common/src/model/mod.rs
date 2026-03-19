@@ -41,6 +41,7 @@ pub mod poem;
 pub mod protobuf;
 pub mod regions;
 pub mod reports;
+pub mod resource_definition;
 pub mod security_scheme;
 #[cfg(test)]
 mod tests;
