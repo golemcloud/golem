@@ -68,33 +68,21 @@ pub fn sdk_overrides() -> anyhow::Result<&'static SdkOverrides> {
 }
 
 impl SdkOverrides {
-    fn for_test_profile(workspace_dir: &Path, profile: SdkOverridesTestProfile) -> Self {
-        match profile {
-            SdkOverridesTestProfile::LocalWorkspace => Self {
-                golem_path: None,
-                golem_rust_path: Some(join_path(
-                    &workspace_dir.to_string_lossy(),
-                    "sdks/rust/golem-rust",
-                )),
-                golem_rust_version: None,
-                ts_packages_path: Some(join_path(
-                    &workspace_dir.to_string_lossy(),
-                    "sdks/ts/packages",
-                )),
-                ts_version: None,
-            },
-            SdkOverridesTestProfile::PublishedArtifacts => Self {
-                golem_path: None,
-                golem_rust_path: None,
-                golem_rust_version: None,
-                ts_packages_path: None,
-                ts_version: None,
-            },
+    fn local_workspace_test_values(workspace_dir: &Path) -> HashMap<String, String> {
+        Self {
+            golem_path: None,
+            golem_rust_path: Some(join_path(
+                &workspace_dir.to_string_lossy(),
+                "sdks/rust/golem-rust",
+            )),
+            golem_rust_version: None,
+            ts_packages_path: Some(join_path(
+                &workspace_dir.to_string_lossy(),
+                "sdks/ts/packages",
+            )),
+            ts_version: None,
         }
-    }
-
-    fn for_default_test_profile(workspace_dir: &Path) -> Self {
-        Self::for_test_profile(workspace_dir, SDK_OVERRIDES_DEFAULT_TEST_PROFILE)
+        .to_env_vars()
     }
 
     pub fn ts_package_dep(&self, package_name: &str) -> String {
@@ -179,13 +167,7 @@ impl SdkOverrides {
         let current_dir = std::env::current_dir().context("Failed to resolve current directory")?;
         let file_values = Self::load_file_values(&current_dir)?;
 
-        let test_values = {
-            if running_from_golem_workspace_checkout() {
-                Self::for_default_test_profile(&workspace_root()?).to_env_vars()
-            } else {
-                HashMap::new()
-            }
-        };
+        let test_values = Self::load_test_values()?;
 
         let env_values = Self::load_env_values();
 
@@ -194,6 +176,17 @@ impl SdkOverrides {
             test_values,
             env_values,
         ))
+    }
+
+    fn load_test_values() -> anyhow::Result<HashMap<String, String>> {
+        if !should_apply_test_layer()
+            || SDK_OVERRIDES_DEFAULT_TEST_PROFILE == SdkOverridesTestProfile::PublishedArtifacts
+            || !running_from_golem_workspace_checkout()
+        {
+            Ok(HashMap::new())
+        } else {
+            Ok(Self::local_workspace_test_values(&workspace_root()?))
+        }
     }
 
     #[cfg(test)]
@@ -332,6 +325,10 @@ fn running_from_golem_workspace_checkout() -> bool {
         || current_exe
             .as_deref()
             .is_some_and(|path| path.starts_with(&workspace_root))
+}
+
+fn should_apply_test_layer() -> bool {
+    cfg!(debug_assertions)
 }
 
 fn has_local_workspace_sdks(workspace_root: &Path) -> bool {
