@@ -116,10 +116,10 @@ function cacheAnonymousUnionType(
 // ```ts
 //   function foo(x: string | number);
 // ```
-// Union handler ensures to convert `string | number` is converted to `variant { case0(string), case1(number) }` in WIT.
+// Union handler ensures to convert `string | number` is converted to `variant { case1(string), case2(number) }` in WIT.
 // But `union` handler also updates a cache of this `AnalysedType`
 // which ensures with reusing the same WIT variant whenever `string | number` appears in the code
-// instead of unlimited generation of case indices
+// instead of repeated generation of equivalent case indices
 function reuseAnonymousUnionCache(
   cacheKey: string | undefined,
 ): Either.Either<AnalysedType, string> | undefined {
