@@ -448,12 +448,23 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "write_zeroes");
-            // File-backed stream: enforce storage quota before writing.
-            self.check_storage_quota(len)
-                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-            self.acquire_storage_space(len)
-                .await
-                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+
+            // Exclude console streams from quota — only file-backed streams consume storage.
+            let is_console = {
+                let output = self.table().get(&self_)?;
+                output.as_any().downcast_ref::<ManagedStdOut>().is_some()
+                    || output.as_any().downcast_ref::<ManagedStdErr>().is_some()
+            };
+
+            if !is_console {
+                // File-backed stream: enforce storage quota before writing.
+                self.check_storage_quota(len)
+                    .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+                self.acquire_storage_space(len)
+                    .await
+                    .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+            }
+
             HostOutputStream::write_zeroes(self.table(), self_, len).await
         }
     }
@@ -463,11 +474,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         len: u64,
     ) -> Result<(), StreamError> {
-        self.observe_function_call(
-            "io::streams::output_stream",
-            "blocking_write_zeroes_and_flush",
-        );
-        HostOutputStream::blocking_write_zeroes_and_flush(self.table(), self_, len).await
+        // Composed from write_zeroes + blocking_flush, both of which handle
+        // quota enforcement individually — mirrors blocking_write_and_flush.
+        let self2 = Resource::new_borrow(self_.rep());
+        self.write_zeroes(self_, len).await?;
+        self.blocking_flush(self2).await?;
+        Ok(())
     }
 
     async fn splice(

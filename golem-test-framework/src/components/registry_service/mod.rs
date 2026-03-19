@@ -45,6 +45,7 @@ pub trait RegistryService: Send + Sync {
 
     fn default_plan(&self) -> PlanId;
     fn low_fuel_plan(&self) -> PlanId;
+    fn low_disk_space_plan(&self) -> PlanId;
 
     async fn kill(&self);
 
@@ -86,6 +87,7 @@ async fn env_vars(
     admin_token: &TokenSecret,
     default_plan_id: &PlanId,
     low_fuel_plan_id: &PlanId,
+    low_disk_space_plan_id: &PlanId,
     otlp: bool,
 ) -> HashMap<String, String> {
     let builder = EnvVarBuilder::golem_service(verbosity)
@@ -163,6 +165,10 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_DISK_SPACE_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_GAS_LIMIT",
             "1000000000000000000".to_string(),
         )
@@ -207,6 +213,10 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_DISK_SPACE_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_GAS_LIMIT",
             "1".to_string(),
         )
@@ -224,6 +234,55 @@ async fn env_vars(
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__WORKER_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        // Low disk space plan — per-worker disk quota of 5 bytes so "hello world" exceeds it
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_ID",
+            low_disk_space_plan_id.to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_NAME",
+            "low_disk_space".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__APP_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__COMPONENT_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__ENV_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_DISK_SPACE_PER_WORKER",
+            "5".to_string(), // 5 bytes — "hello world" (11 bytes) exceeds this
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_GAS_LIMIT",
+            "1000000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_UPLOAD_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__STORAGE_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_CONNECTION_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
         //

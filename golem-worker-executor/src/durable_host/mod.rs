@@ -475,14 +475,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.is_replay() {
             return Ok(());
         }
-        self.public_state
-            .worker()
-            .add_to_oplog(OplogEntry::storage_usage_update(new_bytes as i64))
-            .await;
+        // Acquire the semaphore permit first (non-blocking try). Writing the
+        // oplog entry after a confirmed acquire ensures the oplog accurately
+        // reflects only committed storage changes — a failed acquire leaves no
+        // phantom delta that would inflate `current_storage_usage` on restart.
         self.public_state
             .worker()
             .acquire_storage_space(new_bytes)
             .await?;
+        self.public_state
+            .worker()
+            .add_to_oplog(OplogEntry::storage_usage_update(new_bytes as i64))
+            .await;
         self.state.current_storage_usage += new_bytes;
         Ok(())
     }

@@ -4,6 +4,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::fs::{create_dir_all, read_dir, read_to_string, remove_file, write, File};
 use std::hash::{Hash, Hasher};
+use wasi::filesystem::types::{Descriptor, DescriptorFlags, OpenFlags, PathFlags};
+use wasi::io::streams::OutputStream;
 
 #[derive(Clone, Schema, Serialize, Deserialize)]
 pub struct DirEntry {
@@ -59,6 +61,10 @@ pub trait FileSystem {
     fn remove_file(&self, path: String) -> Result<(), String>;
     fn rename_file(&self, source: String, destination: String) -> Result<(), String>;
     fn hash(&self, path: String) -> Result<HashResult, String>;
+    fn write_zeroes_to_file(&self, path: String, len: u64) -> Result<(), String>;
+    fn write_zeroes_to_stdout(&self, len: u64) -> Result<(), String>;
+    fn blocking_write_zeroes_and_flush_to_file(&self, path: String, len: u64)
+        -> Result<(), String>;
 }
 
 pub struct FileSystemImpl {
@@ -228,6 +234,49 @@ impl FileSystem for FileSystemImpl {
 
     fn rename_file(&self, source: String, destination: String) -> Result<(), String> {
         fs::rename(source, destination).map_err(|err| err.to_string())
+    }
+
+    fn write_zeroes_to_file(&self, path: String, len: u64) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let rel = path.trim_start_matches('/');
+        let fd: Descriptor = root
+            .open_at(
+                PathFlags::empty(),
+                rel,
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream: OutputStream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        stream.write_zeroes(len).map_err(|e| format!("{e:?}"))
+    }
+
+    fn write_zeroes_to_stdout(&self, len: u64) -> Result<(), String> {
+        let stdout: OutputStream = wasi::cli::stdout::get_stdout();
+        stdout.write_zeroes(len).map_err(|e| format!("{e:?}"))
+    }
+
+    fn blocking_write_zeroes_and_flush_to_file(
+        &self,
+        path: String,
+        len: u64,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let rel = path.trim_start_matches('/');
+        let fd: Descriptor = root
+            .open_at(
+                PathFlags::empty(),
+                rel,
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream: OutputStream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+        stream
+            .blocking_write_zeroes_and_flush(len)
+            .map_err(|e| format!("{e:?}"))
     }
 
     fn hash(&self, path: String) -> Result<HashResult, String> {
