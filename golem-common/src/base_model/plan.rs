@@ -33,5 +33,6 @@ declare_structs! {
         pub monthly_gas_limit: u64,
         pub monthly_upload_limit: u64,
         pub max_memory_per_worker: u64,
+        pub max_table_elements_per_worker: u64,
     }
 }

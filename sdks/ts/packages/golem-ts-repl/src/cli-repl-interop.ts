@@ -18,10 +18,10 @@ import pc from 'picocolors';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
 import { flushStdIO, writeChunk } from './process';
 import { writeFullLineSeparator } from './format';
-import * as base from './base';
+import type * as base from '@golemcloud/golem-ts-bridge';
 import * as uuid from 'uuid';
 
-const AGENT_STREAM_CLOSE_DELAY_MS = 100;
+const AGENT_STREAM_CLOSE_DELAY_MS = 300;
 
 export class CliReplInterop {
   private readonly config: CliCommandsConfig;
@@ -337,12 +337,18 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
     complete: async (cli, currentToken) => {
       const result = await cli.runJson({ args: ['agent', 'list'] });
 
-      if (!result.ok || !result.json || !Array.isArray(result.json.workers)) {
+      if (!result.ok || !result.json || !Array.isArray(result.json.agents)) {
         return [];
       }
 
-      const values = result.json.workers
-        .map((worker: any) => worker.workerName)
+      const values = result.json.agents
+        .map((agent: any) => {
+          const agentName = agent?.agentName;
+          if (typeof agentName !== 'string') {
+            return undefined;
+          }
+          return agentName;
+        })
         .filter((value: unknown): value is string => typeof value === 'string');
 
       return filterByPrefix(values, currentToken);
@@ -603,7 +609,7 @@ function commandPathToReplCommandName(segments: string[]): string {
   return parts.join('-');
 }
 
-function parseRawArgs(rawArgs: string): string[] {
+export function parseRawArgs(rawArgs: string): string[] {
   const args: string[] = [];
   let current = '';
   let inSingle = false;
@@ -624,6 +630,21 @@ function parseRawArgs(rawArgs: string): string[] {
 
   function isIdentChar(ch: string): boolean {
     return /[A-Za-z0-9_-]/.test(ch);
+  }
+
+  function tryReadAgentCallOpenParenIndex(start: number): number | undefined {
+    let simpleAgentEnd = start;
+    while (simpleAgentEnd < rawArgs.length && isIdentChar(rawArgs[simpleAgentEnd])) {
+      simpleAgentEnd += 1;
+    }
+
+    if (simpleAgentEnd === start) {
+      return;
+    }
+
+    if (rawArgs[simpleAgentEnd] === '(') {
+      return simpleAgentEnd;
+    }
   }
 
   for (let i = 0; i < rawArgs.length; i += 1) {
@@ -717,17 +738,14 @@ function parseRawArgs(rawArgs: string): string[] {
       continue;
     }
 
-    if (current.length === 0 && isIdentChar(ch)) {
-      let j = i;
-      while (j < rawArgs.length && isIdentChar(rawArgs[j])) {
-        j += 1;
-      }
-      if (rawArgs[j] === '(') {
-        current += rawArgs.slice(i, j);
+    if (current.length === 0 && (isIdentChar(ch) || /[A-Za-z0-9-]/.test(ch))) {
+      const openParenIndex = tryReadAgentCallOpenParenIndex(i);
+      if (openParenIndex !== undefined) {
+        current += rawArgs.slice(i, openParenIndex);
         current += '(';
         inAgent = true;
         agentDepth = 1;
-        i = j;
+        i = openParenIndex;
         continue;
       }
     }

@@ -34,15 +34,17 @@ sequential_suite!(agents);
 inherit_test_dep!(Tracing);
 
 use crate::{crate_path, workspace_path, Tracing};
+use anyhow::Context;
 use colored::Colorize;
+use expectrl::Expect;
 use golem_cli::fs::{read_to_string, write_str};
+use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
@@ -107,7 +109,7 @@ impl Output {
         quiet: bool,
         prefix: &str,
         child: &mut Child,
-    ) -> io::Result<Self> {
+    ) -> std::io::Result<Self> {
         let stdout = child
             .stdout
             .take()
@@ -305,16 +307,9 @@ impl TestContext {
 
         env.insert("NO_COLOR".to_string(), "1".to_string());
 
-        for key in [
-            "GOLEM_RUST_PATH",
-            "GOLEM_RUST_VERSION",
-            "GOLEM_TS_PACKAGES_PATH",
-            "GOLEM_TS_VERSION",
-        ] {
-            if let Ok(val) = std::env::var(key) {
-                env.insert(key.to_string(), val);
-            }
-        }
+        let sdk_overrides = sdk_overrides().unwrap().to_env_vars();
+        println!("{} {:#?}", "> SDK Overrides:".bold(), sdk_overrides);
+        env.extend(sdk_overrides);
 
         let ctx = Self {
             quiet,
@@ -396,6 +391,56 @@ impl TestContext {
         Output::stream_and_collect(self.quiet, "golem-cli", &mut child)
             .await
             .unwrap()
+    }
+
+    async fn cli_interactive<I, S, F>(&self, args: I, session_fn: F)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+        F: FnOnce(&mut dyn InteractiveSession) -> anyhow::Result<()> + Send + 'static,
+    {
+        let args = {
+            let mut all_args = vec![
+                "--config-dir".to_string(),
+                self.config_dir.path().to_str().unwrap().to_string(),
+            ];
+            all_args.extend(
+                args.into_iter()
+                    .map(|a| a.as_ref().to_str().unwrap().to_string()),
+            );
+            all_args
+        };
+        let working_dir = self.working_dir.canonicalize().unwrap();
+
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let golem_cli_path = self.golem_cli_path.clone();
+        let env = self.env.clone();
+        let quiet = self.quiet;
+
+        tokio::task::spawn_blocking(move || {
+            let mut command = std::process::Command::new(golem_cli_path);
+            command.current_dir(working_dir).envs(env).args(args);
+            let mut session = expectrl::Session::spawn(command)
+                .expect("failed to spawn interactive golem-cli session");
+
+            if quiet {
+                session_fn(&mut session as &mut dyn InteractiveSession)
+            } else {
+                let mut logged = expectrl::session::log(session, std::io::stdout())
+                    .expect("failed to add logger");
+                session_fn(&mut logged as &mut dyn InteractiveSession)
+            }
+        })
+        .await
+        .expect("failed to start interactive golem-cli session")
+        .context("interactive session failed")
+        .unwrap()
     }
 
     async fn start_server(&mut self) {
@@ -570,4 +615,79 @@ pub fn replace_strings_in_file(
 
 pub fn replace_string_in_file(path: impl AsRef<Path>, from: &str, to: &str) -> anyhow::Result<()> {
     replace_strings_in_file(path, &[(from, to)])
+}
+
+pub trait InteractiveSession {
+    fn set_expect_timeout(&mut self, timeout: Option<Duration>);
+    fn send(&mut self, line: &str) -> anyhow::Result<()>;
+    fn send_line(&mut self, line: &str) -> anyhow::Result<()>;
+    fn expect_str(&mut self, expected: &str) -> anyhow::Result<()>;
+    fn expect_regex(&mut self, expected: &str) -> anyhow::Result<()>;
+
+    fn send_tab_complete_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.send_and_expect_str(&format!("{line}\t"), expected)
+    }
+
+    fn send_tab_list_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.send_and_expect_regex(&format!("{line}\t\t"), expected)
+    }
+
+    fn send_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.send(line)?;
+        self.expect_str(expected)
+            .with_context(|| format!("after sending: {line}"))?;
+        Ok(())
+    }
+
+    fn send_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.send(line)?;
+        self.expect_regex(expected)
+            .with_context(|| format!("after sending: {line}"))?;
+        Ok(())
+    }
+
+    fn send_line_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.send_line(line)?;
+        self.expect_str(expected)
+            .with_context(|| format!("after sending line: {line}"))?;
+        Ok(())
+    }
+
+    fn send_line_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.send_line(line)?;
+        self.expect_regex(expected)
+            .with_context(|| format!("after sending line: {line}"))?;
+        Ok(())
+    }
+}
+
+impl<P, S> InteractiveSession for expectrl::Session<P, S>
+where
+    expectrl::Session<P, S>: Expect,
+{
+    fn set_expect_timeout(&mut self, timeout: Option<Duration>) {
+        self.set_expect_timeout(timeout);
+    }
+
+    fn send(&mut self, line: &str) -> anyhow::Result<()> {
+        Expect::send(self, line).with_context(|| format!("failed to send: {line}"))?;
+        Ok(())
+    }
+
+    fn send_line(&mut self, line: &str) -> anyhow::Result<()> {
+        Expect::send_line(self, line).with_context(|| format!("failed to send line: {line}"))?;
+        Ok(())
+    }
+
+    fn expect_str(&mut self, expected: &str) -> anyhow::Result<()> {
+        self.expect(expected)
+            .with_context(|| format!("failed to match string: {expected}"))?;
+        Ok(())
+    }
+
+    fn expect_regex(&mut self, expected: &str) -> anyhow::Result<()> {
+        self.expect(expectrl::Regex(expected))
+            .with_context(|| format!("failed to match regex: {expected}"))?;
+        Ok(())
+    }
 }

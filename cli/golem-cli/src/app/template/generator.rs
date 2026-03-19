@@ -15,7 +15,8 @@
 use crate::app::template::repo::TEMPLATES_DIR;
 use crate::app::template::snippet::{APP_MANIFEST_HEADER, DEP_ENV_VARS_DOC};
 use crate::app::template::AppTemplate;
-use crate::{fs, SdkOverrides};
+use crate::fs;
+use crate::sdk_overrides::sdk_overrides;
 use anyhow::{anyhow, bail};
 use golem_common::base_model::application::ApplicationName;
 use golem_common::base_model::component::ComponentName;
@@ -59,7 +60,6 @@ struct GeneratorContext<'a> {
     application_name: Option<&'a ApplicationName>,
     component_name: Option<&'a ComponentName>,
     target_path: &'a Path,
-    sdk_overrides: &'a SdkOverrides,
     resolve_mode: TargetExistsResolveMode,
 }
 
@@ -67,7 +67,6 @@ pub fn generate_commons_by_template(
     template: &AppTemplate,
     application_name: &ApplicationName,
     target_path: &Path,
-    sdk_overrides: &SdkOverrides,
 ) -> anyhow::Result<()> {
     if !template.metadata.is_common() {
         bail!("Template {} is not a common template", template.name);
@@ -84,7 +83,6 @@ pub fn generate_commons_by_template(
         application_name: Some(application_name),
         component_name: None,
         target_path,
-        sdk_overrides,
         resolve_mode: TargetExistsResolveMode::MergeOrSkip,
     })
 }
@@ -92,7 +90,6 @@ pub fn generate_commons_by_template(
 pub fn generate_on_demand_commons_by_template(
     template: &AppTemplate,
     target_path: &Path,
-    sdk_overrides: &SdkOverrides,
 ) -> anyhow::Result<()> {
     if !template.metadata.is_common_on_demand() {
         bail!(
@@ -118,7 +115,6 @@ pub fn generate_on_demand_commons_by_template(
         application_name: None,
         component_name: None,
         target_path,
-        sdk_overrides,
         resolve_mode: TargetExistsResolveMode::Fail,
     })?;
 
@@ -135,7 +131,6 @@ pub fn generate_component_by_template(
     target_path: &Path,
     application_name: &ApplicationName,
     component_name: &ComponentName,
-    sdk_overrides: &SdkOverrides,
 ) -> anyhow::Result<()> {
     if !template.metadata.is_component() {
         bail!("Template {} is not a component template", template.name);
@@ -146,7 +141,6 @@ pub fn generate_component_by_template(
         application_name: Some(application_name),
         component_name: Some(component_name),
         target_path,
-        sdk_overrides,
         resolve_mode: TargetExistsResolveMode::MergeOrFail,
     })
 }
@@ -175,7 +169,7 @@ fn generate_directory(
         let entry_path = entry.path();
         let name = entry_path.file_name().unwrap().to_str().unwrap();
         if name != "metadata.json" {
-            let name = transform_file_name(ctx, name);
+            let name = transform_file_name(ctx, name)?;
             match entry {
                 DirEntry::Dir(dir) => {
                     generate_directory(ctx, templates_dir, dir.path(), &target.join(&name))?;
@@ -237,7 +231,7 @@ fn instantiate_file(
                             )
                         })?,
                         &content_transforms,
-                    ),
+                    )?,
                 )?)
             }
         }
@@ -245,8 +239,14 @@ fn instantiate_file(
     }
 }
 
-fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Transform]) -> String {
-    let transform_pack_and_comp = |str: &str| -> String {
+fn transform(
+    ctx: &GeneratorContext<'_>,
+    str: impl AsRef<str>,
+    transforms: &[Transform],
+) -> anyhow::Result<String> {
+    let sdk_overrides = sdk_overrides()?;
+
+    let transform_component_name = |str: &str| -> String {
         match &ctx.component_name {
             Some(component_name) => str
                 .replace("componentname", component_name.as_str())
@@ -286,18 +286,18 @@ fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Tra
     let transform_rust_sdk = |str: &str| -> String {
         str.replace(
             "GOLEM_RUST_VERSION_OR_PATH",
-            &ctx.sdk_overrides.golem_rust_dep(),
+            &sdk_overrides.golem_rust_dep(),
         )
     };
 
     let transform_ts_sdk = |str: &str| -> String {
         str.replace(
             "GOLEM_TS_SDK_VERSION_OR_PATH",
-            &ctx.sdk_overrides.ts_package_dep("golem-ts-sdk"),
+            &sdk_overrides.ts_package_dep("golem-ts-sdk"),
         )
         .replace(
             "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-            &ctx.sdk_overrides.ts_package_dep("golem-ts-typegen"),
+            &sdk_overrides.ts_package_dep("golem-ts-typegen"),
         )
     };
 
@@ -305,7 +305,7 @@ fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Tra
 
     for transform in transforms {
         transformed = match transform {
-            Transform::ComponentName => transform_pack_and_comp(&transformed),
+            Transform::ComponentName => transform_component_name(&transformed),
             Transform::ManifestHints => transform_manifest_hints(&transformed),
             Transform::TsSdk => transform_ts_sdk(&transformed),
             Transform::RustSdk => transform_rust_sdk(&transformed),
@@ -313,11 +313,15 @@ fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Tra
         };
     }
 
-    transformed
+    Ok(transformed)
 }
 
-fn transform_file_name(ctx: &GeneratorContext<'_>, file_name: impl AsRef<str>) -> String {
-    transform(ctx, file_name, &[Transform::ComponentName]).replace("Cargo.toml._", "Cargo.toml")
+fn transform_file_name(
+    ctx: &GeneratorContext<'_>,
+    file_name: impl AsRef<str>,
+) -> anyhow::Result<String> {
+    Ok(transform(ctx, file_name, &[Transform::ComponentName])?
+        .replace("Cargo.toml._", "Cargo.toml"))
 }
 
 fn check_target(

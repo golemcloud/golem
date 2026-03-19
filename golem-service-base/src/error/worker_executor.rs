@@ -898,6 +898,7 @@ impl From<EncodingError> for WorkerExecutorError {
 pub enum GolemSpecificWasmTrap {
     WorkerOutOfMemory,
     WorkerExceededMemoryLimit,
+    WorkerExceededTableLimit,
 }
 
 impl Display for GolemSpecificWasmTrap {
@@ -905,6 +906,9 @@ impl Display for GolemSpecificWasmTrap {
         match self {
             Self::WorkerOutOfMemory => write!(f, "Worker cannot acquire more memory"),
             Self::WorkerExceededMemoryLimit => write!(f, "Worker exceeded plan memory limits"),
+            Self::WorkerExceededTableLimit => {
+                write!(f, "Worker exceeded plan function table limits")
+            }
         }
     }
 }

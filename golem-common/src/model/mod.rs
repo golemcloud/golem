@@ -44,7 +44,6 @@ pub mod reports;
 pub mod security_scheme;
 #[cfg(test)]
 mod tests;
-pub mod trim_date;
 pub mod worker;
 
 pub use crate::base_model::*;

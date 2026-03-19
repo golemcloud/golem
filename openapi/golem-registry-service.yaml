@@ -9437,6 +9437,7 @@ components:
       - monthlyGasLimit
       - monthlyUploadLimit
       - maxMemoryPerWorker
+      - maxTableElementsPerWorker
       properties:
         planId:
           type: string
@@ -9468,6 +9469,9 @@ components:
           type: integer
           format: uint64
         maxMemoryPerWorker:
+          type: integer
+          format: uint64
+        maxTableElementsPerWorker:
           type: integer
           format: uint64
     PluginInstallation:

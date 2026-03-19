@@ -167,11 +167,7 @@ impl AppCommandHandler {
                 let _indent = LogIndent::new();
                 for language in &languages {
                     if let Some(common_template) = app_template_repo.common_template(*language)? {
-                        match common_template.generate(
-                            &application_name,
-                            &app_dir,
-                            self.ctx.sdk_overrides(),
-                        ) {
+                        match common_template.generate(&application_name, &app_dir) {
                             Ok(()) => {
                                 log_action(
                                     "Added",
@@ -541,6 +537,30 @@ impl AppCommandHandler {
                         .await
                         .map_service_error()?
                         .values)
+                },
+            )
+            .await
+    }
+
+    pub async fn get_agent_type_by_name(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        agent_type_name: &str,
+    ) -> anyhow::Result<Option<DeployedRegisteredAgentType>> {
+        environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    self.ctx
+                        .golem_clients()
+                        .await?
+                        .environment
+                        .get_deployment_agent_type(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                            agent_type_name,
+                        )
+                        .await
+                        .map_service_error_not_found_as_opt()
                 },
             )
             .await
@@ -2025,15 +2045,10 @@ impl AppCommandHandler {
         let (common_template, component_template) = self.get_templates(template_name)?;
 
         if let Some(common_template) = common_template {
-            common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())?;
+            common_template.generate(application_name, app_dir)?;
         }
 
-        match component_template.generate(
-            application_name,
-            component_name,
-            app_dir,
-            self.ctx.sdk_overrides(),
-        ) {
+        match component_template.generate(application_name, component_name, app_dir) {
             Ok(()) => {
                 log_action(
                     "Added",

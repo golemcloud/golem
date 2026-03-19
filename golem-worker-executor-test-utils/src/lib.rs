@@ -102,7 +102,9 @@ use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::{
     DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsStatus, RdbmsTransactionStatus, RdbmsType,
 };
-use golem_worker_executor::services::resource_limits::ResourceLimits;
+use golem_worker_executor::services::resource_limits::{
+    AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
+};
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -1331,17 +1333,20 @@ fn get_durable_ctx_from_context(
 }
 
 // -------------------------------------------------------------------------
-// Fuel-aware bootstrap — uses the production Context which has real fuel
-// management via FuelTracker and AtomicResourceEntry.
+// Production-Context bootstrap — uses the production Context which has real
+// fuel management via FuelTracker, and real ResourceLimiterAsync enforcement
+// (memory_growing / table_growing checks against AtomicResourceEntry).
+// Used by start_with_fuel_tracking and start_with_table_limit.
 // -------------------------------------------------------------------------
 
-struct FuelAwareTestServerBootstrap {
+struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
+    resource_limits: Arc<dyn ResourceLimits>,
 }
 
 #[async_trait]
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
-    for FuelAwareTestServerBootstrap
+    for ProductionContextTestServerBootstrap
 {
     fn create_active_workers(
         &self,
@@ -1369,7 +1374,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         Arc::new(ComponentServiceLocalFileSystem::new(
             &self.component_service_directory,
             10000,
-            std::time::Duration::from_secs(3600),
+            Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
         ))
     }
@@ -1377,11 +1382,9 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>>,
-        engine: Arc<wasmtime::Engine>,
-        linker: Arc<
-            wasmtime::component::Linker<golem_worker_executor::workerctx::default::Context>,
-        >,
-        runtime: tokio::runtime::Handle,
+        engine: Arc<Engine>,
+        linker: Arc<Linker<golem_worker_executor::workerctx::default::Context>>,
+        runtime: Handle,
         component_service: Arc<dyn ComponentService>,
         shard_manager_service: Arc<dyn ShardManagerService>,
         worker_service: Arc<dyn WorkerService>,
@@ -1405,19 +1408,14 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
-        registry_service: Arc<dyn RegistryService>,
+        _registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<golem_worker_executor::workerctx::default::Context>> {
         use golem_worker_executor::services::NoAdditionalDeps;
 
-        let resource_limits = resource_limits::configured(
-            &golem_config.resource_limits,
-            registry_service,
-            shutdown_token.clone(),
-        );
-
+        let resource_limits = self.resource_limits.clone();
         let additional_deps = NoAdditionalDeps {};
 
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -1532,57 +1530,69 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
 
     fn create_wasmtime_linker(
         &self,
-        engine: &wasmtime::Engine,
-    ) -> anyhow::Result<
-        wasmtime::component::Linker<golem_worker_executor::workerctx::default::Context>,
-    > {
+        engine: &Engine,
+    ) -> anyhow::Result<Linker<golem_worker_executor::workerctx::default::Context>> {
         use golem_worker_executor::workerctx::default::Context;
-        let mut linker = create_linker(engine, get_durable_ctx_from_context)?;
-        golem_api_1_x::host::add_to_linker::<
-            _,
-            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
-        >(&mut linker, get_durable_ctx_from_context)?;
-        golem_api_1_x::oplog::add_to_linker::<
-            _,
-            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
-        >(&mut linker, get_durable_ctx_from_context)?;
-        golem_api_1_x::context::add_to_linker::<
-            _,
-            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
-        >(&mut linker, get_durable_ctx_from_context)?;
-        durability::durability::add_to_linker::<
-            _,
-            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
-        >(&mut linker, get_durable_ctx_from_context)?;
+        let mut linker =
+            golem_worker_executor::wasi_host::create_linker(engine, get_durable_ctx_from_context)?;
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
         golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
             _,
-            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
+            HasSelf<DurableWorkerCtx<Context>>,
         >(&mut linker, get_durable_ctx_from_context)?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker::<
-            _,
-            wasmtime::component::HasSelf<DurableWorkerCtx<Context>>,
-        >(&mut linker, get_durable_ctx_from_context)?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
         Ok(linker)
     }
 }
 
-/// Starts a worker executor that uses the production [`Context`] worker context,
-/// which has real fuel management via [`FuelTracker`] and [`AtomicResourceEntry`].
-/// Use this in tests that need to verify actual fuel consumption behaviour.
-pub async fn start_with_fuel_tracking(
+/// A `ResourceLimits` implementation that provides a fixed table element limit
+/// while keeping fuel and memory unlimited. Used by table-limit tests.
+struct FixedTableLimitResourceLimits {
+    max_table_elements: usize,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedTableLimitResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            self.max_table_elements,
+        )))
+    }
+}
+
+fn make_production_context_config(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
-) -> anyhow::Result<TestWorkerExecutor> {
-    let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
-    redis.assert_valid();
-    redis_monitor.assert_valid();
-
-    let prometheus = golem_worker_executor::metrics::register_all();
-
-    let config = GolemConfig {
+) -> GolemConfig {
+    GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
-            port: redis.public_port(),
+            port: deps.redis.public_port(),
             key_prefix: context.redis_prefix(),
             ..Default::default()
         }),
@@ -1606,18 +1616,31 @@ pub async fn start_with_fuel_tracking(
             enable_fs_cache: true,
         },
         // Use Disabled resource limits so initialize_account doesn't require a
-        // live registry service. Fuel is still tracked and measured correctly by
-        // FuelTracker — borrow_fuel always succeeds (unlimited budget) so workers
-        // are never suspended, allowing fuel consumption to be measured freely.
+        // live registry service. Each caller injects its own ResourceLimits
+        // implementation via ProductionContextTestServerBootstrap.
         resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
         ..Default::default()
-    };
+    }
+}
+
+async fn run_production_context_bootstrap(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    resource_limits: Arc<dyn ResourceLimits>,
+    timeout_msg: &'static str,
+) -> anyhow::Result<TestWorkerExecutor> {
+    deps.redis.assert_valid();
+    deps.redis_monitor.assert_valid();
+
+    let prometheus = golem_worker_executor::metrics::register_all();
+    let config = make_production_context_config(deps, context);
 
     let handle = tokio::runtime::Handle::current();
     let mut join_set = tokio::task::JoinSet::new();
 
-    let details = FuelAwareTestServerBootstrap {
+    let details = ProductionContextTestServerBootstrap {
         component_service_directory: deps.component_service_directory.clone(),
+        resource_limits,
     }
     .run(config, prometheus, handle, &mut join_set)
     .await?;
@@ -1635,11 +1658,10 @@ pub async fn start_with_fuel_tracking(
                 .await;
 
         if let Ok(channel) = channel {
-            use tower::ServiceBuilder;
-            let otel_channel = ServiceBuilder::new()
+            let otel_channel = tower::ServiceBuilder::new()
                 .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
                 .service(channel);
-            let client = golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient::new(otel_channel);
+            let client = WorkerExecutorClient::new(otel_channel);
             return Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,
@@ -1649,11 +1671,46 @@ pub async fn start_with_fuel_tracking(
                 leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
-            return Err(anyhow::anyhow!(
-                "Timeout waiting for fuel-aware server to start"
-            ));
+            return Err(anyhow::anyhow!(timeout_msg));
         }
     }
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// which has real fuel management via [`FuelTracker`] and [`AtomicResourceEntry`].
+/// Use this in tests that need to verify actual fuel consumption behaviour.
+pub async fn start_with_fuel_tracking(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> anyhow::Result<TestWorkerExecutor> {
+    // ResourceLimitsDisabled gives unlimited fuel budget so workers are never
+    // suspended, allowing fuel consumption to be measured freely.
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(ResourceLimitsDisabled),
+        "Timeout waiting for fuel-aware server to start",
+    )
+    .await
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// with a specific function table element limit enforced via `table_growing`.
+///
+/// The resource limiter is configured with `max_table_elements` as the limit;
+/// fuel and memory remain unlimited (using `u64::MAX` / `usize::MAX`).
+pub async fn start_with_table_limit(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_table_elements: usize,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedTableLimitResourceLimits { max_table_elements }),
+        "Timeout waiting for table-limit server to start",
+    )
+    .await
 }
 
 #[derive(Clone)]
