@@ -218,8 +218,8 @@ pub use bindings::golem::api::host::{
 pub use bindings::golem::api::host::{ForkResult, PersistenceLevel, PromiseId};
 
 pub use bindings::golem::websocket::client::{
-    CloseInfo as WebSocketCloseInfo, Error as WebSocketError,
-    Message as WebSocketMessage, WebsocketConnection,
+    CloseInfo as WebSocketCloseInfo, Error as WebSocketError, Message as WebSocketMessage,
+    WebsocketConnection,
 };
 
 pub use transaction::*;
