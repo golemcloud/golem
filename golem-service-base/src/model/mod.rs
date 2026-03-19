@@ -142,6 +142,7 @@ pub struct WorkersMetadataRequest {
 pub struct ResourceLimits {
     pub available_fuel: u64,
     pub max_memory_per_worker: u64,
+    pub max_table_elements_per_worker: u64,
 }
 
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
@@ -149,6 +150,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
         Self {
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
+            max_table_elements_per_worker: value.max_table_elements_per_worker,
         }
     }
 }
@@ -158,6 +160,7 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
         Self {
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
+            max_table_elements_per_worker: value.max_table_elements_per_worker,
         }
     }
 }
