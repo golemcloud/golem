@@ -131,15 +131,15 @@ impl InFunctionRetryState {
     pub async fn decide_retry(
         &mut self,
         ctx: &mut impl DurabilityHost,
-        begin_index: OplogIndex,
         function_label: &str,
     ) -> AsyncRetryDecision {
         if ctx.in_atomic_region() {
             return AsyncRetryDecision::FallBackToTrap;
         }
 
+        let retry_point = ctx.current_retry_point();
         let retry_config = ctx.retry_config();
-        let oplog_retry_count = ctx.current_retry_count_for(begin_index).await;
+        let oplog_retry_count = ctx.current_retry_count_for(retry_point).await;
         let total_attempts = self.retry_count + oplog_retry_count;
 
         let delay = match get_delay(&retry_config, total_attempts) {
@@ -154,7 +154,7 @@ impl InFunctionRetryState {
             return AsyncRetryDecision::FallBackToTrap;
         }
 
-        ctx.append_retry_error_entry(begin_index).await;
+        ctx.append_retry_error_entry(retry_point).await;
         self.retry_count += 1;
 
         debug!(
@@ -247,6 +247,11 @@ pub trait DurabilityHost {
 
     /// Returns the current retry count for a given oplog index from the worker's status record.
     async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32;
+
+    /// Returns the current retry point — the oplog index that Error entries should reference
+    /// as `retry_from`. This is stable across trap+replay cycles for the same host function
+    /// invocation, unlike `begin_index` which may advance past Error entries after replay.
+    fn current_retry_point(&self) -> OplogIndex;
 
     /// Returns the current retry configuration (overridden or default).
     fn retry_config(&self) -> RetryConfig;
@@ -619,6 +624,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             .unwrap_or(0)
     }
 
+    fn current_retry_point(&self) -> OplogIndex {
+        self.state.current_retry_point
+    }
+
     fn retry_config(&self) -> RetryConfig {
         self.state
             .overridden_retry_policy
@@ -733,7 +742,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
 
         let decision = self
             .retry_state
-            .decide_retry(ctx, self.begin_index, Pair::FQFN)
+            .decide_retry(ctx, Pair::FQFN)
             .await;
 
         match decision {
@@ -1016,6 +1025,10 @@ mod tests {
 
         async fn current_retry_count_for(&self, _retry_from: OplogIndex) -> u32 {
             self.oplog_retry_count
+        }
+
+        fn current_retry_point(&self) -> OplogIndex {
+            OplogIndex::INITIAL
         }
 
         fn retry_config(&self) -> RetryConfig {
