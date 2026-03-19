@@ -130,11 +130,21 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
         }
+        // size == current_size: no-op
 
         self.observe_function_call("filesystem::types::descriptor", "set_size");
 
-        let mut view = self.as_wasi_view();
-        HostDescriptor::set_size(&mut view.filesystem(), fd, size).await
+        let result = {
+            let mut view = self.as_wasi_view();
+            HostDescriptor::set_size(&mut view.filesystem(), fd, size).await
+        };
+
+        // Release permits if the truncation succeeded and actually shrank the file.
+        if result.is_ok() && size < current_size {
+            self.release_storage_space(current_size - size);
+        }
+
+        result
     }
 
     async fn set_times(
@@ -510,9 +520,36 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
 
+        // Stat the target file before unlinking to know how many bytes to release.
+        // Use the upstream (non-durable) stat_at to avoid oplog side effects.
+        let file_size = {
+            let fd_borrow = Resource::new_borrow(fd.rep());
+            let mut view = self.as_wasi_view();
+            match HostDescriptor::stat_at(
+                &mut view.filesystem(),
+                fd_borrow,
+                PathFlags::empty(),
+                path.clone(),
+            )
+            .await
+            {
+                Ok(s) => s.size,
+                Err(_) => 0,
+            }
+        };
+
         self.observe_function_call("filesystem::types::descriptor", "unlink_file_at");
-        let mut view = self.as_wasi_view();
-        HostDescriptor::unlink_file_at(&mut view.filesystem(), fd, path.clone()).await
+        let result = {
+            let mut view = self.as_wasi_view();
+            HostDescriptor::unlink_file_at(&mut view.filesystem(), fd, path.clone()).await
+        };
+
+        // Only release permits if the unlink actually succeeded.
+        if result.is_ok() {
+            self.release_storage_space(file_size);
+        }
+
+        result
     }
 
     async fn is_same_object(

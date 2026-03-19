@@ -452,10 +452,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.is_replay() {
             return Ok(());
         }
-        let after = self
-            .state
-            .current_storage_usage
-            .saturating_add(new_bytes);
+        let after = self.state.current_storage_usage.saturating_add(new_bytes);
         if after > self.max_disk_space {
             Err(anyhow!(GolemSpecificWasmTrap::WorkerExceededStorageLimit))
         } else {
@@ -496,7 +493,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if freed_bytes == 0 {
             return;
         }
-        self.public_state.worker().release_storage_space(freed_bytes);
+        self.public_state
+            .worker()
+            .release_storage_space(freed_bytes);
         self.state.current_storage_usage -= freed_bytes;
     }
 

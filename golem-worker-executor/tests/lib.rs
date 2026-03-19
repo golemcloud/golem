@@ -38,10 +38,10 @@ pub mod observability;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod resource_limits;
-pub mod storage_quota;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
+pub mod storage_quota;
 pub mod transactions;
 pub mod wasi;
 

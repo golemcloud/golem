@@ -72,7 +72,10 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         &self,
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<DebugContext>> {
-        Arc::new(ActiveWorkers::<DebugContext>::new(&golem_config.memory, &golem_config.storage))
+        Arc::new(ActiveWorkers::<DebugContext>::new(
+            &golem_config.memory,
+            &golem_config.storage,
+        ))
     }
 
     fn create_environment_state_service(

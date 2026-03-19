@@ -14,11 +14,11 @@
 
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
+use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::AgentError;
 use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
-use golem_common::SafeDisplay;
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};

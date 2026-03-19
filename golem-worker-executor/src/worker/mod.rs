@@ -877,8 +877,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(ref mut running) => {
-                if let Some(permit) = self.active_workers().try_acquire_storage(total_bytes).await
-                {
+                if let Some(permit) = self.active_workers().try_acquire_storage(total_bytes).await {
                     running.merge_extra_storage_permits(permit);
                     Ok(())
                 } else {
