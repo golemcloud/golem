@@ -13,6 +13,7 @@ message LogEvent {
     InvocationStarted invocation_started = 4;
     InvocationFinished invocation_finished = 5;
     ClientLagged client_lagged = 6;
+    PluginError plugin_error = 7;
   }
 }
 
@@ -52,6 +53,12 @@ message InvocationFinished {
   google.protobuf.Timestamp timestamp = 1;
   string function = 2;
   IdempotencyKey idempotency_key = 3;
+}
+
+message PluginError {
+  google.protobuf.Timestamp timestamp = 1;
+  string plugin_name = 2;
+  string message = 3;
 }
 
 /**

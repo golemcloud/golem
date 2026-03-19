@@ -428,6 +428,10 @@ impl From<EnvironmentPluginGrantError> for ApiError {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
+            EnvironmentPluginGrantError::CannotDeleteBuiltinPluginGrant(_) => {
+                Self::Forbidden(Json(ErrorBody { error, cause: None }))
+            }
+
             EnvironmentPluginGrantError::Unauthorized(inner) => inner.into(),
             EnvironmentPluginGrantError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,

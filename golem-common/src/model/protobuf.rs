@@ -455,6 +455,13 @@ impl TryFrom<golem::worker::LogEvent> for AgentEvent {
                         number_of_missed_messages: event.number_of_missed_messages,
                     })
                 }
+                golem::worker::log_event::Event::PluginError(event) => {
+                    Ok(AgentEvent::PluginError {
+                        timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
+                        plugin_name: event.plugin_name,
+                        message: event.message,
+                    })
+                }
             },
             None => Err("Missing event".to_string()),
         }
@@ -525,6 +532,19 @@ impl TryFrom<AgentEvent> for golem::worker::LogEvent {
                         function,
                         idempotency_key: Some(idempotency_key.into()),
                         timestamp: Some(timestamp.into()),
+                    },
+                )),
+            }),
+            AgentEvent::PluginError {
+                timestamp,
+                plugin_name,
+                message,
+            } => Ok(golem::worker::LogEvent {
+                event: Some(golem::worker::log_event::Event::PluginError(
+                    golem::worker::PluginError {
+                        timestamp: Some(timestamp.into()),
+                        plugin_name,
+                        message,
                     },
                 )),
             }),

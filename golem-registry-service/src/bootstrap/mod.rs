@@ -203,6 +203,15 @@ impl Services {
 
         let auth_service = Arc::new(AuthService::new(repos.account_repo.clone()));
 
+        let builtin_plugin_owner_account_id = config
+            .initial_accounts
+            .values()
+            .find(|a| a.role == golem_common::model::auth::AccountRole::BuiltinPluginOwner)
+            .map(|a| a.id)
+            .ok_or(anyhow!(
+                "No builtin-plugin-owner account found in initial_accounts"
+            ))?;
+
         let application_service = Arc::new(ApplicationService::new(
             repos.application_repo.clone(),
             account_service.clone(),
@@ -213,6 +222,8 @@ impl Services {
             repos.environment_repo.clone(),
             application_service.clone(),
             account_usage_service.clone(),
+            repos.plugin_repo.clone(),
+            builtin_plugin_owner_account_id,
         ));
 
         let environment_share_service = Arc::new(EnvironmentShareService::new(
@@ -244,6 +255,7 @@ impl Services {
             repos.environment_plugin_grant_repo.clone(),
             environment_service.clone(),
             plugin_registration_service.clone(),
+            builtin_plugin_owner_account_id,
         ));
 
         let component_write_service = Arc::new(ComponentWriteService::new(
@@ -335,6 +347,23 @@ impl Services {
             deployment_service.clone(),
             agent_secret_service.clone(),
         ));
+
+        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+            &config.builtin_plugins,
+            builtin_plugin_owner_account_id,
+            &repos.plugin_repo,
+            &application_service,
+            &environment_service,
+            &component_service,
+            &component_write_service,
+            &deployment_service,
+            &deployment_write_service,
+            &plugin_registration_service,
+        )
+        .await
+        {
+            tracing::warn!("Failed to provision built-in plugins: {e}");
+        }
 
         Ok(Self {
             account_service,

@@ -18,6 +18,7 @@ use crate::repo::environment_plugin_grant::EnvironmentPluginGrantRepo;
 use crate::repo::model::environment_plugin_grant::{
     EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError,
 };
+use golem_common::model::account::AccountId;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::{
     EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
@@ -39,6 +40,8 @@ pub enum EnvironmentPluginGrantError {
     EnvironmentPluginGrantNotFound(EnvironmentPluginGrantId),
     #[error("Grant for this plugin already exists in this environment")]
     GrantForPluginAlreadyExists,
+    #[error("Cannot delete built-in plugin grant {0}")]
+    CannotDeleteBuiltinPluginGrant(EnvironmentPluginGrantId),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -50,6 +53,7 @@ impl SafeDisplay for EnvironmentPluginGrantError {
         match self {
             Self::EnvironmentPluginGrantNotFound(_) => self.to_string(),
             Self::GrantForPluginAlreadyExists => self.to_string(),
+            Self::CannotDeleteBuiltinPluginGrant(_) => self.to_string(),
             Self::ReferencedPluginNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
@@ -69,6 +73,7 @@ pub struct EnvironmentPluginGrantService {
     environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
     environment_service: Arc<EnvironmentService>,
     plugin_registration_service: Arc<PluginRegistrationService>,
+    builtin_plugin_owner_account_id: AccountId,
 }
 
 impl EnvironmentPluginGrantService {
@@ -76,11 +81,13 @@ impl EnvironmentPluginGrantService {
         environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
         environment_service: Arc<EnvironmentService>,
         plugin_registration_service: Arc<PluginRegistrationService>,
+        builtin_plugin_owner_account_id: AccountId,
     ) -> Self {
         Self {
             environment_plugin_grant_repo,
             environment_service,
             plugin_registration_service,
+            builtin_plugin_owner_account_id,
         }
     }
 
@@ -143,7 +150,7 @@ impl EnvironmentPluginGrantService {
         environment_plugin_grant_id: EnvironmentPluginGrantId,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentPluginGrantError> {
-        let (_, environment) = self
+        let (grant, environment) = self
             .get_by_id_with_environment(environment_plugin_grant_id, false, auth)
             .await?;
 
@@ -152,6 +159,12 @@ impl EnvironmentPluginGrantService {
             &environment.roles_from_active_shares,
             EnvironmentAction::DeleteEnvironmentPluginGrant,
         )?;
+
+        if grant.plugin_account.id == self.builtin_plugin_owner_account_id {
+            return Err(EnvironmentPluginGrantError::CannotDeleteBuiltinPluginGrant(
+                environment_plugin_grant_id,
+            ));
+        }
 
         self.environment_plugin_grant_repo
             .delete(environment_plugin_grant_id.0, auth.account_id().0)
