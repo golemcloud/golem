@@ -148,10 +148,9 @@ fn build_request(
     url: &str,
     headers: Option<&[(String, String)]>,
 ) -> Result<tungstenite::http::Request<()>, String> {
-    let mut request = tungstenite::http::Request::builder()
-        .uri(url)
-        .body(())
-        .map_err(|e| e.to_string())?;
+    use tungstenite::client::IntoClientRequest;
+
+    let mut request = url.into_client_request().map_err(|e| e.to_string())?;
 
     if let Some(headers) = headers {
         let req_headers = request.headers_mut();
