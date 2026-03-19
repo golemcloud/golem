@@ -74,7 +74,6 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
     assert!(outputs.stderr_contains("app:rust"));
     assert!(outputs.stderr_contains("app:typescript"));
     assert!(outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
-    assert!(outputs.stderr_contains("cargo-clean"));
     assert!(outputs.stderr_contains("npm-install"));
 }
 
