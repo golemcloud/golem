@@ -119,33 +119,27 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::NEW,
-            ".",
-            flag::TEMPLATE,
-            "rust",
-            flag::COMPONENT_NAME,
-            "rust:agent",
-        ])
-        .await;
+    let component_manifest_path = ctx.cwd_path_join("golem.yaml");
 
-    assert!(outputs.success_or_dump());
+    let component_source_code_lib_file = ctx.cwd_path_join("src/lib.rs");
 
-    let component_manifest_path = ctx.cwd_path_join(Path::new("rust-agent").join("golem.yaml"));
-
-    let component_source_code_lib_file =
-        ctx.cwd_path_join(Path::new("rust-agent").join("src").join("lib.rs"));
-
-    let component_source_code_model_file =
-        ctx.cwd_path_join(Path::new("rust-agent").join("src").join("model.rs"));
+    let component_source_code_model_file = ctx.cwd_path_join("src/model.rs");
 
     fs::write_str(
         &component_manifest_path,
         indoc! { r#"
+            app: rust-code-first
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
             components:
-              rust:agent:
+              rust-code-first:rust-main:
                 templates: rust
 
             # We also test that we can generate the bridge SDKs during the build process
@@ -173,10 +167,10 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
 
-    check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::Rust).unwrap();
-
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+
+    check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::Rust).unwrap();
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
@@ -632,33 +626,29 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::NEW,
-            ".",
-            flag::TEMPLATE,
-            "ts",
-            flag::COMPONENT_NAME,
-            "ts:agent",
-        ])
-        .await;
-
     assert!(outputs.success_or_dump());
 
-    let component_manifest_path = ctx.cwd_path_join(Path::new("ts-agent").join("golem.yaml"));
+    let component_manifest_path = ctx.cwd_path_join("golem.yaml");
 
-    let component_source_code_main_file =
-        ctx.cwd_path_join(Path::new("ts-agent").join("src").join("main.ts"));
+    let component_source_code_main_file = ctx.cwd_path_join("src/main.ts");
 
-    let component_source_code_model_file =
-        ctx.cwd_path_join(Path::new("ts-agent").join("src").join("model.ts"));
+    let component_source_code_model_file = ctx.cwd_path_join("src/model.ts");
 
     fs::write_str(
         &component_manifest_path,
         indoc! { r#"
+            app: ts-code-first
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
             components:
-              ts:agent:
+              ts-code-first:ts-main:
                 templates: ts
 
             # We also test that we can generate the bridge SDKs during the build process
@@ -686,15 +676,15 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
 
-    check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::TypeScript).unwrap();
-
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+
+    check_agent_types_golden_file(ctx.cwd_path(), GuestLanguage::TypeScript).unwrap();
 
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("ts:agent/FooAgent(\"{uuid}\")");
+        let agent_constructor = format!("ts-code-first:ts-main/FooAgent(\"{uuid}\")");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -712,7 +702,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // function optional (that has null, defined as union)
     run_and_assert(
         &ctx,
-        "ts:agent/FooAgent.{funOptional}",
+        "ts-code-first:ts-main/FooAgent.{funOptional}",
         &[
             r#"{tag: "case1", value: "foo"}"#,
             r#"{a: "foo"}"#,
@@ -777,14 +767,14 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // // Multimodal
     // run_and_assert(
     //     &ctx,
-    //     "ts:agent/FooAgent.{funMultimodal}",
+    //     "ts-code-first:ts-main/FooAgent.{funMultimodal}",
     //     &["[text(inline({data: \"data\", text-type: none}))]"],
     // )
     // .await;
     //
     // run_and_assert(
     //     &ctx,
-    //     "ts:agent/FooAgent.{funMultimodalAdvanced}",
+    //     "ts-code-first:ts-main/FooAgent.{funMultimodalAdvanced}",
     //     &["[text(\"foo\")]"],
     // )
     // .await;
