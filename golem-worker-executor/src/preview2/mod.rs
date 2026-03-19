@@ -55,6 +55,7 @@ wasmtime::component::bindgen!({
         "golem:rdbms/postgres.db-transaction": super::durable_host::rdbms::postgres::DbTransactionEntry,
         "golem:rdbms/postgres.lazy-db-column-type": super::durable_host::rdbms::postgres::LazyDbColumnTypeEntry,
         "golem:rdbms/postgres.lazy-db-value": super::durable_host::rdbms::postgres::LazyDbValueEntry,
+        "golem:websocket/client.websocket-connection": super::durable_host::websocket::client::WebSocketConnectionEntry,
     },
 });
 

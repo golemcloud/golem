@@ -1841,3 +1841,136 @@ async fn deployment_invalidates_agent_resolution_cache(
 
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_echo(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .unique()
+        .store()
+        .await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+
+    let ws_server = tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let ws_stream = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("WS handshake failed");
+            let (mut write, mut read) = futures::StreamExt::split(ws_stream);
+            while let Some(Ok(msg)) = futures::StreamExt::next(&mut read).await {
+                if msg.is_close() {
+                    break;
+                }
+                if msg.is_text() || msg.is_binary() {
+                    futures::SinkExt::send(&mut write, msg).await.ok();
+                }
+            }
+        }
+    });
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "ws-echo-test");
+    let _agent_id = user
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "echo",
+            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(result, Value::String("hello websocket".to_string()));
+
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_receive_with_timeout(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .unique()
+        .store()
+        .await?;
+
+    // Start a WS server that accepts but never sends — so timeout will fire
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+
+    let ws_server = tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let ws_stream = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("WS handshake failed");
+            // Hold the connection open but never send anything
+            let (_write, mut read) = futures::StreamExt::split(ws_stream);
+            while let Some(Ok(msg)) = futures::StreamExt::next(&mut read).await {
+                if msg.is_close() {
+                    break;
+                }
+            }
+        }
+    });
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "ws-timeout-test");
+    let _agent_id = user
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "receive_with_timeout_test",
+            data_value!(format!("ws://localhost:{ws_port}"), 1000u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    // Should return None (timeout expired, no message received)
+    assert_eq!(result, Value::Option(None));
+
+    ws_server.abort();
+
+    Ok(())
+}

@@ -14,3 +14,4 @@ pub mod networking;
 pub mod raw_wasi_http;
 pub mod relational_databases;
 pub mod wasi_config;
+pub mod websocket;

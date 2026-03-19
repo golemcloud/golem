@@ -213,6 +213,11 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         get,
     )?;
 
+    crate::preview2::golem::websocket::client::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
+
     Ok(linker)
 }
 

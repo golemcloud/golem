@@ -31,6 +31,7 @@ pub mod rdbms;
 mod replay_state;
 mod sockets;
 pub mod wasm_rpc;
+pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
