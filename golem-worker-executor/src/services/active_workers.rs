@@ -401,6 +401,12 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.worker_storage.try_acquire(storage_bytes).await
     }
 
+    /// Return `freed_bytes` to the storage pool without dropping the whole permit.
+    /// Used when a file is deleted or truncated (Phase 5).
+    pub fn release_storage(&self, freed_bytes: u64) {
+        self.worker_storage.release(freed_bytes);
+    }
+
     async fn try_free_up_storage_inner(
         workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
         storage_bytes: u64,

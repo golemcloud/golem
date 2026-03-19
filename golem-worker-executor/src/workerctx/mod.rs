@@ -190,6 +190,11 @@ pub trait WorkerCtx:
     fn component_service(&self) -> Arc<dyn ComponentService>;
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService>;
+
+    /// Returns the per-plan storage limit (bytes) for this worker.
+    /// Used by write-time quota enforcement to check plan caps before acquiring
+    /// semaphore permits.
+    fn max_disk_space(&self) -> u64;
 }
 
 /// The fuel management interface of a worker context is responsible for borrowing and returning

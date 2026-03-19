@@ -646,4 +646,8 @@ impl WorkerCtx for DebugContext {
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
     }
+
+    fn max_disk_space(&self) -> u64 {
+        u64::MAX // debug context has no plan limits
+    }
 }

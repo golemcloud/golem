@@ -828,6 +828,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// Return `freed_bytes` to the storage semaphore pool.
+    /// Called from `DurableWorkerCtx::release_storage_space` when a file is
+    /// deleted or truncated (Phase 5). Should only be called from the invocation loop.
+    pub fn release_storage_space(&self, freed_bytes: u64) {
+        self.active_workers().release_storage(freed_bytes);
+    }
+
+    /// Acquire storage semaphore permits for a write operation.
+    /// Called from `DurableWorkerCtx::acquire_storage_space` in live mode only.
+    /// Returns `WorkerOutOfStorage` if the executor pool is exhausted.
+    ///
+    /// Should only be called from the invocation loop.
+    pub async fn acquire_storage_space(&self, new_bytes: u64) -> anyhow::Result<()> {
+        match &mut *self.instance.lock().await {
+            WorkerInstance::Running(ref mut running) => {
+                if let Some(permit) = self.active_workers().try_acquire_storage(new_bytes).await {
+                    running.merge_extra_storage_permits(permit);
+                    Ok(())
+                } else {
+                    Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfStorage))
+                }
+            }
+            // Worker is stopping/unloaded — no-op; the current invocation will
+            // fail anyway and permits will be re-acquired on restart.
+            _ => Ok(()),
+        }
+    }
+
     /// Acquire storage semaphore permits for the total size of all initial
     /// component files. Called once from `DurableWorkerCtx::create` after
     /// `prepare_filesystem` has loaded the files. Merges the acquired permits

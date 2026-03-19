@@ -316,6 +316,13 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 self.emit_log_event(event).await;
                 Ok::<(), StreamError>(())
             } else {
+                // File-backed stream: enforce storage quota before writing.
+                let new_bytes = contents.len() as u64;
+                self.check_storage_quota(new_bytes)
+                    .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+                self.acquire_storage_space(new_bytes)
+                    .await
+                    .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
                 HostOutputStream::write(self.table(), self_, contents).await
             }
         }
@@ -441,6 +448,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "write_zeroes");
+            // File-backed stream: enforce storage quota before writing.
+            self.check_storage_quota(len)
+                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
+            self.acquire_storage_space(len)
+                .await
+                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
             HostOutputStream::write_zeroes(self.table(), self_, len).await
         }
     }

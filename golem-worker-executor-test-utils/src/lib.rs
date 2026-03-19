@@ -906,6 +906,10 @@ impl WorkerCtx for TestWorkerCtx {
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
     }
+
+    fn max_disk_space(&self) -> u64 {
+        u64::MAX // no plan limit enforcement in tests by default
+    }
 }
 
 #[async_trait]
@@ -1715,6 +1719,53 @@ pub async fn start_with_table_limit(
         context,
         Arc::new(FixedTableLimitResourceLimits { max_table_elements }),
         "Timeout waiting for table-limit server to start",
+    )
+    .await
+}
+
+/// A `ResourceLimits` implementation that provides a fixed per-worker disk
+/// space limit while keeping fuel, memory, and table elements unlimited.
+/// Used by storage quota tests.
+struct FixedStorageQuotaResourceLimits {
+    max_disk_space_bytes: u64,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedStorageQuotaResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            self.max_disk_space_bytes,
+        )))
+    }
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// with a specific per-worker disk space limit enforced at write time.
+///
+/// `max_disk_space_bytes` is the per-worker plan limit (checked by
+/// `check_storage_quota`). The executor-wide semaphore pool is left at its
+/// default (10 GB), so only the plan limit is exercised.
+pub async fn start_with_storage_quota(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedStorageQuotaResourceLimits {
+            max_disk_space_bytes,
+        }),
+        "Timeout waiting for storage-quota server to start",
     )
     .await
 }

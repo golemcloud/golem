@@ -190,6 +190,10 @@ impl Context {
     pub fn get_max_table_elements(&self) -> usize {
         self.resource_limit_entry.max_table_elements_limit()
     }
+
+    pub fn get_max_disk_space(&self) -> u64 {
+        self.resource_limit_entry.max_disk_space_limit()
+    }
 }
 
 impl DurableWorkerCtxView<Context> for Context {
@@ -782,7 +786,10 @@ impl WorkerCtx for Context {
         )
         .await?;
         let account_resource_limits = resource_limits.initialize_account(account_id).await?;
-        Ok(Self::new(golem_ctx, config, account_resource_limits))
+        let mut ctx = Self::new(golem_ctx, config, account_resource_limits);
+        ctx.durable_ctx
+            .set_max_disk_space(ctx.resource_limit_entry.max_disk_space_limit());
+        Ok(ctx)
     }
 
     fn as_wasi_view(&mut self) -> impl WasiView {
@@ -843,6 +850,10 @@ impl WorkerCtx for Context {
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
+    }
+
+    fn max_disk_space(&self) -> u64 {
+        self.get_max_disk_space()
     }
 }
 

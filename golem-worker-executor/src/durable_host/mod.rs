@@ -104,7 +104,9 @@ use golem_common::model::{
     ScheduledAction, Timestamp,
 };
 use golem_common::retries::get_delay;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
@@ -151,6 +153,10 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     state: PrivateDurableWorkerState,
     temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
+    /// Per-plan storage limit (bytes). Set after creation via `set_max_disk_space`
+    /// once the `AtomicResourceEntry` is initialised for the account. Defaults to
+    /// `u64::MAX` (unlimited) until explicitly set.
+    max_disk_space: u64,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -310,7 +316,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await,
             temp_dir,
             execution_status,
+            max_disk_space: u64::MAX, // unlimited until set_max_disk_space is called
         })
+    }
+
+    /// Set the per-plan storage limit. Called from the concrete `WorkerCtx::create`
+    /// implementation after the `AtomicResourceEntry` is initialised.
+    pub fn set_max_disk_space(&mut self, limit: u64) {
+        self.max_disk_space = limit;
     }
 
     fn table(&mut self) -> &mut ResourceTable {
@@ -419,6 +432,72 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn total_linear_memory_size(&self) -> u64 {
         self.state.total_linear_memory_size
+    }
+
+    pub fn current_storage_usage(&self) -> u64 {
+        self.state.current_storage_usage
+    }
+
+    pub fn max_disk_space(&self) -> u64 {
+        self.max_disk_space
+    }
+
+    /// Check whether acquiring `new_bytes` would breach the per-plan storage
+    /// limit. Returns `WorkerExceededStorageLimit` (permanent) if so.
+    /// Does NOT check the executor semaphore pool — that is done by
+    /// `acquire_storage_space`.
+    ///
+    /// No-op during replay.
+    pub fn check_storage_quota(&self, new_bytes: u64) -> anyhow::Result<()> {
+        if self.state.is_replay() {
+            return Ok(());
+        }
+        let after = self
+            .state
+            .current_storage_usage
+            .saturating_add(new_bytes);
+        if after > self.max_disk_space {
+            Err(anyhow!(GolemSpecificWasmTrap::WorkerExceededStorageLimit))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Acquire `new_bytes` of storage from the executor semaphore pool.
+    ///
+    /// - During replay: no-op (permits were pre-acquired at startup).
+    /// - During live execution: calls `Worker::acquire_storage_space`, which
+    ///   tries the semaphore non-blockingly. On failure returns
+    ///   `WorkerOutOfStorage` (retriable via `ReacquirePermits`).
+    ///
+    /// Call `check_storage_quota` before calling this to enforce the per-plan
+    /// limit (`WorkerExceededStorageLimit`). This method only checks the
+    /// executor-wide semaphore pool (`WorkerOutOfStorage`).
+    pub async fn acquire_storage_space(&mut self, new_bytes: u64) -> anyhow::Result<()> {
+        if self.state.is_replay() {
+            return Ok(());
+        }
+        self.public_state
+            .worker()
+            .acquire_storage_space(new_bytes)
+            .await?;
+        self.state.current_storage_usage += new_bytes;
+        Ok(())
+    }
+
+    /// Release `freed_bytes` back to the executor semaphore pool.
+    /// Called when files are deleted or truncated (Phase 5).
+    /// During replay this is a no-op.
+    pub fn release_storage_space(&mut self, freed_bytes: u64) {
+        if self.state.is_replay() {
+            return;
+        }
+        let freed_bytes = freed_bytes.min(self.state.current_storage_usage);
+        if freed_bytes == 0 {
+            return;
+        }
+        self.public_state.worker().release_storage_space(freed_bytes);
+        self.state.current_storage_usage -= freed_bytes;
     }
 
     pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
@@ -2927,6 +3006,10 @@ struct PrivateDurableWorkerState {
     component_metadata: Component,
 
     total_linear_memory_size: u64,
+    /// Running total of storage bytes acquired from the executor semaphore pool
+    /// by this worker since it last started. Incremented on every successful
+    /// write; decremented when files are deleted or truncated (Phase 5).
+    current_storage_usage: u64,
 
     invocation_context: InvocationContext,
     current_span_id: SpanId,
@@ -3062,6 +3145,7 @@ impl PrivateDurableWorkerState {
             snapshotting_mode: None,
             component_metadata,
             total_linear_memory_size,
+            current_storage_usage: 0,
             replay_state,
             invocation_context,
             current_span_id,

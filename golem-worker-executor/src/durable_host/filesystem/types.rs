@@ -111,6 +111,26 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
 
+        // Determine whether this is a growth and charge the delta.
+        // We borrow fd to stat before consuming it in set_size.
+        let current_size = {
+            let fd_borrow = Resource::new_borrow(fd.rep());
+            let mut view = self.as_wasi_view();
+            match HostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
+                Ok(s) => s.size,
+                Err(_) => 0, // if we can't stat, treat current as 0 (conservative: charges full size)
+            }
+        };
+
+        if size > current_size {
+            let delta = size - current_size;
+            self.check_storage_quota(delta)
+                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
+            self.acquire_storage_space(delta)
+                .await
+                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
+        }
+
         self.observe_function_call("filesystem::types::descriptor", "set_size");
 
         let mut view = self.as_wasi_view();
@@ -155,6 +175,13 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
         self.fail_if_read_only(&fd)?;
+
+        let new_bytes = buffer.len() as u64;
+        self.check_storage_quota(new_bytes)
+            .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
+        self.acquire_storage_space(new_bytes)
+            .await
+            .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
 
         self.observe_function_call("filesystem::types::descriptor", "write");
         let mut view = self.as_wasi_view();
