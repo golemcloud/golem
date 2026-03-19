@@ -39,7 +39,8 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
+    types::ObjectMetadata, OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload,
+    TimestampedUpdateDescription,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::worker::AgentMetadataDto;
@@ -81,7 +82,7 @@ use golem_worker_executor::preview2::golem_api_1_x;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
-use golem_worker_executor::services::blob_store::BlobStoreService;
+use golem_worker_executor::services::blob_store::{BlobStoreError, BlobStoreService};
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
@@ -130,7 +131,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -419,6 +420,113 @@ pub async fn start_with_oplog_config(
     start_customized(deps, context, None, None, None, None, oplog_config_override).await
 }
 
+/// Overrides for customizing the test executor. Allows wrapping services with
+/// failure-injecting wrappers and modifying the GolemConfig.
+type ConfigureFn = dyn Fn(&mut GolemConfig) + Send + Sync;
+type WrapKeyValueServiceFn =
+    dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
+type WrapBlobStoreServiceFn =
+    dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+
+#[derive(Clone, Default)]
+pub struct TestExecutorOverrides {
+    pub configure: Option<Arc<ConfigureFn>>,
+    pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
+    pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+}
+
+pub async fn start_with_overrides(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let redis = deps.redis.clone();
+    let redis_monitor = deps.redis_monitor.clone();
+    redis.assert_valid();
+    redis_monitor.assert_valid();
+    info!("Using Redis on port {}", redis.public_port());
+
+    let prometheus = golem_worker_executor::metrics::register_all();
+
+    let mut config = GolemConfig {
+        key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
+            port: redis.public_port(),
+            key_prefix: context.redis_prefix(),
+            ..Default::default()
+        }),
+        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
+        blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
+            root: deps.data_dir.path().join("blobs"),
+        }),
+        http_port: 0,
+        grpc: GrpcApiConfig {
+            port: 0,
+            tls: GrpcServerTlsConfig::disabled(),
+        },
+        compiled_component_service: CompiledComponentServiceConfig::Enabled(
+            CompiledComponentServiceEnabledConfig {},
+        ),
+        shard_manager_service: ShardManagerServiceConfig::SingleShard(
+            ShardManagerServiceSingleShardConfig {},
+        ),
+        memory: MemoryConfig {
+            ..Default::default()
+        },
+        agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
+        engine: EngineConfig {
+            enable_fs_cache: true,
+        },
+        ..Default::default()
+    };
+
+    if let Some(configure) = &overrides.configure {
+        configure(&mut config);
+    }
+
+    let handle = Handle::current();
+
+    let mut join_set = JoinSet::new();
+
+    let details = run(
+        config,
+        prometheus,
+        handle,
+        deps.component_service_directory.clone(),
+        overrides,
+        &mut join_set,
+    )
+    .await?;
+    let grpc_port = details.grpc_port;
+    let leak_detector = details.leak_detector.clone();
+    let details = Arc::new(details);
+
+    let start = std::time::Instant::now();
+    loop {
+        info!("Waiting for worker-executor to be reachable on port {grpc_port}");
+        let channel = Channel::from_shared(format!("http://127.0.0.1:{grpc_port}"))
+            .expect("Valid URI")
+            .connect()
+            .await;
+
+        if let Ok(channel) = channel {
+            let otel_channel = ServiceBuilder::new()
+                .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
+                .service(channel);
+            let client = WorkerExecutorClient::new(otel_channel);
+            break Ok(TestWorkerExecutor {
+                _join_set: Arc::new(join_set),
+                _run_details: details,
+                deps: deps.clone(),
+                client,
+                context: context.clone(),
+                leak_detector,
+            });
+        } else if start.elapsed().as_secs() > 10 {
+            break Err(anyhow::anyhow!("Timeout waiting for server to start"));
+        }
+    }
+}
+
 pub async fn start_customized(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
@@ -489,6 +597,7 @@ pub async fn start_customized(
         prometheus,
         handle,
         deps.component_service_directory.clone(),
+        TestExecutorOverrides::default(),
         &mut join_set,
     )
     .await?;
@@ -528,12 +637,14 @@ async fn run(
     prometheus_registry: Registry,
     runtime: Handle,
     component_service_directory: PathBuf,
+    overrides: TestExecutorOverrides,
     join_set: &mut JoinSet<Result<(), Error>>,
 ) -> Result<RunDetails, Error> {
     info!("Golem Worker Executor starting up...");
 
     TestServerBootstrap {
         component_service_directory,
+        overrides,
     }
     .run(golem_config, prometheus_registry, runtime, join_set)
     .await
@@ -758,6 +869,7 @@ impl UpdateManagement for TestWorkerCtx {
 
 struct TestServerBootstrap {
     component_service_directory: PathBuf,
+    overrides: TestExecutorOverrides,
 }
 
 #[async_trait]
@@ -1171,6 +1283,16 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
+        let key_value_service = if let Some(wrap) = &self.overrides.wrap_key_value_service {
+            wrap(key_value_service)
+        } else {
+            key_value_service
+        };
+        let blob_store_service = if let Some(wrap) = &self.overrides.wrap_blob_store_service {
+            wrap(blob_store_service)
+        } else {
+            blob_store_service
+        };
         let resource_limits = resource_limits::configured(
             &golem_config.resource_limits,
             registry_service,
@@ -2046,5 +2168,316 @@ impl AdditionalTestDeps {
             .or_default();
 
         *inner.entry_async(entry).await.or_default().get_mut() += 1;
+    }
+}
+
+pub struct FailingKeyValueService {
+    inner: Arc<dyn KeyValueService>,
+    remaining_failures: AtomicU32,
+    remaining_set_failures: AtomicU32,
+}
+
+impl FailingKeyValueService {
+    pub fn new(inner: Arc<dyn KeyValueService>, failure_count: u32) -> Self {
+        Self {
+            inner,
+            remaining_failures: AtomicU32::new(failure_count),
+            remaining_set_failures: AtomicU32::new(0),
+        }
+    }
+
+    pub fn with_set_failures(inner: Arc<dyn KeyValueService>, set_failure_count: u32) -> Self {
+        Self {
+            inner,
+            remaining_failures: AtomicU32::new(0),
+            remaining_set_failures: AtomicU32::new(set_failure_count),
+        }
+    }
+}
+
+#[async_trait]
+impl KeyValueService for FailingKeyValueService {
+    async fn delete(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<()> {
+        self.inner.delete(environment_id, bucket, key).await
+    }
+
+    async fn delete_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        keys: Vec<String>,
+    ) -> anyhow::Result<()> {
+        self.inner.delete_many(environment_id, bucket, keys).await
+    }
+
+    async fn exists(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<bool> {
+        self.inner.exists(environment_id, bucket, key).await
+    }
+
+    async fn get(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        if self
+            .remaining_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(anyhow!("transient test failure"))
+        } else {
+            self.inner.get(environment_id, bucket, key).await
+        }
+    }
+
+    async fn get_keys(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+    ) -> anyhow::Result<Vec<String>> {
+        self.inner.get_keys(environment_id, bucket).await
+    }
+
+    async fn get_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        keys: Vec<String>,
+    ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
+        self.inner.get_many(environment_id, bucket, keys).await
+    }
+
+    async fn set(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key: String,
+        outgoing_value: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        if self
+            .remaining_set_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(anyhow!("transient test failure"))
+        } else {
+            self.inner
+                .set(environment_id, bucket, key, outgoing_value)
+                .await
+        }
+    }
+
+    async fn set_many(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+        key_values: Vec<(String, Vec<u8>)>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .set_many(environment_id, bucket, key_values)
+            .await
+    }
+}
+
+pub struct FailingBlobStoreService {
+    inner: Arc<dyn BlobStoreService>,
+    remaining_failures: AtomicU32,
+}
+
+impl FailingBlobStoreService {
+    pub fn new(inner: Arc<dyn BlobStoreService>, failure_count: u32) -> Self {
+        Self {
+            inner,
+            remaining_failures: AtomicU32::new(failure_count),
+        }
+    }
+}
+
+#[async_trait]
+impl BlobStoreService for FailingBlobStoreService {
+    async fn clear(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+    ) -> Result<(), BlobStoreError> {
+        self.inner.clear(environment_id, container_name).await
+    }
+
+    async fn container_exists(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+    ) -> Result<bool, BlobStoreError> {
+        self.inner
+            .container_exists(environment_id, container_name)
+            .await
+    }
+
+    async fn copy_object(
+        &self,
+        environment_id: EnvironmentId,
+        source_container_name: String,
+        source_object_name: String,
+        destination_container_name: String,
+        destination_object_name: String,
+    ) -> Result<(), BlobStoreError> {
+        self.inner
+            .copy_object(
+                environment_id,
+                source_container_name,
+                source_object_name,
+                destination_container_name,
+                destination_object_name,
+            )
+            .await
+    }
+
+    async fn create_container(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+    ) -> Result<(), BlobStoreError> {
+        self.inner
+            .create_container(environment_id, container_name)
+            .await
+    }
+
+    async fn delete_container(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+    ) -> Result<(), BlobStoreError> {
+        self.inner
+            .delete_container(environment_id, container_name)
+            .await
+    }
+
+    async fn delete_object(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_name: String,
+    ) -> Result<(), BlobStoreError> {
+        self.inner
+            .delete_object(environment_id, container_name, object_name)
+            .await
+    }
+
+    async fn delete_objects(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_names: Vec<String>,
+    ) -> Result<(), BlobStoreError> {
+        self.inner
+            .delete_objects(environment_id, container_name, object_names)
+            .await
+    }
+
+    async fn get_container(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+    ) -> Result<Option<u64>, BlobStoreError> {
+        self.inner
+            .get_container(environment_id, container_name)
+            .await
+    }
+
+    async fn get_data(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_name: String,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<u8>, BlobStoreError> {
+        if self
+            .remaining_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(BlobStoreError::TransientBackend(
+                "transient test failure".to_string(),
+            ))
+        } else {
+            self.inner
+                .get_data(environment_id, container_name, object_name, start, end)
+                .await
+        }
+    }
+
+    async fn has_object(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_name: String,
+    ) -> Result<bool, BlobStoreError> {
+        self.inner
+            .has_object(environment_id, container_name, object_name)
+            .await
+    }
+
+    async fn list_objects(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+    ) -> Result<Vec<String>, BlobStoreError> {
+        self.inner
+            .list_objects(environment_id, container_name)
+            .await
+    }
+
+    async fn move_object(
+        &self,
+        environment_id: EnvironmentId,
+        source_container_name: String,
+        source_object_name: String,
+        destination_container_name: String,
+        destination_object_name: String,
+    ) -> Result<(), BlobStoreError> {
+        self.inner
+            .move_object(
+                environment_id,
+                source_container_name,
+                source_object_name,
+                destination_container_name,
+                destination_object_name,
+            )
+            .await
+    }
+
+    async fn object_info(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_name: String,
+    ) -> Result<ObjectMetadata, BlobStoreError> {
+        self.inner
+            .object_info(environment_id, container_name, object_name)
+            .await
+    }
+
+    async fn write_data(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+        object_name: String,
+        data: Vec<u8>,
+    ) -> Result<(), BlobStoreError> {
+        self.inner
+            .write_data(environment_id, container_name, object_name, data)
+            .await
     }
 }
