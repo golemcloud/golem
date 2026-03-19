@@ -3030,6 +3030,12 @@ components:
       properties:
         idempotencyKey:
           type: string
+    ProcessOplogEntriesResultParameters:
+      type: object
+      title: ProcessOplogEntriesResultParameters
+      properties:
+        error:
+          type: string
     PublicAgentInvocation:
       type: object
       oneOf:
@@ -3056,7 +3062,7 @@ components:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -3065,7 +3071,7 @@ components:
           ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_AgentInvocationOutputParameters:
       allOf:
       - type: object
@@ -3099,9 +3105,21 @@ components:
           type:
             type: string
             enum:
+            - LoadSnapshot
+            example: LoadSnapshot
+      - $ref: '#/components/schemas/FallibleResultParameters'
+    PublicAgentInvocationResult_ProcessOplogEntriesResultParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
             - ProcessOplogEntries
             example: ProcessOplogEntries
-      - $ref: '#/components/schemas/FallibleResultParameters'
+      - $ref: '#/components/schemas/ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_SaveSnapshotResultParameters:
       allOf:
       - type: object

@@ -106,9 +106,11 @@ derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 desert_rust = { version = "0.1.7", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
 dirs = "6.0.0"
+dotenvy = "0.15.7"
 drop-stream = "0.3.2"
 evcxr = "0.21.1"
 evicting_cache_map = "0.4.0"
+expectrl = "0.8.0"
 fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
@@ -243,8 +245,8 @@ tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
 test-r = { version = "3.0.3", default-features = true }
-testcontainers = { version = "0.23.3" }
-testcontainers-modules = { version = "0.11.6", features = ["postgres", "redis", "minio", "mysql", ] }
+testcontainers = { version = "0.27.1" }
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }

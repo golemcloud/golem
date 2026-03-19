@@ -1,0 +1,15 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+
+app: otlp-exporter
+
+includes:
+  - components-*/*/golem.yaml
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

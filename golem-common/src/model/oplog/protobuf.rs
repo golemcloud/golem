@@ -16,12 +16,13 @@ use super::{
     AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
     LoadSnapshotParameters, LogLevel, ManualUpdateParameters, OplogCursor,
-    PluginInstallationDescription, ProcessOplogEntriesParameters, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicRetryConfig, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalSpanData,
+    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex, PublicRetryConfig,
+    PublicSnapshotData, PublicSpanData, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, StringAttributeValue,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::model::agent::DataValue;
@@ -1464,11 +1465,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
                     SaveSnapshotResultParameters { snapshot: data },
                 ))
             }
-            ProtoResult::ProcessOplogEntries(opt_err) => Ok(
-                PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters {
-                    error: opt_err.error,
-                }),
-            ),
+            ProtoResult::ProcessOplogEntries(result) => {
+                Ok(PublicAgentInvocationResult::ProcessOplogEntries(
+                    ProcessOplogEntriesResultParameters {
+                        error: result.error,
+                    },
+                ))
+            }
         }
     }
 }
@@ -1536,10 +1539,10 @@ impl TryFrom<PublicAgentInvocationResult>
                 };
                 ProtoResult::SaveSnapshot(snapshot_data)
             }
-            PublicAgentInvocationResult::ProcessOplogEntries(fallible) => {
+            PublicAgentInvocationResult::ProcessOplogEntries(result) => {
                 ProtoResult::ProcessOplogEntries(
-                    golem_api_grpc::proto::golem::worker::OptionalError {
-                        error: fallible.error,
+                    golem_api_grpc::proto::golem::worker::ProcessOplogEntriesResult {
+                        error: result.error,
                     },
                 )
             }

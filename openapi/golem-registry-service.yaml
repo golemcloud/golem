@@ -7118,6 +7118,7 @@ components:
       enum:
       - admin
       - marketing-admin
+      - builtin-plugin-owner
     AccountSetPlan:
       type: object
       title: AccountSetPlan

@@ -909,6 +909,7 @@ pub fn log_event_to_string(event: &LogEvent) -> String {
         Some(log_event::Event::InvocationFinished(_)) => "".to_string(),
         Some(log_event::Event::InvocationStarted(_)) => "".to_string(),
         Some(log_event::Event::ClientLagged { .. }) => "".to_string(),
+        Some(log_event::Event::PluginError(err)) => err.message.clone(),
         None => std::panic!("Unexpected event type"),
     }
 }

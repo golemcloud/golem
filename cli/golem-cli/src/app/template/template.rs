@@ -17,8 +17,8 @@ use crate::app::template::generator::{
     generate_on_demand_commons_by_template,
 };
 use crate::app::template::metadata::AppTemplateMetadata;
+use crate::fs;
 use crate::model::GuestLanguage;
-use crate::{fs, SdkOverrides};
 use golem_common::base_model::application::ApplicationName;
 use golem_common::base_model::component::ComponentName;
 use serde_derive::{Deserialize, Serialize};
@@ -105,17 +105,12 @@ impl AppTemplate {
         &self,
         application_name: &ApplicationName,
         target_path: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
-        generate_commons_by_template(self, application_name, target_path, sdk_overrides)
+        generate_commons_by_template(self, application_name, target_path)
     }
 
-    fn generate_on_demand_commons(
-        &self,
-        target_path: &Path,
-        sdk_overrides: &SdkOverrides,
-    ) -> anyhow::Result<()> {
-        generate_on_demand_commons_by_template(self, target_path, sdk_overrides)
+    fn generate_on_demand_commons(&self, target_path: &Path) -> anyhow::Result<()> {
+        generate_on_demand_commons_by_template(self, target_path)
     }
 
     fn generate_component(
@@ -123,15 +118,8 @@ impl AppTemplate {
         target_path: &Path,
         application_name: &ApplicationName,
         component_name: &ComponentName,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
-        generate_component_by_template(
-            self,
-            target_path,
-            application_name,
-            component_name,
-            sdk_overrides,
-        )
+        generate_component_by_template(self, target_path, application_name, component_name)
     }
 }
 
@@ -143,10 +131,8 @@ impl AppTemplateCommon {
         &self,
         application_name: &ApplicationName,
         target_path: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
-        self.0
-            .generate_commons(application_name, target_path, sdk_overrides)
+        self.0.generate_commons(application_name, target_path)
     }
 }
 
@@ -154,9 +140,8 @@ impl AppTemplateCommon {
 pub struct AppTemplateCommonOnDemand(pub AppTemplate);
 
 impl AppTemplateCommonOnDemand {
-    pub fn generate(&self, target_path: &Path, sdk_overrides: &SdkOverrides) -> anyhow::Result<()> {
-        self.0
-            .generate_on_demand_commons(target_path, sdk_overrides)
+    pub fn generate(&self, target_path: &Path) -> anyhow::Result<()> {
+        self.0.generate_on_demand_commons(target_path)
     }
 }
 
@@ -169,10 +154,9 @@ impl AppTemplateComponent {
         application_name: &ApplicationName,
         component_name: &ComponentName,
         target_path: &Path,
-        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
         self.0
-            .generate_component(target_path, application_name, component_name, sdk_overrides)
+            .generate_component(target_path, application_name, component_name)
     }
 }
 

@@ -210,6 +210,7 @@ fn label(event: &InternalWorkerEvent) -> &'static str {
         InternalWorkerEvent::Log { .. } => "log",
         InternalWorkerEvent::InvocationStart { .. } => "invocation_start",
         InternalWorkerEvent::InvocationFinished { .. } => "invocation_finished",
+        InternalWorkerEvent::PluginError { .. } => "plugin_error",
     }
 }
 

@@ -92,10 +92,10 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                         .insert(format!("{worker_id:?}"), params.clone());
                 });
             } else if let PublicOplogEntry::AgentInvocationFinished(_params) = entry {
-                if let Some(invocation) =
+                let function_name = if let Some(invocation) =
                     CURRENT_INVOCATIONS.with(|ci| ci.borrow().get(&format!("{worker_id:?}")).cloned())
                 {
-                    let function_name = match &invocation.invocation {
+                    match &invocation.invocation {
                         AgentInvocation::AgentInitialization(_) => {
                             "agent-initialization".to_string()
                         }
@@ -108,17 +108,22 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                             "process-oplog-entries".to_string()
                         }
                         AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
-                    };
-
-                    invocations.push(InvocationRecord {
-                        oplog_index: *oplog_index,
-                        fn_name: function_name,
-                    });
+                    }
                 } else {
+                    // AgentInvocationStarted was in a previous batch sent to a
+                    // different plugin worker (e.g. shard reassignment / locality
+                    // recovery spawned a new instance). Still record the invocation
+                    // so we don't silently lose callbacks.
                     println!(
                         "AgentInvocationFinished without corresponding AgentInvocationStarted"
-                    )
-                }
+                    );
+                    "unknown".to_string()
+                };
+
+                invocations.push(InvocationRecord {
+                    oplog_index: *oplog_index,
+                    fn_name: function_name,
+                });
             }
         }
 

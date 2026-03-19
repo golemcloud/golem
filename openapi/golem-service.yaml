@@ -10162,6 +10162,12 @@ components:
           type: string
       required:
       - idempotencyKey
+    ProcessOplogEntriesResultParameters:
+      title: ProcessOplogEntriesResultParameters
+      type: object
+      properties:
+        error:
+          type: string
     PublicAgentInvocation:
       discriminator:
         propertyName: type
@@ -10189,7 +10195,7 @@ components:
           ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
@@ -10197,7 +10203,7 @@ components:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_AgentInvocationOutputParameters:
       allOf:
       - type: object
@@ -10227,13 +10233,25 @@ components:
       - type: object
         properties:
           type:
+            example: LoadSnapshot
+            type: string
+            enum:
+            - LoadSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/FallibleResultParameters'
+    PublicAgentInvocationResult_ProcessOplogEntriesResultParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
             example: ProcessOplogEntries
             type: string
             enum:
             - ProcessOplogEntries
         required:
         - type
-      - $ref: '#/components/schemas/FallibleResultParameters'
+      - $ref: '#/components/schemas/ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_SaveSnapshotResultParameters:
       allOf:
       - type: object
@@ -12442,6 +12460,7 @@ components:
       enum:
       - admin
       - marketing-admin
+      - builtin-plugin-owner
     AccountSetPlan:
       title: AccountSetPlan
       type: object

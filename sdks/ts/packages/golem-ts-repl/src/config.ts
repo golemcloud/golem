@@ -15,7 +15,7 @@
 import { env } from 'node:process';
 import fs from 'node:fs';
 import util from 'node:util';
-import * as base from './base';
+import type * as base from '@golemcloud/golem-ts-bridge';
 
 export type Config = {
   binary: string;
@@ -167,7 +167,7 @@ export function loadReplCliFlags(): ReplCliFlags {
       return values.script;
     }
     if (scriptPath !== undefined) {
-      fs.readFileSync(scriptPath, 'utf8');
+      return fs.readFileSync(scriptPath, 'utf8');
     }
     return undefined;
   })();
