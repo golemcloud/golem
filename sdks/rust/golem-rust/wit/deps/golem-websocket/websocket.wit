@@ -38,6 +38,10 @@ interface client {
     /// Receive the next message (blocks until available)
     receive: func() -> result<message, error>;
 
+    /// Receive the next message with a timeout in milliseconds.
+    /// Returns none if the timeout expires before a message arrives.
+    receive-with-timeout: func(timeout-ms: u64) -> result<option<message>, error>;
+
     /// Send a close frame with optional code and reason
     close: func(code: option<u16>, reason: option<string>) -> result<_, error>;
 

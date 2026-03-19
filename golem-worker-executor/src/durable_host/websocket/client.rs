@@ -106,6 +106,37 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         }
     }
 
+    async fn receive_with_timeout(
+        &mut self,
+        self_: Resource<WebSocketConnectionEntry>,
+        timeout_ms: u64,
+    ) -> anyhow::Result<Result<Option<Message>, Error>> {
+        self.observe_function_call("golem:websocket/client", "receive-with-timeout");
+
+        let mut view = self.as_wasi_view();
+        let entry = view.table().get(&self_)?;
+        let mut reader = entry.reader.lock().await;
+
+        let timeout = tokio::time::Duration::from_millis(timeout_ms);
+
+        loop {
+            match tokio::time::timeout(timeout, reader.next()).await {
+                Ok(Some(Ok(msg))) => match from_tungstenite_message(msg) {
+                    Some(message) => return Ok(Ok(Some(message))),
+                    None => continue,
+                },
+                Ok(Some(Err(e))) => return Ok(Err(to_wit_error(e))),
+                Ok(None) => {
+                    return Ok(Err(Error::Closed(Some(CloseInfo {
+                        code: 1000,
+                        reason: "Connection closed".to_string(),
+                    }))));
+                }
+                Err(_) => return Ok(Ok(None)), // timeout expired
+            }
+        }
+    }
+
     async fn close(
         &mut self,
         self_: Resource<WebSocketConnectionEntry>,
@@ -177,9 +208,7 @@ fn to_tungstenite_message(message: Message) -> tungstenite::Message {
 fn from_tungstenite_message(msg: tungstenite::Message) -> Option<Message> {
     match msg {
         tungstenite::Message::Text(text) => Some(Message::Text(text.as_str().to_owned())),
-        tungstenite::Message::Binary(data) => {
-            Some(Message::Binary(data.as_slice().to_vec()))
-        }
+        tungstenite::Message::Binary(data) => Some(Message::Binary(data.as_slice().to_vec())),
         tungstenite::Message::Close(_) => None,
         tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => None,
         tungstenite::Message::Frame(_) => None,
