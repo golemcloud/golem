@@ -177,28 +177,15 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "ts"]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:ts-main"])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:ts-extra"])
-        .await;
-    assert!(outputs.success_or_dump());
-
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-ts")
-                .join("app-ts-extra")
-                .join("src")
-                .join("main.ts"),
-        ),
+        ctx.cwd_path_join(Path::new("src").join("sample-agent.ts")),
         indoc! {
             r#"
             import {
@@ -231,6 +218,17 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                     return this.value;
                 }
             }
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("main.ts")),
+        indoc! {
+            r#"
+            export * from './counter-agent';
+            export * from './sample-agent';
             "#
         },
     )
