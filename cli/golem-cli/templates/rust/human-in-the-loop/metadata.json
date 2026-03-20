@@ -1,4 +1,4 @@
 {
-  "type": "component",
+  "type": "agent",
   "description": "An example agent using promises to implement a human in the loop workflow."
 }

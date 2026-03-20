@@ -41,7 +41,7 @@ pub async fn execute_build_command(
     let base_build_dir = ctx
         .application()
         .component(component_name)
-        .source_dir()
+        .component_dir()
         .to_path_buf();
     match command {
         app_raw::BuildCommand::External(external_command) => {
@@ -172,7 +172,7 @@ pub async fn execute_custom_command(
 
             for step in custom_command {
                 if let Err(error) =
-                    execute_external_command(ctx, component.source_dir(), step).await
+                    execute_external_command(ctx, component.component_dir(), step).await
                 {
                     return Err(CustomCommandError::CommandError { error });
                 }
@@ -287,6 +287,8 @@ pub async fn execute_external_command(
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
 ) -> anyhow::Result<()> {
+    let app_root_dir = ctx.application().app_root_dir();
+
     let build_dir = command
         .dir
         .as_ref()
@@ -296,8 +298,13 @@ pub async fn execute_external_command(
     let (sources, targets) = {
         if !command.sources.is_empty() && !command.targets.is_empty() {
             (
-                fs::compile_and_collect_globs(&build_dir, &command.sources)?,
-                fs::compile_and_collect_globs(&build_dir, &command.targets)?,
+                fs::compile_and_collect_globs_with_expanders(
+                    app_root_dir,
+                    &build_dir,
+                    &command.sources,
+                    &[fs::GlobExpander::TsConfigInclude],
+                )?,
+                fs::compile_and_collect_globs(app_root_dir, &build_dir, &command.targets)?,
             )
         } else {
             (vec![], vec![])
@@ -366,6 +373,7 @@ pub async fn execute_external_command(
                 .await?;
 
                 let mut process = Command::new(command_tokens[0].clone());
+
                 process
                     .args(command_tokens.iter().skip(1))
                     .current_dir(&build_dir);

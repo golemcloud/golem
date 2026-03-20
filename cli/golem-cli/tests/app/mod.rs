@@ -26,6 +26,7 @@ sequential_suite!(app);
 tag_suite!(plugins, group1);
 sequential_suite!(plugins);
 
+tag_suite!(build_and_deploy_all, group2);
 sequential_suite!(build_and_deploy_all);
 
 tag_suite!(agents, group3);
@@ -37,12 +38,14 @@ use crate::{crate_path, workspace_path, Tracing};
 use anyhow::Context;
 use colored::Colorize;
 use expectrl::Expect;
-use golem_cli::fs::{read_to_string, write_str};
+use golem_cli::app::edit;
+use golem_cli::fs;
 use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -70,6 +73,7 @@ mod cmd {
     pub static GET: &str = "get";
     pub static INVOKE: &str = "invoke";
     pub static LIST: &str = "list";
+    pub static LIST_AGENT_TYPES: &str = "list-agent-types";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
@@ -79,11 +83,13 @@ mod cmd {
 
 mod flag {
     pub static AGENT_TYPE_NAME: &str = "--agent-type-name";
+    pub static COMPONENT_NAME: &str = "--component-name";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
     pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static TEMPLATE: &str = "--template";
     pub static YES: &str = "--yes";
 }
 
@@ -100,6 +106,7 @@ enum CommandOutput {
 }
 
 pub struct Output {
+    quiet: bool,
     status: ExitStatus,
     output: Vec<CommandOutput>,
 }
@@ -158,6 +165,7 @@ impl Output {
         }
 
         Ok(Self {
+            quiet,
             status: child.wait().await?,
             output,
         })
@@ -168,6 +176,20 @@ impl Output {
             CommandOutput::Stdout(line) => Some(line.as_str()),
             CommandOutput::Stderr(_) => None,
         })
+    }
+
+    fn stdout_json<T: DeserializeOwned>(&self) -> Vec<T> {
+        self.output
+            .iter()
+            .filter_map(|output| match output {
+                CommandOutput::Stdout(line) => {
+                    Some(serde_json::from_str::<T>(line).unwrap_or_else(|err| {
+                        panic!("Failed to parse line as JSON: {err}, input line:\n{}", line)
+                    }))
+                }
+                CommandOutput::Stderr(_) => None,
+            })
+            .collect()
     }
 
     fn stderr(&self) -> impl Iterator<Item = &str> {
@@ -185,7 +207,7 @@ impl Output {
     #[must_use]
     fn success_or_dump(&self) -> bool {
         let success = self.status.success();
-        if !success {
+        if !success && self.quiet {
             self.dump();
         }
         success
@@ -606,11 +628,11 @@ pub fn replace_strings_in_file(
     replace: &[(&str, &str)],
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
-    let mut content = read_to_string(path)?;
+    let mut content = fs::read_to_string(path)?;
     for (from, to) in replace {
         content = content.replace(from, to);
     }
-    write_str(path, content)
+    fs::write_str(path, content)
 }
 
 pub fn replace_string_in_file(path: impl AsRef<Path>, from: &str, to: &str) -> anyhow::Result<()> {
@@ -690,4 +712,11 @@ where
             .with_context(|| format!("failed to match regex: {expected}"))?;
         Ok(())
     }
+}
+
+fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {
+    let manifest = fs::read_to_string(path)?;
+    let updated_manifest = edit::golem_yaml::merge_documents(&manifest, update)?;
+    fs::write_str(path, updated_manifest)?;
+    Ok(())
 }

@@ -14,9 +14,9 @@
 
 use crate::app::template::repo::TEMPLATES_DIR;
 
-use anyhow::Context;
+use anyhow::anyhow;
 use serde_derive::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
@@ -24,20 +24,21 @@ pub enum AppTemplateMetadata {
     #[serde(rename_all = "camelCase")]
     Common {
         description: Option<String>,
-        skip_if_exists: Option<PathBuf>,
-        exclude: Option<Vec<String>>,
         dev_only: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]
     CommonOnDemand {
         description: Option<String>,
-        exclude: Option<Vec<String>>,
         dev_only: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]
     Component {
         description: String,
-        exclude: Option<Vec<String>>,
+        dev_only: Option<bool>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Agent {
+        description: String,
         dev_only: Option<bool>,
     },
 }
@@ -48,10 +49,11 @@ impl AppTemplateMetadata {
             .get_file(template_path.join("metadata.json"))
             .expect("Failed to read metadata JSON")
             .contents();
-        serde_json::from_slice(raw_metadata).with_context(|| {
-            format!(
-                "Failed to parse metadata JSON for template at {}",
-                template_path.display()
+        serde_json::from_slice(raw_metadata).map_err(|err| {
+            anyhow!(
+                "Failed to parse metadata JSON for template at {}, error: {}",
+                template_path.display(),
+                err
             )
         })
     }
@@ -66,5 +68,9 @@ impl AppTemplateMetadata {
 
     pub fn is_component(&self) -> bool {
         matches!(self, AppTemplateMetadata::Component { .. })
+    }
+
+    pub fn is_agent(&self) -> bool {
+        matches!(self, AppTemplateMetadata::Agent { .. })
     }
 }

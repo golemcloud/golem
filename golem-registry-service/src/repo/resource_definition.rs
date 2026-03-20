@@ -48,40 +48,27 @@ pub trait ResourceDefinitionRepo: Send + Sync {
         revision: ResourceDefinitionRevisionRecord,
     ) -> Result<(), ResourceDefinitionRepoError>;
 
-    async fn get_staged_by_id(
+    async fn get(
         &self,
         resource_definition_id: Uuid,
     ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>>;
 
-    async fn get_staged_by_name(
+    async fn get_by_environment_and_name(
         &self,
         environment_id: Uuid,
         name: &str,
     ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>>;
 
-    async fn get_by_id_and_revision(
+    async fn get_revision(
         &self,
         resource_definition_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>>;
 
-    async fn list_staged(
+    async fn list_in_environment(
         &self,
         environment_id: Uuid,
     ) -> RepoResult<Vec<ResourceDefinitionExtRevisionRecord>>;
-
-    async fn list_by_deployment(
-        &self,
-        environment_id: Uuid,
-        deployment_revision_id: i64,
-    ) -> RepoResult<Vec<ResourceDefinitionExtRevisionRecord>>;
-
-    async fn get_in_deployment_by_name(
-        &self,
-        environment_id: Uuid,
-        deployment_revision_id: i64,
-        name: &str,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>>;
 }
 
 pub struct LoggedResourceDefinitionRepo<Repo> {
@@ -135,7 +122,7 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
         self.repo.delete(revision).instrument(span).await
     }
 
-    async fn get_staged_by_id(
+    async fn get(
         &self,
         resource_definition_id: Uuid,
     ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>> {
@@ -144,13 +131,10 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
             resource_definition_id = %resource_definition_id,
         );
 
-        self.repo
-            .get_staged_by_id(resource_definition_id)
-            .instrument(span)
-            .await
+        self.repo.get(resource_definition_id).instrument(span).await
     }
 
-    async fn get_staged_by_name(
+    async fn get_by_environment_and_name(
         &self,
         environment_id: Uuid,
         name: &str,
@@ -162,12 +146,12 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
         );
 
         self.repo
-            .get_staged_by_name(environment_id, name)
+            .get_by_environment_and_name(environment_id, name)
             .instrument(span)
             .await
     }
 
-    async fn get_by_id_and_revision(
+    async fn get_revision(
         &self,
         resource_definition_id: Uuid,
         revision_id: i64,
@@ -179,12 +163,12 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
         );
 
         self.repo
-            .get_by_id_and_revision(resource_definition_id, revision_id)
+            .get_revision(resource_definition_id, revision_id)
             .instrument(span)
             .await
     }
 
-    async fn list_staged(
+    async fn list_in_environment(
         &self,
         environment_id: Uuid,
     ) -> RepoResult<Vec<ResourceDefinitionExtRevisionRecord>> {
@@ -193,41 +177,8 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
             environment_id = %environment_id
         );
 
-        self.repo.list_staged(environment_id).instrument(span).await
-    }
-
-    async fn list_by_deployment(
-        &self,
-        environment_id: Uuid,
-        deployment_revision_id: i64,
-    ) -> RepoResult<Vec<ResourceDefinitionExtRevisionRecord>> {
-        let span = info_span!(
-            SPAN_NAME,
-            environment_id = %environment_id,
-            deployment_revision_id
-        );
-
         self.repo
-            .list_by_deployment(environment_id, deployment_revision_id)
-            .instrument(span)
-            .await
-    }
-
-    async fn get_in_deployment_by_name(
-        &self,
-        environment_id: Uuid,
-        deployment_revision_id: i64,
-        name: &str,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>> {
-        let span = info_span!(
-            SPAN_NAME,
-            environment_id = %environment_id,
-            deployment_revision_id,
-            name
-        );
-
-        self.repo
-            .get_in_deployment_by_name(environment_id, deployment_revision_id, name)
+            .list_in_environment(environment_id)
             .instrument(span)
             .await
     }
@@ -316,6 +267,50 @@ impl DbResourceDefinitionRepo<PostgresPool> {
         .await
         .to_error_on_unique_violation(ResourceDefinitionRepoError::ConcurrentModification)
     }
+
+    pub async fn create_within_transaction(
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
+        args: ResourceDefinitionCreationArgs,
+    ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO resource_definitions
+                (
+                    resource_definition_id,
+                    environment_id,
+                    limit_type,
+                    name,
+                    created_at,
+                    updated_at,
+                    deleted_at,
+                    modified_by,
+                    current_revision_id
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)
+            "# })
+            .bind(args.revision.resource_definition_id)
+            .bind(args.environment_id)
+            .bind(args.limit_type)
+            .bind(&args.name)
+            .bind(&args.revision.audit.created_at)
+            .bind(&args.revision.audit.created_at)
+            .bind(args.revision.audit.created_by)
+            .bind(args.revision.revision_id),
+        )
+        .await
+        .to_error_on_unique_violation(
+            ResourceDefinitionRepoError::ResourceDefinitionViolatesUniqueness,
+        )?;
+
+        let revision = Self::insert_revision(tx, args.revision).await?;
+
+        Ok(ResourceDefinitionExtRevisionRecord {
+            environment_id: args.environment_id,
+            limit_type: args.limit_type,
+            name: args.name,
+            revision,
+        })
+    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -325,52 +320,8 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
         &self,
         args: ResourceDefinitionCreationArgs,
     ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError> {
-        let environment_id = args.environment_id;
-        let limit_type = args.limit_type;
-        let name = args.name.to_owned();
-
         self.with_tx_err("create", |tx| {
-            async move {
-                tx.execute(
-                    sqlx::query(indoc! { r#"
-                        INSERT INTO resource_definitions
-                        (
-                            resource_definition_id,
-                            environment_id,
-                            limit_type,
-                            name,
-                            created_at,
-                            updated_at,
-                            deleted_at,
-                            modified_by,
-                            current_revision_id
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)
-                    "# })
-                    .bind(args.revision.resource_definition_id)
-                    .bind(args.environment_id)
-                    .bind(args.limit_type)
-                    .bind(args.name)
-                    .bind(&args.revision.audit.created_at)
-                    .bind(&args.revision.audit.created_at)
-                    .bind(args.revision.audit.created_by)
-                    .bind(args.revision.revision_id),
-                )
-                .await
-                .to_error_on_unique_violation(
-                    ResourceDefinitionRepoError::ResourceDefinitionViolatesUniqueness,
-                )?;
-
-                let revision = Self::insert_revision(tx, args.revision).await?;
-
-                Ok(ResourceDefinitionExtRevisionRecord {
-                    environment_id,
-                    limit_type,
-                    name,
-                    revision,
-                })
-            }
-            .boxed()
+            Self::create_within_transaction(tx, args).boxed()
         })
         .await
     }
@@ -438,7 +389,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
         .await
     }
 
-    async fn get_staged_by_id(
+    async fn get(
         &self,
         resource_definition_id: Uuid,
     ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>> {
@@ -471,7 +422,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             .await
     }
 
-    async fn get_staged_by_name(
+    async fn get_by_environment_and_name(
         &self,
         environment_id: Uuid,
         name: &str,
@@ -506,7 +457,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_id_and_revision(
+    async fn get_revision(
         &self,
         resource_definition_id: Uuid,
         revision_id: i64,
@@ -541,7 +492,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             .await
     }
 
-    async fn list_staged(
+    async fn list_in_environment(
         &self,
         environment_id: Uuid,
     ) -> RepoResult<Vec<ResourceDefinitionExtRevisionRecord>> {
@@ -573,22 +524,5 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                     .bind(environment_id),
             )
             .await
-    }
-
-    async fn list_by_deployment(
-        &self,
-        _environment_id: Uuid,
-        _deployment_revision_id: i64,
-    ) -> RepoResult<Vec<ResourceDefinitionExtRevisionRecord>> {
-        unimplemented!()
-    }
-
-    async fn get_in_deployment_by_name(
-        &self,
-        _environment_id: Uuid,
-        _deployment_revision_id: i64,
-        _name: &str,
-    ) -> RepoResult<Option<ResourceDefinitionExtRevisionRecord>> {
-        unimplemented!()
     }
 }

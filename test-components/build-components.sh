@@ -66,7 +66,6 @@ if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
     if should_clean; then
       echo "Cleaning $subdir..."
       "$GOLEM_CLI" clean
-      cargo clean
     fi
 
     if [ "$clean_only" = false ]; then
@@ -118,7 +117,6 @@ if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
       echo "Cleaning $subdir..."
       rm -rf node_modules
       "$GOLEM_CLI" clean
-      cargo clean
     fi
 
     if [ "$clean_only" = false ]; then

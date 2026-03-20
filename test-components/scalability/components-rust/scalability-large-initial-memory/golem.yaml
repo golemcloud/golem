@@ -1,3 +1,0 @@
-components:
-  scalability:large-initial-memory:
-    templates: rust, rust-test-component
