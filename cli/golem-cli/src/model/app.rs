@@ -2189,8 +2189,10 @@ mod app_builder {
         ) {
             let component_dir = match fs::parent_or_err(&source)
                 .and_then(fs::canonicalize_path)
-                .map(|path| dir.as_ref().map(|dir| path.join(dir)).unwrap_or(path))
-            {
+                .map(|path| {
+                    let path = dir.as_ref().map(|dir| path.join(dir)).unwrap_or(path);
+                    fs::normalize_path_lexically(&path)
+                }) {
                 Ok(path) => path,
                 Err(err) => {
                     validation.add_error(err.to_string());
