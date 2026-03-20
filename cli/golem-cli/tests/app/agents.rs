@@ -1,4 +1,4 @@
-use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
+use crate::app::{cmd, flag, merge_into_manifest, replace_strings_in_file, TestContext};
 use crate::crate_path;
 use std::path::PathBuf;
 
@@ -832,27 +832,13 @@ async fn test_component_env_var_substitution() {
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::NEW,
-            ".",
-            flag::TEMPLATE,
-            "ts",
-            flag::COMPONENT_NAME,
-            "app:weather-agent",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
+    let component_manifest_path = ctx.cwd_path_join("golem.yaml");
 
-    let component_manifest_path =
-        ctx.cwd_path_join(Path::new("app-weather-agent").join("golem.yaml"));
-
-    fs::write_str(
+    merge_into_manifest(
         &component_manifest_path,
         indoc! { r#"
             components:
-              app:weather-agent:
+              env-var-substitution:ts-main:
                 templates: ts
                 env:
                   NORMAL: 'REALLY'

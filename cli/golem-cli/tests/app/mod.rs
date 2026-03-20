@@ -38,7 +38,8 @@ use crate::{crate_path, workspace_path, Tracing};
 use anyhow::Context;
 use colored::Colorize;
 use expectrl::Expect;
-use golem_cli::fs::{read_to_string, write_str};
+use golem_cli::app::edit;
+use golem_cli::fs;
 use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
@@ -627,11 +628,11 @@ pub fn replace_strings_in_file(
     replace: &[(&str, &str)],
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
-    let mut content = read_to_string(path)?;
+    let mut content = fs::read_to_string(path)?;
     for (from, to) in replace {
         content = content.replace(from, to);
     }
-    write_str(path, content)
+    fs::write_str(path, content)
 }
 
 pub fn replace_string_in_file(path: impl AsRef<Path>, from: &str, to: &str) -> anyhow::Result<()> {
@@ -711,4 +712,11 @@ where
             .with_context(|| format!("failed to match regex: {expected}"))?;
         Ok(())
     }
+}
+
+fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {
+    let manifest = fs::read_to_string(path)?;
+    let updated_manifest = edit::golem_yaml::merge_documents(&manifest, update)?;
+    fs::write_str(path, updated_manifest)?;
+    Ok(())
 }
