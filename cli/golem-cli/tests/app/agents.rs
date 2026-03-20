@@ -1044,8 +1044,8 @@ async fn test_http_api_merging() {
     let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert!(!outputs.success());
     assert!(outputs.stderr_contains(format!(
-        "error: HTTP API Deployment local - {} - def-a is defined in multiple sources",
-        format!("http_api_merging.localhost:{}", ctx.custom_request_port())
+        "error: HTTP API Deployment local - http_api_merging.localhost:{} - def-a is defined in multiple sources",
+        ctx.custom_request_port()
     )));
 
     // Let's switch back to the good config and deploy, then call the exposed APIs

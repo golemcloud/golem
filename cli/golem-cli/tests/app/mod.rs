@@ -600,7 +600,9 @@ impl TestContext {
                     println!(
                         "{} router={}, custom-request={}, mcp={}",
                         "> discovered server ports:".bold(),
-                        ports.router_port, ports.custom_request_port, ports.mcp_port
+                        ports.router_port,
+                        ports.custom_request_port,
+                        ports.mcp_port
                     );
                     self.add_env_var(
                         "GOLEM_BUILTIN_LOCAL_URL",
