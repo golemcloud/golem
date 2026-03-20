@@ -1076,6 +1076,24 @@ proptest! {
     }
 
     #[test]
+    fn proptest_json_roundtrip_style_stability(
+        (base_value, update_value, base_style, update_style) in arb_json_merge_case(),
+        reparsed_style in arb_json_style(),
+    ) {
+        let base = render_json(&base_value, base_style);
+        let update = render_json(&update_value, update_style);
+
+        let merged_once = json::merge_object(&base, &update).unwrap();
+        let merged_once_value: JsonValue = serde_json::from_str(&merged_once).unwrap();
+
+        let reparsed_source = render_json(&merged_once_value, reparsed_style);
+        let merged_twice = json::merge_object(&reparsed_source, &update).unwrap();
+        let merged_twice_value: JsonValue = serde_json::from_str(&merged_twice).unwrap();
+
+        prop_assert_eq!(merged_twice_value, merged_once_value);
+    }
+
+    #[test]
     fn proptest_yaml_merge_handles_missing_keys_multiline_and_sequences(
         case in arb_yaml_merge_case(),
     ) {
@@ -1150,6 +1168,25 @@ proptest! {
     }
 
     #[test]
+    fn proptest_yaml_roundtrip_style_stability(
+        case in arb_yaml_merge_case(),
+        rescale in prop_oneof![Just(1usize), Just(2usize)],
+    ) {
+        let (base_source, update_source, _, _, _, _) = case;
+
+        let merged_once = golem_yaml::merge_documents(&base_source, &update_source).unwrap();
+        let merged_once_value: serde_yaml::Value = serde_yaml::from_str(&merged_once).unwrap();
+
+        let reparsed = serde_yaml::to_string(&merged_once_value).unwrap();
+        let reparsed_scaled = scale_yaml_indentation(&reparsed, rescale);
+
+        let merged_twice = golem_yaml::merge_documents(&reparsed_scaled, &update_source).unwrap();
+        let merged_twice_value: serde_yaml::Value = serde_yaml::from_str(&merged_twice).unwrap();
+
+        prop_assert_eq!(merged_twice_value, merged_once_value);
+    }
+
+    #[test]
     fn proptest_cargo_toml_merge_merges_features_and_preserves_package(
         case in arb_cargo_merge_case(),
     ) {
@@ -1188,6 +1225,22 @@ proptest! {
         let merged_twice = cargo_toml::merge_documents(&merged_source, &update_source).unwrap();
         let merged_twice_doc: toml_edit::DocumentMut = merged_twice.parse().unwrap();
         prop_assert_eq!(merged_doc.to_string(), merged_twice_doc.to_string());
+    }
+
+    #[test]
+    fn proptest_cargo_toml_roundtrip_style_stability(
+        case in arb_cargo_merge_case(),
+    ) {
+        let (base_source, update_source, _, _, _) = case;
+
+        let merged_once = cargo_toml::merge_documents(&base_source, &update_source).unwrap();
+        let merged_once_doc: toml_edit::DocumentMut = merged_once.parse().unwrap();
+
+        let reparsed_source = merged_once_doc.to_string();
+        let merged_twice = cargo_toml::merge_documents(&reparsed_source, &update_source).unwrap();
+        let merged_twice_doc: toml_edit::DocumentMut = merged_twice.parse().unwrap();
+
+        prop_assert_eq!(merged_once_doc.to_string(), merged_twice_doc.to_string());
     }
 
     #[test]
