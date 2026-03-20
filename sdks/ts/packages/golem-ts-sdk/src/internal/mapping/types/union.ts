@@ -173,12 +173,7 @@ export function tryInbuiltResultType(
 
   const isInbuiltResult = typeName === 'Result' || originalTypeName === 'Result';
 
-  if (
-    isInbuiltResult &&
-    unionTypes.length === 2 &&
-    hasOkCase &&
-    hasErrCase
-  ) {
+  if (isInbuiltResult && unionTypes.length === 2 && hasOkCase && hasErrCase) {
     const okType = typeParams[0];
     const errType = typeParams[1];
 
@@ -305,7 +300,10 @@ function normalizeBooleanUnion(types: TsType[]): TsType[] {
   );
 
   const optional = types.some(
-    (t) => t.kind === 'literal' && (t.literalValue === 'true' || t.literalValue === 'false') && t.optional,
+    (t) =>
+      t.kind === 'literal' &&
+      (t.literalValue === 'true' || t.literalValue === 'false') &&
+      t.optional,
   );
 
   const withoutBoolLiterals = types.filter(

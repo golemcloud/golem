@@ -237,7 +237,10 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle boolean|undefined as option<bool> in method', () => {
-    const optionalBooleanInGetWeather = getWitType(barAgentMethod.inputSchema, 'optionalBooleanType');
+    const optionalBooleanInGetWeather = getWitType(
+      barAgentMethod.inputSchema,
+      'optionalBooleanType',
+    );
 
     expect(optionalBooleanInGetWeather).toEqual({
       nodes: [

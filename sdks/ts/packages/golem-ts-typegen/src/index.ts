@@ -433,7 +433,9 @@ function getSourceOrderedUnionTypes(
 
   return sourceUnionTypeNode
     .getTypeNodes()
-    .map((member) => getTypeFromTsMorphInternal(member.getType(), false, new Set(visitedTypes), member));
+    .map((member) =>
+      getTypeFromTsMorphInternal(member.getType(), false, new Set(visitedTypes), member),
+    );
 }
 
 function resolveUnionTypeNodeFromType(type: TsMorphType): UnionTypeNode | undefined {
@@ -736,7 +738,11 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
           }),
         );
 
-        const returnType = getTypeFromTsMorph(method.getReturnType(), false, method.getReturnTypeNode());
+        const returnType = getTypeFromTsMorph(
+          method.getReturnType(),
+          false,
+          method.getReturnTypeNode(),
+        );
         methods.set(method.getName(), { methodParams, returnType });
       }
 
