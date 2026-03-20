@@ -598,7 +598,8 @@ impl TestContext {
                         });
 
                     println!(
-                        "> discovered startup ports: router={}, custom-request={}, mcp={}",
+                        "{} router={}, custom-request={}, mcp={}",
+                        "> discovered server ports:".bold(),
                         ports.router_port, ports.custom_request_port, ports.mcp_port
                     );
                     self.add_env_var(
@@ -630,13 +631,14 @@ impl TestContext {
 
                         match client.healthcheck().await {
                             Ok(_) => {
-                                println!("> server healthcheck {}", "ok".green());
+                                println!("{} {}", "> server healthcheck".bold(), "ok".green());
                                 break;
                             }
                             Err(err) => {
                                 if start.elapsed() > timeout {
                                     println!(
-                                        "> server healthcheck failed: {}, stopping",
+                                        "{} {}, stopping",
+                                        "> server healthcheck failed:".bold(),
                                         format!("{}", err).red()
                                     );
                                     panic!("Server is still not running, stopping");
