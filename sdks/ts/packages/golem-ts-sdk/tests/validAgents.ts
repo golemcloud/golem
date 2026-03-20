@@ -388,6 +388,7 @@ class BarAgent extends BaseAgent {
     interfaceWithUnionWithUndefined4: InterfaceWithUnionWithUndefined4,
     interfaceWithOption: InterfaceWithOption,
     optionalStringType: string | undefined,
+    optionalBooleanType: boolean | undefined,
     optionalUnionType: UnionType | undefined,
     taggedUnionType: TaggedUnion,
     unionWithOnlyLiterals: UnionWithOnlyLiterals,
@@ -512,6 +513,7 @@ class ConstructorUnionOrderAgent extends BaseAgent {
   constructor(
     readonly name: string,
     readonly complex: { a: number; b: string } | boolean | undefined,
+    readonly flag: boolean | undefined,
   ) {
     super();
   }

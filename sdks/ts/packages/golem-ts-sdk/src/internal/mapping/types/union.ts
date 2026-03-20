@@ -65,6 +65,17 @@ export function handleUnionInternal(
   cacheKey: string | undefined,
 ): Either.Either<AnalysedType, string> {
   const { type } = ctx;
+  const normalizedUnionTypes = normalizeBooleanUnion(type.unionTypes);
+  const normalizedCtx: UnionCtx =
+    normalizedUnionTypes === type.unionTypes
+      ? ctx
+      : {
+          ...ctx,
+          type: {
+            ...type,
+            unionTypes: normalizedUnionTypes,
+          },
+        };
 
   // Reuse cached anonymous unions
   const cached = reuseAnonymousUnionCache(cacheKey);
@@ -84,14 +95,11 @@ export function handleUnionInternal(
   if (taggedResult) return taggedResult;
 
   // Try Optional union (null | undefined | void) and convert to `option` WIT
-  const optionalResult = tryOptionalUnion(ctx, mapper);
+  const optionalResult = tryOptionalUnion(normalizedCtx, mapper);
   if (optionalResult) return optionalResult;
 
-  // Normalize union types if it consist of `true`, `false` literals
-  const normalizedUnionTypes = normalizeBooleanUnion(type.unionTypes);
-
   // Otherwise plain variant
-  return buildPlainVariant(type, normalizedUnionTypes, mapper);
+  return buildPlainVariant(normalizedCtx.type, normalizedUnionTypes, mapper);
 }
 
 export function hashUnion(type: TsType): string {

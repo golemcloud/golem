@@ -236,6 +236,26 @@ describe('Agent decorator should register the agent class and its methods into A
     });
   });
 
+  it('should handle boolean|undefined as option<bool> in method', () => {
+    const optionalBooleanInGetWeather = getWitType(barAgentMethod.inputSchema, 'optionalBooleanType');
+
+    expect(optionalBooleanInGetWeather).toEqual({
+      nodes: [
+        {
+          type: {
+            tag: 'option-type',
+            val: 1,
+          },
+        },
+        {
+          type: {
+            tag: 'prim-bool-type',
+          },
+        },
+      ],
+    });
+  });
+
   it('should handle tagged unions in method', () => {
     const wit = getWitType(barAgentMethod.inputSchema, 'taggedUnionType');
 
@@ -537,6 +557,26 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(nodes[3]?.type).toEqual({ tag: 'prim-f64-type' });
     expect(nodes[4]?.type).toEqual({ tag: 'prim-string-type' });
     expect(nodes[5]?.type).toEqual({ tag: 'prim-bool-type' });
+  });
+
+  it('should handle boolean|undefined as option<bool> in constructor', () => {
+    const wit = getWitType(constructorUnionOrderAgent.constructor.inputSchema, 'flag');
+
+    expect(wit).toEqual({
+      nodes: [
+        {
+          type: {
+            tag: 'option-type',
+            val: 1,
+          },
+        },
+        {
+          type: {
+            tag: 'prim-bool-type',
+          },
+        },
+      ],
+    });
   });
 
   it('union with null works', () => {
