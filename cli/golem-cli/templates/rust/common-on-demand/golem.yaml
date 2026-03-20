@@ -7,6 +7,8 @@ componentTemplates:
         default: true
         build:
         - command: cargo build --target wasm32-wasip2
+          env:
+            CARGO_TARGET_DIR: "{{ componentDir }}/target"
           sources:
           - "{{ componentDir }}/src"
           - "{{ componentDir }}/Cargo.toml"
@@ -20,6 +22,8 @@ componentTemplates:
       release:
         build:
         - command: cargo build --target wasm32-wasip2 --release
+          env:
+            CARGO_TARGET_DIR: "{{ componentDir }}/target"
           sources:
           - "{{ componentDir }}/src"
           - "{{ componentDir }}/Cargo.toml"
