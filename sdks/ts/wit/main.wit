@@ -25,6 +25,8 @@ world agent-guest {
 
   import wasi:config/store@0.2.0-draft;
 
+  import golem:websocket/client@1.5.0;
+
   include golem:agent/agent-guest@1.5.0;
 
   export golem:api/save-snapshot@1.5.0;
