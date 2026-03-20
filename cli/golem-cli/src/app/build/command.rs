@@ -421,9 +421,8 @@ fn configure_external_command_env(command: &mut Command, executable: &str, ctx: 
         .file_name()
         .and_then(|name| name.to_str());
 
-    match executable_name {
-        Some("cargo") => apply_cargo_term_color_env(command, ctx.should_colorize()),
-        _ => {}
+    if let Some("cargo") = executable_name {
+        apply_cargo_term_color_env(command, ctx.should_colorize())
     }
 }
 
