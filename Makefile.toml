@@ -414,11 +414,12 @@ dependencies = [
     "integration-tests-group4",
     "integration-tests-group5",
     "integration-tests-group6",
+    "integration-tests-group7",
     "cli-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
-description = "Runs integration tests (group 1/6 - worker, fork)"
+description = "Runs integration tests (group 1/7 - worker, fork)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -426,7 +427,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group1 -- -
 '''
 
 [tasks.integration-tests-group2]
-description = "Runs integration tests (group 2/6 - worker_local_agent_config, api, custom_api)"
+description = "Runs integration tests (group 2/7 - worker_local_agent_config, api, custom_api)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -434,7 +435,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group2 -- -
 '''
 
 [tasks.integration-tests-group3]
-description = "Runs integration tests (group 3/6 - worker, fork with sqlite)"
+description = "Runs integration tests (group 3/7 - worker, fork with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
@@ -442,7 +443,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group1 -- -
 '''
 
 [tasks.integration-tests-group4]
-description = "Runs integration tests (group 4/6 - worker_local_agent_config, api, custom_api with sqlite)"
+description = "Runs integration tests (group 4/7 - worker_local_agent_config, api, custom_api with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
@@ -450,7 +451,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group2 -- -
 '''
 
 [tasks.integration-tests-group5]
-description = "Runs integration tests (group 5/6 - service tests)"
+description = "Runs integration tests (group 5/7 - service tests)"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -461,11 +462,19 @@ cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $
 '''
 
 [tasks.integration-tests-group6]
-description = "Runs integration tests (group 6/6 - sharding)"
+description = "Runs integration tests (group 6/7 - sharding)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script = '''
 cargo-test-r run --package integration-tests --test sharding -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group7]
+description = "Runs integration tests (group 7/7 - otlp_plugin, plugins)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group7 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
@@ -1136,6 +1145,18 @@ description = "Serve the schema.golem.cloud directory locally to help testing th
 install_crate = "miniserve"
 command = "miniserve"
 args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
+
+## PLUGINS
+[tasks.build-plugins]
+dependencies = ["build"]
+description = "Builds built-in plugins (requires golem CLI to be built first)"
+script_runner = "@duckscript"
+script = '''
+cd plugins/otlp-exporter
+exec --fail-on-error ../../target/debug/golem build -P release --force-build
+exec --fail-on-error ../../target/debug/golem exec -P release copy
+cd ../..
+'''
 
 ## Cleanup
 [tasks.clear-v8]

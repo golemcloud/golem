@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::event::InternalWorkerEvent;
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
+use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     HasComponentService, HasOplogProcessorPlugin, HasShardService, HasWorkerActivator,
@@ -74,7 +76,8 @@ pub trait OplogProcessorPlugin: Send + Sync {
         plugin: &InstalledPlugin,
     ) -> Result<AgentId, WorkerExecutorError>;
 
-    /// Sends oplog entries to the specified target plugin worker.
+    /// Enqueues oplog entries to the specified target plugin worker.
+    /// Any `Ok(())` means durable delivery — the batch has been accepted.
     async fn send(
         &self,
         worker_metadata: AgentMetadata,
@@ -83,6 +86,10 @@ pub trait OplogProcessorPlugin: Send + Sync {
         initial_oplog_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Evicts the cached plugin worker for the given plugin, forcing a fresh
+    /// instance to be created on the next `resolve_target` call.
+    async fn invalidate_target(&self, environment_id: EnvironmentId, plugin: &InstalledPlugin);
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
 
@@ -281,7 +288,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         );
 
         let account_id = worker_metadata.created_by;
-        worker
+        // Enqueue only — any Ok (Pending or Finished) counts as durable delivery
+        let _result = worker
             .invoke(AgentInvocation::ProcessOplogEntries {
                 idempotency_key,
                 account_id,
@@ -297,6 +305,11 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             .await?;
 
         Ok(())
+    }
+
+    async fn invalidate_target(&self, environment_id: EnvironmentId, plugin: &InstalledPlugin) {
+        let mut workers = self.workers.write().await;
+        workers.remove(&(environment_id, plugin.plugin_registration_id));
     }
 
     async fn is_local(&self, agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
@@ -694,6 +707,9 @@ impl ForwardingOplog {
             components,
             inner: inner.clone(),
             plugin_state,
+            pending_direct_commits: BTreeMap::new(),
+            worker_event_service: None,
+            monitor_tasks: Vec::new(),
         }));
 
         let timer = tokio::spawn({
@@ -716,6 +732,14 @@ impl ForwardingOplog {
             close_fn: Some(close_fn),
         }
     }
+
+    pub async fn set_worker_event_service(
+        &self,
+        worker_event_service: Arc<dyn WorkerEventService>,
+    ) {
+        let mut state = self.state.lock().await;
+        state.worker_event_service = Some(worker_event_service);
+    }
 }
 
 impl Debug for ForwardingOplog {
@@ -731,6 +755,13 @@ impl Drop for ForwardingOplog {
         }
         if let Some(timer) = self.timer.take() {
             timer.abort();
+        }
+        // Abort all background monitor tasks to prevent them from
+        // outliving this oplog and causing resource contention.
+        if let Some(mut state) = self.state.try_lock() {
+            for task in state.monitor_tasks.drain(..) {
+                task.abort();
+            }
         }
     }
 }
@@ -750,7 +781,7 @@ impl Oplog for ForwardingOplog {
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         let mut state = self.state.lock().await;
-        let result = self.inner.commit(level).await;
+        let mut result = self.inner.commit(level).await;
         // Update last_committed_idx from committed entries
         if let Some(max_idx) = result.keys().max() {
             if *max_idx > state.last_committed_idx {
@@ -761,6 +792,9 @@ impl Oplog for ForwardingOplog {
         if state.commit_count >= self.max_commit_count {
             state.try_flush().await;
         }
+        // Merge entries committed directly to inner during flush
+        // so the Worker folds them into AgentStatusRecord
+        result.append(&mut state.pending_direct_commits);
         result
     }
 
@@ -823,6 +857,12 @@ struct ForwardingOplogState {
     components: Arc<dyn ComponentService>,
     inner: Arc<dyn Oplog>,
     plugin_state: HashMap<EnvironmentPluginGrantId, LivePluginState>,
+    /// Entries committed directly to inner (bypassing `ForwardingOplog::commit()`),
+    /// to be surfaced in the next `ForwardingOplog::commit()` return value
+    /// so the Worker folds them into `AgentStatusRecord`.
+    pending_direct_commits: BTreeMap<OplogIndex, OplogEntry>,
+    worker_event_service: Option<Arc<dyn WorkerEventService>>,
+    monitor_tasks: Vec<JoinHandle<()>>,
 }
 
 impl ForwardingOplogState {
@@ -927,6 +967,10 @@ impl ForwardingOplogState {
     }
 
     /// Flush a single plugin: resolve target, read entries, write checkpoints, send.
+    ///
+    /// Uses enqueue-and-confirm: after a successful `send()` (which only enqueues
+    /// the invocation), we immediately write the confirmation checkpoint. A background
+    /// monitoring task is spawned to observe errors and emit plugin_error events.
     async fn flush_one_plugin(
         &mut self,
         grant_id: EnvironmentPluginGrantId,
@@ -1011,13 +1055,14 @@ impl ForwardingOplogState {
         }
 
         // If ALL entries are checkpoint entries, skip — nothing meaningful to deliver.
-        // Don't advance cursors: when a real entry arrives later, it will be included
-        // in the batch alongside these checkpoints and sent together.
+        // Advance the cursor past them so we don't re-read the same range forever.
         if entries
             .iter()
             .all(|e| matches!(e, OplogEntry::OplogProcessorCheckpoint { .. }))
         {
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                s.confirmed_up_to = batch_end;
+                s.sending_up_to = batch_end;
                 s.send_in_progress = false;
             }
             return;
@@ -1049,6 +1094,7 @@ impl ForwardingOplogState {
             .await
         {
             Ok(()) => {
+                // Enqueue succeeded — immediately confirm
                 self.write_checkpoint(
                     grant_id,
                     &target_agent_id,
@@ -1063,11 +1109,99 @@ impl ForwardingOplogState {
                     s.send_in_progress = false;
                     s.last_batch_start = batch_start;
                 }
+
+                // Spawn background monitoring task to observe errors.
+                // Compute the idempotency key here so only lightweight data
+                // needs to be moved into the task.
+                let idempotency_key = oplog_processor_idempotency_key(
+                    &metadata.agent_id,
+                    &plugin.environment_plugin_grant_id,
+                    batch_start,
+                    batch_end,
+                );
+                let worker_event_service = self.worker_event_service.clone();
+                let oplog_plugins = self.oplog_plugins.clone();
+                let environment_id = metadata.environment_id;
+                let plugin_clone = plugin.clone();
+                let target_clone = target_agent_id.clone();
+                let monitor = tokio::spawn(
+                    async move {
+                        // Poll until the invocation completes, with a timeout
+                        let deadline = Instant::now() + Duration::from_secs(300);
+                        loop {
+                            if Instant::now() >= deadline {
+                                tracing::warn!(
+                                    "Plugin {grant_id}: monitoring timed out for batch [{batch_start}..{batch_end}]"
+                                );
+                                break;
+                            }
+
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+
+                            match oplog_plugins
+                                .lookup_invocation_status(
+                                    environment_id,
+                                    &plugin_clone,
+                                    &target_clone,
+                                    &idempotency_key,
+                                )
+                                .await
+                            {
+                                Ok(InvocationStatus::Complete) => {
+                                    // Completed — nothing to do
+                                    break;
+                                }
+                                Ok(InvocationStatus::Unknown) => {
+                                    tracing::warn!(
+                                        "Plugin {grant_id}: invocation status unknown for batch [{batch_start}..{batch_end}]"
+                                    );
+                                    break;
+                                }
+                                Ok(_) => {
+                                    // Still pending — continue polling
+                                }
+                                Err(err) => {
+                                    tracing::error!(
+                                        "Plugin {grant_id} error monitoring batch [{batch_start}..{batch_end}]: {err}"
+                                    );
+                                    if let Some(event_service) = &worker_event_service {
+                                        event_service.emit_event(
+                                            InternalWorkerEvent::plugin_error(
+                                                &format!("{grant_id}"),
+                                                &format!("Error monitoring batch [{batch_start}..{batch_end}]: {err}"),
+                                            ),
+                                            true,
+                                        );
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    .in_current_span(),
+                );
+                self.monitor_tasks.push(monitor);
             }
             Err(err) => {
-                tracing::error!("Failed to send oplog entries to plugin {grant_id}: {err}");
+                // Pre-enqueue failure — permanent for this target instance
+                tracing::error!("Failed to enqueue oplog entries to plugin {grant_id}: {err}");
+                if let Some(event_service) = &self.worker_event_service {
+                    event_service.emit_event(
+                        InternalWorkerEvent::plugin_error(
+                            &format!("{grant_id}"),
+                            &format!("Failed to enqueue batch [{batch_start}..{batch_end}]: {err}"),
+                        ),
+                        true,
+                    );
+                }
+                // Invalidate target — next flush will create a fresh instance
+                self.oplog_plugins
+                    .invalidate_target(metadata.environment_id, &plugin)
+                    .await;
                 if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                    s.target_agent_id = None;
                     s.send_in_progress = false;
+                    // Leave cursors unchanged — same batch retried on new target
                 }
             }
         }
@@ -1121,14 +1255,15 @@ impl ForwardingOplogState {
             last_batch_start,
         };
         self.buffer.push_back(checkpoint.clone());
-        self.inner.add(checkpoint).await;
+        let idx = self.inner.add(checkpoint).await;
+        self.last_oplog_idx = idx;
         let committed = self.inner.commit(CommitLevel::Always).await;
-        self.last_oplog_idx = self.last_oplog_idx.next();
-        if let Some(max_idx) = committed.keys().max() {
-            if *max_idx > self.last_committed_idx {
-                self.last_committed_idx = *max_idx;
-            }
+        if let Some(max_idx) = committed.keys().max().copied() {
+            self.last_committed_idx = self.last_committed_idx.max(max_idx);
         }
+        // Track all directly committed entries so ForwardingOplog::commit()
+        // can surface them to the Worker for status folding
+        self.pending_direct_commits.extend(committed);
     }
 
     /// Prune buffer: drain entries that ALL active/in-flight plugins have confirmed past.
@@ -1163,6 +1298,8 @@ impl ForwardingOplogState {
     fn finish_flush_cycle(&mut self) {
         self.last_send = Instant::now();
         self.commit_count = 0;
+        // Prune completed monitor tasks
+        self.monitor_tasks.retain(|h| !h.is_finished());
     }
 
     /// Periodic locality recovery: for each plugin whose target worker is on a
@@ -1528,6 +1665,14 @@ mod tests {
             Ok(())
         }
 
+        async fn invalidate_target(
+            &self,
+            _environment_id: EnvironmentId,
+            _plugin: &InstalledPlugin,
+        ) {
+            // no-op in tests
+        }
+
         async fn is_local(&self, _agent_id: &AgentId) -> Result<bool, WorkerExecutorError> {
             Ok(true)
         }
@@ -1793,6 +1938,9 @@ mod tests {
                     last_batch_start: OplogIndex::NONE,
                 },
             )]),
+            pending_direct_commits: BTreeMap::new(),
+            worker_event_service: None,
+            monitor_tasks: Vec::new(),
         };
 
         // No committed entries (last_committed_idx = NONE) — try_flush should be a no-op
@@ -1832,6 +1980,9 @@ mod tests {
             components,
             inner,
             plugin_state: HashMap::new(),
+            pending_direct_commits: BTreeMap::new(),
+            worker_event_service: None,
+            monitor_tasks: Vec::new(),
         };
 
         state.try_flush().await;
@@ -1891,6 +2042,9 @@ mod tests {
                     last_batch_start: OplogIndex::NONE,
                 },
             )]),
+            pending_direct_commits: BTreeMap::new(),
+            worker_event_service: None,
+            monitor_tasks: Vec::new(),
         };
 
         state.try_flush().await;

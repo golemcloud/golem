@@ -20,7 +20,9 @@ use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
 };
-use crate::worker::{QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand};
+use crate::worker::{
+    FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
+};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use async_lock::Mutex;
@@ -111,7 +113,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             match final_decision {
                 None | Some(RetryDecision::None) => {
                     debug!("Invocation queue loop notifying parent about being stopped");
-                    self.parent.stop_internal(true, None).await;
+                    self.parent
+                        .stop_internal(
+                            true,
+                            None,
+                            FinalWorkerState::Unloaded {
+                                startup_failure: None,
+                            },
+                        )
+                        .await;
                     break;
                 }
                 Some(RetryDecision::TryStop(ts)) => {
@@ -122,7 +132,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         continue;
                     } else {
                         debug!("Invocation queue loop notifying parent about being stopped");
-                        self.parent.stop_internal(true, None).await;
+                        self.parent
+                            .stop_internal(
+                                true,
+                                None,
+                                FinalWorkerState::Unloaded {
+                                    startup_failure: None,
+                                },
+                            )
+                            .await;
                         break;
                     }
                 }
@@ -170,7 +188,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     agent_id: self.owned_agent_id.agent_id(),
                     result: Err(err.clone()),
                 });
-                self.parent.stop_internal(true, Some(err)).await;
+                self.parent
+                    .stop_internal(
+                        true,
+                        Some(err.clone()),
+                        FinalWorkerState::Unloaded {
+                            startup_failure: Some(err),
+                        },
+                    )
+                    .await;
                 None
             }
         }
@@ -212,7 +238,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 warn!("Failed to start the worker: {err}");
                 store.data().set_suspended();
 
-                self.parent.stop_internal(true, Some(err)).await;
+                self.parent
+                    .stop_internal(
+                        true,
+                        Some(err.clone()),
+                        FinalWorkerState::Unloaded {
+                            startup_failure: Some(err),
+                        },
+                    )
+                    .await;
                 Some(RetryDecision::None) // early return, we can't retry this
             }
         }
@@ -405,7 +439,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 warn!("Failed to resume replay: {err}");
                 store.data().set_suspended();
 
-                self.parent.stop_internal(true, Some(err)).await;
+                self.parent
+                    .stop_internal(
+                        true,
+                        Some(err.clone()),
+                        FinalWorkerState::Unloaded {
+                            startup_failure: Some(err),
+                        },
+                    )
+                    .await;
                 CommandOutcome::BreakOuterLoop
             }
         }

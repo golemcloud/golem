@@ -334,6 +334,14 @@ pub struct SaveSnapshotResultParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessOplogEntriesResultParameters {
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -344,7 +352,7 @@ pub enum PublicAgentInvocationResult {
     ManualUpdate(Empty),
     LoadSnapshot(FallibleResultParameters),
     SaveSnapshot(SaveSnapshotResultParameters),
-    ProcessOplogEntries(FallibleResultParameters),
+    ProcessOplogEntries(ProcessOplogEntriesResultParameters),
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]

@@ -439,7 +439,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         environment_id: Uuid,
         domain: &str,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
-        self.with_ro("get_staged_by_name")
+        self.with_ro("get_staged_by_domain")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT d.environment_id, d.domain, dr.http_api_deployment_id,
@@ -472,7 +472,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     FROM http_api_deployments d
                     JOIN http_api_deployment_revisions dr
                         ON d.http_api_deployment_id = dr.http_api_deployment_id
-                    WHERE d.http_api_deployment_id = $1 AND dr.revision_id = $2 AND dr.deleted = FALSE
+                    WHERE d.http_api_deployment_id = $1 AND dr.revision_id = $2 AND d.deleted_at IS NULL
                 "#})
                     .bind(http_api_deployment_id)
                     .bind(revision_id),

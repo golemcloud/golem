@@ -19,6 +19,7 @@ use crate::repo::model::BindFields;
 pub use crate::repo::model::environment::{
     EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
 };
+use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -63,6 +64,13 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         application_id: Uuid,
         revision: EnvironmentRevisionRecord,
+    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
+
+    async fn create_with_plugin_grants(
+        &self,
+        application_id: Uuid,
+        revision: EnvironmentRevisionRecord,
+        plugin_grants: Vec<EnvironmentPluginGrantRecord>,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
 
     async fn update(
@@ -156,6 +164,19 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         self.repo
             .create(application_id, revision)
             .instrument(Self::span_app_id(application_id))
+            .await
+    }
+
+    async fn create_with_plugin_grants(
+        &self,
+        application_id: Uuid,
+        revision: EnvironmentRevisionRecord,
+        plugin_grants: Vec<EnvironmentPluginGrantRecord>,
+    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+        let span = Self::span_app_id(application_id);
+        self.repo
+            .create_with_plugin_grants(application_id, revision, plugin_grants)
+            .instrument(span)
             .await
     }
 
@@ -505,6 +526,85 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .to_error_on_unique_violation(EnvironmentRepoError::EnvironmentViolatesUniqueness)?;
 
             let revision = Self::insert_revision(tx, revision).await?;
+
+            Ok(EnvironmentExtRevisionRecord {
+                application_id,
+                revision,
+
+                owner_account_id: environment_record.owner_account_id,
+                environment_roles_from_shares: environment_record.environment_roles_from_shares,
+
+                current_deployment_revision: environment_record.current_deployment_revision,
+                current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                current_deployment_deployment_version: environment_record.current_deployment_deployment_version,
+                current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash
+            })
+        }.boxed()).await
+    }
+
+    async fn create_with_plugin_grants(
+        &self,
+        application_id: Uuid,
+        revision: EnvironmentRevisionRecord,
+        plugin_grants: Vec<EnvironmentPluginGrantRecord>,
+    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+        self.with_tx_err("create_with_plugin_grants", |tx| async move {
+            let environment_record: EnvironmentExtRecord = tx.fetch_one_as(
+                sqlx::query_as(indoc! { r#"
+                    INSERT INTO environments
+                      (environment_id, name, application_id, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                    VALUES
+                      ($1, $2, $3, $4, $4, NULL, $5, 0)
+                    RETURNING
+                      environment_id,
+                      name,
+                      application_id,
+                      created_at,
+                      updated_at,
+                      deleted_at,
+                      modified_by,
+                      current_revision_id,
+
+                      -- Owner account id via scalar subquery
+                      (SELECT a.account_id
+                       FROM applications ap
+                       JOIN accounts a ON a.account_id = ap.account_id
+                       WHERE ap.application_id = environments.application_id) AS owner_account_id,
+
+                      -- Hard-coded defaults
+                      0 AS environment_roles_from_shares,
+                      NULL AS current_deployment_revision,
+                      NULL AS current_deployment_deployment_revision,
+                      NULL AS current_deployment_deployment_version,
+                      NULL AS current_deployment_deployment_hash;
+                "# })
+                    .bind(revision.environment_id)
+                    .bind(&revision.name)
+                    .bind(application_id)
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+            ).await
+            .to_error_on_unique_violation(EnvironmentRepoError::EnvironmentViolatesUniqueness)?;
+
+            let revision = Self::insert_revision(tx, revision).await?;
+
+            for grant in plugin_grants {
+                tx.execute(
+                    sqlx::query(indoc! {r#"
+                        INSERT INTO environment_plugin_grants (
+                            environment_plugin_grant_id, environment_id, plugin_id,
+                            created_at, created_by, deleted_at, deleted_by
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        ON CONFLICT (environment_id, plugin_id) WHERE deleted_at IS NULL DO NOTHING
+                    "#})
+                    .bind(grant.environment_plugin_grant_id)
+                    .bind(grant.environment_id)
+                    .bind(grant.plugin_id)
+                    .bind_immutable_audit(grant.audit),
+                ).await
+                .map_err(|e| EnvironmentRepoError::InternalError(e.into()))?;
+            }
 
             Ok(EnvironmentExtRevisionRecord {
                 application_id,

@@ -19,6 +19,7 @@ mod hash;
 mod http_api_deployment;
 mod mcp_deployment;
 mod plugin;
+mod resource_definition;
 mod ser;
 
 pub use component::*;
@@ -28,6 +29,7 @@ pub use hash::*;
 pub use http_api_deployment::*;
 pub use mcp_deployment::*;
 pub use plugin::*;
+pub use resource_definition::*;
 pub use ser::*;
 
 use serde::{Serialize, Serializer};

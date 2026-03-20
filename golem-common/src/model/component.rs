@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::diff::VecDiffable;
 use crate::model::diff;
+use itertools::Itertools;
 use uuid::Uuid;
 
-use super::diff::VecDiffable;
 pub use crate::base_model::component::*;
-use itertools::Itertools;
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
