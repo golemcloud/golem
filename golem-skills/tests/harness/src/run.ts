@@ -1,6 +1,8 @@
 import { parseArgs } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import { spawn } from "node:child_process";
 import {
   ScenarioLoader,
   ScenarioExecutor,
@@ -13,6 +15,12 @@ import { OpenCodeAgentDriver } from "./driver/opencode.js";
 import { CodexAgentDriver } from "./driver/codex.js";
 import type { AgentDriver } from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
+import {
+  generateHtmlReport,
+  type Summary,
+  type MergedSummary,
+  type HtmlScenarioReport,
+} from "./html-report.js";
 import chalk from "chalk";
 
 const SUPPORTED_AGENTS = [
@@ -49,6 +57,121 @@ function createDriver(agent: SupportedAgent): AgentDriver {
   }
 }
 
+async function cleanupGolemState(cwd: string): Promise<void> {
+  return new Promise((resolve) => {
+    const child = spawn("golem", ["deploy", "--reset", "--yes"], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout?.on("data", (data: Buffer) => (output += data.toString()));
+    child.stderr?.on("data", (data: Buffer) => (output += data.toString()));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        console.warn(
+          chalk.yellow(
+            `Warning: golem deploy --reset failed (exit ${code}): ${output.trim()}`,
+          ),
+        );
+      }
+      resolve();
+    });
+    child.on("error", (err) => {
+      console.warn(
+        chalk.yellow(`Warning: golem deploy --reset error: ${err.message}`),
+      );
+      resolve();
+    });
+  });
+}
+
+async function mergeReports(
+  reportsDir: string,
+  outputDir: string,
+): Promise<void> {
+  await fs.mkdir(outputDir, { recursive: true });
+
+  const files: string[] = [];
+  const topLevel = (await fs.readdir(reportsDir)).filter(
+    (f) => f === "summary.json" || f.endsWith("-summary.json"),
+  );
+  if (topLevel.length > 0) {
+    files.push(...topLevel);
+  } else {
+    // Try reading summary.json from subdirectories
+    const entries = await fs.readdir(reportsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        try {
+          const summaryPath = path.join(reportsDir, entry.name, "summary.json");
+          await fs.access(summaryPath);
+          files.push(path.join(entry.name, "summary.json"));
+        } catch {
+          // no summary in this dir
+        }
+      }
+    }
+  }
+
+  const summaries: Summary[] = [];
+  for (const file of files) {
+    const content = await fs.readFile(path.join(reportsDir, file), "utf8");
+    summaries.push(JSON.parse(content) as Summary);
+  }
+
+  if (summaries.length === 0) {
+    console.error(
+      chalk.red("No summary.json files found in the reports directory"),
+    );
+    process.exit(1);
+  }
+
+  const agents = new Set<string>();
+  const languages = new Set<string>();
+  const osSet = new Set<string>();
+  const heatMap: MergedSummary["heatMap"] = [];
+
+  for (const s of summaries) {
+    const agent = s.agent ?? "unknown";
+    const lang = s.language ?? "unknown";
+    const sOs = s.os ?? "unknown";
+    agents.add(agent);
+    languages.add(lang);
+    osSet.add(sOs);
+    heatMap.push({
+      agent,
+      language: lang,
+      os: sOs,
+      total: s.total,
+      passed: s.passed,
+      failed: s.failed,
+    });
+  }
+
+  const merged: MergedSummary = {
+    overallTotal: summaries.reduce((sum, s) => sum + s.total, 0),
+    overallPassed: summaries.reduce((sum, s) => sum + s.passed, 0),
+    overallFailed: summaries.reduce((sum, s) => sum + s.failed, 0),
+    matrix: {
+      agents: Array.from(agents),
+      languages: Array.from(languages),
+      os: Array.from(osSet),
+    },
+    heatMap,
+    summaries,
+  };
+
+  const mergedPath = path.join(outputDir, "merged-summary.json");
+  await fs.writeFile(mergedPath, JSON.stringify(merged, null, 2));
+  console.log(chalk.green(`Merged summary written to ${mergedPath}`));
+
+  // Generate HTML for merged report
+  const htmlContent = generateHtmlReport(merged, []);
+  const htmlPath = path.join(outputDir, "report.html");
+  await fs.writeFile(htmlPath, htmlContent);
+  console.log(chalk.green(`HTML report written to ${htmlPath}`));
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -61,6 +184,10 @@ async function main() {
       skills: { type: "string", default: "../../skills" },
       help: { type: "boolean", short: "h", default: false },
       "dry-run": { type: "boolean", default: false },
+      "resume-from": { type: "string" },
+      workspace: { type: "string" },
+      "no-cleanup": { type: "boolean", default: false },
+      "merge-reports": { type: "string" },
     },
   });
 
@@ -72,9 +199,20 @@ async function main() {
     skills: skillsDirRel,
     help,
     "dry-run": dryRun,
+    "resume-from": resumeFrom,
+    workspace: workspaceOverride,
+    "no-cleanup": noCleanup,
+    "merge-reports": mergeReportsDir,
   } = values;
   const agentArg = values.agent ?? "all";
   const languageArg = values.language ?? "all";
+
+  // Merge-reports mode — standalone, doesn't require --agent/--language/--scenarios
+  if (mergeReportsDir) {
+    const outputDir = path.resolve(process.cwd(), output!);
+    await mergeReports(path.resolve(process.cwd(), mergeReportsDir), outputDir);
+    return;
+  }
 
   if (help) {
     const usage = `
@@ -92,6 +230,10 @@ Options:
   --timeout <seconds>   Global timeout per scenario step in seconds (default: ${DEFAULT_STEP_TIMEOUT_SECONDS})
   --skills <dir>        Path to skills directory (default: ../../skills)
   --dry-run             Validate scenarios and print step summaries without executing
+  --resume-from <id>    Resume execution from the given step ID
+  --workspace <path>    Override workspace directory (implies --no-cleanup)
+  --no-cleanup          Skip Golem state cleanup between scenarios
+  --merge-reports <dir> Merge summary.json files from <dir> into aggregated report
   -h, --help            Show this help message
 `.trim();
 
@@ -133,6 +275,7 @@ Options:
   const globalTimeoutSeconds = timeout
     ? Number.parseInt(timeout, 10)
     : undefined;
+  const skipCleanup = noCleanup || !!workspaceOverride;
 
   if (
     globalTimeoutSeconds !== undefined &&
@@ -208,6 +351,7 @@ Options:
 
   const scenarioReports: ScenarioReport[] = [];
   let hasFailures = false;
+  let isFirstScenario = true;
 
   for (const currentAgent of agents) {
     for (const currentLanguage of languages) {
@@ -232,16 +376,27 @@ Options:
 
         if (scenarioFilter && spec.name !== scenarioFilter) continue;
 
+        // Cleanup Golem state between scenarios
+        if (!isFirstScenario && !skipCleanup) {
+          console.log(
+            chalk.gray("Cleaning up Golem state between scenarios..."),
+          );
+          await cleanupGolemState(process.cwd());
+        }
+        isFirstScenario = false;
+
         console.log(
           chalk.blue(
             `Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`,
           ),
         );
-        const workspace = path.join(
-          process.cwd(),
-          "workspaces",
-          spec.name.replace(/\s+/g, "-").toLowerCase(),
-        );
+        const workspace = workspaceOverride
+          ? path.resolve(process.cwd(), workspaceOverride)
+          : path.join(
+              process.cwd(),
+              "workspaces",
+              spec.name.replace(/\s+/g, "-").toLowerCase(),
+            );
         const executor = new ScenarioExecutor(
           driver,
           watcher,
@@ -252,6 +407,8 @@ Options:
             agent: currentAgent,
             language: currentLanguage,
             abortSignal: abortController.signal,
+            resumeFromStepId: resumeFrom,
+            skipCleanup,
           },
         );
 
@@ -272,6 +429,13 @@ Options:
                 ),
               );
               console.log(chalk.red(`  Error: ${res.error}`));
+              if (res.classification) {
+                console.log(
+                  chalk.yellow(
+                    `  [${res.classification.category}] ${res.classification.guidance}`,
+                  ),
+                );
+              }
             }
           }
         }
@@ -319,16 +483,24 @@ Options:
         return {
           scenario: r.scenario,
           error: failedStep?.error ?? "unknown",
+          guidance: failedStep?.classification?.guidance,
         };
       });
 
-    const summary = {
+    const summary: Summary = {
+      agent: agents.join(","),
+      language: languages.join(","),
+      os: os.platform(),
+      timestamp: new Date().toISOString(),
       total: totalScenarios,
       passed,
       failed,
       skipped: 0,
       durationSeconds: totalDuration,
-      worstFailures,
+      worstFailures: worstFailures.map((f) => ({
+        scenario: f.scenario,
+        error: f.error,
+      })),
       scenarios: scenarioReports.map((r) => ({
         name: r.scenario,
         status: r.status,
@@ -338,6 +510,14 @@ Options:
 
     const summaryPath = path.join(resultsDir, "summary.json");
     await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
+
+    // Generate HTML report
+    const htmlContent = generateHtmlReport(
+      summary,
+      scenarioReports as HtmlScenarioReport[],
+    );
+    const htmlPath = path.join(resultsDir, "report.html");
+    await fs.writeFile(htmlPath, htmlContent);
 
     // GitHub Actions job summary
     const ghSummaryPath = process.env["GITHUB_STEP_SUMMARY"];
@@ -365,6 +545,9 @@ Options:
           const truncatedError =
             f.error.length > 200 ? f.error.slice(0, 197) + "..." : f.error;
           lines.push(`- **${f.scenario}**: ${truncatedError}`);
+          if (f.guidance) {
+            lines.push(`  - _${f.guidance}_`);
+          }
         }
       }
       lines.push("");
@@ -389,8 +572,17 @@ Options:
       console.log(chalk.red("Failures:"));
       for (const f of worstFailures) {
         console.log(chalk.red(`  ${f.scenario}: ${f.error}`));
+        if (f.guidance) {
+          console.log(chalk.yellow(`    ${f.guidance}`));
+        }
       }
     }
+
+    console.log(
+      chalk.gray(
+        `Reports: ${summaryPath}, ${path.join(resultsDir, "report.html")}`,
+      ),
+    );
   }
 
   if (hasFailures) {

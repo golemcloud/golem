@@ -333,4 +333,60 @@ steps:
     assert.deepEqual(spec.steps[0].only_if, { language: "ts" });
     assert.deepEqual(spec.steps[0].skip_if, { os: "windows" });
   });
+
+  // HTTP step tests
+
+  it("loads step with http action", async () => {
+    const filePath = await writeTempYaml(`
+name: "http-test"
+steps:
+  - id: "healthcheck"
+    http:
+      url: "http://localhost:9881/healthcheck"
+      method: "GET"
+    expect:
+      status: 200
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.equal(spec.steps[0].http?.url, "http://localhost:9881/healthcheck");
+    assert.equal(spec.steps[0].http?.method, "GET");
+    assert.equal(spec.steps[0].expect?.status, 200);
+  });
+
+  it("loads step with http POST and headers", async () => {
+    const filePath = await writeTempYaml(`
+name: "http-post-test"
+steps:
+  - id: "post"
+    http:
+      url: "http://localhost:8080/api"
+      method: "POST"
+      body: '{"key":"value"}'
+      headers:
+        Content-Type: "application/json"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.equal(spec.steps[0].http?.method, "POST");
+    assert.equal(spec.steps[0].http?.body, '{"key":"value"}');
+    assert.deepEqual(spec.steps[0].http?.headers, {
+      "Content-Type": "application/json",
+    });
+  });
+
+  // Retry schema tests
+
+  it("loads step with retry config", async () => {
+    const filePath = await writeTempYaml(`
+name: "retry-test"
+steps:
+  - id: "flaky"
+    prompt: "do something flaky"
+    retry:
+      attempts: 3
+      delay: 2
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.equal(spec.steps[0].retry?.attempts, 3);
+    assert.equal(spec.steps[0].retry?.delay, 2);
+  });
 });
