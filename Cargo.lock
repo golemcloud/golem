@@ -12395,6 +12395,7 @@ dependencies = [
 [[package]]
 name = "wasm-rquickjs"
 version = "0.0.0"
+source = "git+https://github.com/golemcloud/wasm-rquickjs?branch=web_socket#79c0a4a4cc729d1e1909fdc301ff7ef3ddda8576"
 dependencies = [
  "anyhow",
  "camino",
