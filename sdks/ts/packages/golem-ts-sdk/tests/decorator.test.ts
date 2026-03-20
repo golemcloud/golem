@@ -266,7 +266,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'TaggedUnion',
-          owner: undefined,
+          owner: './testTypes',
           type: {
             tag: 'variant-type',
             val: [
@@ -331,7 +331,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'UnionWithOnlyLiterals',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'enum-type', val: ['foo', 'bar', 'baz'] },
         },
       ],
@@ -347,7 +347,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'UnionWithLiterals',
-          owner: undefined,
+          owner: './testTypes',
           type: {
             tag: 'variant-type',
             val: [
@@ -358,8 +358,8 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'record-type', val: [['n', 2]] } },
-        { type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'record-type', val: [['n', 2]] } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
       ],
     };
 
@@ -373,7 +373,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'ResultTypeExactBoth',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'result-type', val: [1, 2] },
         },
         { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
@@ -391,7 +391,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'ResultTypeNonExact',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'result-type', val: [1, 2] },
         },
         { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
@@ -409,7 +409,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'ResultTypeNonExact2',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'result-type', val: [1, 2] },
         },
         { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
@@ -428,7 +428,7 @@ describe('Agent decorator should register the agent class and its methods into A
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
         {
           name: 'UnionType',
-          owner: undefined,
+          owner: './testTypes',
           type: {
             tag: 'variant-type',
             val: [
@@ -468,7 +468,7 @@ describe('Agent decorator should register the agent class and its methods into A
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
         {
           name: 'UnionType',
-          owner: undefined,
+          owner: './testTypes',
           type: {
             tag: 'variant-type',
             val: [
@@ -505,10 +505,10 @@ describe('Agent decorator should register the agent class and its methods into A
 
     const expectedWit = {
       nodes: [
-        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
+        { name: undefined, owner: './testTypes', type: { tag: 'option-type', val: 1 } },
         {
           name: 'ObjectOrBooleanOrUndefined',
-          owner: undefined,
+          owner: './testTypes',
           type: {
             tag: 'variant-type',
             val: [
@@ -615,7 +615,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'ObjectWithUnionWithUndefined1',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -633,7 +633,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'InterfaceWithUnionWithUndefined1',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -654,7 +654,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'ObjectWithUnionWithUndefined2',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -684,7 +684,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'InterfaceWithUnionWithUndefined2',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -717,7 +717,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'ObjectWithUnionWithUndefined3',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -747,7 +747,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'InterfaceWithUnionWithUndefined3',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -780,7 +780,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'ObjectWithUnionWithUndefined4',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -798,7 +798,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'InterfaceWithUnionWithUndefined4',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -816,7 +816,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'ObjectWithOption',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },
@@ -834,7 +834,7 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'InterfaceWithOption',
-          owner: undefined,
+          owner: './testTypes',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 2 } },

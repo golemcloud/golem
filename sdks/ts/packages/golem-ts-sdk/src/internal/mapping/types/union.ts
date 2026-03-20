@@ -154,7 +154,7 @@ function tryEnumUnion(ctx: UnionCtx): Either.Either<AnalysedType, string> | unde
   if (!literals.val) return;
 
   // Union of only literals are converted to WIT enum
-  const result = enum_(type.name, literals.val.literals);
+  const result = enum_(type.name, literals.val.literals, type.owner);
 
   return Either.right(result);
 }
@@ -187,6 +187,7 @@ export function tryInbuiltResultType(
           { tag: 'inbuilt', okEmptyType: 'void', errEmptyType: 'void' },
           undefined,
           undefined,
+          type.owner,
         ),
       );
     }
@@ -198,6 +199,7 @@ export function tryInbuiltResultType(
           { tag: 'inbuilt', okEmptyType: 'void', errEmptyType: undefined },
           undefined,
           err,
+          type.owner,
         ),
       );
     }
@@ -209,6 +211,7 @@ export function tryInbuiltResultType(
           { tag: 'inbuilt', okEmptyType: undefined, errEmptyType: 'void' },
           ok,
           undefined,
+          type.owner,
         ),
       );
     }
@@ -222,6 +225,7 @@ export function tryInbuiltResultType(
         { tag: 'inbuilt', okEmptyType: undefined, errEmptyType: undefined },
         ok,
         err,
+        type.owner,
       );
     });
   }
@@ -243,8 +247,8 @@ function tryTaggedUnionAndProcess(
   // else convert to simple `variant` WIT with each variant name corresponds to tag name.
   const result =
     tagged.val.tag === 'result'
-      ? convertUserDefinedResultToWitResult(type.name, tagged.val.val, mapper)
-      : convertToVariantAnalysedType(type.name, tagged.val.val, mapper);
+      ? convertUserDefinedResultToWitResult(type.name, type.owner, tagged.val.val, mapper)
+      : convertToVariantAnalysedType(type.name, type.owner, tagged.val.val, mapper);
 
   return result;
 }
@@ -268,7 +272,7 @@ function tryOptionalUnion(
 
   if (Either.isLeft(innerAnalysedType)) return innerAnalysedType;
 
-  return Either.right(option(undefined, emptyType, innerAnalysedType.val));
+  return Either.right(option(undefined, emptyType, innerAnalysedType.val, ctx.type.owner));
 }
 
 // In typescript type-system, and hence in ts-morph
@@ -359,6 +363,7 @@ function filterEmptyTypesFromUnion(ctx: UnionCtx): Either.Either<TsType, string>
   return Either.right({
     kind: 'union',
     name: type.name,
+    owner: type.owner,
     unionTypes: alternateTypes,
     optional: type.optional,
     typeParams: type.typeParams,
@@ -399,13 +404,14 @@ function buildPlainVariant(
     });
   }
 
-  const result = variant(type.name, [], cases);
+  const result = variant(type.name, [], cases, type.owner);
 
   return Either.right(result);
 }
 
 function convertUserDefinedResultToWitResult(
   typeName: string | undefined,
+  typeOwner: string | undefined,
   resultType: UserDefinedResultType,
   mapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
@@ -438,12 +444,14 @@ function convertUserDefinedResultToWitResult(
       { tag: 'custom', okValueName, errValueName },
       okTypeResult ? okTypeResult.val : undefined,
       errTypeResult ? errTypeResult.val : undefined,
+      typeOwner,
     ),
   );
 }
 
 function convertToVariantAnalysedType(
   typeName: string | undefined,
+  typeOwner: string | undefined,
   taggedTypes: TaggedTypeMetadata[],
   mapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
@@ -472,5 +480,5 @@ function convertToVariantAnalysedType(
     }
   }
 
-  return Either.right(variant(typeName, taggedTypes, possibleTypes));
+  return Either.right(variant(typeName, taggedTypes, possibleTypes, typeOwner));
 }

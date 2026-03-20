@@ -218,7 +218,7 @@ test('Union with literals to AnalysedType', () => {
     taggedTypes: [],
     value: {
       name: 'UnionWithLiterals',
-      owner: undefined,
+      owner: './testTypes',
       cases: [
         { name: 'a' },
         { name: 'b' },

@@ -55,6 +55,7 @@ export function getTypeFromTsMorph(
       return {
         kind: 'unresolved-type',
         name: undefined,
+        owner: undefined,
         optional: isOptional,
         text: tsMorphType.getText(),
         error: error,
@@ -73,12 +74,14 @@ function getTypeFromTsMorphInternal(
 ): Type.Type {
   const type = unwrapAlias(tsMorphType);
   const rawName = getRawTypeName(type);
-  const aliasName = getAliasTypeName(type);
+  const aliasName = getAliasTypeName(tsMorphType) ?? getAliasTypeName(type);
+  const owner = getTypeOwner(tsMorphType, sourceTypeNode) ?? getTypeOwner(type);
 
   if (visitedTypes.has(tsMorphType)) {
     return {
       kind: 'others',
       name: rawName ?? aliasName ?? type.getText(),
+      owner,
       optional: isOptional,
       recursive: true,
     };
@@ -90,6 +93,7 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'others',
         name: rawName,
+        owner,
         optional: isOptional,
         recursive: false,
       };
@@ -97,8 +101,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'Float64Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -107,8 +113,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'Float32Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -117,8 +125,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'Int8Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -127,8 +137,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'Uint8Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -137,8 +149,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'Int16Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -147,8 +161,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'Uint16Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -157,8 +173,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'Int32Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -167,8 +185,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'Uint32Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -177,8 +197,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'BigInt64Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -187,8 +209,10 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'array',
         name: 'BigUint64Array',
+        owner,
         element: {
           kind: 'number',
+          owner: undefined,
           optional: false,
         },
         optional: isOptional,
@@ -211,6 +235,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'others',
       name: name,
+      owner,
       optional: isOptional,
       recursive: false,
     };
@@ -223,6 +248,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'promise',
       name: aliasName,
+      owner,
       element: promiseType,
       optional: isOptional,
     };
@@ -235,6 +261,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'map',
       name: aliasName,
+      owner,
       key: key,
       value: value,
       optional: isOptional,
@@ -242,11 +269,11 @@ function getTypeFromTsMorphInternal(
   }
 
   if (type.isVoid()) {
-    return { kind: 'void', name: 'void', optional: isOptional };
+    return { kind: 'void', name: 'void', owner, optional: isOptional };
   }
 
   if (type.isBoolean()) {
-    return { kind: 'boolean', optional: isOptional };
+    return { kind: 'boolean', owner, optional: isOptional };
   }
 
   if (type.isLiteral()) {
@@ -255,6 +282,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'literal',
       name: aliasName,
+      owner,
       literalValue: literalValue.toString(),
       optional: isOptional,
     };
@@ -268,6 +296,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'tuple',
       name: aliasName,
+      owner,
       elements: tupleElems,
       optional: isOptional,
     };
@@ -293,6 +322,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'array',
       name: aliasName,
+      owner,
       element,
       optional: isOptional,
     };
@@ -315,6 +345,7 @@ function getTypeFromTsMorphInternal(
       return {
         kind: 'union',
         name: aliasName,
+        owner,
         unionTypes,
         optional: isOptional,
         typeParams: args,
@@ -327,6 +358,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'union',
       name: aliasName,
+      owner,
       unionTypes,
       optional: isOptional,
       typeParams: aliasedArgs,
@@ -338,6 +370,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'class',
       name: aliasName ?? rawName,
+      owner,
       properties: propertiesAsSymbols(type, visitedTypes),
       optional: isOptional,
     };
@@ -347,6 +380,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'interface',
       name: aliasName ?? rawName,
+      owner,
       properties: propertiesAsSymbols(type, visitedTypes),
       optional: isOptional,
       typeParams: type.getAliasTypeArguments().map((arg) => getTypeFromTsMorph(arg, false)),
@@ -359,6 +393,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'object',
       name: aliasName,
+      owner,
       properties: propertiesAsSymbols(type, visitedTypes),
       typeParams: args,
       optional: isOptional,
@@ -366,23 +401,23 @@ function getTypeFromTsMorphInternal(
   }
 
   if (type.isNull()) {
-    return { kind: 'null', name: aliasName, optional: isOptional };
+    return { kind: 'null', name: aliasName, owner, optional: isOptional };
   }
 
   if (type.isBigInt()) {
-    return { kind: 'bigint', name: aliasName, optional: isOptional };
+    return { kind: 'bigint', name: aliasName, owner, optional: isOptional };
   }
 
   if (type.isUndefined()) {
-    return { kind: 'undefined', name: aliasName, optional: isOptional };
+    return { kind: 'undefined', name: aliasName, owner, optional: isOptional };
   }
 
   if (type.isNumber()) {
-    return { kind: 'number', name: aliasName, optional: isOptional };
+    return { kind: 'number', name: aliasName, owner, optional: isOptional };
   }
 
   if (type.isString()) {
-    return { kind: 'string', name: aliasName, optional: isOptional };
+    return { kind: 'string', name: aliasName, owner, optional: isOptional };
   }
 
   if (type.getTypeArguments().length === 1) {
@@ -392,6 +427,7 @@ function getTypeFromTsMorphInternal(
   return {
     kind: 'others',
     name: aliasName ?? type.getText(),
+    owner,
     optional: isOptional,
     recursive: false,
   };
@@ -537,6 +573,7 @@ function getSdkConfigTypeFromTsMorph(
   return {
     kind: 'config',
     name: aliasName,
+    owner: getTypeOwner(type),
     optional: isOptional,
     properties,
   };
@@ -645,6 +682,47 @@ export function getAliasTypeName(type: TsMorphType): string | undefined {
     return undefined;
   }
   return alias;
+}
+
+export function getTypeOwner(type: TsMorphType, sourceTypeNode?: TsMorphNode): string | undefined {
+  return (
+    getOwnerFromSourceTypeNode(sourceTypeNode) ??
+    getOwnerFromDeclarations(type.getAliasSymbol()?.getDeclarations()) ??
+    getOwnerFromDeclarations(type.getSymbol()?.getDeclarations())
+  );
+}
+
+function getOwnerFromSourceTypeNode(node: TsMorphNode | undefined): string | undefined {
+  if (!node) return undefined;
+
+  if (TsMorphNode.isTypeReference(node)) {
+    const typeNameSymbol = node.getTypeName().getSymbol();
+    const fromTypeName = getOwnerFromDeclarations(typeNameSymbol?.getDeclarations());
+    if (fromTypeName) return fromTypeName;
+
+    return getOwnerFromDeclarations(node.getType().getAliasSymbol()?.getDeclarations());
+  }
+
+  return undefined;
+}
+
+function getOwnerFromDeclarations(declarations: TsMorphNode[] | undefined): string | undefined {
+  if (!declarations || declarations.length === 0) return undefined;
+
+  for (const declaration of declarations) {
+    const importDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
+    if (importDeclaration) {
+      return importDeclaration.getModuleSpecifierValue();
+    }
+
+    const moduleDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.ModuleDeclaration);
+    if (moduleDeclaration) {
+      const moduleName = moduleDeclaration.getName();
+      return moduleName.replace(/^['"]|['"]$/g, '');
+    }
+  }
+
+  return undefined;
 }
 
 export function unwrapAlias(type: TsMorphType): TsMorphType {

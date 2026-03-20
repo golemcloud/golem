@@ -154,6 +154,9 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     expect(importedUnion.kind).toEqual('union');
 
     if (importedUnion.kind === 'union') {
+      expect(importedUnion.name).toBe('ImportedSourceOrderedUnion');
+      expect(importedUnion.owner).toBe('./importedTypes');
+
       const kinds = importedUnion.unionTypes.map((t) => t.kind);
       expect(kinds).toStrictEqual(['number', 'string', 'boolean', 'object']);
       expect(kinds).not.toStrictEqual(['string', 'number', 'boolean', 'object']);
