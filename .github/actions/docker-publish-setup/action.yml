@@ -10,10 +10,6 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Checkout
-      uses: actions/checkout@v5
-      with:
-        fetch-depth: 1
     - name: Fetch tag
       shell: bash
       run: git fetch origin --deepen=1

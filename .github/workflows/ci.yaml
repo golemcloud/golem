@@ -27,6 +27,9 @@ jobs:
       CARGO_BUILD_JOBS: 20
     runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           cache-save-if: 'true'
@@ -60,6 +63,9 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
 
       - name: Check formatting and clippy rules
@@ -72,6 +78,9 @@ jobs:
     needs: build-and-store
     timeout-minutes: 6
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
@@ -109,6 +118,9 @@ jobs:
           - name: group3
     name: worker-tests-${{ matrix.group.name }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
@@ -169,6 +181,9 @@ jobs:
             runner: blacksmith-16vcpu-ubuntu-2204
 
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
@@ -222,6 +237,9 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           rust-targets: 'wasm32-wasip2'
@@ -238,6 +256,9 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           install-cargo-binstall: 'true'
@@ -373,6 +394,9 @@ jobs:
       matrix: ${{ fromJson(needs.list-test-component-groups.outputs.matrix) }}
     name: build-test-components-${{ matrix.chunk.name }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
@@ -475,6 +499,9 @@ jobs:
             cross: true
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           fetch-tag: 'true'
@@ -508,6 +535,9 @@ jobs:
       - docker-targets-build
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/docker-publish-setup
         with:
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -535,6 +565,9 @@ jobs:
       - docker-targets-build
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/docker-publish-setup
         with:
           dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -568,6 +601,9 @@ jobs:
       CARGO_BUILD_JOBS: 20
     runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           fetch-tag: 'true'
@@ -608,6 +644,9 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           fetch-tag: 'true'

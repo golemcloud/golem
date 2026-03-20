@@ -9,6 +9,9 @@ jobs:
   run-benchmark:
     runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           cache-prefix-key: 'v3-rust'

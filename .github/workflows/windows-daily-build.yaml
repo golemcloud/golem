@@ -14,6 +14,9 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - uses: ./.github/actions/setup-rust
         with:
           cache-prefix-key: 'v3-rust'
