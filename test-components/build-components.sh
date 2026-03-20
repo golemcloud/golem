@@ -16,77 +16,93 @@ TS_CHUNKS=1   # Number of chunks to split ts apps into for parallel CI builds
 # - rust-N / ts-N: build only the Nth chunk of that group (for parallel CI)
 # - list-groups: print available group names for CI matrix generation
 
+# Slice an array into a chunk and assign the result to an output array variable.
+# Usage: get_chunk output_var source_array_var chunk_index total_chunks
+# chunk_index is 1-based.
+get_chunk() {
+  local out_name=$1
+  local arr_name=$2
+  local chunk_idx=$3
+  local total_chunks=$4
+  local len chunk_size start count
+
+  eval "len=\${#${arr_name}[@]}"
+
+  if [ "$total_chunks" -lt 1 ] || [ "$chunk_idx" -lt 1 ] || [ "$chunk_idx" -gt "$total_chunks" ]; then
+    echo "Invalid chunk index: $chunk_idx (expected 1..$total_chunks)" >&2
+    return 1
+  fi
+
+  chunk_size=$(( (len + total_chunks - 1) / total_chunks ))
+  start=$(( (chunk_idx - 1) * chunk_size ))
+
+  if [ "$start" -ge "$len" ] || [ "$chunk_size" -eq 0 ]; then
+    eval "$out_name=()"
+    return 0
+  fi
+
+  count=$chunk_size
+  if [ $(( start + count )) -gt "$len" ]; then
+    count=$(( len - start ))
+  fi
+
+  local i
+  eval "$out_name=()"
+  for ((i=start; i<start+count; i++)); do
+    eval "$out_name+=(\"\${${arr_name}[$i]}\")"
+  done
+}
+
+# Print available groups as a JSON array for CI matrix generation.
+print_groups_json() {
+  local i sep=""
+  printf '['
+  for ((i=1; i<=RUST_CHUNKS; i++)); do
+    printf '%s{"name":"rust-%d","needs-node":false}' "$sep" "$i"
+    sep=","
+  done
+  for ((i=1; i<=TS_CHUNKS; i++)); do
+    printf '%s{"name":"ts-%d","needs-node":true}' "$sep" "$i"
+    sep=","
+  done
+  printf '%s{"name":"benchmarks","needs-node":true}]\n' "$sep"
+}
+
 clean_only=false
 rebuild=false
 single_group=false
 group=""
 for arg in "$@"; do
-  case $arg in
+  case "$arg" in
     clean)
       clean_only=true
       ;;
     rebuild)
       rebuild=true
       ;;
-    rust)
-      single_group=true
-      group="rust"
-      ;;
-    rust-[0-9]*)
+    rust|ts|benchmarks)
       single_group=true
       group="$arg"
       ;;
-    c)
-      single_group=true
-      group="c"
-      ;;
-    ts)
-      single_group=true
-      group="ts"
-      ;;
-    ts-[0-9]*)
-      single_group=true
-      group="$arg"
-      ;;
-    benchmarks)
-      single_group=true
-      group="benchmarks"
+    rust-*|ts-*)
+      if [[ "$arg" =~ ^(rust|ts)-([0-9]+)$ ]]; then
+        single_group=true
+        group="$arg"
+      else
+        echo "Unknown argument: $arg" >&2
+        exit 1
+      fi
       ;;
     list-groups)
-      # Output JSON array of groups for CI matrix generation
-      groups="["
-      for i in $(seq 1 $RUST_CHUNKS); do
-        groups="$groups{\"name\":\"rust-$i\",\"needs-node\":false},"
-      done
-      for i in $(seq 1 $TS_CHUNKS); do
-        groups="$groups{\"name\":\"ts-$i\",\"needs-node\":true},"
-      done
-      groups="$groups{\"name\":\"benchmarks\",\"needs-node\":true}]"
-      echo "$groups"
+      print_groups_json
       exit 0
       ;;
     *)
-      echo "Unknown argument: $arg"
+      echo "Unknown argument: $arg" >&2
       exit 1
       ;;
   esac
 done
-
-# Get a chunk of an array by eval. Usage: get_chunk array_name chunk_index total_chunks
-# chunk_index is 1-based. Prints the chunk elements space-separated.
-get_chunk() {
-  local arr_name=$1
-  local chunk_idx=$2
-  local total_chunks=$3
-  eval "local len=\${#${arr_name}[@]}"
-  local chunk_size=$(( (len + total_chunks - 1) / total_chunks ))
-  local start=$(( (chunk_idx - 1) * chunk_size ))
-  local count=$(( chunk_size ))
-  if [ $(( start + count )) -gt $len ]; then
-    count=$(( len - start ))
-  fi
-  eval "echo \"\${${arr_name}[@]:$start:$count}\""
-}
 
 GOLEM_CLI="${TEST_COMP_DIR:-$(pwd)}/../target/debug/golem-cli"
 
@@ -149,10 +165,14 @@ build_node_apps() {
   done
 }
 
-# Handle chunk groups (rust-N, ts-N)
+# Handle chunk groups (rust-N, ts-N) or full groups
 if [[ "$group" =~ ^rust-([0-9]+)$ ]]; then
   chunk_idx="${BASH_REMATCH[1]}"
-  chunk_apps=($(get_chunk rust_test_apps "$chunk_idx" "$RUST_CHUNKS"))
+  if [ "$chunk_idx" -lt 1 ] || [ "$chunk_idx" -gt "$RUST_CHUNKS" ]; then
+    echo "Invalid rust chunk: $chunk_idx (expected 1..$RUST_CHUNKS)" >&2
+    exit 1
+  fi
+  get_chunk chunk_apps rust_test_apps "$chunk_idx" "$RUST_CHUNKS"
   echo "Rust chunk $chunk_idx/$RUST_CHUNKS: ${chunk_apps[*]}"
   build_rust_apps "${chunk_apps[@]}"
 elif [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
@@ -161,7 +181,11 @@ fi
 
 if [[ "$group" =~ ^ts-([0-9]+)$ ]]; then
   chunk_idx="${BASH_REMATCH[1]}"
-  chunk_apps=($(get_chunk ts_test_apps "$chunk_idx" "$TS_CHUNKS"))
+  if [ "$chunk_idx" -lt 1 ] || [ "$chunk_idx" -gt "$TS_CHUNKS" ]; then
+    echo "Invalid ts chunk: $chunk_idx (expected 1..$TS_CHUNKS)" >&2
+    exit 1
+  fi
+  get_chunk chunk_apps ts_test_apps "$chunk_idx" "$TS_CHUNKS"
   echo "TS chunk $chunk_idx/$TS_CHUNKS: ${chunk_apps[*]}"
   NODE_GROUP_LABEL="TS" build_node_apps "${chunk_apps[@]}"
 elif [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
