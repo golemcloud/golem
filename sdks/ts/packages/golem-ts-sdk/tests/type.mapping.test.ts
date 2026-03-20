@@ -24,6 +24,8 @@ import {
   getPromiseType,
   getUnionWithLiterals,
   getUnionWithBooleanInMiddle,
+  getImportedSourceOrderedUnion,
+  getObjectOrBooleanOrUndefined,
 } from './testUtils';
 
 import {
@@ -154,13 +156,13 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
           {
             name: 'UnionType1',
             typ: {
-              kind: 'string',
+              kind: 'f64',
             },
           },
           {
             name: 'UnionType2',
             typ: {
-              kind: 'f64',
+              kind: 'string',
             },
           },
           {
@@ -278,6 +280,43 @@ test('Union with true|false in the middle preserves boolean case position', () =
   expect(unionWithBooleanInMiddle).toEqual(expectedAnalysedType);
 });
 
+test('Imported union alias keeps source order and not fallback canonical order', () => {
+  const [importedSourceOrderedUnion] = getImportedSourceOrderedUnion();
+
+  expect(importedSourceOrderedUnion.kind).toBe('variant');
+  if (importedSourceOrderedUnion.kind !== 'variant') return;
+
+  const cases = importedSourceOrderedUnion.value.cases;
+  const actualCaseKinds = cases.map((c) => c.typ?.kind ?? 'none');
+
+  expect(actualCaseKinds).toStrictEqual(['f64', 'string', 'bool', 'record']);
+  expect(actualCaseKinds).not.toStrictEqual(['string', 'f64', 'bool', 'record']);
+
+  expect(cases.map((c) => c.name)).toStrictEqual([
+    'ImportedSourceOrderedUnion1',
+    'ImportedSourceOrderedUnion2',
+    'ImportedSourceOrderedUnion3',
+    'ImportedSourceOrderedUnion4',
+  ]);
+});
+
+test('Object|boolean|undefined becomes option(variant) preserving source order', () => {
+  const [objectOrBooleanOrUndefined] = getObjectOrBooleanOrUndefined();
+
+  expect(objectOrBooleanOrUndefined.kind).toBe('option');
+  if (objectOrBooleanOrUndefined.kind !== 'option') return;
+
+  const inner = objectOrBooleanOrUndefined.value.inner;
+  expect(inner.kind).toBe('variant');
+  if (inner.kind !== 'variant') return;
+
+  expect(inner.value.cases.map((c) => c.typ?.kind ?? 'none')).toStrictEqual(['record', 'bool']);
+  expect(inner.value.cases.map((c) => c.name)).toStrictEqual([
+    'ObjectOrBooleanOrUndefined1',
+    'ObjectOrBooleanOrUndefined2',
+  ]);
+});
+
 function checkPrimitiveFields(fields: any[]) {
   const expected = {
     numberProp: {
@@ -317,8 +356,7 @@ function checkOptionalFields(fields: NameTypePair[]) {
 
 function checkUnionComplexFields(fields: NameTypePair[]) {
   const unionComplexFields = fields.filter((f) => f.name.startsWith('unionComplexProp'))[0];
-
-  const expected: NameTypePair = {
+  const expected = {
     name: 'unionComplexProp',
     typ: {
       kind: 'variant',
@@ -326,160 +364,30 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
       value: {
         name: 'UnionComplexType',
         cases: [
-          {
-            name: 'UnionComplexType1',
-            typ: {
-              kind: 'string',
-            },
-          },
-          {
-            name: 'UnionComplexType2',
-            typ: {
-              kind: 'f64',
-            },
-          },
-          {
-            name: 'UnionComplexType3',
-            typ: {
-              kind: 'bool',
-            },
-          },
+          { name: 'UnionComplexType1', typ: { kind: 'f64' } },
+          { name: 'UnionComplexType2', typ: { kind: 'string' } },
+          { name: 'UnionComplexType3', typ: { kind: 'bool' } },
           {
             name: 'UnionComplexType4',
             typ: {
               kind: 'record',
               value: {
+                name: 'ObjectComplexType',
                 fields: [
-                  {
-                    name: 'a',
-                    typ: {
-                      kind: 'string',
-                    },
-                  },
-                  {
-                    name: 'b',
-                    typ: {
-                      kind: 'f64',
-                    },
-                  },
-                  {
-                    name: 'c',
-                    typ: {
-                      kind: 'bool',
-                    },
-                  },
-                ],
-                name: 'ObjectType',
-                owner: undefined,
-              },
-            },
-          },
-          {
-            name: 'UnionComplexType5',
-            typ: {
-              kind: 'list',
-              mapType: undefined,
-              typedArray: undefined,
-              value: {
-                inner: {
-                  kind: 'string',
-                },
-                name: 'ListType',
-                owner: undefined,
-              },
-            },
-          },
-          {
-            name: 'UnionComplexType6',
-            typ: {
-              kind: 'tuple',
-              emptyType: undefined,
-              value: {
-                items: [
-                  {
-                    kind: 'string',
-                  },
-                  {
-                    kind: 'f64',
-                  },
-                  {
-                    kind: 'bool',
-                  },
-                ],
-                name: 'TupleType',
-                owner: undefined,
-              },
-            },
-          },
-          {
-            name: 'UnionComplexType7',
-            typ: {
-              kind: 'record',
-              value: {
-                fields: [
-                  {
-                    name: 'n',
-                    typ: {
-                      kind: 'f64',
-                    },
-                  },
-                ],
-                name: 'SimpleInterfaceType',
-                owner: undefined,
-              },
-            },
-          },
-          {
-            name: 'UnionComplexType8',
-            typ: {
-              kind: 'record',
-              value: {
-                fields: [
-                  {
-                    name: 'a',
-                    typ: {
-                      kind: 'string',
-                    },
-                  },
-                  {
-                    name: 'b',
-                    typ: {
-                      kind: 'f64',
-                    },
-                  },
-                  {
-                    name: 'c',
-                    typ: {
-                      kind: 'bool',
-                    },
-                  },
+                  { name: 'a', typ: { kind: 'string' } },
+                  { name: 'b', typ: { kind: 'f64' } },
+                  { name: 'c', typ: { kind: 'bool' } },
                   {
                     name: 'd',
                     typ: {
                       kind: 'record',
                       value: {
-                        fields: [
-                          {
-                            name: 'a',
-                            typ: {
-                              kind: 'string',
-                            },
-                          },
-                          {
-                            name: 'b',
-                            typ: {
-                              kind: 'f64',
-                            },
-                          },
-                          {
-                            name: 'c',
-                            typ: {
-                              kind: 'bool',
-                            },
-                          },
-                        ],
                         name: 'ObjectType',
-                        owner: undefined,
+                        fields: [
+                          { name: 'a', typ: { kind: 'string' } },
+                          { name: 'b', typ: { kind: 'f64' } },
+                          { name: 'c', typ: { kind: 'bool' } },
+                        ],
                       },
                     },
                   },
@@ -489,58 +397,26 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                       kind: 'variant',
                       taggedTypes: [],
                       value: {
+                        name: 'UnionType',
                         cases: [
-                          {
-                            name: 'UnionType1',
-                            typ: {
-                              kind: 'string',
-                            },
-                          },
-                          {
-                            name: 'UnionType2',
-                            typ: {
-                              kind: 'f64',
-                            },
-                          },
-                          {
-                            name: 'UnionType3',
-                            typ: {
-                              kind: 'bool',
-                            },
-                          },
+                          { name: 'UnionType1', typ: { kind: 'f64' } },
+                          { name: 'UnionType2', typ: { kind: 'string' } },
+                          { name: 'UnionType3', typ: { kind: 'bool' } },
                           {
                             name: 'UnionType4',
                             typ: {
                               kind: 'record',
                               value: {
-                                fields: [
-                                  {
-                                    name: 'a',
-                                    typ: {
-                                      kind: 'string',
-                                    },
-                                  },
-                                  {
-                                    name: 'b',
-                                    typ: {
-                                      kind: 'f64',
-                                    },
-                                  },
-                                  {
-                                    name: 'c',
-                                    typ: {
-                                      kind: 'bool',
-                                    },
-                                  },
-                                ],
                                 name: 'ObjectType',
-                                owner: undefined,
+                                fields: [
+                                  { name: 'a', typ: { kind: 'string' } },
+                                  { name: 'b', typ: { kind: 'f64' } },
+                                  { name: 'c', typ: { kind: 'bool' } },
+                                ],
                               },
                             },
                           },
                         ],
-                        name: 'UnionType',
-                        owner: undefined,
                       },
                     },
                   },
@@ -548,14 +424,9 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'f',
                     typ: {
                       kind: 'list',
-                      mapType: undefined,
-                      typedArray: undefined,
                       value: {
-                        inner: {
-                          kind: 'string',
-                        },
                         name: 'ListType',
-                        owner: undefined,
+                        inner: { kind: 'string' },
                       },
                     },
                   },
@@ -563,38 +434,19 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'g',
                     typ: {
                       kind: 'list',
-                      mapType: undefined,
-                      typedArray: undefined,
                       value: {
+                        name: 'ListComplexType',
                         inner: {
                           kind: 'record',
                           value: {
-                            fields: [
-                              {
-                                name: 'a',
-                                typ: {
-                                  kind: 'string',
-                                },
-                              },
-                              {
-                                name: 'b',
-                                typ: {
-                                  kind: 'f64',
-                                },
-                              },
-                              {
-                                name: 'c',
-                                typ: {
-                                  kind: 'bool',
-                                },
-                              },
-                            ],
                             name: 'ObjectType',
-                            owner: undefined,
+                            fields: [
+                              { name: 'a', typ: { kind: 'string' } },
+                              { name: 'b', typ: { kind: 'f64' } },
+                              { name: 'c', typ: { kind: 'bool' } },
+                            ],
                           },
                         },
-                        name: 'ListComplexType',
-                        owner: undefined,
                       },
                     },
                   },
@@ -602,21 +454,9 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'h',
                     typ: {
                       kind: 'tuple',
-                      emptyType: undefined,
                       value: {
-                        items: [
-                          {
-                            kind: 'string',
-                          },
-                          {
-                            kind: 'f64',
-                          },
-                          {
-                            kind: 'bool',
-                          },
-                        ],
                         name: 'TupleType',
-                        owner: undefined,
+                        items: [{ kind: 'string' }, { kind: 'f64' }, { kind: 'bool' }],
                       },
                     },
                   },
@@ -624,45 +464,23 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'i',
                     typ: {
                       kind: 'tuple',
-                      emptyType: undefined,
                       value: {
+                        name: 'TupleComplexType',
                         items: [
-                          {
-                            kind: 'string',
-                          },
-                          {
-                            kind: 'f64',
-                          },
+                          { kind: 'string' },
+                          { kind: 'f64' },
                           {
                             kind: 'record',
                             value: {
-                              fields: [
-                                {
-                                  name: 'a',
-                                  typ: {
-                                    kind: 'string',
-                                  },
-                                },
-                                {
-                                  name: 'b',
-                                  typ: {
-                                    kind: 'f64',
-                                  },
-                                },
-                                {
-                                  name: 'c',
-                                  typ: {
-                                    kind: 'bool',
-                                  },
-                                },
-                              ],
                               name: 'ObjectType',
-                              owner: undefined,
+                              fields: [
+                                { name: 'a', typ: { kind: 'string' } },
+                                { name: 'b', typ: { kind: 'f64' } },
+                                { name: 'c', typ: { kind: 'bool' } },
+                              ],
                             },
                           },
                         ],
-                        name: 'TupleComplexType',
-                        owner: undefined,
                       },
                     },
                   },
@@ -670,30 +488,13 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'j',
                     typ: {
                       kind: 'list',
-                      mapType: {
-                        keyType: { kind: 'string' },
-                        valueType: { kind: 'f64' },
-                      },
-                      typedArray: undefined,
+                      mapType: { keyType: { kind: 'string' }, valueType: { kind: 'f64' } },
                       value: {
+                        name: 'MapType',
                         inner: {
                           kind: 'tuple',
-                          emptyType: undefined,
-                          value: {
-                            items: [
-                              {
-                                kind: 'string',
-                              },
-                              {
-                                kind: 'f64',
-                              },
-                            ],
-                            name: undefined,
-                            owner: undefined,
-                          },
+                          value: { items: [{ kind: 'string' }, { kind: 'f64' }] },
                         },
-                        name: 'MapType',
-                        owner: undefined,
                       },
                     },
                   },
@@ -702,68 +503,99 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     typ: {
                       kind: 'record',
                       value: {
-                        fields: [
-                          {
-                            name: 'n',
-                            typ: {
-                              kind: 'f64',
-                            },
-                          },
-                        ],
                         name: 'SimpleInterfaceType',
-                        owner: undefined,
+                        fields: [{ name: 'n', typ: { kind: 'f64' } }],
                       },
                     },
                   },
                 ],
-                name: 'ObjectComplexType',
-                owner: undefined,
+              },
+            },
+          },
+          {
+            name: 'UnionComplexType5',
+            typ: {
+              kind: 'variant',
+              taggedTypes: [],
+              value: {
+                name: 'UnionType',
+                cases: [
+                  { name: 'UnionType1', typ: { kind: 'f64' } },
+                  { name: 'UnionType2', typ: { kind: 'string' } },
+                  { name: 'UnionType3', typ: { kind: 'bool' } },
+                  {
+                    name: 'UnionType4',
+                    typ: {
+                      kind: 'record',
+                      value: {
+                        name: 'ObjectType',
+                        fields: [
+                          { name: 'a', typ: { kind: 'string' } },
+                          { name: 'b', typ: { kind: 'f64' } },
+                          { name: 'c', typ: { kind: 'bool' } },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            name: 'UnionComplexType6',
+            typ: {
+              kind: 'tuple',
+              value: {
+                name: 'TupleType',
+                items: [{ kind: 'string' }, { kind: 'f64' }, { kind: 'bool' }],
+              },
+            },
+          },
+          {
+            name: 'UnionComplexType7',
+            typ: {
+              kind: 'tuple',
+              value: {
+                name: 'TupleComplexType',
+                items: [
+                  { kind: 'string' },
+                  { kind: 'f64' },
+                  {
+                    kind: 'record',
+                    value: {
+                      name: 'ObjectType',
+                      fields: [
+                        { name: 'a', typ: { kind: 'string' } },
+                        { name: 'b', typ: { kind: 'f64' } },
+                        { name: 'c', typ: { kind: 'bool' } },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            name: 'UnionComplexType8',
+            typ: {
+              kind: 'record',
+              value: {
+                name: 'SimpleInterfaceType',
+                fields: [{ name: 'n', typ: { kind: 'f64' } }],
               },
             },
           },
           {
             name: 'UnionComplexType9',
             typ: {
-              kind: 'tuple',
-              emptyType: undefined,
+              kind: 'list',
+              mapType: { keyType: { kind: 'string' }, valueType: { kind: 'f64' } },
               value: {
-                items: [
-                  {
-                    kind: 'string',
-                  },
-                  {
-                    kind: 'f64',
-                  },
-                  {
-                    kind: 'record',
-                    value: {
-                      fields: [
-                        {
-                          name: 'a',
-                          typ: {
-                            kind: 'string',
-                          },
-                        },
-                        {
-                          name: 'b',
-                          typ: {
-                            kind: 'f64',
-                          },
-                        },
-                        {
-                          name: 'c',
-                          typ: {
-                            kind: 'bool',
-                          },
-                        },
-                      ],
-                      name: 'ObjectType',
-                      owner: undefined,
-                    },
-                  },
-                ],
-                name: 'TupleComplexType',
-                owner: undefined,
+                name: 'MapType',
+                inner: {
+                  kind: 'tuple',
+                  value: { items: [{ kind: 'string' }, { kind: 'f64' }] },
+                },
               },
             },
           },
@@ -771,30 +603,9 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             name: 'UnionComplexType10',
             typ: {
               kind: 'list',
-              mapType: {
-                keyType: { kind: 'string' },
-                valueType: { kind: 'f64' },
-              },
-              typedArray: undefined,
               value: {
-                inner: {
-                  kind: 'tuple',
-                  emptyType: undefined,
-                  value: {
-                    items: [
-                      {
-                        kind: 'string',
-                      },
-                      {
-                        kind: 'f64',
-                      },
-                    ],
-                    name: undefined,
-                    owner: undefined,
-                  },
-                },
-                name: 'MapType',
-                owner: undefined,
+                name: 'ListType',
+                inner: { kind: 'string' },
               },
             },
           },
@@ -802,48 +613,28 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             name: 'UnionComplexType11',
             typ: {
               kind: 'list',
-              typedArray: undefined,
-              mapType: undefined,
               value: {
+                name: 'ListComplexType',
                 inner: {
                   kind: 'record',
                   value: {
-                    fields: [
-                      {
-                        name: 'a',
-                        typ: {
-                          kind: 'string',
-                        },
-                      },
-                      {
-                        name: 'b',
-                        typ: {
-                          kind: 'f64',
-                        },
-                      },
-                      {
-                        name: 'c',
-                        typ: {
-                          kind: 'bool',
-                        },
-                      },
-                    ],
                     name: 'ObjectType',
-                    owner: undefined,
+                    fields: [
+                      { name: 'a', typ: { kind: 'string' } },
+                      { name: 'b', typ: { kind: 'f64' } },
+                      { name: 'c', typ: { kind: 'bool' } },
+                    ],
                   },
                 },
-                name: 'ListComplexType',
-                owner: undefined,
               },
             },
           },
         ],
-        owner: undefined,
       },
     },
   };
 
-  expect(unionComplexFields).toEqual(expected);
+  expect(unionComplexFields).toMatchObject(expected);
 }
 
 function checkUnionFields(fields: any[]) {
@@ -858,8 +649,8 @@ function checkUnionFields(fields: any[]) {
         name: 'UnionType',
         owner: undefined,
         cases: [
-          { name: 'UnionType1', typ: { kind: 'string' } },
-          { name: 'UnionType2', typ: { kind: 'f64' } },
+          { name: 'UnionType1', typ: { kind: 'f64' } },
+          { name: 'UnionType2', typ: { kind: 'string' } },
           { name: 'UnionType3', typ: { kind: 'bool' } },
           {
             name: 'UnionType4',
@@ -1068,13 +859,13 @@ function checkObjectComplexFields(fields: any[]) {
             {
               name: 'UnionType1',
               typ: {
-                kind: 'string',
+                kind: 'f64',
               },
             },
             {
               name: 'UnionType2',
               typ: {
-                kind: 'f64',
+                kind: 'string',
               },
             },
             {

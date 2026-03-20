@@ -160,14 +160,16 @@ export function tryInbuiltResultType(
   const originalTypeName = type.originalTypeName;
   const unionTypes = type.unionTypes;
   const typeParams = type.typeParams;
+  const hasOkCase = unionTypes.some((ut) => ut.name === 'Ok');
+  const hasErrCase = unionTypes.some((ut) => ut.name === 'Err');
 
   const isInbuiltResult = typeName === 'Result' || originalTypeName === 'Result';
 
   if (
     isInbuiltResult &&
     unionTypes.length === 2 &&
-    unionTypes[0].name === 'Ok' &&
-    unionTypes[1].name === 'Err'
+    hasOkCase &&
+    hasErrCase
   ) {
     const okType = typeParams[0];
     const errType = typeParams[1];

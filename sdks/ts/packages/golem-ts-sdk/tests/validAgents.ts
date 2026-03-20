@@ -49,7 +49,9 @@ import {
   InterfaceWithUnionWithUndefined4,
   InterfaceWithOption,
   ResultTypeNonExact3,
+  ObjectOrBooleanOrUndefined,
 } from './testTypes';
+import { ImportedSourceOrderedUnion } from './importedTestTypes';
 import { describe } from 'vitest';
 
 @agent()
@@ -368,6 +370,8 @@ class BarAgent extends BaseAgent {
     objectType: Types.ObjectType,
     unionWithLiterals: UnionWithLiterals,
     unionWithBooleanInMiddle: Types.UnionWithBooleanInMiddle,
+    objectOrBooleanOrUndefined: ObjectOrBooleanOrUndefined,
+    importedSourceOrderedUnion: ImportedSourceOrderedUnion,
     textType: UnstructuredText,
     eitherXType: EitherX,
     eitherYType: EitherY,
@@ -501,6 +505,18 @@ class BarAgent extends BaseAgent {
   async fun24(multimodalInput: Multimodal): Promise<Multimodal> {
     return multimodalInput;
   }
+}
+
+@agent()
+class ConstructorUnionOrderAgent extends BaseAgent {
+  constructor(
+    readonly name: string,
+    readonly complex: { a: number; b: string } | boolean | undefined,
+  ) {
+    super();
+  }
+
+  async ping(): Promise<void> {}
 }
 
 export type TextOrImage =

@@ -29,6 +29,7 @@ export const SnapshottingDisabledAgentClassName = new AgentClassName('Snapshotti
 export const SnapshottingEnabledAgentClassName = new AgentClassName('SnapshottingEnabledAgent');
 export const SnapshottingPeriodicAgentClassName = new AgentClassName('SnapshottingPeriodicAgent');
 export const SnapshottingEveryNAgentClassName = new AgentClassName('SnapshottingEveryNAgent');
+export const ConstructorUnionOrderAgentClassName = new AgentClassName('ConstructorUnionOrderAgent');
 
 // Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getTestInterfaceType(): [AnalysedType, Type.Type] {
@@ -103,6 +104,16 @@ export function getUnionWithLiterals(): [AnalysedType, Type.Type] {
 // Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
 export function getUnionWithBooleanInMiddle(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('UnionWithBooleanInMiddle');
+}
+
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
+export function getImportedSourceOrderedUnion(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('ImportedSourceOrderedUnion');
+}
+
+// Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata
+export function getObjectOrBooleanOrUndefined(): [AnalysedType, Type.Type] {
+  return fetchTypeFromBarAgent('ObjectOrBooleanOrUndefined');
 }
 
 // Fetch the analysed type set in the global registry, and the original (ts-morph-lite) `Type` from BarAgent metadata

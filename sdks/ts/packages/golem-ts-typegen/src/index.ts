@@ -24,6 +24,7 @@ import {
   PropertyDeclaration,
   Symbol as TsMorphSymbol,
   TypeLiteralNode,
+  UnionTypeNode,
 } from 'ts-morph';
 import {
   buildJSONFromType,
@@ -37,9 +38,13 @@ import {
 import * as fs from 'node:fs';
 import path from 'path';
 
-export function getTypeFromTsMorph(tsMorphType: TsMorphType, isOptional: boolean): Type.Type {
+export function getTypeFromTsMorph(
+  tsMorphType: TsMorphType,
+  isOptional: boolean,
+  sourceTypeNode?: TsMorphNode,
+): Type.Type {
   try {
-    return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
+    return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set(), sourceTypeNode);
   } catch (e) {
     if (e instanceof Error) {
       let error = e.message;
@@ -64,6 +69,7 @@ function getTypeFromTsMorphInternal(
   tsMorphType: TsMorphType,
   isOptional: boolean,
   visitedTypes: Set<TsMorphType>,
+  sourceTypeNode?: TsMorphNode,
 ): Type.Type {
   const type = unwrapAlias(tsMorphType);
   const rawName = getRawTypeName(type);
@@ -297,9 +303,9 @@ function getTypeFromTsMorphInternal(
 
     const aliased = getAliasTypeArgumentsSafe(tsMorphType);
 
-    const unionTypes = type
-      .getUnionTypes()
-      .map((t) => getTypeFromTsMorphInternal(t, false, new Set(visitedTypes)));
+    const unionTypes =
+      getSourceOrderedUnionTypes(type, sourceTypeNode, visitedTypes) ??
+      getCanonicalFallbackUnionTypes(type.getUnionTypes(), visitedTypes);
 
     const [aliasRawName, aliasedTypeArgs] = aliased;
 
@@ -391,6 +397,123 @@ function getTypeFromTsMorphInternal(
   };
 }
 
+// This is intentionally used as a deterministic fallback order for union members.
+// Source-order recovery (when AST nodes are available) overrides this fallback.
+function getCanonicalFallbackUnionTypes(
+  unionTypes: TsMorphType[],
+  visitedTypes: Set<TsMorphType>,
+): Type.Type[] {
+  const withKeys = unionTypes.map((member, index) => {
+    const mapped = getTypeFromTsMorphInternal(member, false, new Set(visitedTypes));
+    return {
+      index,
+      mapped,
+      key: getCanonicalUnionSortKey(mapped),
+    };
+  });
+
+  withKeys.sort((a, b) => {
+    if (a.key < b.key) return -1;
+    if (a.key > b.key) return 1;
+    return a.index - b.index;
+  });
+
+  return withKeys.map(({ mapped }) => mapped);
+}
+
+function getSourceOrderedUnionTypes(
+  unionType: TsMorphType,
+  sourceTypeNode: TsMorphNode | undefined,
+  visitedTypes: Set<TsMorphType>,
+): Type.Type[] | undefined {
+  const sourceUnionTypeNode =
+    resolveUnionTypeNode(sourceTypeNode) ?? resolveUnionTypeNodeFromType(unionType);
+
+  if (!sourceUnionTypeNode) return undefined;
+
+  return sourceUnionTypeNode
+    .getTypeNodes()
+    .map((member) => getTypeFromTsMorphInternal(member.getType(), false, new Set(visitedTypes), member));
+}
+
+function resolveUnionTypeNodeFromType(type: TsMorphType): UnionTypeNode | undefined {
+  const aliasSymbol = type.getAliasSymbol();
+  if (!aliasSymbol) return undefined;
+
+  for (const declaration of aliasSymbol.getDeclarations()) {
+    if (!TsMorphNode.isTypeAliasDeclaration(declaration)) continue;
+
+    const unionTypeNode = resolveUnionTypeNode(declaration.getTypeNode());
+    if (unionTypeNode) return unionTypeNode;
+  }
+
+  return undefined;
+}
+
+function resolveUnionTypeNode(node: TsMorphNode | undefined): UnionTypeNode | undefined {
+  if (!node) return undefined;
+
+  if (TsMorphNode.isUnionTypeNode(node)) {
+    return node;
+  }
+
+  if (TsMorphNode.isParenthesizedTypeNode(node)) {
+    return resolveUnionTypeNode(node.getTypeNode());
+  }
+
+  return undefined;
+}
+
+function getCanonicalUnionSortKey(type: Type.Type): string {
+  const rank = getUnionTypeKindRank(type.kind).toString().padStart(2, '0');
+  return `${rank}:${JSON.stringify(buildJSONFromType(type))}`;
+}
+
+function getUnionTypeKindRank(kind: Type.Type['kind']): number {
+  switch (kind) {
+    case 'undefined':
+      return 0;
+    case 'null':
+      return 1;
+    case 'void':
+      return 2;
+    case 'string':
+      return 3;
+    case 'number':
+      return 4;
+    case 'bigint':
+      return 5;
+    case 'boolean':
+      return 6;
+    case 'literal':
+      return 7;
+    case 'tuple':
+      return 8;
+    case 'array':
+      return 9;
+    case 'map':
+      return 10;
+    case 'object':
+      return 11;
+    case 'interface':
+      return 12;
+    case 'class':
+      return 13;
+    case 'promise':
+      return 14;
+    case 'union':
+      return 15;
+    case 'config':
+      return 16;
+    case 'alias':
+      return 17;
+    case 'others':
+      return 18;
+    case 'unresolved-type':
+      return 19;
+  }
+}
+
 function getSdkConfigTypeFromTsMorph(
   type: TsMorphType,
   rawName: string | undefined,
@@ -451,7 +574,11 @@ function extractConfigPropertiesFromTypeLiteral(
       results.push({
         path: nextPath,
         secret: true,
-        type: getTypeFromTsMorph(propType.getTypeArguments()[0], member.hasQuestionToken()),
+        type: getTypeFromTsMorph(
+          propType.getTypeArguments()[0],
+          member.hasQuestionToken(),
+          member.getTypeNode(),
+        ),
       });
       continue;
     }
@@ -471,7 +598,7 @@ function extractConfigPropertiesFromTypeLiteral(
     results.push({
       path: nextPath,
       secret: false,
-      type: getTypeFromTsMorph(propType, member.hasQuestionToken()),
+      type: getTypeFromTsMorph(propType, member.hasQuestionToken(), member.getTypeNode()),
     });
   }
 
@@ -586,7 +713,7 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
           ? []
           : publicConstructors[0].getParameters().map((p) => ({
               name: p.getName(),
-              type: getTypeFromTsMorph(p.getType(), p.isOptional()),
+              type: getTypeFromTsMorph(p.getType(), p.isOptional(), p.getTypeNode()),
             }));
 
       const methods = new Map();
@@ -605,11 +732,11 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
 
         const methodParams = new Map(
           method.getParameters().map((p) => {
-            return [p.getName(), getTypeFromTsMorph(p.getType(), p.isOptional())];
+            return [p.getName(), getTypeFromTsMorph(p.getType(), p.isOptional(), p.getTypeNode())];
           }),
         );
 
-        const returnType = getTypeFromTsMorph(method.getReturnType(), false);
+        const returnType = getTypeFromTsMorph(method.getReturnType(), false, method.getReturnTypeNode());
         methods.set(method.getName(), { methodParams, returnType });
       }
 
@@ -649,7 +776,10 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
             }
             const paramType = p.getTypeAtLocation(decl);
             const isOptional = TsMorphNode.isParameterDeclaration(decl) ? decl.isOptional() : false;
-            return [p.getName(), getTypeFromTsMorph(paramType, isOptional)];
+            const sourceTypeNode = TsMorphNode.isParameterDeclaration(decl)
+              ? decl.getTypeNode()
+              : undefined;
+            return [p.getName(), getTypeFromTsMorph(paramType, isOptional, sourceTypeNode)];
           }),
         );
 
@@ -776,7 +906,12 @@ function propertiesAsSymbols(type: TsMorphType, visitedTypes: Set<TsMorphType>):
     // NOTE: falling back to firstDeclaration if no value declaration found,
     //       to support runtime generated or manipulated types
     const type = prop.getTypeAtLocation(getValueDeclaration(prop) ?? firstDeclaration);
-    const tsType = getTypeFromTsMorphInternal(type, false, new Set(visitedTypes));
+    const sourceTypeNode =
+      TsMorphNode.isPropertySignature(firstDeclaration) ||
+      TsMorphNode.isPropertyDeclaration(firstDeclaration)
+        ? firstDeclaration.getTypeNode()
+        : undefined;
+    const tsType = getTypeFromTsMorphInternal(type, false, new Set(visitedTypes), sourceTypeNode);
     const propName = prop.getName();
 
     if (

@@ -22,6 +22,7 @@ import {
   SnapshottingEnabledAgentClassName,
   SnapshottingPeriodicAgentClassName,
   SnapshottingEveryNAgentClassName,
+  ConstructorUnionOrderAgentClassName,
 } from './testUtils';
 import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
@@ -51,6 +52,12 @@ describe('Agent decorator should register the agent class and its methods into A
 
   if (!barAgentMethod) {
     throw new Error('fun0 method not found in BarAgent');
+  }
+
+  const constructorUnionOrderAgent = AgentTypeRegistry.get(ConstructorUnionOrderAgentClassName);
+
+  if (!constructorUnionOrderAgent) {
+    throw new Error('ConstructorUnionOrderAgent not found in AgentTypeRegistry');
   }
 
   it('should implement getAgentType properly', () => {
@@ -262,8 +269,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['UnionType1', 1],
-              ['UnionType2', 2],
+              ['UnionType1', 2],
+              ['UnionType2', 1],
               ['UnionType3', 3],
               ['UnionType4', 5],
             ],
@@ -397,20 +404,20 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
         {
-          name: undefined,
+          name: 'UnionType',
           owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
-              ['case1', 2],
-              ['case2', 3],
-              ['case3', 4],
-              ['case4', 5],
+              ['UnionType1', 2],
+              ['UnionType2', 3],
+              ['UnionType3', 4],
+              ['UnionType4', 5],
             ],
           },
         },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
         { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
         { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
         {
           name: 'ObjectType',
@@ -418,8 +425,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'record-type',
             val: [
-              ['a', 2],
-              ['b', 3],
+              ['a', 3],
+              ['b', 2],
               ['c', 4],
             ],
           },
@@ -437,20 +444,20 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
         {
-          name: undefined,
+          name: 'UnionType',
           owner: undefined,
           type: {
             tag: 'variant-type',
             val: [
-              ['case1', 2],
-              ['case2', 3],
-              ['case3', 4],
-              ['case4', 5],
+              ['UnionType1', 2],
+              ['UnionType2', 3],
+              ['UnionType3', 4],
+              ['UnionType4', 5],
             ],
           },
         },
-        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
         { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
         { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
         {
           name: 'ObjectType',
@@ -458,8 +465,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'record-type',
             val: [
-              ['a', 2],
-              ['b', 3],
+              ['a', 3],
+              ['b', 2],
               ['c', 4],
             ],
           },
@@ -468,6 +475,68 @@ describe('Agent decorator should register the agent class and its methods into A
     };
 
     expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle object|boolean|undefined in method', () => {
+    const wit = getWitType(barAgentMethod.inputSchema, 'objectOrBooleanOrUndefined');
+
+    const expectedWit = {
+      nodes: [
+        { name: undefined, owner: undefined, type: { tag: 'option-type', val: 1 } },
+        {
+          name: 'ObjectOrBooleanOrUndefined',
+          owner: undefined,
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['ObjectOrBooleanOrUndefined1', 2],
+              ['ObjectOrBooleanOrUndefined2', 5],
+            ],
+          },
+        },
+        {
+          name: undefined,
+          owner: undefined,
+          type: {
+            tag: 'record-type',
+            val: [
+              ['a', 3],
+              ['b', 4],
+            ],
+          },
+        },
+        { name: undefined, owner: undefined, type: { tag: 'prim-f64-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-string-type' } },
+        { name: undefined, owner: undefined, type: { tag: 'prim-bool-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should preserve constructor union order for inline object|boolean|undefined', () => {
+    const wit = getWitType(constructorUnionOrderAgent.constructor.inputSchema, 'complex');
+    const nodes = wit.nodes as any[];
+
+    expect(nodes[0]?.type).toEqual({ tag: 'option-type', val: 1 });
+    expect(nodes[1]?.type).toEqual({
+      tag: 'variant-type',
+      val: [
+        ['case1', 2],
+        ['case2', 5],
+      ],
+    });
+
+    const recordNode = nodes[2];
+    expect(recordNode?.type?.tag).toBe('record-type');
+    expect(recordNode?.type?.val).toEqual([
+      ['a', 3],
+      ['b', 4],
+    ]);
+
+    expect(nodes[3]?.type).toEqual({ tag: 'prim-f64-type' });
+    expect(nodes[4]?.type).toEqual({ tag: 'prim-string-type' });
+    expect(nodes[5]?.type).toEqual({ tag: 'prim-bool-type' });
   });
 
   it('union with null works', () => {
