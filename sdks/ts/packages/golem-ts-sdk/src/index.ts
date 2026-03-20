@@ -21,6 +21,8 @@ import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegist
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
+import { validateAgentHttpConfig } from './internal/http/validation';
+import { AgentClassName } from './agentClassName';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -64,6 +66,23 @@ async function initialize(
     throw createCustomError(
       `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`,
     );
+  }
+
+  const agentType = AgentTypeRegistry.get(new AgentClassName(agentTypeName));
+
+  if (agentType) {
+    try {
+      validateAgentHttpConfig(
+        agentTypeName,
+        agentType.httpMount,
+        agentType.constructor,
+        agentType.methods,
+      );
+    } catch (e) {
+      throw createCustomError(
+        `HTTP validation failed for agent '${agentTypeName}': ${e instanceof Error ? e.message : e}`,
+      );
+    }
   }
 
   setAgentId(getRawSelfAgentId());
