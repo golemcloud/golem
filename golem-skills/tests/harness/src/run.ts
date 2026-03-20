@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { spawn } from "node:child_process";
 import {
   ScenarioLoader,
   ScenarioExecutor,
@@ -36,6 +37,95 @@ interface ScenarioReport {
   artifactPaths: string[];
 }
 
+function runCommand(command: string, args: string[], cwd: string): Promise<{ code: number; output: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout?.on("data", (data: Buffer) => (output += data.toString()));
+    child.stderr?.on("data", (data: Buffer) => (output += data.toString()));
+    child.on("close", (code) => resolve({ code: code ?? 1, output }));
+    child.on("error", (err) => resolve({ code: 1, output: err.message }));
+  });
+}
+
+async function cleanupGolemState(cwd: string): Promise<void> {
+  const isCI = !!process.env["GITHUB_ACTIONS"] || !!process.env["CI"];
+  const isTTY = !!process.stdin.isTTY;
+
+  if (!isCI && isTTY) {
+    const readline = await import("node:readline");
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    const answer = await new Promise<string>((resolve) => {
+      rl.question(
+        chalk.yellow(
+          "This will stop the Golem server, wipe all data, and restart it. Continue? [y/N] ",
+        ),
+        resolve,
+      );
+    });
+    rl.close();
+    if (answer.toLowerCase() !== "y") {
+      console.log(chalk.gray("Skipping cleanup"));
+      return;
+    }
+  } else if (!isCI) {
+    console.log(
+      chalk.yellow(
+        "Non-interactive mode: proceeding with Golem server cleanup",
+      ),
+    );
+  }
+
+  console.log(chalk.gray("Stopping Golem server..."));
+  await runCommand("pkill", ["-f", "golem-server"], cwd);
+  await new Promise((r) => setTimeout(r, 2000));
+
+  console.log(chalk.gray("Cleaning Golem server data..."));
+  const cleanResult = await runCommand(
+    "golem",
+    ["server", "clean", "--yes"],
+    cwd,
+  );
+  if (cleanResult.code !== 0) {
+    console.warn(
+      chalk.yellow(
+        `Warning: golem server clean failed (exit ${cleanResult.code}): ${cleanResult.output.trim()}`,
+      ),
+    );
+  }
+
+  console.log(chalk.gray("Restarting Golem server..."));
+  const serverProcess = spawn("golem", ["server", "run"], {
+    cwd,
+    stdio: "ignore",
+    detached: true,
+  });
+  serverProcess.unref();
+
+  const maxWait = 30;
+  for (let i = 0; i < maxWait; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const health = await runCommand(
+      "curl",
+      ["-fsS", "http://localhost:9881/healthcheck"],
+      cwd,
+    );
+    if (health.code === 0) {
+      console.log(chalk.gray("Golem server is ready"));
+      return;
+    }
+  }
+  console.warn(
+    chalk.yellow("Warning: Golem server did not become ready within 30s"),
+  );
+}
+
 function createDriver(agent: SupportedAgent): AgentDriver {
   switch (agent) {
     case "claude-code":
@@ -59,6 +149,7 @@ async function main() {
       scenario: { type: "string" },
       timeout: { type: "string" },
       skills: { type: "string", default: "../../skills" },
+      "no-cleanup": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       "dry-run": { type: "boolean", default: false },
     },
@@ -70,6 +161,7 @@ async function main() {
     scenario: scenarioFilter,
     timeout,
     skills: skillsDirRel,
+    "no-cleanup": noCleanup,
     help,
     "dry-run": dryRun,
   } = values;
@@ -91,6 +183,7 @@ Options:
   --output <dir>        Results output directory (default: ./results)
   --timeout <seconds>   Global timeout per scenario step in seconds (default: ${DEFAULT_STEP_TIMEOUT_SECONDS})
   --skills <dir>        Path to skills directory (default: ../../skills)
+  --no-cleanup              Skip Golem state cleanup between scenarios
   --dry-run             Validate scenarios and print step summaries without executing
   -h, --help            Show this help message
 `.trim();
@@ -208,6 +301,7 @@ Options:
 
   const scenarioReports: ScenarioReport[] = [];
   let hasFailures = false;
+  let isFirstScenario = true;
 
   for (const currentAgent of agents) {
     for (const currentLanguage of languages) {
@@ -231,6 +325,15 @@ Options:
         const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
 
         if (scenarioFilter && spec.name !== scenarioFilter) continue;
+
+        // Cleanup Golem state between scenarios (#2913)
+        if (!isFirstScenario && !noCleanup) {
+          console.log(
+            chalk.gray("Cleaning up Golem state between scenarios..."),
+          );
+          await cleanupGolemState(process.cwd());
+        }
+        isFirstScenario = false;
 
         console.log(
           chalk.blue(
