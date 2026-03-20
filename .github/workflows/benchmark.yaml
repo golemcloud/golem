@@ -9,26 +9,16 @@ jobs:
   run-benchmark:
     runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
         with:
-          fetch-depth: 1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v3-rust
-          shared-key: release
-          cache-all-crates: true
-          save-if: true
-      - uses: davidB/rust-cargo-make@v1
+          cache-prefix-key: 'v3-rust'
+          cache-shared-key: 'release'
+          cache-save-if: 'true'
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
-      - name: Purge v8 from cache
-        run: cargo make --profile ci clear-v8
 
       - name: Building release executables
         run: cargo make --profile ci build-release

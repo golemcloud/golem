@@ -1,0 +1,66 @@
+name: 'Setup Rust Environment'
+description: 'Checkout, setup Rust, cache, cargo-make, and purge v8'
+inputs:
+  fetch-tag:
+    description: 'Whether to fetch tag with --deepen=1'
+    default: 'false'
+  rust-targets:
+    description: 'Additional Rust targets to add (space-separated)'
+    default: ''
+  use-cache:
+    description: 'Whether to use Swatinem/rust-cache'
+    default: 'true'
+  cache-prefix-key:
+    description: 'Rust cache prefix key'
+    default: 'v4-rust'
+  cache-shared-key:
+    description: 'Rust cache shared key'
+    default: 'debug'
+  cache-save-if:
+    description: 'Whether to save rust cache'
+    default: 'false'
+  install-cargo-make:
+    description: 'Whether to install cargo-make'
+    default: 'true'
+  purge-v8:
+    description: 'Whether to purge v8 from cache'
+    default: 'true'
+  install-cargo-binstall:
+    description: 'Whether to install cargo-binstall'
+    default: 'false'
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 1
+    - name: Fetch tag
+      if: inputs.fetch-tag == 'true'
+      shell: bash
+      run: git fetch origin --deepen=1
+    - name: Setup Rust
+      shell: bash
+      run: |
+        rustup update stable --no-self-update && rustup default stable
+        for target in ${{ inputs.rust-targets }}; do
+          rustup target add "$target"
+        done
+    - name: Setup Rust cache
+      if: inputs.use-cache == 'true'
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: ${{ inputs.cache-prefix-key }}
+        shared-key: ${{ inputs.cache-shared-key }}
+        cache-all-crates: true
+        save-if: ${{ inputs.cache-save-if }}
+    - name: Install cargo-make
+      if: inputs.install-cargo-make == 'true'
+      uses: davidB/rust-cargo-make@v1
+    - name: Install cargo-binstall
+      if: inputs.install-cargo-binstall == 'true'
+      uses: cargo-bins/cargo-binstall@main
+    - name: Purge v8 from cache
+      if: inputs.purge-v8 == 'true'
+      shell: bash
+      run: cargo make --profile ci clear-v8
