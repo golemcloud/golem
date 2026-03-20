@@ -176,7 +176,9 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
-    needs: build-and-store
+    needs:
+      - build-and-store
+      - merge-test-components
     strategy:
       fail-fast: false
       matrix:
@@ -225,6 +227,16 @@ jobs:
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
 
+      - name: Restore built test component WASMs
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/test-components-wasm
+          key: golem-test-components-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install test component WASMs
+        run: cp -v tmp/test-components-wasm/*.wasm test-components/
+
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 20
@@ -251,7 +263,9 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: ${{ matrix.group.runner || 'blacksmith-8vcpu-ubuntu-2204' }}
-    needs: build-and-store
+    needs:
+      - build-and-store
+      - merge-test-components
     strategy:
       fail-fast: false
       matrix:
@@ -340,6 +354,17 @@ jobs:
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
+
+      - name: Restore built test component WASMs
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/test-components-wasm
+          key: golem-test-components-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install test component WASMs
+        run: cp -v tmp/test-components-wasm/*.wasm test-components/
+
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
@@ -517,6 +542,145 @@ jobs:
         working-directory: sdks/ts
         run: |
           pnpm run test
+
+      - name: Save built TS SDK for test component builds
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-${{ github.run_id }}
+
+  list-test-component-groups:
+    runs-on: blacksmith
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Generate matrix from build-components.sh
+        id: generate
+        run: |
+          matrix=$(cd test-components && bash build-components.sh list-groups)
+          echo "matrix={\"chunk\":$matrix}" >> "$GITHUB_OUTPUT"
+          echo "Generated matrix: $matrix"
+
+  build-test-components:
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-ts
+      - list-test-component-groups
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.list-test-component-groups.outputs.matrix) }}
+    name: build-test-components-${{ matrix.chunk.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-test-r
+        run: cargo binstall --force --locked cargo-test-r@2.2.4
+
+      - name: Restore packaged binaries from cache
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/golem-binaries
+          key: golem-binaries-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Apply binary archive
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
+
+      - name: Copy golem-cli to target/debug
+        run: |
+          mkdir -pv target/debug
+          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/
+
+      - name: Restore built TS SDK
+        if: matrix.chunk.needs-node
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Setup Node
+        if: matrix.chunk.needs-node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+
+      - name: Install wasm-rquickjs
+        if: matrix.chunk.needs-node
+        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
+
+      - name: Remove any pre-existing WASMs
+        run: find test-components -maxdepth 1 -name '*.wasm' -delete
+
+      - name: Build test components
+        working-directory: test-components
+        run: ./build-components.sh ${{ matrix.chunk.name }}
+
+      - name: Collect built WASMs
+        run: |
+          mkdir -p tmp/test-components-wasm
+          cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
+          count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
+          echo "Built $count WASM files in chunk ${{ matrix.chunk.name }}"
+          test "$count" -gt 0
+
+      - name: Upload chunk WASMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-components-${{ matrix.chunk.name }}
+          path: tmp/test-components-wasm/*.wasm
+          retention-days: 1
+
+  merge-test-components:
+    runs-on: blacksmith
+    needs: build-test-components
+    steps:
+      - name: Download all chunk WASMs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: test-components-*
+          path: tmp/test-components-wasm
+          merge-multiple: true
+
+      - name: Verify merged WASMs
+        run: |
+          echo "Merged WASM files:"
+          ls -1 tmp/test-components-wasm/*.wasm | sort
+          count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
+          echo "Total: $count WASM files"
+
+      - name: Save merged WASMs to cache
+        uses: actions/cache/save@v4
+        with:
+          path: tmp/test-components-wasm
+          key: golem-test-components-${{ github.run_id }}
 
   docker-targets-build:
     env:
