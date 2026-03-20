@@ -742,38 +742,23 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
-            let (serializable_response, for_retry) = match &response {
-                Ok(None) => (SerializableHttpResponse::Pending, Ok(())),
-                Ok(Some(Ok(Ok(resource)))) => {
-                    let incoming_response = self.table().get(resource)?;
-                    (
-                        SerializableHttpResponse::HeadersReceived(
-                            SerializableResponseHeaders::try_from(incoming_response)
-                                .map_err(wasmtime::Error::from_anyhow)?,
-                        ),
-                        Ok(()),
-                    )
-                }
-                Ok(Some(Err(_))) => (
-                    SerializableHttpResponse::InternalError(None),
-                    Err(HttpFailure::Other("Unknown error".to_string())),
-                ),
-                Ok(Some(Ok(Err(error_code)))) => (
-                    SerializableHttpResponse::HttpError(error_code.clone().into()),
-                    Err(HttpFailure::ErrorCode(error_code.clone())),
-                ),
-                Err(err) => (
-                    SerializableHttpResponse::InternalError(Some(err.to_string())),
-                    Err(HttpFailure::Other(err.to_string())),
-                ),
-            };
+            let (serializable_response, for_retry) =
+                classify_http_response(self.table(), &response)?;
 
             if let Err(err) = &for_retry {
                 let kind = match err {
                     HttpFailure::ErrorCode(code) => classify_http_error_code(code),
                     HttpFailure::Other(_) => HostFailureKind::Transient,
                 };
-                if kind == HostFailureKind::Transient {
+                // Only trigger trap+replay for transient errors when the request does NOT
+                // have background inline retry. When background retry is active, a transient
+                // error reaching get() means retries were exhausted — persist and return it.
+                let has_background_retry = self
+                    .state
+                    .open_http_requests
+                    .get(&handle)
+                    .map_or(false, |s| s.has_background_retry);
+                if kind == HostFailureKind::Transient && !has_background_retry {
                     self.state.current_retry_point = begin_index;
                     let failure = anyhow::Error::new(ClassifiedHostError {
                         kind,
@@ -786,24 +771,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             }
 
             let is_pending = matches!(serializable_response, SerializableHttpResponse::Pending);
-            if self.state.snapshotting_mode.is_none() {
-                self.state
-                    .oplog
-                    .add_host_call(
-                        HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
-                        &HostRequest::HttpRequest(request),
-                        &HostResponse::HttpResponse(HostResponseHttpResponse {
-                            response: serializable_response,
-                        }),
-                        DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
-                    )
-                    .await
-                    .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-                self.public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await;
-            }
+            persist_http_response(self, request, &serializable_response, begin_index).await;
 
             if !is_pending && let Ok(Some(Ok(Ok(resource)))) = &response {
                 let incoming_response_handle = resource.rep();
@@ -919,6 +887,63 @@ impl SerializableScheduleId {
     }
 }
 
+fn classify_http_response(
+    table: &mut wasmtime::component::ResourceTable,
+    response: &Result<Option<Result<Result<Resource<IncomingResponse>, ErrorCode>, ()>>, wasmtime::Error>,
+) -> Result<(SerializableHttpResponse, Result<(), HttpFailure>), wasmtime::Error> {
+    match response {
+        Ok(None) => Ok((SerializableHttpResponse::Pending, Ok(()))),
+        Ok(Some(Ok(Ok(resource)))) => {
+            let incoming_response = table.get(resource)?;
+            Ok((
+                SerializableHttpResponse::HeadersReceived(
+                    SerializableResponseHeaders::try_from(incoming_response)
+                        .map_err(wasmtime::Error::from_anyhow)?,
+                ),
+                Ok(()),
+            ))
+        }
+        Ok(Some(Err(_))) => Ok((
+            SerializableHttpResponse::InternalError(None),
+            Err(HttpFailure::Other("Unknown error".to_string())),
+        )),
+        Ok(Some(Ok(Err(error_code)))) => Ok((
+            SerializableHttpResponse::HttpError(error_code.clone().into()),
+            Err(HttpFailure::ErrorCode(error_code.clone())),
+        )),
+        Err(err) => Ok((
+            SerializableHttpResponse::InternalError(Some(err.to_string())),
+            Err(HttpFailure::Other(err.to_string())),
+        )),
+    }
+}
+
+async fn persist_http_response<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    request: golem_common::model::oplog::HostRequestHttpRequest,
+    serializable_response: &SerializableHttpResponse,
+    begin_index: golem_common::model::oplog::OplogIndex,
+) {
+    if ctx.state.snapshotting_mode.is_none() {
+        ctx.state
+            .oplog
+            .add_host_call(
+                HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
+                &HostRequest::HttpRequest(request),
+                &HostResponse::HttpResponse(HostResponseHttpResponse {
+                    response: serializable_response.clone(),
+                }),
+                DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+        ctx.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+            .await;
+    }
+}
+
 /// Typed HTTP failure for retry classification, preserving the original `ErrorCode`
 /// so the classifier can distinguish transient from permanent errors.
 enum HttpFailure {
@@ -936,7 +961,7 @@ impl fmt::Display for HttpFailure {
 }
 
 /// Classifies a WASI HTTP `ErrorCode` as transient or permanent for retry purposes.
-fn classify_http_error_code(code: &ErrorCode) -> HostFailureKind {
+pub fn classify_http_error_code(code: &ErrorCode) -> HostFailureKind {
     match code {
         // DNS errors — transient (may resolve on retry)
         ErrorCode::DnsTimeout | ErrorCode::DnsError(_) => HostFailureKind::Transient,

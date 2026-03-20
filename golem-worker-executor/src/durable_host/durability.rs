@@ -34,6 +34,7 @@ use golem_wasm::IntoValueAndType;
 use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error};
 use wasmtime::component::Resource;
@@ -860,6 +861,81 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
             ))
         } else {
             Ok(())
+        }
+    }
+}
+
+/// Shared retry loop for spawned background tasks (async RPC, HTTP).
+///
+/// Runs `operation` in a loop, retrying on transient failures according to the
+/// retry budget. On each retry it writes an `OplogEntry::Error` entry to the
+/// oplog so the attempt is visible to the worker status tracker.
+///
+/// Returns:
+/// - `Ok(value)` on success
+/// - `Err(err)` when the error is permanent, retries are exhausted, or the
+///   computed delay exceeds `max_delay` (caller handles trap+replay fallback)
+///
+/// This helper is designed for tasks that run **outside** a `DurableWorkerCtx`
+/// (e.g. inside a `tokio::spawn`). It must NOT be used inside atomic regions —
+/// `inside_atomic_region` is always `false`.
+pub async fn in_task_retry_loop<T, E, C, Op, Fut>(
+    retry_config: RetryConfig,
+    max_delay: Duration,
+    oplog: Arc<dyn crate::services::oplog::Oplog>,
+    retry_point: OplogIndex,
+    base_retry_count: u32,
+    classify: C,
+    mut operation: Op,
+) -> Result<T, E>
+where
+    E: Display,
+    C: Fn(&E) -> HostFailureKind,
+    Op: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+{
+    use golem_common::model::oplog::AgentError;
+
+    let mut local_retry_count: u32 = 0;
+
+    loop {
+        match operation().await {
+            Ok(value) => return Ok(value),
+            Err(err) if classify(&err) == HostFailureKind::Permanent => {
+                return Err(err);
+            }
+            Err(err) => {
+                let total_attempts = base_retry_count + local_retry_count;
+
+                let delay = match get_delay(&retry_config, total_attempts) {
+                    Some(d) => d,
+                    None => return Err(err),
+                };
+
+                if delay > max_delay {
+                    return Err(err);
+                }
+
+                oplog
+                    .add_and_commit(OplogEntry::error(
+                        AgentError::TransientError("in-function retry".into()),
+                        retry_point,
+                        false,
+                    ))
+                    .await;
+
+                local_retry_count += 1;
+
+                debug!(
+                    retry_count = local_retry_count,
+                    total_attempt = total_attempts + 1,
+                    ?delay,
+                    "In-task retry",
+                );
+                record_in_function_retry();
+
+                tokio::time::sleep(delay).await;
+            }
         }
     }
 }

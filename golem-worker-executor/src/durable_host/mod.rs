@@ -3129,6 +3129,25 @@ struct HttpRequestState {
     /// The outgoing body output stream resource handle, set when outgoing_body::write()
     /// creates the stream from the outgoing body.
     pub output_stream_rep: Option<u32>,
+    pub use_tls: bool,
+    pub connect_timeout: std::time::Duration,
+    pub first_byte_timeout: std::time::Duration,
+    pub between_bytes_timeout: std::time::Duration,
+    /// Whether this request has an in-task retry loop running in the background.
+    /// When true, transient errors that reach `get()` are the final result and
+    /// should not trigger trap+replay.
+    pub has_background_retry: bool,
+}
+
+impl HttpRequestState {
+    pub fn outgoing_request_config(&self) -> OutgoingRequestConfig {
+        OutgoingRequestConfig {
+            use_tls: self.use_tls,
+            connect_timeout: self.connect_timeout,
+            first_byte_timeout: self.first_byte_timeout,
+            between_bytes_timeout: self.between_bytes_timeout,
+        }
+    }
 }
 
 /// Extracted view of the begin_index and request from an HttpRequestState,
