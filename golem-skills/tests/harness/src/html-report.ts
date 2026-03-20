@@ -116,15 +116,10 @@ function generateScenarioDetails(reports: ScenarioReport[]): string {
       const errorBlock = r.error
         ? `<pre class="error">${escapeHtml(r.error)}</pre>`
         : '';
-      const attemptsBlock = r.attempts
-        ? `<div class="attempts">Attempts: ${r.attempts.map(a =>
-            `#${a.attemptNumber} ${a.success ? 'pass' : 'fail'} (${a.durationSeconds.toFixed(1)}s)`
-          ).join(', ')}</div>`
-        : '';
       return `<div class="step ${sClass}">
         <span class="step-name">${stepName}</span>
         <span class="step-duration">${r.durationSeconds.toFixed(1)}s</span>
-        ${attemptsBlock}${errorBlock}
+        ${errorBlock}
       </div>`;
     }).join('\n');
 

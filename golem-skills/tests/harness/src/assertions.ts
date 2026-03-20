@@ -1,5 +1,5 @@
-import { JSONPath } from 'jsonpath-plus';
-import { z } from 'zod';
+import { JSONPath } from "jsonpath-plus";
+import { z } from "zod";
 
 const ResultJsonAssertionSchema = z.object({
   path: z.string(),
@@ -35,23 +35,27 @@ export interface AssertionResult {
   message: string;
 }
 
-export function evaluate(context: AssertionContext, expect: ExpectSpec): AssertionResult[] {
+export function evaluate(
+  context: AssertionContext,
+  expect: ExpectSpec,
+): AssertionResult[] {
   const results: AssertionResult[] = [];
 
   if (expect.exit_code !== undefined) {
     results.push({
-      assertion: 'exit_code',
+      assertion: "exit_code",
       passed: context.exitCode === expect.exit_code,
-      message: context.exitCode === expect.exit_code
-        ? `exit code is ${expect.exit_code}`
-        : `expected exit code ${expect.exit_code}, got ${context.exitCode}`,
+      message:
+        context.exitCode === expect.exit_code
+          ? `exit code is ${expect.exit_code}`
+          : `expected exit code ${expect.exit_code}, got ${context.exitCode}`,
     });
   }
 
   if (expect.stdout_contains !== undefined) {
     const passed = context.stdout.includes(expect.stdout_contains);
     results.push({
-      assertion: 'stdout_contains',
+      assertion: "stdout_contains",
       passed,
       message: passed
         ? `stdout contains "${expect.stdout_contains}"`
@@ -62,7 +66,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
   if (expect.stdout_not_contains !== undefined) {
     const passed = !context.stdout.includes(expect.stdout_not_contains);
     results.push({
-      assertion: 'stdout_not_contains',
+      assertion: "stdout_not_contains",
       passed,
       message: passed
         ? `stdout does not contain "${expect.stdout_not_contains}"`
@@ -74,7 +78,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
     const regex = new RegExp(expect.stdout_matches);
     const passed = regex.test(context.stdout);
     results.push({
-      assertion: 'stdout_matches',
+      assertion: "stdout_matches",
       passed,
       message: passed
         ? `stdout matches /${expect.stdout_matches}/`
@@ -85,7 +89,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
   if (expect.status !== undefined) {
     const passed = context.status === expect.status;
     results.push({
-      assertion: 'status',
+      assertion: "status",
       passed,
       message: passed
         ? `status is ${expect.status}`
@@ -94,10 +98,10 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
   }
 
   if (expect.body_contains !== undefined) {
-    const body = context.body ?? '';
+    const body = context.body ?? "";
     const passed = body.includes(expect.body_contains);
     results.push({
-      assertion: 'body_contains',
+      assertion: "body_contains",
       passed,
       message: passed
         ? `body contains "${expect.body_contains}"`
@@ -106,11 +110,11 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
   }
 
   if (expect.body_matches !== undefined) {
-    const body = context.body ?? '';
+    const body = context.body ?? "";
     const regex = new RegExp(expect.body_matches);
     const passed = regex.test(body);
     results.push({
-      assertion: 'body_matches',
+      assertion: "body_matches",
       passed,
       message: passed
         ? `body matches /${expect.body_matches}/`
@@ -120,10 +124,15 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
 
   if (expect.result_json && expect.result_json.length > 0) {
     for (const jsonAssert of expect.result_json) {
-      const pathResults = JSONPath({ path: jsonAssert.path, json: context.resultJson as object });
+      const pathResults = JSONPath({
+        path: jsonAssert.path,
+        json: context.resultJson as object,
+      });
 
       if (jsonAssert.equals !== undefined) {
-        const passed = pathResults.length > 0 && JSON.stringify(pathResults[0]) === JSON.stringify(jsonAssert.equals);
+        const passed =
+          pathResults.length > 0 &&
+          JSON.stringify(pathResults[0]) === JSON.stringify(jsonAssert.equals);
         results.push({
           assertion: `result_json[${jsonAssert.path}].equals`,
           passed,
@@ -134,7 +143,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
       }
 
       if (jsonAssert.contains !== undefined) {
-        const value = pathResults.length > 0 ? String(pathResults[0]) : '';
+        const value = pathResults.length > 0 ? String(pathResults[0]) : "";
         const passed = value.includes(jsonAssert.contains);
         results.push({
           assertion: `result_json[${jsonAssert.path}].contains`,
