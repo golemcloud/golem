@@ -22,8 +22,8 @@ use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
     ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig,
-    CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, WithSource,
-    DEFAULT_CONFIG_FILE_NAME,
+    CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps,
+    WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
@@ -160,7 +160,7 @@ impl ApplicationContext {
         let _output = LogOutput::new(Output::None);
 
         match preload_app(source_mode, dev_mode) {
-            Some(environments) => to_anyhow(
+            Some(environments) => validated_to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,
                 Some(|mut preload_result| {
@@ -194,7 +194,7 @@ impl ApplicationContext {
             return Ok(None);
         };
 
-        let ctx = to_anyhow(
+        let ctx = validated_to_anyhow(
             "Failed to load application manifest, see problems above",
             Self::create_context(app_and_calling_working_dir, config, file_download_client).await,
             Some(|mut app_ctx| {
@@ -283,7 +283,7 @@ impl ApplicationContext {
                             .filter(|component_name| {
                                 self.application
                                     .component(component_name)
-                                    .source_dir()
+                                    .component_dir()
                                     .starts_with(self.calling_working_dir.as_path())
                             })
                             .cloned()
@@ -320,7 +320,7 @@ impl ApplicationContext {
                 }
             };
 
-        let selected_component_names = to_anyhow(
+        let selected_component_names = validated_to_anyhow(
             "Failed to select requested components",
             selected_component_names,
             None,
@@ -377,12 +377,8 @@ impl ApplicationContext {
         &self.selected_component_names
     }
 
-    pub fn deployable_component_names(&self) -> BTreeSet<ComponentName> {
-        self.application
-            .component_names()
-            .filter(|name| self.application.component(name).is_deployable())
-            .cloned()
-            .collect()
+    pub fn component_names(&self) -> BTreeSet<ComponentName> {
+        self.application.component_names().cloned().collect()
     }
 
     pub async fn build(&self, build_config: &BuildConfig) -> anyhow::Result<()> {
@@ -576,10 +572,16 @@ fn load_app(
     component_presets: ComponentPresetSelector,
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<(Application, PathBuf)>> {
-    load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
-        raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::from_raw_apps(application_name, environments, component_presets, raw_apps)
-                .map(|app| (app, calling_working_dir))
+    load_raw_apps(source_mode).map(|loaded_raw_apps| {
+        loaded_raw_apps.and_then(|loaded_raw_apps| {
+            Application::from_raw_apps(
+                loaded_raw_apps.app_root_dir,
+                application_name,
+                environments,
+                component_presets,
+                loaded_raw_apps.raw_apps,
+            )
+            .map(|app| (app, loaded_raw_apps.calling_working_dir))
         })
     })
 }
@@ -588,11 +590,12 @@ fn preload_app(
     source_mode: ApplicationSourceMode,
     dev_mode: bool,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
-    load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
-        raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            let used_language_templates = Application::language_templates_from_raw_apps(&raw_apps);
+    load_raw_apps(source_mode).map(|loaded_raw_apps| {
+        loaded_raw_apps.and_then(|loaded_raw_apps| {
+            let used_language_templates =
+                Application::language_templates_from_raw_apps(&loaded_raw_apps.raw_apps);
 
-            Application::environments_from_raw_apps(raw_apps.as_slice())
+            Application::environments_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
                 .and_then(|application_name_and_environments| {
                     ValidatedResult::from_result(ensure_on_demand_commons(
                         &used_language_templates,
@@ -605,16 +608,17 @@ fn preload_app(
                 .map(
                     |(on_demand_common_raw_apps, application_name_and_environments)| {
                         let raw_apps = {
-                            let mut raw_apps = raw_apps;
+                            let mut raw_apps = loaded_raw_apps.raw_apps;
                             raw_apps.extend(on_demand_common_raw_apps);
                             raw_apps
                         };
 
                         ApplicationPreloadResult {
-                            source_mode: ApplicationSourceMode::Preloaded {
+                            source_mode: ApplicationSourceMode::Preloaded(LoadedRawApps {
+                                app_root_dir: loaded_raw_apps.app_root_dir,
+                                calling_working_dir: loaded_raw_apps.calling_working_dir,
                                 raw_apps,
-                                calling_working_dir,
-                            },
+                            }),
                             loaded_with_warnings: false,
                             application_name_and_environments: Some(
                                 application_name_and_environments,
@@ -637,12 +641,13 @@ fn ensure_on_demand_commons(
 
     for language in languages {
         if let Some(template) = app_template_repo.common_on_demand_template(*language)? {
+            let app_dir = std::env::current_dir()?;
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
-            template.generate(&target_dir)?;
+            template.generate(&app_dir, &target_dir)?;
             let golem_yaml_path = target_dir.join("golem.yaml");
             if golem_yaml_path.exists() {
                 on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(
-                    golem_yaml_path,
+                    &golem_yaml_path,
                 )?);
             }
         }
@@ -651,23 +656,24 @@ fn ensure_on_demand_commons(
     Ok(on_demand_raw_apps)
 }
 
-fn load_raw_apps(
-    source_mode: ApplicationSourceMode,
-) -> Option<ValidatedResult<(Vec<app_raw::ApplicationWithSource>, PathBuf)>> {
-    fn load(
-        root_source: Option<&Path>,
-    ) -> Option<ValidatedResult<(Vec<app_raw::ApplicationWithSource>, PathBuf)>> {
-        collect_sources_and_switch_to_app_root(root_source).map(|sources_and_calling_working_dir| {
-            sources_and_calling_working_dir.and_then(|(sources, calling_working_dir)| {
-                sources
+fn load_raw_apps(source_mode: ApplicationSourceMode) -> Option<ValidatedResult<LoadedRawApps>> {
+    fn load(root_source: Option<&Path>) -> Option<ValidatedResult<LoadedRawApps>> {
+        collect_sources_and_switch_to_app_root(root_source).map(|collected_sources| {
+            collected_sources.and_then(|collected_sources| {
+                collected_sources
+                    .sources
                     .into_iter()
                     .map(|source| {
                         ValidatedResult::from_result(
-                            app_raw::ApplicationWithSource::from_yaml_file(source),
+                            app_raw::ApplicationWithSource::from_yaml_file(&source),
                         )
                     })
                     .collect::<ValidatedResult<Vec<_>>>()
-                    .map(|raw_apps| (raw_apps, calling_working_dir))
+                    .map(|raw_apps| LoadedRawApps {
+                        app_root_dir: collected_sources.app_root_dir,
+                        calling_working_dir: collected_sources.calling_working_dir,
+                        raw_apps,
+                    })
             })
         })
     }
@@ -675,17 +681,22 @@ fn load_raw_apps(
     match source_mode {
         ApplicationSourceMode::Automatic => load(None),
         ApplicationSourceMode::ByRootManifest(root_manifest) => load(Some(&root_manifest)),
-        ApplicationSourceMode::Preloaded {
-            raw_apps,
-            calling_working_dir,
-        } => Some(ValidatedResult::Ok((raw_apps, calling_working_dir))),
+        ApplicationSourceMode::Preloaded(loaded_raw_apps) => {
+            Some(ValidatedResult::Ok(loaded_raw_apps))
+        }
         ApplicationSourceMode::None => None,
     }
 }
 
+struct CollectedSources {
+    app_root_dir: PathBuf,
+    calling_working_dir: PathBuf,
+    sources: BTreeSet<PathBuf>,
+}
+
 fn collect_sources_and_switch_to_app_root(
     root_manifest: Option<&Path>,
-) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf)>> {
+) -> Option<ValidatedResult<CollectedSources>> {
     let calling_working_dir = std::env::current_dir()
         .expect("Failed to get current working directory")
         .canonicalize()
@@ -694,26 +705,33 @@ fn collect_sources_and_switch_to_app_root(
     log_action("Collecting", "application manifests");
     let _indent = LogIndent::new();
 
-    fn collect_by_main_source(source: &Path) -> Option<ValidatedResult<BTreeSet<PathBuf>>> {
+    fn collect_by_main_source(
+        source: &Path,
+    ) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf)>> {
         let source_dir =
             fs::parent_or_err(source).expect("Failed to get parent dir for config parent");
         std::env::set_current_dir(source_dir).expect("Failed to set current dir for config parent");
 
         let includes = includes_from_yaml_file(source);
         if includes.is_empty() {
-            Some(ValidatedResult::Ok(BTreeSet::from([source.to_path_buf()])))
+            Some(ValidatedResult::Ok((
+                BTreeSet::from([source.to_path_buf()]),
+                source_dir.to_path_buf(),
+            )))
         } else {
             Some(
-                ValidatedResult::from_result(fs::compile_and_collect_globs(source_dir, &includes))
-                    .map(|mut sources| {
-                        sources.insert(0, source.to_path_buf());
-                        sources.into_iter().collect()
-                    }),
+                ValidatedResult::from_result(fs::compile_and_collect_globs(
+                    source_dir, source_dir, &includes,
+                ))
+                .map(|mut sources| {
+                    sources.insert(0, source.to_path_buf());
+                    (sources.into_iter().collect(), source_dir.to_path_buf())
+                }),
             )
         }
     }
 
-    let sources = match root_manifest {
+    let sources_and_root_dir = match root_manifest {
         None => match find_main_source() {
             Some(source) => collect_by_main_source(&source),
             None => None,
@@ -728,9 +746,10 @@ fn collect_sources_and_switch_to_app_root(
         },
     };
 
-    sources.map(|sources| {
-        sources
-            .inspect(|sources| {
+    sources_and_root_dir.map(|sources_and_root_dir| {
+        sources_and_root_dir
+            .inspect(|sources_and_root_dir| {
+                let sources = &sources_and_root_dir.0;
                 if sources.is_empty() {
                     log_action("Found", "no sources");
                 } else {
@@ -746,7 +765,11 @@ fn collect_sources_and_switch_to_app_root(
                     );
                 }
             })
-            .map(|sources| (sources, calling_working_dir))
+            .map(|sources_and_root_dir| CollectedSources {
+                app_root_dir: sources_and_root_dir.1,
+                calling_working_dir,
+                sources: sources_and_root_dir.0,
+            })
     })
 }
 
@@ -770,7 +793,7 @@ fn find_main_source() -> Option<PathBuf> {
     last_source
 }
 
-pub fn to_anyhow<T>(
+pub fn validated_to_anyhow<T>(
     message: &str,
     result: ValidatedResult<T>,
     mark_had_warns: Option<fn(T) -> T>,

@@ -32,7 +32,6 @@ pub mod wave;
 pub mod worker;
 
 use crate::app::template::{AppTemplate, AppTemplateName};
-use crate::command::shared_args::ComponentTemplateName;
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
 use anyhow::{anyhow, Context};
@@ -40,8 +39,6 @@ use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};
 use golem_common::model::account::AccountId;
-use golem_common::model::application::ApplicationName;
-use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsStr;
@@ -54,12 +51,13 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
 
+// NOTE: the order of languages (currently) is NOT alphabetical, rather based on recommendation
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, Serialize, Deserialize,
 )]
 pub enum GuestLanguage {
-    Rust,
     TypeScript,
+    Rust,
 }
 
 impl GuestLanguage {
@@ -257,9 +255,4 @@ impl From<golem_client::model::Account> for AccountDetails {
             email: value.email.0,
         }
     }
-}
-
-pub struct NewInteractiveApp {
-    pub app_name: ApplicationName,
-    pub templated_component_names: Vec<(ComponentTemplateName, ComponentName)>,
 }

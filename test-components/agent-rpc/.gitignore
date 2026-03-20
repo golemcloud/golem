@@ -1,5 +1,3 @@
-/dist
 /golem-temp
+target
 /node_modules
-/target
-/.wit

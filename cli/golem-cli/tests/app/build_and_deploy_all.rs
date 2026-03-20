@@ -1,30 +1,39 @@
-use crate::app::{cmd, flag, replace_string_in_file, TestContext};
+use crate::app::{cmd, flag, TestContext};
 use crate::Tracing;
 
+use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
-use heck::ToKebabCase;
+use golem_common::base_model::agent::DeployedRegisteredAgentType;
 use strum::IntoEnumIterator;
-use test_r::{inherit_test_dep, tag, test};
+use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(Tracing);
 
 #[test]
-#[tag(group2)]
-async fn build_and_deploy_all_templates() {
+async fn build_and_deploy_all_templates_for_ts() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::TypeScript).await;
+}
+
+#[test]
+async fn build_and_deploy_all_templates_for_rust() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Rust).await;
+}
+
+async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
 
-    let app_name = "all-templates-app";
+    let app_name = format!("all-templates-app-{}", language.id());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;
+    let outputs = ctx.cli([cmd::TEMPLATES]).await;
     assert!(outputs.success_or_dump());
 
-    let template_prefix = "  - ";
+    let template_text_output_prefix = "  - ";
 
     let templates = outputs
         .stdout()
-        .filter(|line| line.starts_with(template_prefix) && line.contains(':'))
+        .filter(|line| line.starts_with(template_text_output_prefix) && line.contains(':'))
         .map(|line| {
-            let template_with_desc = line.strip_prefix(template_prefix);
+            let template_with_desc = line.strip_prefix(template_text_output_prefix);
             let Some(template_with_desc) = template_with_desc else {
                 panic!("{}", line)
             };
@@ -35,37 +44,19 @@ async fn build_and_deploy_all_templates() {
 
             template_with_desc[..separator_index].to_string()
         })
+        .filter(|template| template.starts_with(language.id()))
         .collect::<Vec<_>>();
 
     println!("{templates:#?}");
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
-    assert!(outputs.success_or_dump());
-
+    fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
     ctx.cd(app_name);
 
     for template in &templates {
-        let component_name = format!("app:{}", template.to_kebab_case(),);
         let outputs = ctx
-            .cli([cmd::COMPONENT, cmd::NEW, template, &component_name])
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
             .await;
         assert!(outputs.success_or_dump());
-    }
-
-    let agent_metas = agent_metas();
-
-    // NOTE: renaming conflicting agent names, prefix all agents with Rust/Ts
-    //       to avoid conflicts between language implementations
-    for agent_meta in &agent_metas {
-        replace_string_in_file(
-            ctx.cwd_path_join(agent_meta.src_path),
-            agent_meta.agent_template_name,
-            agent_meta.agent_test_name,
-        )
-        .unwrap();
-        for (path, from, to) in &agent_meta.extra_replaces {
-            replace_string_in_file(ctx.cwd_path_join(path), from, to).unwrap()
-        }
     }
 
     let outputs = ctx.cli([cmd::BUILD]).await;
@@ -76,22 +67,29 @@ async fn build_and_deploy_all_templates() {
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
-    // Checking bridge SDKs for all agents and languages, one by one
+    let outputs = ctx.cli([cmd::LIST_AGENT_TYPES, flag::FORMAT, "json"]).await;
+    let deployed_agent_types = outputs
+        .stdout_json::<Vec<DeployedRegisteredAgentType>>()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    // Checking bridge SDK generation for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
     for language in GuestLanguage::iter() {
-        for agent_meta in &agent_metas {
+        for deployed_agent_type in &deployed_agent_types {
             let output = ctx
                 .cli([
                     cmd::GENERATE_BRIDGE,
                     flag::LANGUAGE,
                     language.id(),
                     flag::AGENT_TYPE_NAME,
-                    agent_meta.agent_test_name,
+                    deployed_agent_type.agent_type.type_name.as_str(),
                 ])
                 .await;
             if !output.success() {
                 failed_bridge_sdks.push((
-                    agent_meta.agent_test_name.to_string(),
+                    deployed_agent_type.agent_type.type_name.as_str(),
                     language.id(),
                     output.stderr().map(|s| s.to_string()).collect::<Vec<_>>(),
                 ));
@@ -106,282 +104,39 @@ async fn build_and_deploy_all_templates() {
     );
 }
 
-fn agent_metas() -> Vec<AgentMeta> {
-    vec![
-        // Rust agents: prefix with Rust
-        AgentMeta::new(
-            "components-rust/app-rust/src/lib.rs",
-            "CounterAgent",
-            "RustCounterAgent",
-            vec![
-                (
-                    "components-rust/app-rust/src/lib.rs",
-                    "/counters",
-                    "/rust-counters",
-                ),
-                (
-                    "components-rust/app-rust/golem.yaml",
-                    "counter-agent",
-                    "rust-counter-agent",
-                ),
-                (
-                    "components-rust/app-rust/golem.yaml",
-                    "CounterAgent",
-                    "RustCounterAgent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
-            "WorkflowAgent",
-            "RustWorkflowAgent",
-            vec![
-                (
-                    "components-rust/app-rust-human-in-the-loop/src/lib.rs",
-                    "/workflows",
-                    "/rust-workflows",
-                ),
-                (
-                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
-                    "workflow-agent",
-                    "rust-workflow-agent",
-                ),
-                (
-                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
-                    "WorkflowAgent",
-                    "RustWorkflowAgent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-rust/app-rust-human-in-the-loop/src/lib.rs",
-            "HumanAgent",
-            "RustHumanAgent",
-            vec![
-                (
-                    "components-rust/app-rust-human-in-the-loop/src/lib.rs",
-                    "/humans",
-                    "/rust-humans",
-                ),
-                (
-                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
-                    "human-agent",
-                    "rust-human-agent",
-                ),
-                (
-                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
-                    "HumanAgent",
-                    "RustHumanAgent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-rust/app-rust-json/src/lib.rs",
-            "Tasks",
-            "RustTasks",
-            vec![
-                (
-                    "components-rust/app-rust-json/src/lib.rs",
-                    "/task-agents",
-                    "/rust-task-agents",
-                ),
-                (
-                    "components-rust/app-rust-json/golem.yaml",
-                    "tasks(name)",
-                    "rust-tasks(name)",
-                ),
-                (
-                    "components-rust/app-rust-json/golem.yaml",
-                    "Tasks",
-                    "RustTasks",
-                ),
-            ],
-        ),
-        // NOTE: These are temporarily disabled because of golem-ai depending on an older golem-rust
-        // AgentMeta::new(
-        //     "components-rust/app-rust-llm-session/src/lib.rs",
-        //     "ChatAgent",
-        //     "RustChatAgent",
-        //     vec![
-        //         (
-        //             "components-rust/app-rust-llm-session/src/lib.rs",
-        //             "/chats",
-        //             "/rust-chats",
-        //         ),
-        //         (
-        //             "components-rust/app-rust-llm-session/golem.yaml",
-        //             "chat-agent",
-        //             "rust-chat-agent",
-        //         ),
-        //     ],
-        // ),
-        // AgentMeta::new(
-        //     "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
-        //     "ResearchAgent",
-        //     "RustResearchAgent",
-        //     vec![
-        //         (
-        //             "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
-        //             "/research",
-        //             "/rust-research",
-        //         ),
-        //         (
-        //             "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
-        //             "research-agent",
-        //             "rust-research-agent",
-        //         ),
-        //     ],
-        // ),
-        AgentMeta::new(
-            "components-rust/app-rust-snapshotting/src/lib.rs",
-            "CounterAgent",
-            "RustCounterAgentSnapshotting",
-            vec![
-                (
-                    "components-rust/app-rust-snapshotting/src/lib.rs",
-                    "/counters",
-                    "/rust-agent-snapshotting-counters",
-                ),
-                (
-                    "components-rust/app-rust-snapshotting/golem.yaml",
-                    "counter-agent",
-                    "rust-counter-agent-snapshotting",
-                ),
-            ],
-        ),
-        // TypeScript agents: prefix with Ts
-        AgentMeta::new(
-            "components-ts/app-ts/src/main.ts",
-            "CounterAgent",
-            "TsCounterAgent",
-            vec![
-                (
-                    "components-ts/app-ts/src/main.ts",
-                    "/counters",
-                    "/ts-counters",
-                ),
-                (
-                    "components-ts/app-ts/golem.yaml",
-                    "counter-agent",
-                    "ts-counter-agent",
-                ),
-                (
-                    "components-ts/app-ts/golem.yaml",
-                    "CounterAgent",
-                    "TsCounterAgent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-ts/app-ts-human-in-the-loop/src/main.ts",
-            "WorkflowAgent",
-            "TsWorkflowAgent",
-            vec![
-                (
-                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
-                    "/workflows",
-                    "/ts-workflows",
-                ),
-                (
-                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
-                    "workflow-agent",
-                    "ts-workflow-agent",
-                ),
-                (
-                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
-                    "WorkflowAgent",
-                    "TsWorkflowAgent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-ts/app-ts-human-in-the-loop/src/main.ts",
-            "HumanAgent",
-            "TsHumanAgent",
-            vec![
-                (
-                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
-                    "/humans",
-                    "/ts-humans",
-                ),
-                (
-                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
-                    "human-agent",
-                    "ts-human-agent",
-                ),
-                (
-                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
-                    "HumanAgent",
-                    "TsHumanAgent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-ts/app-ts-json/src/main.ts",
-            "TaskAgent",
-            "TsTaskAgent",
-            vec![
-                (
-                    "components-ts/app-ts-json/src/main.ts",
-                    "/task-agents",
-                    "/ts-task-agents",
-                ),
-                (
-                    "components-ts/app-ts-json/golem.yaml",
-                    "task-agent",
-                    "ts-task-agent",
-                ),
-                (
-                    "components-ts/app-ts-json/golem.yaml",
-                    "TaskAgent",
-                    "TsTaskAgent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-ts/app-ts-snapshotting/src/main.ts",
-            "CounterAgent",
-            "TsCounterAgentSnapshotting",
-            vec![
-                (
-                    "components-ts/app-ts-snapshotting/src/main.ts",
-                    "/counters",
-                    "/ts-agent-snapshotting-counters",
-                ),
-                (
-                    "components-ts/app-ts-snapshotting/golem.yaml",
-                    "counter-agent",
-                    "ts-counter-agent-snapshotting",
-                ),
-                (
-                    "components-ts/app-ts-snapshotting/golem.yaml",
-                    "CounterAgent",
-                    "TsCounterAgentSnapshotting",
-                ),
-            ],
-        ),
-    ]
-}
+// We only select a few non-conflicting templates from all apps
+#[test]
+async fn build_mixed_language_app() {
+    let mut ctx = TestContext::new();
 
-struct AgentMeta {
-    src_path: &'static str,
-    agent_template_name: &'static str,
-    agent_test_name: &'static str,
-    extra_replaces: Vec<(&'static str, &'static str, &'static str)>,
-}
+    let templates = GuestLanguage::iter()
+        .flat_map(|language| match language {
+            GuestLanguage::TypeScript => {
+                vec!["ts", "ts/human-in-the-loop"]
+            }
+            GuestLanguage::Rust => {
+                vec!["rust/json", "rust/snapshotting"]
+            }
+        })
+        .collect::<Vec<_>>();
 
-impl AgentMeta {
-    pub fn new(
-        src_path: &'static str,
-        agent_template_name: &'static str,
-        agent_test_name: &'static str,
-        extra_replaces: Vec<(&'static str, &'static str, &'static str)>,
-    ) -> Self {
-        Self {
-            src_path,
-            agent_template_name,
-            agent_test_name,
-            extra_replaces,
-        }
+    let app_name = "mixed-lang-templates-app";
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for template in &templates {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
+            .await;
+        assert!(outputs.success_or_dump());
     }
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    ctx.start_server().await;
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
 }

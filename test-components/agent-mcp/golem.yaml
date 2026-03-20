@@ -9,8 +9,12 @@
 app: agent-mcp
 
 includes:
-- components-*/*/golem.yaml
 - ../golem-test-components-common.yaml
+
+components:
+  golem-it:mcp:
+    dir: "."
+    templates: rust, rust-test-component
 environments:
   local:
     server: local
