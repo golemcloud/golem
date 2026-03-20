@@ -114,6 +114,10 @@ export function getUnionWithTypeParameter(): Type.Type {
   return fetchType('UnionWithTypeParameter');
 }
 
+export function getImportedSourceOrderedUnion(): Type.Type {
+  return fetchType('ImportedSourceOrderedUnion');
+}
+
 // Fetch constructor parameters by class name
 export function getConstructorParams(className: string): Array<{ name: string; type: Type.Type }> {
   const classMetadata = getAll().get(className);

@@ -53,5 +53,5 @@ export function handleObject(
     );
   }
 
-  return Either.right(record(type.name, fields));
+  return Either.right(record(type.name, fields, type.owner));
 }

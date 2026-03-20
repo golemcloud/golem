@@ -11,8 +11,6 @@
 # - `cargo make worker-executor-tests`: runs worker executor tests only
 # - `cargo make integration-tests`: runs integration tests only
 # - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
-# - `cargo make api-tests-http`: runs api integration tests using HTTP API only
-# - `cargo make api-tests-grpc`: runs api integration tests using GRPC API only
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
 # - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
@@ -349,7 +347,6 @@ description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
     "unit-tests",
     "worker-executor-tests",
-    "api-tests",
     "integration-tests",
 ]
 

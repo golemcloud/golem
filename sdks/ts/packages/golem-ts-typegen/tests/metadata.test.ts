@@ -32,6 +32,7 @@ import {
   getUnionWithTypeParameter,
   getMethodParams,
   getConstructorParams,
+  getImportedSourceOrderedUnion,
 } from './util.js';
 
 import { Type } from '@golemcloud/golem-ts-types-core';
@@ -83,6 +84,15 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
 
     const unionType2 = getUnionType();
     expect(unionType2.kind).toEqual('union');
+
+    if (unionType2.kind === 'union') {
+      expect(unionType2.unionTypes.map((t) => t.kind)).toStrictEqual([
+        'number',
+        'string',
+        'boolean',
+        'object',
+      ]);
+    }
   });
 
   it('track interface type', () => {
@@ -139,6 +149,20 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     expect(args).toEqual(['en', 'de']);
   });
 
+  it('preserves source order for imported union aliases instead of fallback order', () => {
+    const importedUnion = getImportedSourceOrderedUnion();
+    expect(importedUnion.kind).toEqual('union');
+
+    if (importedUnion.kind === 'union') {
+      expect(importedUnion.name).toBe('ImportedSourceOrderedUnion');
+      expect(importedUnion.owner).toBe('./importedTypes');
+
+      const kinds = importedUnion.unionTypes.map((t) => t.kind);
+      expect(kinds).toStrictEqual(['number', 'string', 'boolean', 'object']);
+      expect(kinds).not.toStrictEqual(['string', 'number', 'boolean', 'object']);
+    }
+  });
+
   it('track optional parameters with ? syntax', () => {
     const params = getMethodParams('MyAgent', 'methodWithOptionalQMark');
     const optionalParam = params.get('optional');
@@ -157,7 +181,7 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     expect(optionalParam?.optional).toBe(false);
     expect(optionalParam?.kind).toBe('union');
     if (optionalParam?.kind === 'union') {
-      expect(optionalParam?.unionTypes.map((t) => t.kind)).toStrictEqual(['undefined', 'number']);
+      expect(optionalParam?.unionTypes.map((t) => t.kind)).toStrictEqual(['number', 'undefined']);
     }
   });
 
