@@ -400,7 +400,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
-          rust-targets: 'wasm32-wasip1'
+          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
           install-cargo-make: 'false'
           purge-v8: 'false'
