@@ -130,7 +130,7 @@ impl ResourceDefinitionsApi {
     ) -> ApiResult<Json<Page<ResourceDefinition>>> {
         let values = self
             .resource_definitons_service
-            .list_staged(environment_id, &auth)
+            .list_in_environment(environment_id, &auth)
             .await?;
 
         Ok(Json(Page { values }))
@@ -173,7 +173,7 @@ impl ResourceDefinitionsApi {
     ) -> ApiResult<Json<ResourceDefinition>> {
         let result = self
             .resource_definitons_service
-            .get_staged(environment_id, &resource_name, &auth)
+            .get_in_environment(environment_id, &resource_name, &auth)
             .await?;
 
         Ok(Json(result))

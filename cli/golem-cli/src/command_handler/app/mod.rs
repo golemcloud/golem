@@ -1592,6 +1592,8 @@ impl AppCommandHandler {
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
                     version: DeploymentVersion("".to_string()), // TODO: atomic
                     agent_secret_defaults,
+                    // TODO (quota)
+                    quota_resource_defaults: Vec::new(),
                 },
             )
             .await
