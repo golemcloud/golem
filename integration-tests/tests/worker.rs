@@ -1845,16 +1845,18 @@ async fn deployment_invalidates_agent_resolution_cache(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn websocket_echo_ts(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
-
-let user = deps.user().await?;
+async fn websocket_echo_ts(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
         .unique()
-        .store().await?;
-
+        .store()
+        .await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let ws_port = listener.local_addr().unwrap().port();
@@ -1909,11 +1911,13 @@ let user = deps.user().await?;
     Ok(())
 }
 
-
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn websocket_echo_rust(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+async fn websocket_echo_rust(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user
