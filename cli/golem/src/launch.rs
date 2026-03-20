@@ -22,8 +22,8 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::Empty;
 use golem_registry_service::config::{
-    ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount, PrecreatedPlan,
-    RegistryServiceConfig,
+    BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount,
+    PrecreatedPlan, RegistryServiceConfig,
 };
 use golem_registry_service::RegistryService;
 use golem_service_base::config::BlobStorageConfig;
@@ -56,6 +56,7 @@ use tracing::Instrument;
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+const BUILTIN_PLUGIN_OWNER_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_BUILTIN_PLUGIN_OWNER_TOKEN;
 
 pub struct LaunchArgs {
     pub router_addr: String,
@@ -215,8 +216,20 @@ fn registry_service_config(
                     role: AccountRole::Admin,
                 },
             );
+            accounts.insert(
+                "builtin-plugin-owner".to_string(),
+                PrecreatedAccount {
+                    id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
+                    name: "Builtin Plugin Owner".to_string(),
+                    email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
+                    token: TokenSecret::trusted(BUILTIN_PLUGIN_OWNER_TOKEN.to_string()),
+                    plan_id,
+                    role: AccountRole::BuiltinPluginOwner,
+                },
+            );
             accounts
         },
+        builtin_plugins: BuiltinPluginsConfig { enabled: true },
         ..Default::default()
     }
 }

@@ -37,6 +37,7 @@ pub enum ApiTags {
     Login,
     Plugin,
     Reports,
+    Resources,
     /// The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
     Token,
     Worker,

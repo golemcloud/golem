@@ -814,7 +814,7 @@ fn wrap_output_as_agent_result(
             })
         }
         AgentInvocationKind::ProcessOplogEntries => {
-            let error = decode_result_error(output, "process-oplog-entries")?;
+            let error = decode_result_error(output, "process")?;
             Ok(InvokeResult::Succeeded {
                 consumed_fuel,
                 result: AgentInvocationResult::ProcessOplogEntries { error },

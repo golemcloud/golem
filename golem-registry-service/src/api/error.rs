@@ -29,6 +29,7 @@ use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use crate::services::reports::ReportsError;
+use crate::services::resource_definition::ResourceDefinitionError;
 use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -428,6 +429,10 @@ impl From<EnvironmentPluginGrantError> for ApiError {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
+            EnvironmentPluginGrantError::CannotDeleteBuiltinPluginGrant(_) => {
+                Self::Forbidden(Json(ErrorBody { error, cause: None }))
+            }
+
             EnvironmentPluginGrantError::Unauthorized(inner) => inner.into(),
             EnvironmentPluginGrantError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -619,6 +624,29 @@ impl From<AgentSecretError> for ApiError {
             }
             AgentSecretError::Unauthorized(inner) => inner.into(),
             AgentSecretError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<ResourceDefinitionError> for ApiError {
+    fn from(value: ResourceDefinitionError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            ResourceDefinitionError::ConcurrentUpdate
+            | ResourceDefinitionError::LimitTypeCannotBeChanged
+            | ResourceDefinitionError::ResourceDefinitionForNameAlreadyExists(_) => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+            ResourceDefinitionError::ResourceDefinitionNotFound(_)
+            | ResourceDefinitionError::ResourceDefinitionByNameNotFound(_)
+            | ResourceDefinitionError::ParentEnvironmentNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            ResourceDefinitionError::Unauthorized(inner) => inner.into(),
+            ResourceDefinitionError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),

@@ -16,6 +16,7 @@ mod agent_config;
 mod api;
 mod custom_api;
 mod fork;
+mod otlp_plugin;
 mod plugins;
 mod worker;
 
@@ -33,6 +34,12 @@ tag_suite!(fork, group1);
 tag_suite!(agent_config, group2);
 tag_suite!(api, group2);
 tag_suite!(custom_api, group2);
+
+tag_suite!(otlp_plugin, group7);
+tag_suite!(plugins, group7);
+
+test_r::sequential_suite!(otlp_plugin);
+test_r::sequential_suite!(plugins);
 
 #[derive(Debug)]
 pub struct Tracing;

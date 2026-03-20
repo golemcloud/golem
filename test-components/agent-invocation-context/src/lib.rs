@@ -95,12 +95,17 @@ fn broadcast_current_invocation_context(from: &str) {
     });
     println!("Sending context {body} through HTTP");
 
-    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let Ok(port) = std::env::var("PORT") else {
+        return;
+    };
     let client = Client::builder().build().unwrap();
 
-    client
+    match client
         .post(&format!("http://localhost:{port}/invocation-context"))
         .json(&body)
         .send()
-        .expect("Request failed");
+    {
+        Ok(_) => println!("Context broadcast succeeded"),
+        Err(e) => println!("Context broadcast failed (non-fatal): {e}"),
+    }
 }

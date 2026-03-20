@@ -48,6 +48,58 @@ impl InvocationContext for InvocationContextImpl {
     }
 }
 
+#[agent_definition]
+pub trait InvocationContextError {
+    fn new(name: String) -> Self;
+    fn trigger_error(&self);
+}
+
+pub struct InvocationContextErrorImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl InvocationContextError for InvocationContextErrorImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn trigger_error(&self) {
+        let span = start_span("error-span");
+        span.set_attribute("error-test", &AttributeValue::String("true".to_string()));
+        broadcast_current_invocation_context("error-before-panic");
+        panic!("intentional error for OTLP test");
+    }
+}
+
+#[agent_definition]
+pub trait InvocationContextRestart {
+    fn new(name: String) -> Self;
+    fn long_running(&mut self) -> u32;
+}
+
+pub struct InvocationContextRestartImpl {
+    _name: String,
+    count: u32,
+}
+
+#[agent_implementation]
+impl InvocationContextRestart for InvocationContextRestartImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name, count: 0 }
+    }
+
+    fn long_running(&mut self) -> u32 {
+        self.count += 1;
+        let span = start_span("restart-span");
+        span.set_attribute("invocation-count", &AttributeValue::String(self.count.to_string()));
+        broadcast_current_invocation_context("restart-before-sleep");
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        broadcast_current_invocation_context("restart-after-sleep");
+        self.count
+    }
+}
+
 fn broadcast_current_invocation_context(from: &str) {
     let ctx = current_context();
 
