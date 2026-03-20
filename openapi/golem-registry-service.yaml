@@ -8871,6 +8871,7 @@ components:
       - expectedDeploymentHash
       - version
       - agentSecretDefaults
+      - quotaResourceDefaults
       properties:
         currentRevision:
           type: integer
@@ -8884,6 +8885,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentAgentSecretDefault'
+        quotaResourceDefaults:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceDefinitionCreation'
     DeploymentPlan:
       type: object
       title: DeploymentPlan

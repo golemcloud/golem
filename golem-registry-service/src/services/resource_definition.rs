@@ -264,7 +264,7 @@ impl ResourceDefinitionService {
     ) -> Result<ResourceDefinition, ResourceDefinitionError> {
         let resource_definition: ResourceDefinition = self
             .resource_definition_repo
-            .get_by_id_and_revision(resource_definition_id.0, revision.into())
+            .get_revision(resource_definition_id.0, revision.into())
             .await?
             .ok_or_else(|| {
                 ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id)
@@ -292,7 +292,7 @@ impl ResourceDefinitionService {
         Ok(resource_definition)
     }
 
-    pub async fn get_staged(
+    pub async fn get_in_environment(
         &self,
         environment_id: EnvironmentId,
         resource_name: &ResourceName,
@@ -317,7 +317,7 @@ impl ResourceDefinitionService {
 
         let resource_definition: ResourceDefinition = self
             .resource_definition_repo
-            .get_staged_by_name(environment_id.0, &resource_name.0)
+            .get_by_environment_and_name(environment_id.0, &resource_name.0)
             .await?
             .ok_or_else(|| {
                 ResourceDefinitionError::ResourceDefinitionByNameNotFound(resource_name.clone())
@@ -327,7 +327,7 @@ impl ResourceDefinitionService {
         Ok(resource_definition)
     }
 
-    pub async fn list_staged(
+    pub async fn list_in_environment(
         &self,
         environment_id: EnvironmentId,
         auth: &AuthCtx,
@@ -343,6 +343,14 @@ impl ResourceDefinitionService {
                 other => other.into(),
             })?;
 
+        self.list_in_fetched_environment(&environment, auth).await
+    }
+
+    pub async fn list_in_fetched_environment(
+        &self,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<Vec<ResourceDefinition>, ResourceDefinitionError> {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
@@ -351,7 +359,7 @@ impl ResourceDefinitionService {
 
         let resource_definitions: Vec<ResourceDefinition> = self
             .resource_definition_repo
-            .list_staged(environment_id.0)
+            .list_in_environment(environment.id.0)
             .await?
             .into_iter()
             .map(TryInto::try_into)
@@ -367,7 +375,7 @@ impl ResourceDefinitionService {
     ) -> Result<(ResourceDefinition, Environment), ResourceDefinitionError> {
         let resource_definition: ResourceDefinition = self
             .resource_definition_repo
-            .get_staged_by_id(resource_definition_id.0)
+            .get(resource_definition_id.0)
             .await?
             .ok_or_else(|| {
                 ResourceDefinitionError::ResourceDefinitionNotFound(resource_definition_id)

@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::agent_secret::AgentSecretPath;
-use crate::base_model::component::{ComponentId, ComponentName, ComponentRevision};
-use crate::base_model::diff::Hash;
-use crate::base_model::domain_registration::Domain;
-use crate::base_model::environment::EnvironmentId;
-use crate::base_model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
-use crate::base_model::mcp_deployment::{McpDeploymentId, McpDeploymentRevision};
+use super::agent_secret::AgentSecretPath;
+use super::component::{ComponentId, ComponentName, ComponentRevision};
+use super::diff::Hash;
+use super::domain_registration::Domain;
+use super::environment::EnvironmentId;
+use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
+use super::mcp_deployment::{McpDeploymentId, McpDeploymentRevision};
+use super::resource_definition::ResourceDefinitionCreation;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use derive_more::Display;
 
@@ -71,7 +72,8 @@ declare_structs! {
         pub current_revision: Option<CurrentDeploymentRevision>,
         pub expected_deployment_hash: Hash,
         pub version: DeploymentVersion,
-        pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>
+        pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+        pub quota_resource_defaults: Vec<ResourceDefinitionCreation>
     }
 
     pub struct DeploymentRollback {
