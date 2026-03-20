@@ -431,6 +431,17 @@ jobs:
         with:
           node-version: "20.x"
 
+      - name: Setup pnpm
+        if: matrix.chunk.needs-node
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: Install TS SDK dependencies
+        if: matrix.chunk.needs-node
+        working-directory: sdks/ts
+        run: pnpm install --frozen-lockfile
+
       - name: Install wasm-rquickjs
         if: matrix.chunk.needs-node
         run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
