@@ -45,6 +45,24 @@ jobs:
     name: ${{ matrix.agent }} x ${{ matrix.language }}
     runs-on: ubuntu-latest
     needs: unit-tests
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: golem
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem_test
+        ports:
+          - "5432:5432"
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: golem
+          MYSQL_DATABASE: golem_test
+        ports:
+          - "3306:3306"
+        options: --health-cmd "mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 5
     strategy:
       fail-fast: false
       matrix:
@@ -136,6 +154,8 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DATABASE_URL: postgres://golem:golem@localhost:5432/golem_test
+          MYSQL_URL: mysql://root:golem@localhost:3306/golem_test
         run: |
           cd /tmp/harness-run
           tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios --skills ./skills
