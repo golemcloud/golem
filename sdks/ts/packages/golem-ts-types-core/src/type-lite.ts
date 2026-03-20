@@ -58,7 +58,13 @@ export type Type =
   | { kind: 'alias'; name?: string; owner?: string; aliasSymbol: Symbol; optional: boolean }
   | { kind: 'void'; name?: string; owner?: string; optional: boolean }
   | { kind: 'others'; name?: string; owner?: string; optional: boolean; recursive: boolean }
-  | { kind: 'config'; name?: string; owner?: string; optional: boolean; properties: ConfigProperty[] }
+  | {
+      kind: 'config';
+      name?: string;
+      owner?: string;
+      optional: boolean;
+      properties: ConfigProperty[];
+    }
   | {
       kind: 'unresolved-type';
       name?: string;

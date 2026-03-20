@@ -336,7 +336,11 @@ export function tuple(
   };
 }
 
-export function record(name: string | undefined, fields: NameTypePair[], owner?: string): AnalysedType {
+export function record(
+  name: string | undefined,
+  fields: NameTypePair[],
+  owner?: string,
+): AnalysedType {
   return {
     kind: 'record',
     value: {
