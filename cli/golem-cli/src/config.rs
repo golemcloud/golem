@@ -34,8 +34,19 @@ use uuid::Uuid;
 
 pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
 pub const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
+pub const BUILTIN_LOCAL_URL_ENV: &str = "GOLEM_BUILTIN_LOCAL_URL";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
+
+// TODO: agent: only allow overrides in debug builds, and use once or lazy init calculate it
+pub fn builtin_local_url() -> Url {
+    match std::env::var(BUILTIN_LOCAL_URL_ENV) {
+        Ok(override_url) => Url::parse(&override_url).unwrap_or_else(|err| {
+            panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")
+        }),
+        Err(_) => Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse BUILTIN_LOCAL_URL"),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -113,9 +124,8 @@ pub struct Profile {
 
 impl Profile {
     pub fn default_local_profile() -> Self {
-        let url = Url::parse(BUILTIN_LOCAL_URL).unwrap();
         Self {
-            custom_url: Some(url),
+            custom_url: Some(builtin_local_url()),
             custom_worker_url: None,
             allow_insecure: false,
             config: ProfileConfig::default(),
@@ -334,11 +344,9 @@ impl From<&Server> for ClientConfig {
         } = match server {
             Server::Builtin(builtin) => match builtin {
                 BuiltinServer::Local => {
-                    let local_url =
-                        Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse DEFAULT_OSS_URL");
                     BaseConfig {
-                        registry_url: local_url.clone(),
-                        worker_url: local_url.clone(),
+                        registry_url: builtin_local_url(),
+                        worker_url: builtin_local_url(),
                         allow_insecure: false,
                     }
                 }
