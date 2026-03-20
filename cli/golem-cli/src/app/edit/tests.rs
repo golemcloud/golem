@@ -671,6 +671,55 @@ fn golem_yaml_merge_normalizes_trailing_empty_lines() {
 }
 
 #[test]
+fn golem_yaml_merge_replaces_empty_env_with_mapping() {
+    let base = r#"app: env-var-substitution
+
+components:
+  env-var-substitution:ts-main:
+    templates: ts
+    env:
+httpApi:
+  deployments:
+    local:
+    - domain: env-var-substitution.localhost:9006
+      agents:
+        CounterAgent: {}
+"#;
+
+    let update = r#"components:
+  env-var-substitution:ts-main:
+    env:
+      NORMAL: 'REALLY'
+      VERY_CUSTOM_ENV_VAR_SECRET_1: '{{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}'
+      VERY_CUSTOM_ENV_VAR_SECRET_2: '{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}'
+      COMPOSED: '{{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}'
+"#;
+
+    let merged = golem_yaml::merge_documents(base, update).unwrap();
+
+    let merged_value: serde_yaml::Value =
+        serde_yaml::from_str(&merged).unwrap_or_else(|err| panic!("{err}\nMerged:\n{merged}"));
+    let env = merged_value
+        .get("components")
+        .and_then(|value| value.get("env-var-substitution:ts-main"))
+        .and_then(|value| value.get("env"))
+        .and_then(|value| value.as_mapping())
+        .unwrap();
+
+    assert_eq!(
+        env.get(serde_yaml::Value::String("NORMAL".to_string()))
+            .and_then(|value| value.as_str()),
+        Some("REALLY")
+    );
+    assert_eq!(
+        env.get(serde_yaml::Value::String("COMPOSED".to_string()))
+            .and_then(|value| value.as_str()),
+        Some("{{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}")
+    );
+    assert!(merged.contains("httpApi:"));
+}
+
+#[test]
 fn agents_md_merge_guides_preserves_user_content() {
     let rust_guide = make_managed_guide(GuestLanguage::Rust, "# Rust guide\nRust body");
     let ts_guide = make_managed_guide(GuestLanguage::TypeScript, "# TS guide\nTS body");

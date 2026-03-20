@@ -420,13 +420,20 @@ fn merge_mapping_nodes(
                         edits,
                     )?;
                 }
-                (None, Some(_)) => {
-                    let insertion = reindent_block(
+                (None, Some(update_value)) => {
+                    let pair_indent = value_indent(base_source, base_pair.start_byte());
+                    let base_pair_text =
+                        base_source[base_pair.start_byte()..base_pair.end_byte()].trim_end();
+                    let mut insertion = String::new();
+                    insertion.push_str(base_pair_text);
+                    insertion.push('\n');
+                    insertion.push_str(&reindent_block(
                         update_source,
-                        update_pair.pair_node.start_byte(),
-                        update_pair.pair_node.end_byte(),
-                        mapping_child_indent(base_source, base_mapping)?,
-                    );
+                        update_value.start_byte(),
+                        update_value.end_byte(),
+                        pair_indent + 2,
+                    ));
+                    insertion.push('\n');
                     edits.push(TextEdit::new(
                         base_pair.start_byte(),
                         base_pair.end_byte(),
