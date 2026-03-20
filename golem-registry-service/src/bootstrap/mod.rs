@@ -342,6 +342,7 @@ impl Services {
             agent_secret_service.clone(),
             registry_change_notifier.clone(),
             security_scheme_service.clone(),
+            resource_definition_service.clone(),
         ));
 
         let deployed_routes_service =

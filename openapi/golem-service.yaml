@@ -13896,10 +13896,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentAgentSecretDefault'
+        quotaResourceDefaults:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceDefinitionCreation'
       required:
       - expectedDeploymentHash
       - version
       - agentSecretDefaults
+      - quotaResourceDefaults
     DeploymentPlan:
       title: DeploymentPlan
       description: Planned deployment including the current revision
