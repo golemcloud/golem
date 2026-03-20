@@ -36,6 +36,7 @@ use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::plugin::{DbPluginRepo, PluginRepo};
 use crate::repo::registry_change::{DbRegistryChangeRepo, RegistryChangeRepo};
 use crate::repo::report::{DbReportRepo, ReportRepo};
+use crate::repo::resource_definition::{DbResourceDefinitionRepo, ResourceDefinitionRepo};
 use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
@@ -63,6 +64,7 @@ use crate::services::registry_change_notifier::{
     LocalRegistryChangeNotifier, PostgresRegistryChangeNotifier, RegistryChangeNotifier,
 };
 use crate::services::reports::ReportsService;
+use crate::services::resource_definition::ResourceDefinitionService;
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;
 use anyhow::{Context, anyhow};
@@ -108,6 +110,7 @@ pub struct Services {
     pub login_system: LoginSystem,
     pub plan_service: Arc<PlanService>,
     pub plugin_registration_service: Arc<PluginRegistrationService>,
+    pub resource_definition_service: Arc<ResourceDefinitionService>,
     pub reports_service: Arc<ReportsService>,
     pub security_scheme_service: Arc<SecuritySchemeService>,
     pub token_service: Arc<TokenService>,
@@ -131,6 +134,7 @@ struct Repos {
     oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     plan_repo: Arc<dyn PlanRepo>,
     plugin_repo: Arc<dyn PluginRepo>,
+    resource_definition_repo: Arc<dyn ResourceDefinitionRepo>,
     reports_repo: Arc<dyn ReportRepo>,
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     token_repo: Arc<dyn TokenRepo>,
@@ -319,6 +323,11 @@ impl Services {
             domain_registration_service.clone(),
         ));
 
+        let resource_definition_service = Arc::new(ResourceDefinitionService::new(
+            environment_service.clone(),
+            repos.resource_definition_repo.clone(),
+        ));
+
         let agent_secret_service = Arc::new(AgentSecretService::new(
             repos.agent_secret_repo.clone(),
             environment_service.clone(),
@@ -379,6 +388,7 @@ impl Services {
             deployed_mcp_service,
             registry_change_notifier,
             registry_change_repo: repos.registry_change_repo,
+            resource_definition_service,
             deployment_service,
             deployment_write_service,
             domain_registration_service,
@@ -432,8 +442,9 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
-            let registry_change_repo: Arc<dyn RegistryChangeRepo> =
-                Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
+            let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
+            let resource_definition_repo =
+                Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -453,6 +464,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 oauth2_webflow_state_repo,
                 plan_repo,
                 plugin_repo,
+                resource_definition_repo,
                 reports_repo,
                 security_scheme_repo,
                 token_repo,
@@ -488,8 +500,9 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
-            let registry_change_repo: Arc<dyn RegistryChangeRepo> =
-                Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
+            let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
+            let resource_definition_repo =
+                Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -509,6 +522,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 oauth2_webflow_state_repo,
                 plan_repo,
                 plugin_repo,
+                resource_definition_repo,
                 reports_repo,
                 security_scheme_repo,
                 token_repo,

@@ -12,28 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Repos
-pub mod account;
-pub mod account_usage;
-pub mod agent_secret;
-pub mod application;
-pub mod component;
-pub mod deployment;
-pub mod domain_registration;
-pub mod environment;
-pub mod environment_plugin_grant;
-pub mod environment_share;
-pub mod http_api_deployment;
-pub mod mcp_deployment;
-pub mod oauth2_token;
-pub mod oauth2_webflow_state;
-pub mod plan;
-pub mod plugin;
-pub mod registry_change;
-pub mod report;
-pub mod resource_definition;
-pub mod security_scheme;
-pub mod token;
+use crate::model::diff;
 
-// Model for SQL records and fields
-pub mod model;
+pub use crate::base_model::resource_definition::*;
+
+impl ResourceDefinition {
+    pub fn to_diffable(&self) -> diff::ResourceDefinition {
+        diff::ResourceDefinition {
+            limit: self.limit.clone().into(),
+            enforcement_action: self.enforcement_action,
+            unit: self.unit.clone(),
+            units: self.units.clone(),
+        }
+    }
+}
