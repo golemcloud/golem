@@ -44,8 +44,8 @@ use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation, PluginInstallationAction,
 };
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
-use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRevision};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
@@ -980,7 +980,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
     async fn deploy_environment_with(
         &self,
         environment_id: EnvironmentId,
-        agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+        modify_deployment: impl for<'a> FnOnce(&'a mut DeploymentCreation) + Send,
     ) -> anyhow::Result<CurrentDeployment> {
         let client = self.registry_service_client().await;
 
@@ -988,16 +988,18 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             .get_environment_deployment_plan(&environment_id.0)
             .await?;
 
+        let mut deployment_creation = DeploymentCreation {
+            current_revision: plan.current_revision,
+            expected_deployment_hash: plan.deployment_hash,
+            version: DeploymentVersion(Uuid::new_v4().to_string()),
+            agent_secret_defaults: Vec::new(),
+            quota_resource_defaults: Vec::new(),
+        };
+
+        modify_deployment(&mut deployment_creation);
+
         let deployment = client
-            .deploy_environment(
-                &environment_id.0,
-                &DeploymentCreation {
-                    current_revision: plan.current_revision,
-                    expected_deployment_hash: plan.deployment_hash,
-                    version: DeploymentVersion(Uuid::new_v4().to_string()),
-                    agent_secret_defaults,
-                },
-            )
+            .deploy_environment(&environment_id.0, &deployment_creation)
             .await?;
 
         self.last_deployments

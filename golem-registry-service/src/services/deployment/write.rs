@@ -12,25 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::DeployValidationError;
 use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
 use crate::repo::registry_change::RegistryChangeEvent;
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
-use crate::services::deployment::route_compilation::render_http_method;
+use crate::services::deployment::deploy_validation_error::format_validation_errors;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
+use crate::services::resource_definition::{ResourceDefinitionError, ResourceDefinitionService};
 use crate::services::security_scheme::SecuritySchemeService;
 use futures::TryFutureExt;
-use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, HttpMethod};
-use golem_common::model::agent_secret::CanonicalAgentSecretPath;
-use golem_common::model::component::ComponentName;
+use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
-use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::{
@@ -38,11 +37,9 @@ use golem_common::model::{
     environment::EnvironmentId,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::custom_api::PathSegment;
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
-use golem_wasm::analysis::AnalysedType;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -101,133 +98,8 @@ error_forwarding!(
     HttpApiDeploymentError,
     McpDeploymentError,
     AgentSecretError,
+    ResourceDefinitionError
 );
-
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum DeployValidationError {
-    #[error(
-        "Agent type {missing_agent_type} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
-    )]
-    HttpApiDeploymentMissingAgentType {
-        http_api_deployment_domain: Domain,
-        missing_agent_type: AgentTypeName,
-    },
-    #[error(
-        "Agent type {missing_agent_type} requested by mcp deployment {mcp_deployment_domain} is not part of the deployment"
-    )]
-    McpDeploymentMissingAgentType {
-        mcp_deployment_domain: Domain,
-        missing_agent_type: AgentTypeName,
-    },
-    #[error("Invalid path pattern: {0}")]
-    HttpApiDefinitionInvalidPathPattern(String),
-    #[error("Invalid http cors binding expression: {0}")]
-    InvalidHttpCorsBindingExpr(String),
-    #[error("Component {0} not found in deployment")]
-    ComponentNotFound(ComponentName),
-    #[error("No security scheme configured for agent {0} but agent has methods that require auth")]
-    NoSecuritySchemeConfigured(AgentTypeName),
-    #[error(
-        "MCP deployment {mcp_deployment_domain} has conflicting security schemes across agents"
-    )]
-    McpDeploymentConflictingSecuritySchemes { mcp_deployment_domain: Domain },
-    #[error(
-        "MCP deployment {mcp_deployment_domain} references unknown security scheme {security_scheme}"
-    )]
-    McpDeploymentUnknownSecurityScheme {
-        mcp_deployment_domain: Domain,
-        security_scheme: SecuritySchemeName,
-    },
-    #[error(
-        "Method {agent_method} of agent {agent_type} used by http api at {method} {domain}/{path} is invalid: {error}"
-    )]
-    HttpApiDeploymentAgentMethodInvalid {
-        domain: Domain,
-        method: String,
-        path: String,
-        agent_type: AgentTypeName,
-        agent_method: String,
-        error: String,
-    },
-    #[error(
-        "Method constructor of agent {agent_type} mounted by by http api at {domain}/{path} is invalid: {error}"
-    )]
-    HttpApiDeploymentAgentConstructorInvalid {
-        domain: Domain,
-        path: String,
-        agent_type: AgentTypeName,
-        error: String,
-    },
-    #[error(
-        "Agent type {agent_type} is deployed to multiple domains. An agent type can only be deployed to one domain at a time"
-    )]
-    HttpApiDeploymentMultipleDeploymentsForAgentType { agent_type: AgentTypeName },
-    #[error("Agent type {agent_type} is deployed to a domain but does not have http mount details")]
-    HttpApiDeploymentAgentTypeMissingHttpMount { agent_type: AgentTypeName },
-    #[error(
-        "Agent type {agent_type} uses forbidden patterns in its webhook. Variable and catchall segments are not allowed in webhook urls"
-    )]
-    HttpApiDeploymentInvalidAgentWebhookSegmentType { agent_type: AgentTypeName },
-    #[error(
-        "Agent type {agent_type} has an invalid final webhook url {url}. (Protocol is a placeholder)"
-    )]
-    HttpApiDeploymentInvalidWebhookUrl {
-        agent_type: AgentTypeName,
-        url: String,
-    },
-    #[error("Overriding security scheme is only allowed if the environment level option is set")]
-    SecurityOverrideDisabled,
-    #[error("Http api for domain {domain} has multiple routes for pattern {rendered_method} {rendered_path}", rendered_method = render_http_method(method), rendered_path = itertools::join(path.iter().map(|p| p.to_string()), "/"))]
-    RouteIsAmbiguous {
-        domain: Domain,
-        method: HttpMethod,
-        path: Vec<PathSegment>,
-    },
-    #[error("Invalid http method: {method:?}")]
-    InvalidHttpMethod { method: HttpMethod },
-    #[error("Agent type name {0} is provided by multiple components")]
-    AmbiguousAgentTypeName(AgentTypeName),
-    #[error(
-        "Agent type names '{name1}' and '{name2}' conflict: both normalize to '{normalized}' in kebab-case"
-    )]
-    ConflictingAgentTypeNames {
-        name1: AgentTypeName,
-        name2: AgentTypeName,
-        normalized: String,
-    },
-    #[error(
-        "Secret default at key {path} has the wrong type: [{rendered_errors}]",
-        rendered_errors = errors.join(", ")
-    )]
-    AgentSecretDefaultTypeMismatch {
-        path: CanonicalAgentSecretPath,
-        errors: Vec<String>,
-    },
-    #[error(
-        "Agent secret at path {path} is not compatible with existing secret in the environment. agent: {agent_secret_type:?}; environment: {environment_secret_type:?}"
-    )]
-    AgentSecretNotCompatibleWithEnvironmentSecret {
-        path: CanonicalAgentSecretPath,
-        agent_secret_type: AnalysedType,
-        environment_secret_type: AnalysedType,
-    },
-    #[error("Agent secret at path {path} has different type across deployed agents")]
-    AgentSecretTypeConflict { path: CanonicalAgentSecretPath },
-}
-
-impl SafeDisplay for DeployValidationError {
-    fn to_safe_string(&self) -> String {
-        self.to_string()
-    }
-}
-
-fn format_validation_errors(errors: &[DeployValidationError]) -> String {
-    errors
-        .iter()
-        .map(|err| format!("{err}"))
-        .collect::<Vec<_>>()
-        .join(",\n")
-}
 
 pub struct DeploymentWriteService {
     environment_service: Arc<EnvironmentService>,
@@ -238,6 +110,7 @@ pub struct DeploymentWriteService {
     agent_secrets_service: Arc<AgentSecretService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     security_scheme_service: Arc<SecuritySchemeService>,
+    resource_definition_service: Arc<ResourceDefinitionService>,
 }
 
 impl DeploymentWriteService {
@@ -250,6 +123,7 @@ impl DeploymentWriteService {
         agent_secrets_service: Arc<AgentSecretService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         security_scheme_service: Arc<SecuritySchemeService>,
+        resource_definition_service: Arc<ResourceDefinitionService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -260,6 +134,7 @@ impl DeploymentWriteService {
             agent_secrets_service,
             registry_change_notifier,
             security_scheme_service,
+            resource_definition_service,
         }
     }
 
@@ -316,7 +191,13 @@ impl DeploymentWriteService {
 
         tracing::info!("Creating deployment for environment: {environment_id}");
 
-        let (components, http_api_deployments, mcp_deployments, agent_secrets_in_environment) = tokio::try_join!(
+        let (
+            components,
+            http_api_deployments,
+            mcp_deployments,
+            agent_secrets_in_environment,
+            resource_definitions_in_environment,
+        ) = tokio::try_join!(
             self.component_service
                 .list_staged_components_for_environment(&environment, auth)
                 .map_err(DeploymentWriteError::from),
@@ -329,14 +210,18 @@ impl DeploymentWriteService {
             self.agent_secrets_service
                 .list_in_fetched_environment(&environment, auth)
                 .map_err(DeploymentWriteError::from),
+            self.resource_definition_service
+                .list_in_fetched_environment(&environment, auth)
+                .map_err(DeploymentWriteError::from),
         )?;
 
         tracing::info!(
-            "Fetched staged deployment data for environment: {environment_id}, components: {}, http api deployments: {}, mcp deployments: {}, agent_secrets: {}",
+            "Fetched staged deployment data for environment: {environment_id}, components: {}, http api deployments: {}, mcp deployments: {}, agent_secrets: {}, resource_definitions: {}",
             components.len(),
             http_api_deployments.len(),
             mcp_deployments.len(),
-            agent_secrets_in_environment.len()
+            agent_secrets_in_environment.len(),
+            resource_definitions_in_environment.len(),
         );
 
         let account_id = environment.owner_account_id;
@@ -400,6 +285,12 @@ impl DeploymentWriteService {
                 &mut errors,
             );
 
+        let new_resource_definitions = deployment_context.deployment_resource_definition_creations(
+            resource_definitions_in_environment,
+            data.quota_resource_defaults,
+            &mut errors,
+        );
+
         if !errors.is_empty() {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         }
@@ -424,6 +315,7 @@ impl DeploymentWriteService {
                 .collect(),
             new_agent_secrets,
             updated_agent_secrets,
+            new_resource_definitions,
             auth.account_id(),
         )?;
 

@@ -14,7 +14,8 @@
 
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateResourceError, RegistryServiceDeleteResourceError,
-    RegistryServiceGetResourceError, RegistryServiceUpdateResourceError,
+    RegistryServiceDeployEnvironmentError, RegistryServiceGetResourceError,
+    RegistryServiceUpdateResourceError,
 };
 use golem_common::model::resource_definition::{
     EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceDefinitionCreation,
@@ -376,6 +377,110 @@ async fn cannot_access_resource_from_another_user(
             RegistryServiceGetResourceError::Error404(_)
         ))
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deployment_creates_resource_defaults(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let creation = ResourceDefinitionCreation {
+        name: ResourceName("from_deployment".into()),
+        limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 123 }),
+        enforcement_action: EnforcementAction::Throttle,
+        unit: "u".into(),
+        units: "us".into(),
+    };
+
+    user.deploy_environment_with(env.id, |d| {
+        d.quota_resource_defaults = vec![creation.clone()];
+    })
+    .await?;
+
+    let resources = client.get_environment_resources(&env.id.0).await?;
+
+    assert!(resources.values.iter().any(|r| r.name == creation.name));
+
+    Ok(())
+}
+
+#[test]
+async fn deployment_with_duplicate_resources_should_fail(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let creation = ResourceDefinitionCreation {
+        name: ResourceName("dup".into()),
+        limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 100 }),
+        enforcement_action: EnforcementAction::Throttle,
+        unit: "u".into(),
+        units: "us".into(),
+    };
+
+    let result = user
+        .deploy_environment_with(env.id, |d| {
+            d.quota_resource_defaults = vec![creation.clone(), creation.clone()];
+        })
+        .await;
+
+    let Err(error) = result else {
+        panic!("expected failed request")
+    };
+
+    let downcasted: golem_client::Error<RegistryServiceDeployEnvironmentError> =
+        error.downcast().unwrap();
+
+    assert_matches!(
+        downcasted,
+        golem_client::Error::Item(RegistryServiceDeployEnvironmentError::Error400(_))
+    );
+
+    Ok(())
+}
+
+#[test]
+async fn deployment_does_not_modify_existing_resource(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let original = ResourceDefinitionCreation {
+        name: ResourceName("no_overwrite".into()),
+        limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 100 }),
+        enforcement_action: EnforcementAction::Throttle,
+        unit: "u".into(),
+        units: "us".into(),
+    };
+
+    let created = client.create_resource(&env.id.0, &original).await?;
+
+    let different = ResourceDefinitionCreation {
+        name: ResourceName("no_overwrite".into()),
+        limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 999 }),
+        enforcement_action: EnforcementAction::Reject,
+        unit: "x".into(),
+        units: "xs".into(),
+    };
+
+    user.deploy_environment_with(env.id, |d| {
+        d.quota_resource_defaults = vec![different];
+    })
+    .await?;
+
+    let fetched = client.get_resource(&created.id.0).await?;
+    assert_eq!(fetched, created);
 
     Ok(())
 }
