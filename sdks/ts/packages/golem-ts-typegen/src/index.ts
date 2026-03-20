@@ -27,7 +27,9 @@ import {
 } from 'ts-morph';
 import {
   buildJSONFromType,
+  ClassMetadataJSON,
   LiteTypeJSON,
+  MethodMetadataJSON,
   Node,
   Symbol,
   Type,
@@ -709,7 +711,7 @@ export function saveAndClearInMemoryMetadata() {
     fs.mkdirSync(METADATA_DIR);
   }
 
-  const json: Record<string, any> = {};
+  const json: Record<string, ClassMetadataJSON> = {};
 
   for (const [className, meta] of TypeMetadata.getAll().entries()) {
     const constructorArgsJSON = meta.constructorArgs.map((arg) => ({
@@ -717,7 +719,7 @@ export function saveAndClearInMemoryMetadata() {
       type: buildJSONFromType(arg.type),
     }));
 
-    const methodsObj: Record<string, any> = {};
+    const methodsObj: Record<string, MethodMetadataJSON> = {};
     for (const [methodName, { methodParams, returnType }] of meta.methods) {
       const paramsJSON: Record<string, LiteTypeJSON> = {};
       for (const [paramName, paramType] of methodParams.entries()) {
@@ -739,7 +741,7 @@ export function saveAndClearInMemoryMetadata() {
   const tsFilePath = path.join(METADATA_DIR, METADATA_TS_FILE);
   const jsonFilePath = path.join(METADATA_DIR, METADATA_JSON_FILE);
 
-  const tsContent = `export const Metadata = ${JSON.stringify(json, null, 2)};`;
+  const tsContent = `import type { MetadataJSON } from '@golemcloud/golem-ts-types-core';\n\nexport const Metadata = ${JSON.stringify(json, null, 2)} as const satisfies MetadataJSON;`;
   const jsonContent = JSON.stringify(json, null, 2);
 
   fs.writeFileSync(tsFilePath, tsContent, 'utf-8');
