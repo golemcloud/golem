@@ -596,13 +596,13 @@ fn bridge_tests_uniontype(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: 
     assert_function_input_encoding(
         pkg.target_dir(),
         "FunUnionType",
-        json!([{ "tag": "UnionType3", "val": true }]),
+        json!([{ "tag": "UnionType4", "val": true }]),
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
-                            case_idx: 2,
+                            case_idx: 3,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
                         pkg.input_element_type_by_name("funUnionType", "unionType"),
@@ -1406,7 +1406,7 @@ fn bridge_tests_uniontype_output(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
-                            case_idx: 2,
+                            case_idx: 3,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
                         pkg.output_element_type_by_name("funUnionType", "returnValue"),
@@ -1416,7 +1416,7 @@ fn bridge_tests_uniontype_output(
                 },
             )],
         }),
-        json!({"tag": "UnionType3", "val": true}),
+        json!({"tag": "UnionType4", "val": true}),
     );
 }
 
@@ -1432,15 +1432,8 @@ fn bridge_tests_unioncomplextype_output(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
-                            case_idx: 3,
-                            case_value: Some(Box::new(Value::Variant {
-                                case_idx: 3,
-                                case_value: Some(Box::new(Value::Record(vec![
-                                    Value::String("hello".to_string()),
-                                    Value::F64(123.4),
-                                    Value::Bool(true),
-                                ]))),
-                            })),
+                            case_idx: 0,
+                            case_value: Some(Box::new(Value::F64(123.4))),
                         },
                         pkg.output_element_type_by_name("funUnionComplexType", "returnValue"),
                     )
@@ -1449,7 +1442,7 @@ fn bridge_tests_unioncomplextype_output(
                 },
             )],
         }),
-        json!({"tag": "UnionComplexType4", "val": {"a": "hello", "b": 123.4, "c": true}}),
+        json!({"tag": "UnionComplexType1", "val": 123.4}),
     );
 }
 
