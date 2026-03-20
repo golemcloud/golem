@@ -31,6 +31,8 @@ pub mod blob_storage;
 pub mod component_compilation_service;
 mod docker;
 mod dynamic_span;
+pub mod jaeger;
+pub mod otel_collector;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
@@ -301,7 +303,7 @@ pub async fn wait_for_startup_http(
     loop {
         let client = golem_client::api::HealthCheckClientLive {
             context: golem_client::Context {
-                client: new_reqwest_client(),
+                client: reqwest_middleware::ClientBuilder::new(new_reqwest_client()).build(),
                 base_url: Url::from_str(&format!("http://{host}:{http_port}"))
                     .expect("Can't parse HTTP URL for health check"),
                 security_token: Security::Empty,
@@ -382,6 +384,7 @@ impl EnvVarBuilder {
             .with_rust_log_with_dep_defaults(verbosity)
             .with_rust_back_log()
             .with_tracing_from_env()
+            .with_oplog_from_env()
             .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
             .with("GOLEM__TRACING__STDOUT__ENABLED", "true".to_string())
             .with("GOLEM__TRACING__STDOUT__JSON", "true".to_string())
@@ -418,6 +421,7 @@ impl EnvVarBuilder {
                 "{rust_log_level_str},\
                 cranelift_codegen=warn,\
                 wasmtime_cranelift=warn,\
+                wasmtime_internal_cranelift=warn,\
                 wasmtime_jit=warn,\
                 h2=warn,\
                 hyper=warn,\
@@ -441,6 +445,15 @@ impl EnvVarBuilder {
         self
     }
 
+    fn with_oplog_from_env(mut self) -> Self {
+        for (name, value) in
+            std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__OPLOG__"))
+        {
+            self.env_vars.insert(name, value);
+        }
+        self
+    }
+
     fn with_optional_otlp(mut self, service_name: &str, enabled: bool) -> Self {
         if enabled {
             self.env_vars.insert(
@@ -457,6 +470,10 @@ impl EnvVarBuilder {
                 "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
                 service_name.to_string(),
             );
+            // Increase the BatchSpanProcessor queue size from the default (2048)
+            // to avoid dropping spans under high throughput (e.g. benchmarks).
+            self.env_vars
+                .insert("OTEL_BSP_MAX_QUEUE_SIZE".to_string(), "262144".to_string());
         }
         self
     }
@@ -467,8 +484,22 @@ impl EnvVarBuilder {
 }
 
 fn new_reqwest_client() -> reqwest::Client {
+    new_reqwest_client_with_headers(reqwest::header::HeaderMap::new())
+}
+
+fn new_reqwest_client_with_headers(headers: reqwest::header::HeaderMap) -> reqwest::Client {
     reqwest::ClientBuilder::new()
         .danger_accept_invalid_certs(true)
+        .default_headers(headers)
         .build()
         .expect("Failed to build reqwest client")
+}
+
+/// Creates a reqwest client wrapped with OpenTelemetry tracing middleware.
+/// The middleware automatically injects trace context (traceparent/tracestate headers)
+/// into every outgoing request at send time, so the client can be cached and reused.
+pub(crate) fn new_reqwest_client_with_tracing() -> reqwest_middleware::ClientWithMiddleware {
+    reqwest_middleware::ClientBuilder::new(new_reqwest_client())
+        .with(reqwest_tracing::TracingMiddleware::default())
+        .build()
 }

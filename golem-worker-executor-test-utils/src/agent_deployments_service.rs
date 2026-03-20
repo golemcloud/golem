@@ -14,20 +14,30 @@
 
 use async_trait::async_trait;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::AgentDeploymentDetails;
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
+use golem_worker_executor::services::environment_state::EnvironmentStateService;
+use std::collections::HashMap;
 
-pub struct DisabledAgentDeploymentsService;
+pub struct DisabledEnvironmentStateService;
 
 #[async_trait]
-impl AgentDeploymentsService for DisabledAgentDeploymentsService {
+impl EnvironmentStateService for DisabledEnvironmentStateService {
     async fn get_agent_deployment(
         &self,
         _environment: EnvironmentId,
         _agent_type: &AgentTypeName,
     ) -> Result<Option<AgentDeploymentDetails>, WorkerExecutorError> {
         unimplemented!()
+    }
+
+    async fn get_agent_secrets(
+        &self,
+        _environment_id: EnvironmentId,
+    ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
+        Ok(HashMap::new())
     }
 }

@@ -7,14 +7,6 @@ tracing_file_name_with_port = true
 drop_when_full = 0.25
 ttl = "8h"
 
-[agent_deployments_service]
-cache_capacity = 1000
-cache_eviction_interval = "1m"
-
-[agent_deployments_service.cache_ttl]
-nanos = 0
-secs = 300
-
 [agent_types_service]
 type = "Grpc"
 
@@ -45,6 +37,14 @@ time_to_idle = "12h"
 [engine]
 enable_fs_cache = false
 
+[environment_state_service]
+cache_capacity = 1000
+cache_eviction_interval = "1m"
+
+[environment_state_service.cache_ttl]
+nanos = 0
+secs = 300
+
 [grpc]
 port = 9093
 
@@ -52,6 +52,17 @@ port = 9093
 type = "Disabled"
 
 [grpc.tls.config]
+
+[http_client]
+type = "Enabled"
+
+[http_client.config]
+connect_timeout = "30s"
+idle_timeout = "1m 30s"
+max_connections_per_host = 20
+max_host_entries = 1024
+max_idle_per_host = 8
+max_total_connections = 200
 
 [indexed_storage]
 type = "KVStoreRedis"
@@ -107,6 +118,8 @@ indexed_storage_layers = 2
 max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
+plugin_max_commit_count = 3
+plugin_max_elapsed_time = "5s"
 
 [oplog.default_snapshotting]
 type = "Disabled"
@@ -161,6 +174,7 @@ type = "Grpc"
 
 [resource_limits.config]
 batch_update_interval = "1m"
+limit_refresh_interval = "5m"
 
 [retry]
 max_attempts = 3
@@ -263,14 +277,6 @@ without_time = false
 # drop_when_full = 0.25
 # ttl = "8h"
 # 
-# [agent_deployments_service]
-# cache_capacity = 1000
-# cache_eviction_interval = "1m"
-# 
-# [agent_deployments_service.cache_ttl]
-# nanos = 0
-# secs = 300
-# 
 # [agent_types_service]
 # type = "Grpc"
 # 
@@ -315,6 +321,14 @@ without_time = false
 # [engine]
 # enable_fs_cache = false
 # 
+# [environment_state_service]
+# cache_capacity = 1000
+# cache_eviction_interval = "1m"
+# 
+# [environment_state_service.cache_ttl]
+# nanos = 0
+# secs = 300
+# 
 # [grpc]
 # port = 9093
 # 
@@ -322,6 +336,17 @@ without_time = false
 # type = "Disabled"
 # 
 # [grpc.tls.config]
+# 
+# [http_client]
+# type = "Enabled"
+# 
+# [http_client.config]
+# connect_timeout = "30s"
+# idle_timeout = "1m 30s"
+# max_connections_per_host = 20
+# max_host_entries = 1024
+# max_idle_per_host = 8
+# max_total_connections = 200
 # 
 # [indexed_storage]
 # type = "Redis"
@@ -377,6 +402,8 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
+# plugin_max_commit_count = 3
+# plugin_max_elapsed_time = "5s"
 # 
 # [oplog.default_snapshotting]
 # type = "Disabled"
@@ -431,6 +458,7 @@ without_time = false
 # 
 # [resource_limits.config]
 # batch_update_interval = "1m"
+# limit_refresh_interval = "5m"
 # 
 # [retry]
 # max_attempts = 3
@@ -510,14 +538,6 @@ without_time = false
 # drop_when_full = 0.25
 # ttl = "8h"
 # 
-# [agent_deployments_service]
-# cache_capacity = 1000
-# cache_eviction_interval = "1m"
-# 
-# [agent_deployments_service.cache_ttl]
-# nanos = 0
-# secs = 300
-# 
 # [agent_types_service]
 # type = "Grpc"
 # 
@@ -547,6 +567,14 @@ without_time = false
 # [engine]
 # enable_fs_cache = false
 # 
+# [environment_state_service]
+# cache_capacity = 1000
+# cache_eviction_interval = "1m"
+# 
+# [environment_state_service.cache_ttl]
+# nanos = 0
+# secs = 300
+# 
 # [grpc]
 # port = 9093
 # 
@@ -554,6 +582,17 @@ without_time = false
 # type = "Disabled"
 # 
 # [grpc.tls.config]
+# 
+# [http_client]
+# type = "Enabled"
+# 
+# [http_client.config]
+# connect_timeout = "30s"
+# idle_timeout = "1m 30s"
+# max_connections_per_host = 20
+# max_host_entries = 1024
+# max_idle_per_host = 8
+# max_total_connections = 200
 # 
 # [indexed_storage]
 # type = "InMemory"
@@ -595,6 +634,8 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
+# plugin_max_commit_count = 3
+# plugin_max_elapsed_time = "5s"
 # 
 # [oplog.default_snapshotting]
 # type = "Disabled"
@@ -649,6 +690,7 @@ without_time = false
 # 
 # [resource_limits.config]
 # batch_update_interval = "1m"
+# limit_refresh_interval = "5m"
 # 
 # [retry]
 # max_attempts = 3

@@ -382,11 +382,13 @@ impl ApiDeploymentCommandHandler {
 
         let agents = deployable_mcp_deployment
             .agents
-            .keys()
-            .map(|k| {
+            .iter()
+            .map(|(k, v)| {
                 (
                     k.clone(),
-                    golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default(),
+                    golem_common::model::mcp_deployment::McpDeploymentAgentOptions {
+                        security_scheme: v.security_scheme.as_ref().and_then(|s| s.parse().ok()),
+                    },
                 )
             })
             .collect();

@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{to_anyhow, BuildContext};
+use crate::app::context::{validated_to_anyhow, BuildContext};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
-use crate::command::shared_args::{ComponentTemplateName, OptionalComponentNames, PostDeployArgs};
+use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
-use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
+use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_error, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
@@ -52,11 +52,10 @@ use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
-use golem_common::model::diff;
+use golem_common::model::diff::{self, VecDiffable};
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -78,11 +77,6 @@ impl ComponentCommandHandler {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
         Box::pin(async move {
             match subcommand {
-                ComponentSubcommand::New {
-                    component_template,
-                    component_name,
-                } => self.cmd_new(component_template, component_name).await,
-                ComponentSubcommand::Templates { filter } => self.cmd_templates(filter),
                 ComponentSubcommand::List => self.cmd_list().await,
                 ComponentSubcommand::Get {
                     component_name,
@@ -115,87 +109,6 @@ impl ComponentCommandHandler {
                 }
             }
         })
-    }
-
-    async fn cmd_new(
-        &self,
-        template: Option<ComponentTemplateName>,
-        component_name: Option<ComponentName>,
-    ) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-
-        // Loading app for:
-        //   - checking that we are inside an application
-        //   - switching to the root dir as a side effect
-        //   - getting existing component names
-        let (existing_component_names, application_name) = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            (
-                app_ctx
-                    .application()
-                    .component_names()
-                    .map(|name| name.to_string())
-                    .collect::<HashSet<_>>(),
-                app_ctx.application().application_name().clone(),
-            )
-        };
-
-        let Some((template, component_name)) = ({
-            match (template, component_name) {
-                (Some(template), Some(component_package_name)) => {
-                    Some((template, component_package_name))
-                }
-                _ => self
-                    .ctx
-                    .interactive_handler()
-                    .select_new_component_template_and_package_name(
-                        existing_component_names.clone(),
-                    )?,
-            }
-        }) else {
-            log_error("Both TEMPLATE and COMPONENT_NAME are required in non-interactive mode");
-            logln("");
-            self.ctx.app_handler().log_templates_help(None, None)?;
-            logln("");
-            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
-        };
-
-        if existing_component_names.contains(component_name.as_str()) {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-
-            log_error(format!("Component {component_name} already exists"));
-            logln("");
-            app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?;
-            bail!(NonSuccessfulExit)
-        }
-
-        self.ctx.app_handler().generate_component(
-            &application_name,
-            &component_name,
-            &PathBuf::from("."),
-            template.as_str(),
-        )?;
-
-        Ok(())
-    }
-
-    fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
-        match filter {
-            Some(filter) => {
-                if let Some(language) = GuestLanguage::from_string(filter.clone()) {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None)
-                } else {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter))
-                }
-            }
-            None => self.ctx.app_handler().log_templates_help(None, None),
-        }
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
@@ -849,7 +762,7 @@ impl ComponentCommandHandler {
     ) -> anyhow::Result<BTreeMap<ComponentName, ComponentDeployProperties>> {
         let component_names = {
             let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx.some_or_err()?.deployable_component_names()
+            app_ctx.some_or_err()?.component_names()
         };
 
         let mut components = BTreeMap::<ComponentName, ComponentDeployProperties>::new();
@@ -875,14 +788,11 @@ impl ComponentCommandHandler {
         .await?;
         let component = app_ctx.application().component(component_name);
         let wasm_path = component.final_wasm();
-
-        if !component.component_type().is_deployable() {
-            bail!("Component {component_name} is not deployable");
-        }
         let files = component.files().clone();
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
         let config_vars = component.config_vars().clone();
+        let agent_config = component.agent_config().clone();
 
         Ok(ComponentDeployProperties {
             wasm_path,
@@ -891,6 +801,7 @@ impl ComponentCommandHandler {
             plugins,
             env,
             config_vars,
+            agent_config,
         })
     }
 
@@ -997,8 +908,16 @@ impl ComponentCommandHandler {
             wasm_hash: component_binary_hash.into(),
             files_by_path,
             plugins_by_grant_id,
-            // FIXME: agent-config
-            local_agent_config_ordered_by_agent_and_key: Vec::new(),
+            ordered_agent_config: properties
+                .agent_config
+                .iter()
+                .map(|lac| diff::AgentConfigEntry {
+                    agent: lac.agent.0.clone(),
+                    path: lac.path.clone(),
+                    value: diff::into_normalized_json(lac.value.clone()),
+                })
+                .sorted_by(|v1, v2| v1.ordering_key().cmp(&v2.ordering_key()))
+                .collect(),
         })
     }
 
@@ -1045,8 +964,7 @@ impl ComponentCommandHandler {
                         .unwrap_or_default(),
                     env: component_stager.env(),
                     config_vars: component_stager.config_vars(),
-                    // FIXME: agent-config
-                    local_agent_config: Vec::new(),
+                    agent_config: component_stager.agent_config(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
@@ -1141,8 +1059,7 @@ impl ComponentCommandHandler {
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
                     config_vars: component_stager.config_vars_if_changed(),
-                    // FIXME: agent-config
-                    local_agent_config: None,
+                    agent_config: component_stager.agent_config_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),
@@ -1283,7 +1200,7 @@ fn resolve_env_vars(
         },
     );
 
-    to_anyhow(
+    validated_to_anyhow(
         &format!(
             "Failed to prepare environment variables for component: {}",
             component_name.as_str().log_color_highlight()

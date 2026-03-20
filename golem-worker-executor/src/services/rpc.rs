@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::agent_webhooks::AgentWebhooksService;
+use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
-use super::HasAgentWebhooksService;
+use super::{HasAgentWebhooksService, HasEnvironmentStateService};
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
@@ -24,8 +25,8 @@ use crate::services::{
     active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
     rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
-    HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasLeakSentinel,
-    HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasRdbmsService,
+    HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
+    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasRdbmsService,
     HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
     HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
     HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
@@ -40,6 +41,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
@@ -49,6 +51,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tracing::debug;
+use wasmtime_wasi_http::HttpConnectionPool;
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
@@ -60,6 +63,7 @@ pub trait Rpc: Send + Sync {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
@@ -260,6 +264,7 @@ impl Rpc for RemoteInvocationRpc {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
@@ -274,6 +279,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_config,
                 self_stack,
                 self_created_by,
+                agent_config,
                 principal,
             )
             .await?;
@@ -310,6 +316,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
                 self_created_by,
                 principal,
+                owned_agent_id.environment_id,
             )
             .await?;
 
@@ -351,6 +358,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_stack,
                 self_created_by,
                 principal,
+                owned_agent_id.environment_id,
             )
             .await?;
 
@@ -391,8 +399,10 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
     shutdown_token: tokio_util::sync::CancellationToken,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
+    http_connection_pool: Option<HttpConnectionPool>,
     extra_deps: Ctx::ExtraDeps,
     leak_sentinel: Arc<()>,
 }
@@ -425,8 +435,10 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
+            environment_state_service: self.environment_state_service.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
+            http_connection_pool: self.http_connection_pool.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -611,6 +623,18 @@ impl<Ctx: WorkerCtx> HasShutdownToken for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasHttpConnectionPool for DirectWorkerInvocationRpc<Ctx> {
+    fn http_connection_pool(&self) -> Option<HttpConnectionPool> {
+        self.http_connection_pool.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ctx> {
+    fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
+        self.environment_state_service.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -642,8 +666,10 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
+        http_connection_pool: Option<HttpConnectionPool>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -673,8 +699,10 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             oplog_processor_plugin,
             resource_limits,
             shutdown_token,
+            environment_state_service,
             agent_types_service,
             agent_webhooks_service,
+            http_connection_pool,
             extra_deps,
             leak_sentinel,
         }
@@ -691,6 +719,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         if self
             .shard_service()
@@ -705,7 +734,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
-                Vec::new(),
+                agent_config,
                 None,
                 Some(self_agent_id.clone()),
                 &self_stack,
@@ -726,6 +755,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_env,
                     self_config,
                     self_stack,
+                    agent_config,
                 )
                 .await
         }

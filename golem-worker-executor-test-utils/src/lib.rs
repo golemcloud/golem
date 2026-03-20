@@ -17,7 +17,7 @@ pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
 
-use self::agent_deployments_service::DisabledAgentDeploymentsService;
+use self::agent_deployments_service::DisabledEnvironmentStateService;
 use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{anyhow, Error};
@@ -26,13 +26,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
 };
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, ComponentId};
-use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -78,18 +79,19 @@ use golem_worker_executor::preview2::golem::agent::host::{
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::golem_api_1_x;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
-use golem_worker_executor::services::agent_deployments::AgentDeploymentsService;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
-    EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, OplogConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
+    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
+    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig, ShardManagerServiceConfig,
+    ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -100,7 +102,9 @@ use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::{
     DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsStatus, RdbmsTransactionStatus, RdbmsType,
 };
-use golem_worker_executor::services::resource_limits::ResourceLimits;
+use golem_worker_executor::services::resource_limits::{
+    AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
+};
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -390,7 +394,7 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, None).await
+    start_customized(deps, context, None, None, None, None, None).await
 }
 
 pub async fn start_with_snapshot_policy(
@@ -398,7 +402,15 @@ pub async fn start_with_snapshot_policy(
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, Some(snapshot_policy), None).await
+    start_customized(deps, context, None, None, Some(snapshot_policy), None, None).await
+}
+
+pub async fn start_with_http_client_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    http_client: HttpClientConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_customized(deps, context, None, None, None, Some(http_client), None).await
 }
 
 pub async fn start_with_oplog_config(
@@ -406,7 +418,7 @@ pub async fn start_with_oplog_config(
     context: &TestContext,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, oplog_config_override).await
+    start_customized(deps, context, None, None, None, None, oplog_config_override).await
 }
 
 pub async fn start_customized(
@@ -415,6 +427,7 @@ pub async fn start_customized(
     system_memory_override: Option<u64>,
     retry_override: Option<RetryConfig>,
     snapshot_policy_override: Option<SnapshotPolicy>,
+    http_client_override: Option<HttpClientConfig>,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
@@ -461,6 +474,9 @@ pub async fn start_customized(
     }
     if let Some(snapshot_policy) = snapshot_policy_override {
         config.oplog.default_snapshotting = snapshot_policy;
+    }
+    if let Some(http_client) = http_client_override {
+        config.http_client = http_client;
     }
     if let Some(oplog_config) = oplog_config_override {
         config.oplog = oplog_config;
@@ -557,7 +573,7 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
 
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
-    fn borrow_fuel(&mut self, _current_level: u64) -> bool {
+    fn ensure_fuel(&mut self, _current_level: u64) -> bool {
         true
     }
 
@@ -734,7 +750,7 @@ impl UpdateManagement for TestWorkerCtx {
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginPriority>,
+        new_active_plugins: HashSet<EnvironmentPluginGrantId>,
     ) {
         self.durable_ctx
             .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
@@ -779,8 +795,10 @@ impl WorkerCtx for TestWorkerCtx {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -813,8 +831,10 @@ impl WorkerCtx for TestWorkerCtx {
             file_loader,
             worker_fork,
             agent_types_service,
+            environment_state_service,
             agent_webhooks_service,
             shard_service,
+            http_connection_pool,
             pending_update,
             original_phantom_id,
         )
@@ -949,9 +969,12 @@ impl HostWasmRpc for TestWorkerCtx {
         agent_type_name: String,
         constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
+        agent_config: Vec<
+            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id)
+            .new(agent_type_name, constructor, phantom_id, agent_config)
             .await
     }
 
@@ -1096,12 +1119,12 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
-    fn create_agent_deployments_service(
+    fn create_environment_state_service(
         &self,
-        _config: &AgentDeploymentsServiceConfig,
+        _config: &EnvironmentStateServiceConfig,
         _registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn AgentDeploymentsService> {
-        Arc::new(DisabledAgentDeploymentsService)
+    ) -> Arc<dyn EnvironmentStateService> {
+        Arc::new(DisabledEnvironmentStateService)
     }
 
     fn create_component_service(
@@ -1143,9 +1166,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(
@@ -1186,9 +1211,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
+            http_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1222,8 +1249,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             shutdown_token.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1256,6 +1285,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin,
             resource_limits,
             shutdown_token,
+            http_connection_pool,
+            environment_state_service,
             extra_deps.clone(),
             leak_sentinel,
         ))
@@ -1293,6 +1324,393 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 
 fn get_durable_ctx(ctx: &mut TestWorkerCtx) -> &mut DurableWorkerCtx<TestWorkerCtx> {
     &mut ctx.durable_ctx
+}
+
+fn get_durable_ctx_from_context(
+    ctx: &mut golem_worker_executor::workerctx::default::Context,
+) -> &mut DurableWorkerCtx<golem_worker_executor::workerctx::default::Context> {
+    &mut ctx.durable_ctx
+}
+
+// -------------------------------------------------------------------------
+// Production-Context bootstrap — uses the production Context which has real
+// fuel management via FuelTracker, and real ResourceLimiterAsync enforcement
+// (memory_growing / table_growing checks against AtomicResourceEntry).
+// Used by start_with_fuel_tracking and start_with_table_limit.
+// -------------------------------------------------------------------------
+
+struct ProductionContextTestServerBootstrap {
+    component_service_directory: PathBuf,
+    resource_limits: Arc<dyn ResourceLimits>,
+}
+
+#[async_trait]
+impl Bootstrap<golem_worker_executor::workerctx::default::Context>
+    for ProductionContextTestServerBootstrap
+{
+    fn create_active_workers(
+        &self,
+        golem_config: &GolemConfig,
+    ) -> Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>> {
+        Arc::new(ActiveWorkers::<
+            golem_worker_executor::workerctx::default::Context,
+        >::new(&golem_config.memory))
+    }
+
+    fn create_environment_state_service(
+        &self,
+        _config: &EnvironmentStateServiceConfig,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn EnvironmentStateService> {
+        Arc::new(DisabledEnvironmentStateService)
+    }
+
+    fn create_component_service(
+        &self,
+        _golem_config: &GolemConfig,
+        _registry_service: Arc<dyn RegistryService>,
+        blob_storage: Arc<dyn BlobStorage>,
+    ) -> Arc<dyn ComponentService> {
+        Arc::new(ComponentServiceLocalFileSystem::new(
+            &self.component_service_directory,
+            10000,
+            Duration::from_secs(3600),
+            Arc::new(DefaultCompiledComponentService::new(blob_storage)),
+        ))
+    }
+
+    async fn create_services(
+        &self,
+        active_workers: Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>>,
+        engine: Arc<Engine>,
+        linker: Arc<Linker<golem_worker_executor::workerctx::default::Context>>,
+        runtime: Handle,
+        component_service: Arc<dyn ComponentService>,
+        shard_manager_service: Arc<dyn ShardManagerService>,
+        worker_service: Arc<dyn WorkerService>,
+        worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
+        running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService>,
+        promise_service: Arc<dyn PromiseService>,
+        golem_config: Arc<GolemConfig>,
+        shard_service: Arc<dyn ShardService>,
+        key_value_service: Arc<dyn KeyValueService>,
+        blob_store_service: Arc<dyn BlobStoreService>,
+        rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        worker_activator: Arc<
+            dyn WorkerActivator<golem_worker_executor::workerctx::default::Context>,
+        >,
+        oplog_service: Arc<dyn OplogService>,
+        scheduler_service: Arc<dyn SchedulerService>,
+        worker_proxy: Arc<dyn WorkerProxy>,
+        events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
+        oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
+        _registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        leak_sentinel: Arc<()>,
+    ) -> anyhow::Result<All<golem_worker_executor::workerctx::default::Context>> {
+        use golem_worker_executor::services::NoAdditionalDeps;
+
+        let resource_limits = self.resource_limits.clone();
+        let additional_deps = NoAdditionalDeps {};
+
+        let worker_fork = Arc::new(DefaultWorkerFork::new(
+            Arc::new(RemoteInvocationRpc::new(
+                worker_proxy.clone(),
+                shard_service.clone(),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            component_service.clone(),
+            shard_manager_service.clone(),
+            worker_service.clone(),
+            worker_proxy.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            shard_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            rdbms_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            worker_activator.clone(),
+            events.clone(),
+            file_loader.clone(),
+            oplog_processor_plugin.clone(),
+            resource_limits.clone(),
+            environment_state_service.clone(),
+            agent_types_service.clone(),
+            agent_webhooks_service.clone(),
+            shutdown_token.clone(),
+            http_connection_pool.clone(),
+            additional_deps.clone(),
+            leak_sentinel.clone(),
+        ));
+
+        let rpc = Arc::new(DirectWorkerInvocationRpc::new(
+            Arc::new(RemoteInvocationRpc::new(
+                worker_proxy.clone(),
+                shard_service.clone(),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            component_service.clone(),
+            worker_fork.clone(),
+            worker_service.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            shard_service.clone(),
+            shard_manager_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            rdbms_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            worker_activator.clone(),
+            events.clone(),
+            file_loader.clone(),
+            oplog_processor_plugin.clone(),
+            resource_limits.clone(),
+            shutdown_token.clone(),
+            environment_state_service.clone(),
+            agent_types_service.clone(),
+            agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
+            additional_deps.clone(),
+            leak_sentinel.clone(),
+        ));
+
+        Ok(All::new(
+            active_workers,
+            agent_types_service,
+            agent_webhooks_service,
+            engine,
+            linker,
+            runtime,
+            component_service,
+            shard_manager_service,
+            worker_fork,
+            worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
+            promise_service,
+            golem_config,
+            shard_service,
+            key_value_service,
+            blob_store_service,
+            rdbms_service,
+            oplog_service,
+            rpc,
+            scheduler_service,
+            worker_activator,
+            worker_proxy,
+            events,
+            file_loader,
+            oplog_processor_plugin,
+            resource_limits,
+            shutdown_token,
+            http_connection_pool,
+            environment_state_service,
+            additional_deps,
+            leak_sentinel,
+        ))
+    }
+
+    fn create_wasmtime_linker(
+        &self,
+        engine: &Engine,
+    ) -> anyhow::Result<Linker<golem_worker_executor::workerctx::default::Context>> {
+        use golem_worker_executor::workerctx::default::Context;
+        let mut linker =
+            golem_worker_executor::wasi_host::create_linker(engine, get_durable_ctx_from_context)?;
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(&mut linker, get_durable_ctx_from_context)?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        Ok(linker)
+    }
+}
+
+/// A `ResourceLimits` implementation that provides a fixed table element limit
+/// while keeping fuel and memory unlimited. Used by table-limit tests.
+struct FixedTableLimitResourceLimits {
+    max_table_elements: usize,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedTableLimitResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            self.max_table_elements,
+        )))
+    }
+}
+
+fn make_production_context_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> GolemConfig {
+    GolemConfig {
+        key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
+            port: deps.redis.public_port(),
+            key_prefix: context.redis_prefix(),
+            ..Default::default()
+        }),
+        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
+        blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
+            root: deps.data_dir.path().join("blobs"),
+        }),
+        http_port: 0,
+        grpc: GrpcApiConfig {
+            port: 0,
+            tls: GrpcServerTlsConfig::disabled(),
+        },
+        compiled_component_service: CompiledComponentServiceConfig::Enabled(
+            CompiledComponentServiceEnabledConfig {},
+        ),
+        shard_manager_service: ShardManagerServiceConfig::SingleShard(
+            ShardManagerServiceSingleShardConfig {},
+        ),
+        agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
+        engine: EngineConfig {
+            enable_fs_cache: true,
+        },
+        // Use Disabled resource limits so initialize_account doesn't require a
+        // live registry service. Each caller injects its own ResourceLimits
+        // implementation via ProductionContextTestServerBootstrap.
+        resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
+        ..Default::default()
+    }
+}
+
+async fn run_production_context_bootstrap(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    resource_limits: Arc<dyn ResourceLimits>,
+    timeout_msg: &'static str,
+) -> anyhow::Result<TestWorkerExecutor> {
+    deps.redis.assert_valid();
+    deps.redis_monitor.assert_valid();
+
+    let prometheus = golem_worker_executor::metrics::register_all();
+    let config = make_production_context_config(deps, context);
+
+    let handle = tokio::runtime::Handle::current();
+    let mut join_set = tokio::task::JoinSet::new();
+
+    let details = ProductionContextTestServerBootstrap {
+        component_service_directory: deps.component_service_directory.clone(),
+        resource_limits,
+    }
+    .run(config, prometheus, handle, &mut join_set)
+    .await?;
+
+    let grpc_port = details.grpc_port;
+    let leak_detector = details.leak_detector.clone();
+    let details = Arc::new(details);
+
+    let start = std::time::Instant::now();
+    loop {
+        let channel =
+            tonic::transport::Channel::from_shared(format!("http://127.0.0.1:{grpc_port}"))
+                .expect("Valid URI")
+                .connect()
+                .await;
+
+        if let Ok(channel) = channel {
+            let otel_channel = tower::ServiceBuilder::new()
+                .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
+                .service(channel);
+            let client = WorkerExecutorClient::new(otel_channel);
+            return Ok(TestWorkerExecutor {
+                _join_set: Arc::new(join_set),
+                _run_details: details,
+                deps: deps.clone(),
+                client,
+                context: context.clone(),
+                leak_detector,
+            });
+        } else if start.elapsed().as_secs() > 10 {
+            return Err(anyhow::anyhow!(timeout_msg));
+        }
+    }
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// which has real fuel management via [`FuelTracker`] and [`AtomicResourceEntry`].
+/// Use this in tests that need to verify actual fuel consumption behaviour.
+pub async fn start_with_fuel_tracking(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> anyhow::Result<TestWorkerExecutor> {
+    // ResourceLimitsDisabled gives unlimited fuel budget so workers are never
+    // suspended, allowing fuel consumption to be measured freely.
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(ResourceLimitsDisabled),
+        "Timeout waiting for fuel-aware server to start",
+    )
+    .await
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// with a specific function table element limit enforced via `table_growing`.
+///
+/// The resource limiter is configured with `max_table_elements` as the limit;
+/// fuel and memory remain unlimited (using `u64::MAX` / `usize::MAX`).
+pub async fn start_with_table_limit(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_table_elements: usize,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedTableLimitResourceLimits { max_table_elements }),
+        "Timeout waiting for table-limit server to start",
+    )
+    .await
 }
 
 #[derive(Clone)]

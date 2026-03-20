@@ -30,15 +30,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
-    InitialComponentFile, LocalAgentConfigEntry, PluginInstallation,
+    AgentConfigEntry, ComponentDto, ComponentFilePath, ComponentId, ComponentName,
+    ComponentRevision, InitialComponentFile, PluginInstallation, PluginInstallationAction,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
-    AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget,
-    WorkerCreationLocalAgentConfigEntry,
+    AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget, WorkerAgentConfigEntry,
 };
 use golem_common::model::PromiseId;
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
@@ -75,12 +74,12 @@ impl TestDsl for TestWorkerExecutor {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        local_agent_config: Vec<LocalAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
-        if !local_agent_config.is_empty() {
+        if !agent_config.is_empty() {
             return Err(anyhow!(
-                "Local agent config isn't supported in worker executor tests"
+                "Agent config isn't supported in worker executor tests"
             ));
         }
 
@@ -211,11 +210,12 @@ impl TestDsl for TestWorkerExecutor {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
-        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
+        agent_config: Option<Vec<AgentConfigEntry>>,
+        _plugin_updates: Vec<PluginInstallationAction>,
     ) -> anyhow::Result<ComponentDto> {
-        if local_agent_config.is_some() {
+        if agent_config.is_some() {
             return Err(anyhow!(
-                "Local agent config isn't supported in worker executor tests"
+                "Agent config isn't supported in worker executor tests"
             ));
         }
 
@@ -291,7 +291,7 @@ impl TestDsl for TestWorkerExecutor {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
@@ -309,10 +309,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
                 config_vars,
-                local_agent_config: local_agent_config
-                    .into_iter()
-                    .map(|lac| lac.into())
-                    .collect(),
+                agent_config: agent_config.into_iter().map(|lac| lac.into()).collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
@@ -348,9 +345,9 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
                 agent_id: Some(agent_id.clone().into()),
-                method_name: method_name.to_string(),
+                method_name: Some(method_name.to_string()),
                 method_parameters: Some(UntypedDataValue::from(params).into()),
-                mode: workerexecutor::v1::AgentInvocationMode::Schedule as i32,
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
                 schedule_at: None,
                 idempotency_key: Some(idempotency_key.clone().into()),
                 component_owner_account_id: Some(component.account_id.into()),
@@ -395,9 +392,9 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .invoke_agent(workerexecutor::v1::InvokeAgentRequest {
                 agent_id: Some(worker_agent_id.clone().into()),
-                method_name: method_name.to_string(),
+                method_name: Some(method_name.to_string()),
                 method_parameters: Some(UntypedDataValue::from(params).into()),
-                mode: workerexecutor::v1::AgentInvocationMode::Await as i32,
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 schedule_at: None,
                 idempotency_key: Some(key.into()),
                 component_owner_account_id: Some(component.account_id.into()),

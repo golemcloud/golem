@@ -46,6 +46,10 @@ pub struct RegistryServiceConfig {
     pub component_compilation: ComponentCompilationConfig,
     pub initial_accounts: HashMap<String, PrecreatedAccount>,
     pub initial_plans: HashMap<String, PrecreatedPlan>,
+    #[serde(default)]
+    pub builtin_plugins: BuiltinPluginsConfig,
+    #[serde(default)]
+    pub deployment_events: DeploymentEventsConfig,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -89,13 +93,31 @@ impl SafeDisplay for RegistryServiceConfig {
             self.component_compilation.to_safe_string_indented()
         );
 
+        let _ = writeln!(
+            &mut result,
+            "builtin plugins: enabled={}",
+            self.builtin_plugins.enabled,
+        );
+
+        let _ = writeln!(&mut result, "deployment events:");
+        let _ = writeln!(
+            &mut result,
+            "  retention: {:?}",
+            self.deployment_events.retention
+        );
+        let _ = writeln!(
+            &mut result,
+            "  cleanup_interval: {:?}",
+            self.deployment_events.cleanup_interval
+        );
+
         result
     }
 }
 
 impl Default for RegistryServiceConfig {
     fn default() -> Self {
-        let mut initial_accounts = HashMap::with_capacity(2);
+        let mut initial_accounts = HashMap::with_capacity(3);
         initial_accounts.insert(
             "root".to_string(),
             PrecreatedAccount {
@@ -122,6 +144,17 @@ impl Default for RegistryServiceConfig {
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
             },
         );
+        initial_accounts.insert(
+            "builtin-plugin-owner".to_string(),
+            PrecreatedAccount {
+                id: AccountId(uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")),
+                name: "Builtin Plugin Owner".to_string(),
+                email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
+                token: TokenSecret::trusted("32d6072d-64e9-4a4a-b8f9-fadf68bb446b".to_string()),
+                role: AccountRole::BuiltinPluginOwner,
+                plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+            },
+        );
 
         let mut initial_plans = HashMap::with_capacity(1);
         initial_plans.insert(
@@ -138,6 +171,7 @@ impl Default for RegistryServiceConfig {
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
+                max_table_elements_per_worker: 16_384,
             },
         );
 
@@ -155,6 +189,8 @@ impl Default for RegistryServiceConfig {
             domain_provisioner: DomainProvisionerConfig::default(),
             initial_accounts,
             initial_plans,
+            builtin_plugins: BuiltinPluginsConfig::default(),
+            deployment_events: DeploymentEventsConfig::default(),
         }
     }
 }
@@ -357,6 +393,11 @@ impl ComponentCompilationEnabledConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct BuiltinPluginsConfig {
+    pub enabled: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PrecreatedAccount {
     pub id: AccountId,
@@ -365,6 +406,25 @@ pub struct PrecreatedAccount {
     pub token: TokenSecret,
     pub plan_id: PlanId,
     pub role: AccountRole,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeploymentEventsConfig {
+    /// Retention period for outbox events
+    #[serde(with = "humantime_serde")]
+    pub retention: std::time::Duration,
+    /// How often to clean up old events
+    #[serde(with = "humantime_serde")]
+    pub cleanup_interval: std::time::Duration,
+}
+
+impl Default for DeploymentEventsConfig {
+    fn default() -> Self {
+        Self {
+            retention: std::time::Duration::from_secs(24 * 3600), // 24 hours
+            cleanup_interval: std::time::Duration::from_secs(3600), // 1 hour
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -380,6 +440,12 @@ pub struct PrecreatedPlan {
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
     pub max_memory_per_worker: u64,
+    #[serde(default = "default_max_table_elements_per_worker")]
+    pub max_table_elements_per_worker: u64,
+}
+
+fn default_max_table_elements_per_worker() -> u64 {
+    16_384
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

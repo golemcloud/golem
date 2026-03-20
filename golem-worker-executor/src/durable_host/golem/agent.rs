@@ -19,19 +19,127 @@ use anyhow::anyhow;
 use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
-use golem_common::model::agent::ConfigValueType;
-use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{
+    AgentConfigDeclaration, AgentConfigSource, AgentTypeName, ParsedAgentId,
+};
+use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
+    GolemAgentGetConfigValue,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemApiPromiseId,
-    HostRequestNoInput, HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
+    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemAgentGetConfigValue,
+    HostRequestGolemApiPromiseId, HostRequestNoInput, HostResponseGolemAgentAgentType,
+    HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::model::PromiseId;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{NodeBuilder, WitType, WitValue, WitValueBuilderExtensions};
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    fn resolve_local_config(
+        &self,
+        key: &[String],
+        key_str: &str,
+        expected_type: &AnalysedType,
+        declared_type: &AnalysedType,
+    ) -> anyhow::Result<WitValue> {
+        let config_value = self.state.agent_config.get(key);
+
+        if expected_type != declared_type {
+            return Err(anyhow!(
+                "declared and expected type for config key {key_str} are not compatible"
+            ));
+        }
+
+        let result = match (expected_type, config_value) {
+            (AnalysedType::Option(_), None) => WitValue::builder().option_none(),
+            (_, Some(value)) => value.value.clone().into(),
+            (_, None) => return Err(anyhow!("required config key {key_str} is missing value")),
+        };
+
+        Ok(result)
+    }
+
+    async fn resolve_secret_config(
+        &mut self,
+        path: Vec<String>,
+        path_str: &str,
+        expected_type: AnalysedType,
+        declared_type: &AnalysedType,
+    ) -> anyhow::Result<WitValue> {
+        let durability =
+            Durability::<GolemAgentGetConfigValue>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
+
+        if durability.is_live() {
+            let agent_secrets = self
+                .state
+                .environment_state_service
+                .get_agent_secrets(self.state.component_metadata.environment_id)
+                .await?;
+
+            let canonical_agent_secret_path =
+                CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
+            let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
+
+            let agent_secret_type = agent_secret.map(|sec| &sec.secret_type);
+            let agent_secret_value = agent_secret.and_then(|sec| sec.secret_value.as_ref());
+
+            if *declared_type != expected_type {
+                return Err(anyhow!(
+                    "declared and expected type for secret key {path_str} are not compatible"
+                ));
+            }
+
+            let result = match (&expected_type, agent_secret_type, agent_secret_value) {
+                (AnalysedType::Option(_), None, None) => golem_wasm::Value::Option(None),
+
+                (
+                    AnalysedType::Option(expected_type),
+                    Some(AnalysedType::Option(actual_type)),
+                    None,
+                ) if *expected_type == *actual_type => golem_wasm::Value::Option(None),
+
+                (expected_type, Some(actual_type), Some(value)) if expected_type == actual_type => {
+                    value.clone()
+                }
+
+                (_, None, _) => {
+                    return Err(anyhow!(
+                        "No secret for key {path_str} exists in environment"
+                    ));
+                }
+
+                (_, Some(_), None) => {
+                    return Err(anyhow!("Secret key {path_str} is missing value"));
+                }
+
+                (_, _, _) => {
+                    return Err(anyhow!(
+                        "declared and expected type for config key {path_str} are not compatible"
+                    ));
+                }
+            };
+
+            let persisted = durability
+                .persist(
+                    self,
+                    HostRequestGolemAgentGetConfigValue {
+                        path,
+                        expected_type,
+                    },
+                    HostResponseGolemAgentGetConfigValue { result },
+                )
+                .await?;
+
+            Ok(persisted.result.into())
+        } else {
+            Ok(durability.replay(self).await?.result.into())
+        }
+    }
+}
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -223,11 +331,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn get_config_value(
         &mut self,
-        key: Vec<String>,
+        path: Vec<String>,
         expected_type: WitType,
     ) -> anyhow::Result<WitValue> {
-        let key_str = key.join(".");
-        tracing::debug!("Agent getting config value for key {}", key_str);
+        let path_str = path.join(".");
+        tracing::debug!("Agent getting config value for key {path_str}");
 
         let agent_id = self
             .parsed_agent_id()
@@ -235,52 +343,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let expected_type = AnalysedType::from(expected_type);
 
-        let declaration = self
+        let agent_type = self
             .component_metadata()
             .metadata
             .find_agent_type_by_name(&agent_id.agent_type)
-            .expect("Active agent type of agent was not declared in component metadata")
-            .config
-            .iter()
-            .find_map(|c| (c.key == key).then(|| c.value.clone()));
+            .expect("Active agent type of agent was not declared in component metadata");
 
-        let declaration = match declaration {
-            None if matches!(expected_type, AnalysedType::Option(_)) => {
-                // Allow optional undeclared config for schema evolution
-                return Ok(WitValue::builder().option_none());
-            }
-            None => {
-                return Err(anyhow!("No config declared for key {}", key_str));
-            }
-            Some(d) => d,
-        };
+        let declaration = agent_type.config.iter().find(|c| c.path == path);
 
         match declaration {
-            ConfigValueType::Local(local_decl) => {
-                let config_value = self.state.local_agent_config.get(&key);
-
-                match (&local_decl.value, &expected_type, config_value) {
-                    // Declared optional, expected optional, value missing
-                    (AnalysedType::Option(declared), AnalysedType::Option(expected), None)
-                        if declared == expected =>
-                    {
-                        Ok(WitValue::builder().option_none())
-                    }
-
-                    // Types match and value exists
-                    (declared, expected, Some(value)) if declared == expected => {
-                        Ok(value.value.clone().into())
-                    }
-
-                    _ => Err(anyhow!(
-                        "declared and expected type for config key {} are not compatible",
-                        key_str
-                    )),
-                }
+            // Allow reading undeclared optional config keys so that
+            // newer agents can run against older component schemas.
+            None if matches!(expected_type, AnalysedType::Option(_)) => {
+                Ok(WitValue::builder().option_none())
             }
-
-            ConfigValueType::Shared(_) => {
-                unimplemented!()
+            None => Err(anyhow!("No config declared for path {path_str}")),
+            Some(AgentConfigDeclaration {
+                source: AgentConfigSource::Local,
+                value_type,
+                ..
+            }) => self.resolve_local_config(&path, &path_str, &expected_type, value_type),
+            Some(AgentConfigDeclaration {
+                source: AgentConfigSource::Secret,
+                value_type,
+                ..
+            }) => {
+                self.resolve_secret_config(path, &path_str, expected_type, value_type)
+                    .await
             }
         }
     }

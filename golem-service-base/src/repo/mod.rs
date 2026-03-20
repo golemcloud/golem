@@ -15,6 +15,7 @@
 pub mod blob;
 pub mod numeric;
 
+use crate::db::{LabelledPoolApi, Pool};
 use golem_common::{SafeDisplay, error_forwarding};
 use sqlx::error::ErrorKind;
 use sqlx::{Database, Encode, Type};
@@ -59,6 +60,9 @@ impl SafeDisplay for RepoError {
 }
 
 pub type RepoResult<T> = Result<T, RepoError>;
+
+pub type PoolLabelledTransaction<T> =
+    <<T as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
 pub trait ResultExt<T> {
     fn none_on_unique_violation(self) -> RepoResult<Option<T>>;

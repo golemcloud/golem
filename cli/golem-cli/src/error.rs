@@ -34,7 +34,6 @@ impl Error for PipedExitCode {}
 #[derive(Clone, Copy, Debug, Display, EnumIter)]
 pub enum ShowClapHelpTarget {
     AppNew,
-    ComponentNew,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages
@@ -73,10 +72,10 @@ pub mod service {
 
     use crate::model::text::fmt::{format_stack, format_stderr};
     use golem_client::api::{
-        AccountError, AgentError, ApiDeploymentError, ApiDomainError, ApiSecurityError,
-        ApplicationError, ComponentError, EnvironmentError, LoginCompleteOauth2DeviceFlowError,
-        LoginCurrentLoginTokenError, LoginLoginOauth2Error, LoginPollOauth2WebflowError,
-        LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
+        AccountError, AgentError, AgentSecretsError, ApiDeploymentError, ApiDomainError,
+        ApiSecurityError, ApplicationError, ComponentError, EnvironmentError,
+        LoginCompleteOauth2DeviceFlowError, LoginCurrentLoginTokenError, LoginLoginOauth2Error,
+        LoginPollOauth2WebflowError, LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
         LoginSubmitOauth2WebflowCallbackError, McpDeploymentError, PluginError, TokenError,
         WorkerError,
     };
@@ -119,6 +118,7 @@ pub mod service {
     pub enum ServiceErrorKind {
         ErrorResponse(ServiceErrorResponse),
         ReqwestError(reqwest::Error),
+        MiddlewareError(reqwest_middleware::Error),
         ReqwestHeaderError(reqwest::header::InvalidHeaderValue),
         SerdeError(serde_json::Error),
         UnexpectedResponse { status_code: u16, payload: Bytes },
@@ -158,6 +158,14 @@ pub mod service {
                     }
 
                     Ok(())
+                }
+                ServiceErrorKind::MiddlewareError(error) => {
+                    write!(
+                        f,
+                        "{} - HTTP Middleware Error: {}",
+                        service_name,
+                        error.to_string().log_color_warn()
+                    )
                 }
                 ServiceErrorKind::ReqwestHeaderError(error) => {
                     write!(
@@ -219,6 +227,9 @@ pub mod service {
                         ServiceErrorKind::ErrorResponse(error.into())
                     }
                     golem_client::Error::Reqwest(error) => ServiceErrorKind::ReqwestError(error),
+                    golem_client::Error::Middleware(error) => {
+                        ServiceErrorKind::MiddlewareError(error)
+                    }
                     golem_client::Error::ReqwestHeader(error) => {
                         ServiceErrorKind::ReqwestHeaderError(error)
                     }
@@ -1086,6 +1097,47 @@ pub mod service {
                     message: error.error,
                 },
                 McpDeploymentError::Error500(error) => ServiceErrorResponse {
+                    status_code: 500,
+                    message: error.error,
+                },
+            }
+        }
+    }
+
+    impl HasServiceName for AgentSecretsError {
+        fn service_name() -> &'static str {
+            "AgentSecrets"
+        }
+    }
+
+    impl From<AgentSecretsError> for ServiceErrorResponse {
+        fn from(value: AgentSecretsError) -> Self {
+            match value {
+                AgentSecretsError::Error400(error) => ServiceErrorResponse {
+                    status_code: 400,
+                    message: error.errors.iter().join("\n"),
+                },
+                AgentSecretsError::Error401(error) => ServiceErrorResponse {
+                    status_code: 401,
+                    message: error.error,
+                },
+                AgentSecretsError::Error403(error) => ServiceErrorResponse {
+                    status_code: 403,
+                    message: error.error,
+                },
+                AgentSecretsError::Error404(error) => ServiceErrorResponse {
+                    status_code: 404,
+                    message: error.error,
+                },
+                AgentSecretsError::Error409(error) => ServiceErrorResponse {
+                    status_code: 409,
+                    message: error.error,
+                },
+                AgentSecretsError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
+                AgentSecretsError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
                 },

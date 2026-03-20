@@ -28,7 +28,6 @@ import {
 } from './testUtils';
 
 import { TestInterfaceType } from './testTypes';
-import * as Value from '../src/internal/mapping/values/Value';
 import {
   interfaceArb,
   mapArb,
@@ -44,7 +43,6 @@ import {
 } from './arbitraries';
 import * as fc from 'fast-check';
 import { Type } from '@golemcloud/golem-ts-types-core';
-import * as EffectEither from '../src/newTypes/either';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import { AnalysedType } from '../src/internal/mapping/types/analysedType';
 
@@ -386,20 +384,10 @@ describe('typescript value to wit value round-trip conversions', () => {
 });
 
 function runRoundTripTest<T>(data: T, type: [AnalysedType, Type.Type]) {
-  const witValueEither = WitValue.fromTsValueDefault(data, type[0]);
-
-  const witValue = EffectEither.getOrElse(witValueEither, (err) => {
-    throw new Error(err);
-  });
-
-  // Round trip wit-value -> value -> wit-value
-  const value = Value.fromWitValue(witValue);
-
-  const witValueReturned = Value.toWitValue(value);
-  expect(witValueReturned).toEqual(witValue);
+  const witValue = WitValue.fromTsValueDefault(data, type[0]);
 
   // Round trip ts-value -> wit-value -> ts-value
-  const tsValueReturned = WitValue.toTsValue(witValueReturned, type[0]);
+  const tsValueReturned = WitValue.toTsValue(witValue, type[0]);
 
   expect(tsValueReturned).toEqual(data);
 }

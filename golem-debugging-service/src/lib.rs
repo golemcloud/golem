@@ -39,6 +39,7 @@ use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
@@ -138,9 +139,11 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> =
@@ -192,9 +195,11 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
+            http_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -228,8 +233,10 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             shutdown_token.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -263,6 +270,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits,
             shutdown_token,
+            http_connection_pool,
+            environment_state_service,
             additional_deps,
             leak_sentinel,
         ))
@@ -314,7 +323,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
     let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
     let shutdown = golem_worker_executor::services::shutdown::Shutdown::new();
 
-    let (worker_executor_impl, epoch_thread, epoch_stop) =
+    let (worker_executor_impl, epoch_thread, epoch_stop, _registry_service) =
         create_worker_executor_impl::<DebugContext, T>(
             golem_config.clone(),
             bootstrap,

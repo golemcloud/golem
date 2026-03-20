@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
+use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
@@ -35,10 +37,9 @@ use crate::model::oplog::{
     PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
-use crate::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
+use crate::model::worker::ParsedWorkerAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp,
-    TransactionId,
+    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
 use golem_wasm::analysis::analysed_type::{
     bool, f64, field, handle, list, option, r#enum, record, result_err, result_ok, s16, s32, str,
@@ -71,8 +72,8 @@ fn create_serialization_poem_serde_equivalence() {
             .collect(),
         created_by: AccountId::new(),
         config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
-        local_agent_config: vec![ParsedWorkerCreationLocalAgentConfigEntry {
-            key: vec!["foo".to_string(), "bar".to_string()],
+        local_agent_config: vec![ParsedWorkerAgentConfigEntry {
+            path: vec!["foo".to_string(), "bar".to_string()],
             value: 1.into_value_and_type(),
         }],
         environment_id: EnvironmentId::new(),
@@ -85,6 +86,7 @@ fn create_serialization_poem_serde_equivalence() {
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
         initial_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
+            environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
             plugin_priority: PluginPriority(0),
             plugin_name: "plugin1".to_string(),
             plugin_version: "1".to_string(),
@@ -536,6 +538,7 @@ fn successful_update_serialization_poem_serde_equivalence() {
         target_revision: ComponentRevision::new(1).unwrap(),
         new_component_size: 100_000_000,
         new_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
+            environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
             plugin_priority: PluginPriority(0),
             plugin_name: "plugin1".to_string(),
             plugin_version: "1".to_string(),
@@ -642,6 +645,7 @@ fn activate_plugin_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
         timestamp: Timestamp::now_utc().rounded(),
         plugin: PluginInstallationDescription {
+            environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
             plugin_priority: PluginPriority(1),
             plugin_name: "my-plugin".to_string(),
             plugin_version: "1.0.0".to_string(),
@@ -658,6 +662,7 @@ fn deactivate_plugin_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::DeactivatePlugin(DeactivatePluginParams {
         timestamp: Timestamp::now_utc().rounded(),
         plugin: PluginInstallationDescription {
+            environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
             plugin_priority: PluginPriority(2),
             plugin_name: "my-plugin".to_string(),
             plugin_version: "2.0.0".to_string(),

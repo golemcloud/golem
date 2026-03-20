@@ -22,8 +22,8 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::Empty;
 use golem_registry_service::config::{
-    ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount, PrecreatedPlan,
-    RegistryServiceConfig,
+    BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount,
+    PrecreatedPlan, RegistryServiceConfig,
 };
 use golem_registry_service::RegistryService;
 use golem_service_base::config::BlobStorageConfig;
@@ -35,7 +35,7 @@ use golem_service_base::service::compiled_component::{
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
-    AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentWebhooksServiceConfig,
+    AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
     GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
@@ -56,6 +56,7 @@ use tracing::Instrument;
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+const BUILTIN_PLUGIN_OWNER_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_BUILTIN_PLUGIN_OWNER_TOKEN;
 
 pub struct LaunchArgs {
     pub router_addr: String,
@@ -197,6 +198,7 @@ fn registry_service_config(
                     monthly_gas_limit: u64::MAX,
                     monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,
+                    max_table_elements_per_worker: u64::MAX,
                 },
             );
             plans
@@ -214,8 +216,20 @@ fn registry_service_config(
                     role: AccountRole::Admin,
                 },
             );
+            accounts.insert(
+                "builtin-plugin-owner".to_string(),
+                PrecreatedAccount {
+                    id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
+                    name: "Builtin Plugin Owner".to_string(),
+                    email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
+                    token: TokenSecret::trusted(BUILTIN_PLUGIN_OWNER_TOKEN.to_string()),
+                    plan_id,
+                    role: AccountRole::BuiltinPluginOwner,
+                },
+            );
             accounts
         },
+        builtin_plugins: BuiltinPluginsConfig { enabled: true },
         ..Default::default()
     }
 }
@@ -299,6 +313,7 @@ fn worker_executor_config(
         },
         resource_limits: ResourceLimitsConfig::Grpc(ResourceLimitsGrpcConfig {
             batch_update_interval: Duration::from_secs(60),
+            limit_refresh_interval: Duration::from_secs(300),
         }),
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
@@ -310,7 +325,7 @@ fn worker_executor_config(
             port: worker_service_run_details.grpc_port,
             client_config: GrpcClientConfig::default(),
         },
-        agent_deployments_service: AgentDeploymentsServiceConfig {
+        environment_state_service: EnvironmentStateServiceConfig {
             cache_capacity: 0,
             ..Default::default()
         },

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::api::agent_secret::AgentSecretSubcommand;
+use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
@@ -27,7 +29,6 @@ use crate::command::shared_args::{
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
-use crate::log::LogColorize;
 use crate::model::app::ComponentPresetName;
 use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
@@ -36,13 +37,11 @@ use crate::model::repl::ReplLanguage;
 use crate::model::worker::{AgentUpdateMode, RawAgentId};
 use crate::model::GuestLanguage;
 use crate::{command_name, version};
-use anyhow::{anyhow, bail, Context as AnyhowContext};
-use chrono::{DateTime, Utc};
+use anyhow::{anyhow, Context as AnyhowContext};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
+use clap::{Command, CommandFactory, Subcommand};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
-use golem_client::model::ScanCursor;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -200,20 +199,6 @@ pub struct GolemCliGlobalFlags {
     #[command(flatten)]
     verbosity: Verbosity,
 
-    // The flags below can only be set through env vars, as they are mostly
-    // useful for testing, so we do not want to pollute the flag space with them
-    #[arg(skip)]
-    pub golem_rust_path: Option<PathBuf>,
-
-    #[arg(skip)]
-    pub golem_rust_version: Option<String>,
-
-    #[arg(skip)]
-    pub golem_ts_packages_path: Option<String>,
-
-    #[arg(skip)]
-    pub golem_ts_version: Option<String>,
-
     #[arg(skip)]
     pub wasm_rpc_offline: bool,
 
@@ -281,30 +266,6 @@ impl GolemCliGlobalFlags {
                 .parse::<LenientBool>()
                 .map(|b| b.into())
                 .unwrap_or_default()
-        }
-
-        if self.golem_rust_path.is_none() {
-            if let Ok(golem_rust_path) = std::env::var("GOLEM_RUST_PATH") {
-                self.golem_rust_path = Some(PathBuf::from(golem_rust_path));
-            }
-        }
-
-        if self.golem_rust_version.is_none() {
-            if let Ok(version) = std::env::var("GOLEM_RUST_VERSION") {
-                self.golem_rust_version = Some(version);
-            }
-        }
-
-        if self.golem_ts_packages_path.is_none() {
-            if let Ok(golem_ts_packages_path) = std::env::var("GOLEM_TS_PACKAGES_PATH") {
-                self.golem_ts_packages_path = Some(golem_ts_packages_path);
-            }
-        }
-
-        if self.golem_ts_version.is_none() {
-            if let Ok(version) = std::env::var("GOLEM_TS_VERSION") {
-                self.golem_ts_version = Some(version);
-            }
         }
 
         if let Ok(batch_size) = std::env::var("GOLEM_HTTP_BATCH_SIZE") {
@@ -631,12 +592,24 @@ pub enum GolemCliCommandPartialMatch {
 #[derive(Debug, Subcommand)]
 pub enum GolemCliSubcommand {
     // App scoped root commands---------------------------------------------------------------------
-    /// Create a new application
+    /// Create a new application, component, or agent
     New {
-        /// Application folder name where the new application should be created
+        /// Application folder path where the new application should be created, use `.` for the current directory or for an existing application
+        application_path: Option<PathBuf>,
+        /// Optional application name, defaults to the folder name (if that is a valid application name)
+        #[arg(long)]
         application_name: Option<ApplicationName>,
-        /// Languages that the application should support
-        language: Vec<GuestLanguage>,
+        /// Optional existing or new component name, by default uses an existing component or name the component based on the application name and the used language
+        #[arg(long)]
+        component_name: Option<ComponentName>,
+        /// Optional template names to apply, in non-interactive mode at least one template must be specified
+        #[arg(long)]
+        template: Vec<AppTemplateName>,
+    },
+    /// List or search application templates
+    Templates {
+        /// Optional filter for language or template name
+        filter: Option<String>,
     },
     /// Build all or selected components in the application
     Build {
@@ -789,6 +762,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
     },
+    /// Manage Agent Secrets
+    AgentSecret {
+        #[clap(subcommand)]
+        subcommand: AgentSecretSubcommand,
+    },
     /// Generate shell completion
     Completion {
         /// Selects shell
@@ -855,9 +833,9 @@ pub mod shared_args {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
         /// Agent ID, accepted formats:
         ///   - <AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         #[arg(verbatim_doc_comment)]
         pub agent_id: RawAgentId,
     }
@@ -949,27 +927,13 @@ pub mod environment {
 }
 
 pub mod component {
-    use crate::command::shared_args::{
-        ComponentTemplateName, OptionalComponentName, OptionalComponentNames,
-    };
+    use crate::command::shared_args::{OptionalComponentName, OptionalComponentNames};
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
-    use golem_common::model::component::{ComponentName, ComponentRevision};
+    use golem_common::model::component::ComponentRevision;
 
     #[derive(Debug, Subcommand)]
     pub enum ComponentSubcommand {
-        /// Create new component in the current application
-        New {
-            /// Template to be used for the new component
-            component_template: Option<ComponentTemplateName>,
-            /// Name of the new component in 'namespace:name' form
-            component_name: Option<ComponentName>,
-        },
-        /// List or search component templates
-        Templates {
-            /// Optional filter for language or template name
-            filter: Option<String>,
-        },
         /// List deployed component versions' metadata
         List,
         /// Get the latest or selected revision of deployed component metadata
@@ -1011,7 +975,7 @@ pub mod component {
     }
 
     pub mod plugin {
-        use crate::command::parse_key_val;
+        use crate::args::parse_key_val;
         use crate::command::shared_args::OptionalComponentName;
         use clap::Subcommand;
 
@@ -1070,8 +1034,9 @@ pub mod component {
 }
 
 pub mod worker {
-    use crate::command::parse_cursor;
-    use crate::command::parse_key_val;
+    use crate::args::parse_cursor;
+    use crate::args::parse_key_val;
+    use crate::args::parse_worker_agent_config;
     use crate::command::shared_args::{
         AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
@@ -1080,6 +1045,7 @@ pub mod worker {
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
     use golem_common::model::component::{ComponentName, ComponentRevision};
+    use golem_common::model::worker::WorkerAgentConfigEntry;
     use golem_common::model::IdempotencyKey;
     use uuid::Uuid;
 
@@ -1095,6 +1061,13 @@ pub mod worker {
             /// wasi:config entries visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
             config_vars: Vec<(String, String)>,
+            /// Configuration to be provided to the agent.
+            /// This parameter can be provided multiple times in the form --agent-config ${DOT_SEPERATED_CONFIG_PATH}=${CONFIG_VALUE}.
+            /// Only configuration declared by the agent can be provided. If a given config path is not provided, the default from the manifest
+            /// (components.*.agents.*.config) is used. If neither value nor default is provided and the config is non-optional, creation
+            /// of the agent will fail.
+            #[arg(short, long, value_parser = parse_worker_agent_config, verbatim_doc_comment)]
+            agent_config: Vec<WorkerAgentConfigEntry>,
         },
         // TODO: json args
         /// Invoke (or enqueue invocation for) agent
@@ -1306,6 +1279,56 @@ pub mod api {
         }
     }
 
+    pub mod agent_secret {
+        use crate::args::parse_agent_secret_path;
+        use clap::Subcommand;
+        use golem_common::model::agent_secret::{
+            AgentSecretId, AgentSecretPath, AgentSecretRevision,
+        };
+
+        #[derive(Debug, Subcommand)]
+        pub enum AgentSecretSubcommand {
+            /// Create Agent Secret in the environment
+            Create {
+                /// Path of the secret to create. The casing of path segments will be normalized during creation.
+                #[arg(long, value_parser = parse_agent_secret_path)]
+                path: AgentSecretPath,
+                /// Description of the agent type in json
+                #[arg(long)]
+                secret_type: String,
+                /// Value of the secret in json
+                #[arg(long)]
+                secret_value: Option<String>,
+            },
+
+            /// Update Agent Secret
+            UpdateValue {
+                /// Id of the secret to update
+                #[arg(long)]
+                id: AgentSecretId,
+                /// Current revision of the agent secret
+                #[arg(long)]
+                current_revision: AgentSecretRevision,
+                /// Value of the secret in json
+                #[arg(long)]
+                secret_value: Option<String>,
+            },
+
+            /// Update Agent Secret
+            Delete {
+                /// Id of the secret to delete
+                #[arg(long)]
+                id: AgentSecretId,
+                /// Current revision of the agent secret
+                #[arg(long)]
+                current_revision: AgentSecretRevision,
+            },
+
+            /// List Agent Secrets
+            List,
+        }
+    }
+
     pub mod security_scheme {
         use clap::Subcommand;
         use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
@@ -1491,7 +1514,7 @@ pub mod cloud {
     }
 
     pub mod token {
-        use crate::command::parse_instant;
+        use crate::args::parse_instant;
         use chrono::{DateTime, Utc};
         use clap::Subcommand;
         use golem_common::model::auth::TokenId;
@@ -1621,12 +1644,7 @@ pub fn builtin_exec_subcommands() -> BTreeSet<String> {
 
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
-        ShowClapHelpTarget::AppNew => {
-            vec!["new"]
-        }
-        ShowClapHelpTarget::ComponentNew => {
-            vec!["component", "new"]
-        }
+        ShowClapHelpTarget::AppNew => vec!["new"],
     }
 }
 
@@ -1639,42 +1657,6 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
     }
 
     command.clone()
-}
-
-fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
-    let pos = key_and_val.find('=').ok_or_else(|| {
-        anyhow!(
-            "invalid KEY=VALUE: no `=` found in `{}`",
-            key_and_val.log_color_error_highlight()
-        )
-    })?;
-    Ok((
-        key_and_val[..pos].to_string(),
-        key_and_val[pos + 1..].to_string(),
-    ))
-}
-
-// TODO: better error context and messages
-fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
-    let parts = cursor.split('/').collect::<Vec<_>>();
-
-    if parts.len() != 2 {
-        bail!("Invalid cursor format: {}", cursor);
-    }
-
-    Ok(ScanCursor {
-        layer: parts[0].parse()?,
-        cursor: parts[1].parse()?,
-    })
-}
-
-fn parse_instant(
-    s: &str,
-) -> Result<DateTime<Utc>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-    match s.parse::<DateTime<Utc>>() {
-        Ok(dt) => Ok(dt),
-        Err(err) => Err(err.into()),
-    }
 }
 
 #[cfg(test)]

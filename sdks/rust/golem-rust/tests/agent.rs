@@ -16,18 +16,21 @@ test_r::enable!();
 
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
+#[test_r::sequential]
 mod tests {
-    use golem_rust::agentic::{create_webhook, Principal, Secret};
+    use golem_rust::agentic::{create_webhook, Principal};
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, AgentType, ConfigKeyValueType, ConfigValueType, Snapshotting, SnapshottingConfig,
+        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, ElementValue,
+        Snapshotting, SnapshottingConfig,
     };
+    use golem_rust::value_and_type::IntoValue;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, ConfigSchema, MultimodalSchema};
-    use golem_rust_macro::{description, endpoint, prompt};
+    use golem_rust_macro::{description, endpoint, prompt, FromValueAndType, IntoValue};
     use std::fmt::Debug;
     use test_r::test;
     use wasip2::clocks::wall_clock::Datetime;
@@ -569,33 +572,36 @@ mod tests {
         }
     }
 
-    #[derive(ConfigSchema)]
     #[allow(unused)]
+    #[derive(ConfigSchema)]
     struct ConfigAgentConfigNested {
         foo: String,
         bar: i32,
-        nested_secret: Secret<bool>,
+        #[config_schema(secret)]
+        nested_secret: golem_rust::agentic::Secret<bool>,
     }
 
-    #[derive(ConfigSchema)]
     #[allow(unused)]
+    #[derive(ConfigSchema)]
     struct ConfigAgentConfig {
         url: String,
         port: u32,
+        #[config_schema(nested)]
         nested: ConfigAgentConfigNested,
-        api_key: Secret<String>,
+        #[config_schema(secret)]
+        api_key: golem_rust::agentic::Secret<String>,
     }
 
     #[agent_definition]
     trait ConfigAgent: BaseAgent {
-        fn new(#[autoinject] config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self;
+        fn new(#[agent_config] config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self;
     }
 
     struct ConfigAgentImpl;
 
     #[agent_implementation]
     impl ConfigAgent for ConfigAgentImpl {
-        fn new(#[autoinject] _config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self {
+        fn new(#[agent_config] _config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self {
             Self
         }
     }
@@ -1296,19 +1302,14 @@ mod tests {
         let agent =
             golem_rust::agentic::get_agent_type_by_name(&agent_name).expect("Agent type not found");
 
-        fn project_for_comparsion(value: ConfigKeyValueType) -> (Vec<String>, bool, String) {
-            match value.value {
-                ConfigValueType::Local(mut inner) => (
-                    value.key,
-                    false,
-                    format!("{:?}", inner.nodes.swap_remove(0).type_),
-                ),
-                ConfigValueType::Shared(mut inner) => (
-                    value.key,
-                    true,
-                    format!("{:?}", inner.nodes.swap_remove(0).type_),
-                ),
-            }
+        fn project_for_comparsion(
+            mut value: AgentConfigDeclaration,
+        ) -> (AgentConfigSource, Vec<String>, String) {
+            (
+                value.source,
+                value.path,
+                format!("{:?}", value.value_type.nodes.swap_remove(0).type_),
+            )
         }
 
         assert_eq!(
@@ -1319,36 +1320,218 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (
+                    AgentConfigSource::Local,
                     vec!["url".to_string()],
-                    false,
                     "WitTypeNode::PrimStringType".to_string()
                 ),
                 (
+                    AgentConfigSource::Local,
                     vec!["port".to_string()],
-                    false,
                     "WitTypeNode::PrimU32Type".to_string()
                 ),
                 (
+                    AgentConfigSource::Local,
                     vec!["nested".to_string(), "foo".to_string(),],
-                    false,
                     "WitTypeNode::PrimStringType".to_string()
                 ),
                 (
+                    AgentConfigSource::Local,
                     vec!["nested".to_string(), "bar".to_string(),],
-                    false,
                     "WitTypeNode::PrimS32Type".to_string()
                 ),
                 (
+                    AgentConfigSource::Secret,
                     vec!["nested".to_string(), "nested_secret".to_string(),],
-                    true,
                     "WitTypeNode::PrimBoolType".to_string()
                 ),
                 (
+                    AgentConfigSource::Secret,
                     vec!["api_key".to_string()],
-                    true,
                     "WitTypeNode::PrimStringType".to_string()
                 )
             ]
         );
+    }
+
+    // --- Schema::from_element_value roundtrip tests ---
+    // These verify that the optimized from_element_value (which bypasses T::get_type())
+    // produces the same results as constructing a full ValueAndType.
+
+    #[test]
+    fn test_from_element_value_roundtrip_string() {
+        let original = "hello world".to_string();
+        let ev = ElementValue::ComponentModel(original.clone().into_value());
+        let recovered = String::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_u64() {
+        let original: u64 = 123456789;
+        let ev = ElementValue::ComponentModel(original.into_value());
+        let recovered = u64::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_bool() {
+        for original in [true, false] {
+            let ev = ElementValue::ComponentModel(original.into_value());
+            let recovered = bool::from_element_value(ev).unwrap();
+            assert_eq!(recovered, original);
+        }
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_option() {
+        let some_val: Option<u32> = Some(42);
+        let ev = ElementValue::ComponentModel(some_val.into_value());
+        let recovered = Option::<u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, Some(42));
+
+        let none_val: Option<u32> = None;
+        let ev = ElementValue::ComponentModel(none_val.into_value());
+        let recovered = Option::<u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, None);
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_vec() {
+        let original = vec![1u32, 2, 3, 4, 5];
+        let ev = ElementValue::ComponentModel(original.clone().into_value());
+        let recovered = Vec::<u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    struct TestStruct {
+        name: String,
+        age: u32,
+        active: bool,
+        score: f64,
+        tags: Vec<String>,
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_struct() {
+        let original = TestStruct {
+            name: "test user".to_string(),
+            age: 42,
+            active: true,
+            score: 99.5,
+            tags: vec!["a".to_string(), "b".to_string()],
+        };
+        let ev = ElementValue::ComponentModel(original.clone().into_value());
+        let recovered = TestStruct::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    struct NestedInner {
+        x: String,
+        y: u32,
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    struct NestedOuter {
+        id: u64,
+        items: Vec<NestedInner>,
+        label: Option<String>,
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_nested_struct() {
+        let original = NestedOuter {
+            id: 999,
+            items: vec![
+                NestedInner {
+                    x: "first".to_string(),
+                    y: 1,
+                },
+                NestedInner {
+                    x: "second".to_string(),
+                    y: 2,
+                },
+            ],
+            label: Some("nested test".to_string()),
+        };
+        let ev = ElementValue::ComponentModel(original.clone().into_value());
+        let recovered = NestedOuter::from_element_value(ev).unwrap();
+        assert_eq!(recovered, original);
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    enum TestEnum {
+        A,
+        B(u32),
+        C { name: String, value: bool },
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_enum() {
+        for original in [
+            TestEnum::A,
+            TestEnum::B(42),
+            TestEnum::C {
+                name: "test".to_string(),
+                value: true,
+            },
+        ] {
+            let ev = ElementValue::ComponentModel(original.clone().into_value());
+            let recovered = TestEnum::from_element_value(ev).unwrap();
+            assert_eq!(recovered, original);
+        }
+    }
+
+    #[test]
+    fn test_from_element_value_roundtrip_result() {
+        let ok_val: Result<String, u32> = Ok("success".to_string());
+        let ev = ElementValue::ComponentModel(ok_val.clone().into_value());
+        let recovered = Result::<String, u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, ok_val);
+
+        let err_val: Result<String, u32> = Err(404);
+        let ev = ElementValue::ComponentModel(err_val.clone().into_value());
+        let recovered = Result::<String, u32>::from_element_value(ev).unwrap();
+        assert_eq!(recovered, err_val);
+    }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    enum EnumCasePayloadNames {
+        Unit,
+        NamedRecord { name: String, value: bool },
+        MultiTuple(u32, u64),
+    }
+
+    #[test]
+    fn enum_case_payload_type_name_uses_case_name() {
+        let typ = <EnumCasePayloadNames as IntoValue>::get_type();
+        let root = typ.nodes.first().expect("missing root type node");
+
+        let golem_wasm::WitTypeNode::VariantType(cases) = &root.type_ else {
+            panic!("expected variant root node");
+        };
+
+        let named_record_idx = cases
+            .iter()
+            .find_map(|(name, idx)| (name == "NamedRecord").then_some(*idx))
+            .flatten()
+            .expect("missing NamedRecord case payload type");
+        let named_record_node = typ
+            .nodes
+            .get(named_record_idx as usize)
+            .expect("missing NamedRecord payload node");
+        assert_eq!(named_record_node.name.as_deref(), Some("NamedRecord"));
+
+        let multi_tuple_idx = cases
+            .iter()
+            .find_map(|(name, idx)| (name == "MultiTuple").then_some(*idx))
+            .flatten()
+            .expect("missing MultiTuple case payload type");
+        let multi_tuple_node = typ
+            .nodes
+            .get(multi_tuple_idx as usize)
+            .expect("missing MultiTuple payload node");
+        assert_eq!(multi_tuple_node.name.as_deref(), Some("MultiTuple"));
     }
 }

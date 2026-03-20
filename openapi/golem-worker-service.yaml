@@ -29,6 +29,7 @@ tags:
 - name: Plugin
 - name: RegistryService
 - name: Reports
+- name: Resources
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
@@ -1720,11 +1721,11 @@ components:
           default: {}
           additionalProperties:
             type: string
-        localAgentConfig:
+        agentConfig:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
+            $ref: '#/components/schemas/WorkerAgentConfigEntry'
     AgentEnvFilter:
       type: object
       title: AgentEnvFilter
@@ -1967,6 +1968,9 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
+        componentRevision:
+          type: integer
+          format: uint64
     AgentMetadataDto:
       type: object
       title: AgentMetadataDto
@@ -1976,6 +1980,7 @@ components:
       - createdBy
       - env
       - configVars
+      - agentConfig
       - status
       - componentRevision
       - retryCount
@@ -2005,6 +2010,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        agentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
         status:
           $ref: '#/components/schemas/AgentStatus'
         componentRevision:
@@ -2038,11 +2047,8 @@ components:
         activePlugins:
           type: array
           items:
-            type: integer
-            format: int32
-            title: |-
-              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-              There can only be a single plugin with a given priority installed to a component.
+            type: string
+            format: uuid
         skippedRegions:
           type: array
           description: |-
@@ -2958,14 +2964,14 @@ components:
         end:
           type: integer
           format: uint64
-    ParsedWorkerCreationLocalAgentConfigEntry:
+    ParsedWorkerAgentConfigEntry:
       type: object
-      title: ParsedWorkerCreationLocalAgentConfigEntry
+      title: ParsedWorkerAgentConfigEntry
       required:
-      - key
+      - path
       - value
       properties:
-        key:
+        path:
           type: array
           items:
             type: string
@@ -2994,11 +3000,15 @@ components:
       type: object
       title: PluginInstallationDescription
       required:
+      - environmentPluginGrantId
       - pluginPriority
       - pluginName
       - pluginVersion
       - parameters
       properties:
+        environmentPluginGrantId:
+          type: string
+          format: uuid
         pluginPriority:
           type: integer
           format: int32
@@ -3020,6 +3030,12 @@ components:
       - idempotencyKey
       properties:
         idempotencyKey:
+          type: string
+    ProcessOplogEntriesResultParameters:
+      type: object
+      title: ProcessOplogEntriesResultParameters
+      properties:
+        error:
           type: string
     PublicAgentInvocation:
       type: object
@@ -3047,7 +3063,7 @@ components:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -3056,7 +3072,7 @@ components:
           ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_AgentInvocationOutputParameters:
       allOf:
       - type: object
@@ -3090,9 +3106,21 @@ components:
           type:
             type: string
             enum:
+            - LoadSnapshot
+            example: LoadSnapshot
+      - $ref: '#/components/schemas/FallibleResultParameters'
+    PublicAgentInvocationResult_ProcessOplogEntriesResultParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
             - ProcessOplogEntries
             example: ProcessOplogEntries
-      - $ref: '#/components/schemas/FallibleResultParameters'
+      - $ref: '#/components/schemas/ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_SaveSnapshotResultParameters:
       allOf:
       - type: object
@@ -3336,6 +3364,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
       discriminator:
         propertyName: type
         mapping:
@@ -3377,6 +3406,7 @@ components:
           CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
           Snapshot: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
+          OplogProcessorCheckpoint: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -3701,6 +3731,18 @@ components:
             - NoOp
             example: NoOp
       - $ref: '#/components/schemas/r#NoOpParams'
+    PublicOplogEntry_r#OplogProcessorCheckpointParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - OplogProcessorCheckpoint
+            example: OplogProcessorCheckpoint
+      - $ref: '#/components/schemas/r#OplogProcessorCheckpointParams'
     PublicOplogEntry_r#PendingAgentInvocationParams:
       allOf:
       - type: object
@@ -4562,14 +4604,14 @@ components:
       properties:
         version:
           type: string
-    WorkerCreationLocalAgentConfigEntry:
+    WorkerAgentConfigEntry:
       type: object
-      title: WorkerCreationLocalAgentConfigEntry
+      title: WorkerAgentConfigEntry
       required:
-      - key
+      - path
       - value
       properties:
-        key:
+        path:
           type: array
           items:
             type: string
@@ -4815,7 +4857,7 @@ components:
         localAgentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/ParsedWorkerCreationLocalAgentConfigEntry'
+            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
@@ -5029,6 +5071,33 @@ components:
         timestamp:
           type: string
           format: date-time
+    r#OplogProcessorCheckpointParams:
+      type: object
+      title: r#OplogProcessorCheckpointParams
+      required:
+      - timestamp
+      - plugin
+      - targetAgentId
+      - confirmedUpTo
+      - sendingUpTo
+      - lastBatchStart
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
+        targetAgentId:
+          $ref: '#/components/schemas/AgentId'
+        confirmedUpTo:
+          type: integer
+          format: uint64
+        sendingUpTo:
+          type: integer
+          format: uint64
+        lastBatchStart:
+          type: integer
+          format: uint64
     r#PendingAgentInvocationParams:
       type: object
       title: r#PendingAgentInvocationParams

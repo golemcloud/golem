@@ -14,8 +14,9 @@
 
 use super::{wait_for_startup, RegistryService};
 use crate::components::component_compilation_service::ComponentCompilationService;
+use crate::components::new_reqwest_client_with_tracing;
 use crate::components::rdb::Rdb;
-use crate::components::{new_reqwest_client, ChildProcessLogger};
+use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
@@ -34,12 +35,12 @@ pub struct SpawnedRegistryService {
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
-    base_http_client: OnceCell<reqwest::Client>,
     admin_account_id: AccountId,
     admin_account_email: AccountEmail,
     admin_account_token: TokenSecret,
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
+    base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
 impl SpawnedRegistryService {
@@ -69,6 +70,13 @@ impl SpawnedRegistryService {
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
         let low_fuel_plan_id = PlanId(uuid!("301fd75c-dcc5-48e3-967e-e7c33df52493"));
 
+        let otlp_wasm = working_directory.join("../plugins/otlp-exporter.wasm");
+        let otlp_wasm_path = if otlp_wasm.exists() {
+            Some(otlp_wasm.as_path())
+        } else {
+            None
+        };
+
         let mut child = Command::new(executable)
             .current_dir(working_directory)
             .envs(
@@ -86,6 +94,7 @@ impl SpawnedRegistryService {
                     &default_plan_id,
                     &low_fuel_plan_id,
                     otlp,
+                    otlp_wasm_path,
                 )
                 .await,
             )
@@ -116,12 +125,12 @@ impl SpawnedRegistryService {
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
-            base_http_client: OnceCell::new(),
             admin_account_id,
             admin_account_email,
             admin_account_token,
             default_plan_id,
             low_fuel_plan_id,
+            base_http_client: OnceCell::new(),
         }
     }
 }
@@ -159,9 +168,9 @@ impl RegistryService for SpawnedRegistryService {
         self.low_fuel_plan_id
     }
 
-    async fn base_http_client(&self) -> reqwest::Client {
+    async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {
         self.base_http_client
-            .get_or_init(async || new_reqwest_client())
+            .get_or_init(|| async { new_reqwest_client_with_tracing() })
             .await
             .clone()
     }

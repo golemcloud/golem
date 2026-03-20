@@ -73,7 +73,6 @@ run_task = [
         "wit-golem-wasm",
         "wit-golem-common",
         "wit-golem-cli",
-        "wit-test-components",
         "wit-sdks",
     ] },
 ]
@@ -129,21 +128,6 @@ cp wit/deps/golem-1.x cli/golem-cli/wit/deps
 cp wit/deps/golem-core cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
-"""
-
-[tasks.wit-test-components]
-private = true
-script_runner = "@duckscript"
-script = """
-components = array
-array_push ${components} oplog-processor
-
-for component in ${components}
-    echo "Updating wit directory for test component ${component}"
-    rm -r test-components/${component}/wit/deps
-    mkdir test-components/${component}/wit/deps
-    glob_cp wit/deps/**/* test-components/${component}/wit/deps
-end
 """
 
 [tasks.remove-wit-deps]
@@ -360,16 +344,6 @@ args = [
 
 ## ** TEST **
 
-[tasks.setup-sdk-overrides]
-private = true
-script_runner = "@duckscript"
-script = """
-# NOTE: when we reach a stable phase during a release cycle, then these env vars should be commented
-
-set_env GOLEM_RUST_PATH ${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust
-set_env GOLEM_TS_PACKAGES_PATH ${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages
-"""
-
 [tasks.test]
 description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
@@ -380,7 +354,7 @@ dependencies = [
 ]
 
 [tasks.unit-tests]
-dependencies = ["setup-sdk-overrides", "wit"]
+dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
 cargo-test-r run --workspace --lib --exclude golem-wasm-derive -- --nocapture --report-time $JUNIT_OPTS
@@ -441,27 +415,46 @@ dependencies = [
     "integration-tests-group2",
     "integration-tests-group3",
     "integration-tests-group4",
+    "integration-tests-group5",
+    "integration-tests-group6",
+    "integration-tests-group7",
     "cli-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
-description = "Runs integration tests (group 1/4)"
+description = "Runs integration tests (group 1/7 - worker, fork)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group2]
-description = "Runs integration tests (group 2/4)"
+description = "Runs integration tests (group 2/7 - worker_local_agent_config, api, custom_api)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test integration :tag:group2 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group3]
-description = "Runs integration tests (group 3/4)"
+description = "Runs integration tests (group 3/7 - worker, fork with sqlite)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group4]
+description = "Runs integration tests (group 4/7 - worker_local_agent_config, api, custom_api with sqlite)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group2 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group5]
+description = "Runs integration tests (group 5/7 - service tests)"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -471,12 +464,20 @@ cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --repo
 cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
 '''
 
-[tasks.integration-tests-group4]
-description = "Runs integration tests (group 4/4)"
+[tasks.integration-tests-group6]
+description = "Runs integration tests (group 6/7 - sharding)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script = '''
 cargo-test-r run --package integration-tests --test sharding -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group7]
+description = "Runs integration tests (group 7/7 - otlp_plugin, plugins)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group7 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
@@ -488,7 +489,7 @@ dependencies = [
 ]
 
 [tasks.cli-integration-tests-group1]
-dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (1/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -498,7 +499,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test int
 '''
 
 [tasks.cli-integration-tests-group2]
-dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (2/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -507,7 +508,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test int
 '''
 
 [tasks.cli-integration-tests-group3]
-dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 description = "Run CLI integration tests (3/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -516,7 +517,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test int
 '''
 
 [tasks.cli-integration-tests-update-golden-files]
-dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
 script_runner = "@duckscript"
 script = '''
@@ -1147,6 +1148,18 @@ description = "Serve the schema.golem.cloud directory locally to help testing th
 install_crate = "miniserve"
 command = "miniserve"
 args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
+
+## PLUGINS
+[tasks.build-plugins]
+dependencies = ["build"]
+description = "Builds built-in plugins (requires golem CLI to be built first)"
+script_runner = "@duckscript"
+script = '''
+cd plugins/otlp-exporter
+exec --fail-on-error ../../target/debug/golem build -P release --force-build
+exec --fail-on-error ../../target/debug/golem exec -P release copy
+cd ../..
+'''
 
 ## Cleanup
 [tasks.clear-v8]

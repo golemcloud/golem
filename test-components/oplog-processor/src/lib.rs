@@ -1,115 +1,161 @@
-#[allow(static_mut_refs)]
-mod bindings;
-
-use crate::bindings::golem::api::oplog::{
-    self, enrich_oplog_entries, OplogIndex, PublicOplogEntry,
+use golem_rust::bindings::golem::api::oplog::{
+    enrich_oplog_entries, AgentInvocation, AgentInvocationStartedParameters, OplogEntry,
+    OplogIndex, PublicOplogEntry,
 };
-use bindings::{
-    exports::golem::api::oplog_processor,
-    golem::api::oplog::{AgentInvocation, AgentInvocationStartedParameters, OplogEntry},
-};
+use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
+use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
 use uuid::Uuid;
+use wstd::http::{Body, Client, Request};
+use wstd::runtime::block_on;
 
-use crate::bindings::exports::golem::component::api::*;
-use std::{cell::RefCell, collections::HashMap};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
-/// This is one of any number of data types that our application
-/// uses. Golem will take care to persist all application state,
-/// whether that state is local to a function being executed or
-/// global across the entire program.
-struct State {
-    invocations: Vec<String>,
-    current_invocations: HashMap<String, AgentInvocationStartedParameters>,
+/// Per-batch delivery record posted to the callback URL.
+#[derive(serde::Serialize)]
+struct BatchCallback {
+    /// Source worker identity
+    source_worker_id: String,
+    /// Account that owns the worker
+    account_id: String,
+    /// Component the worker belongs to
+    component_id: String,
+    /// Index of the first entry in this batch
+    first_entry_index: u64,
+    /// Number of entries in this batch
+    entry_count: u64,
+    /// Invocations observed in this batch (only AgentInvocationFinished entries)
+    invocations: Vec<InvocationRecord>,
+}
+
+#[derive(serde::Serialize)]
+struct InvocationRecord {
+    oplog_index: u64,
+    fn_name: String,
 }
 
 thread_local! {
-    /// This holds the state of our application.
-    static STATE: RefCell<State> = RefCell::new(State {
-        invocations: Vec::new(),
-        current_invocations: HashMap::new()
-    });
+    static CURRENT_INVOCATIONS: RefCell<HashMap<String, AgentInvocationStartedParameters>> =
+        RefCell::new(HashMap::new());
 }
 
-struct Component;
+struct OplogProcessorComponent;
 
-impl Guest for Component {
-    fn get_invoked_functions() -> Vec<String> {
-        STATE.with_borrow(|state| state.invocations.clone())
-    }
-}
-
-impl oplog_processor::Guest for Component {
+impl OplogProcessorGuest for OplogProcessorComponent {
     fn process(
-        account_info: oplog_processor::AccountInfo,
-        _config: Vec<(String, String)>,
-        component_id: oplog_processor::ComponentId,
-        worker_id: oplog_processor::AgentId,
-        metadata: oplog_processor::AgentMetadata,
-        first_entry_index: oplog_processor::OplogIndex,
-        entries: Vec<oplog::OplogEntry>,
+        account_info: golem_rust::oplog_processor::exports::golem::api::oplog_processor::AccountInfo,
+        config: Vec<(String, String)>,
+        component_id: ComponentId,
+        worker_id: AgentId,
+        metadata: golem_rust::bindings::golem::api::host::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<OplogEntry>,
     ) -> Result<(), String> {
-        STATE.with_borrow_mut(|state| {
-            let indexed_entries: Vec<(OplogIndex, OplogEntry)> = entries
-                .into_iter()
-                .enumerate()
-                .map(|(idx, entry)| ((first_entry_index + (idx as u64)), entry))
-                .collect();
-            let enriched_entries = enrich_oplog_entries(
-                metadata.environment_id.clone(),
-                &metadata.agent_id.clone(),
-                &indexed_entries,
-                metadata.component_revision,
-            )
-            .unwrap();
-            for entry in enriched_entries {
-                if let PublicOplogEntry::AgentInvocationStarted(params) = &entry {
-                    state
-                        .current_invocations
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let callback_url = config
+            .iter()
+            .find(|(k, _)| k == "callback-url")
+            .map(|(_, v)| v.clone());
+
+        let account_id = Uuid::from_u64_pair(
+            account_info.account_id.uuid.high_bits,
+            account_info.account_id.uuid.low_bits,
+        );
+
+        let comp_id = Uuid::from_u64_pair(
+            component_id.uuid.high_bits,
+            component_id.uuid.low_bits,
+        );
+
+        let mut invocations: Vec<InvocationRecord> = Vec::new();
+
+        let indexed_entries: Vec<(OplogIndex, OplogEntry)> = entries
+            .into_iter()
+            .enumerate()
+            .map(|(idx, entry)| ((first_entry_index + (idx as u64)), entry))
+            .collect();
+        let enriched_entries = enrich_oplog_entries(
+            metadata.environment_id.clone(),
+            &metadata.agent_id.clone(),
+            &indexed_entries,
+            metadata.component_revision,
+        )
+        .unwrap();
+        for ((oplog_index, _raw_entry), entry) in indexed_entries.iter().zip(enriched_entries.iter())
+        {
+            if let PublicOplogEntry::AgentInvocationStarted(params) = entry {
+                CURRENT_INVOCATIONS.with(|ci| {
+                    ci.borrow_mut()
                         .insert(format!("{worker_id:?}"), params.clone());
-                } else if let PublicOplogEntry::AgentInvocationFinished(_params) = &entry {
-                    if let Some(invocation) =
-                        state.current_invocations.get(&format!("{worker_id:?}"))
-                    {
-                        let account_id = Uuid::from_u64_pair(
-                            account_info.account_id.uuid.high_bits,
-                            account_info.account_id.uuid.low_bits,
-                        );
-
-                        let component_id = Uuid::from_u64_pair(
-                            component_id.uuid.high_bits,
-                            component_id.uuid.low_bits,
-                        );
-
-                        let function_name = match &invocation.invocation {
-                            AgentInvocation::AgentInitialization(_) => {
-                                "agent-initialization".to_string()
-                            }
-                            AgentInvocation::AgentMethodInvocation(method_params) => {
-                                method_params.method_name.clone()
-                            }
-                            AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
-                            AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
-                            AgentInvocation::ProcessOplogEntries(_) => {
-                                "process-oplog-entries".to_string()
-                            }
-                            AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
-                        };
-
-                        state.invocations.push(format!(
-                            "{}/{}/{}/{}",
-                            account_id, component_id, worker_id.agent_id, function_name
-                        ));
-                    } else {
-                        println!(
-                            "AgentInvocationFinished without corresponding AgentInvocationStarted"
-                        )
+                });
+            } else if let PublicOplogEntry::AgentInvocationFinished(_params) = entry {
+                let function_name = if let Some(invocation) =
+                    CURRENT_INVOCATIONS.with(|ci| ci.borrow().get(&format!("{worker_id:?}")).cloned())
+                {
+                    match &invocation.invocation {
+                        AgentInvocation::AgentInitialization(_) => {
+                            "agent-initialization".to_string()
+                        }
+                        AgentInvocation::AgentMethodInvocation(method_params) => {
+                            method_params.method_name.clone()
+                        }
+                        AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
+                        AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
+                        AgentInvocation::ProcessOplogEntries(_) => {
+                            "process-oplog-entries".to_string()
+                        }
+                        AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
                     }
-                }
+                } else {
+                    // AgentInvocationStarted was in a previous batch sent to a
+                    // different plugin worker (e.g. shard reassignment / locality
+                    // recovery spawned a new instance). Still record the invocation
+                    // so we don't silently lose callbacks.
+                    println!(
+                        "AgentInvocationFinished without corresponding AgentInvocationStarted"
+                    );
+                    "unknown".to_string()
+                };
+
+                invocations.push(InvocationRecord {
+                    oplog_index: *oplog_index,
+                    fn_name: function_name,
+                });
             }
-        });
+        }
+
+        let entry_count = indexed_entries.len() as u64;
+
+        if let Some(url) = callback_url {
+            let batch = BatchCallback {
+                source_worker_id: format!("{}", worker_id.agent_id),
+                account_id: account_id.to_string(),
+                component_id: comp_id.to_string(),
+                first_entry_index,
+                entry_count,
+                invocations,
+            };
+            let json = serde_json::to_string(&batch).map_err(|err| err.to_string())?;
+            block_on(async move {
+                let body = Body::from(json.into_bytes());
+                let request = Request::post(&url)
+                    .header("Content-Type", "application/json")
+                    .body(body)
+                    .map_err(|err| err.to_string())?;
+                let _ = Client::new()
+                    .send(request)
+                    .await
+                    .map_err(|err| err.to_string())?;
+                Ok::<(), String>(())
+            })?;
+        }
 
         Ok(())
     }
+
 }
 
-bindings::export!(Component with_types_in bindings);
+golem_rust::oplog_processor::export_oplog_processor!(OplogProcessorComponent with_types_in golem_rust::oplog_processor);

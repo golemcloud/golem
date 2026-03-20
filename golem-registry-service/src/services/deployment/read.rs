@@ -20,6 +20,7 @@ use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::ResolvedAgentType;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
@@ -399,7 +400,7 @@ impl DeploymentService {
         deployment_revision: Option<DeploymentRevision>,
         owner_account_email: Option<&str>,
         auth: &AuthCtx,
-    ) -> Result<DeployedRegisteredAgentType, DeploymentError> {
+    ) -> Result<ResolvedAgentType, DeploymentError> {
         let caller_account_id = auth.account_id();
 
         let record = self
@@ -416,6 +417,7 @@ impl DeploymentService {
             .ok_or_else(|| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
 
         let owner_account_id = AccountId(record.owner_account_id);
+        let environment_id = EnvironmentId(record.environment_id);
         let roles = environment_roles_from_bit_vector(record.environment_roles_from_shares);
 
         // Map authorization failure to NotFound to prevent resource enumeration
@@ -426,7 +428,17 @@ impl DeploymentService {
         )
         .map_err(|_| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
 
-        record.try_into().map_err(DeploymentError::from)
+        let deployment_revision: DeploymentRevision = record
+            .deployment_revision_id
+            .try_into()
+            .map_err(DeployRepoError::from)?;
+        let deployed: DeployedRegisteredAgentType =
+            record.try_into().map_err(DeploymentError::from)?;
+        Ok(ResolvedAgentType {
+            registered_agent_type: deployed.into(),
+            environment_id,
+            deployment_revision,
+        })
     }
 
     pub async fn get_agent_type_by_names_at_deployment(

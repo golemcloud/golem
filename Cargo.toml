@@ -19,13 +19,12 @@ members = [
     "golem-wasm-derive",
     "cli/golem",
     "cli/golem-cli",
+    "golem-openapi-client-generator",
 ]
 
 exclude = [
     "cli/desktop-app/src-tauri",
-    "test-components/host-api-tests",
-    "test-components/http-tests",
-    "test-components/oplog-processor",
+    "test-components",
     "sdks/golem-rust"
 ]
 
@@ -38,7 +37,7 @@ golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
-golem-openapi-client-generator = { version = "=0.0.17" }
+golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
@@ -94,7 +93,7 @@ colored-diff = "0.2.3"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.5.0"
-convert_case = "0.8.0"
+convert_case = "0.11.0"
 cookie = "0.18.1"
 criterion = "0.5"
 crossbeam-channel = "0.5.15"
@@ -105,12 +104,15 @@ derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 desert_rust = { version = "0.1.7", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
 dirs = "6.0.0"
+dotenvy = "0.15.7"
 drop-stream = "0.3.2"
 evcxr = "0.21.1"
 evicting_cache_map = "0.4.0"
+expectrl = "0.8.0"
 fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
+fmt = "0.1.0"
 flate2 = "1.1.0"
 fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", "enable-rustls-ring"] }
 fs-set-times = "0.20.3"
@@ -201,10 +203,12 @@ range-set-blaze = "0.1.16"
 rayon = "1.11.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
-reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }
+reqwest = { version = "0.13.1", features = ["gzip", "json", "multipart", "stream", "query"] }
+reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "query"] }
+reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_30"] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
-rmcp = {version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
 rsa = "0.9.7"
 
 rustc-hash = "2.1.1"
@@ -239,8 +243,8 @@ tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
 test-r = { version = "3.0.3", default-features = true }
-testcontainers = { version = "0.23.3" }
-testcontainers-modules = { version = "0.11.6", features = ["postgres", "redis", "minio", "mysql", ] }
+testcontainers = { version = "0.27.1" }
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
@@ -257,7 +261,7 @@ tonic-health = "0.14.2"
 tonic-prost = "0.14.2"
 tonic-prost-build = "0.14.2"
 tonic-reflection = "0.14.2"
-tonic-tracing-opentelemetry = "0.30.0"
+tonic-tracing-opentelemetry = { version = "0.30.0", features = ["tracing_level_info"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = "0.1"
 tracing-futures = "0.2.5"
@@ -265,6 +269,11 @@ tracing-opentelemetry = "0.31.0"
 tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
+tree-sitter = "0.26.5"
+tree-sitter-json = "0.24.8"
+tree-sitter-rust = "0.24.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-yaml = "0.7.2"
 tower = "0.5.2"
 try_match = "0.4.2"
 tryhard = "0.5.1"

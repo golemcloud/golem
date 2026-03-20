@@ -14,8 +14,8 @@
 
 use crate::app::template::metadata::AppTemplateMetadata;
 use crate::app::template::template::{
-    AppTemplate, AppTemplateCommon, AppTemplateCommonOnDemand, AppTemplateComponent,
-    AppTemplatesForLanguage,
+    AppTemplate, AppTemplateAgent, AppTemplateCommon, AppTemplateCommonOnDemand,
+    AppTemplateComponent, AppTemplatesForLanguage,
 };
 use crate::app::template::AppTemplateName;
 use crate::fs;
@@ -79,26 +79,45 @@ impl AppTemplateRepo {
     pub fn component_templates(
         &self,
         language: GuestLanguage,
-    ) -> anyhow::Result<&BTreeMap<AppTemplateName, AppTemplateComponent>> {
+    ) -> anyhow::Result<&Option<AppTemplateComponent>> {
         Ok(&self.language_templates(language)?.component)
     }
 
     pub fn component_template(
         &self,
         language: GuestLanguage,
-        template_name: &AppTemplateName,
-    ) -> anyhow::Result<&AppTemplateComponent> {
-        self.language_templates(language)?
-            .component
-            .get(template_name)
-            .ok_or_else(|| anyhow!("{} template '{}' not found", language, template_name))
+    ) -> anyhow::Result<&Option<AppTemplateComponent>> {
+        Ok(&self.language_templates(language)?.component)
     }
 
-    pub fn search_component_templates(
+    pub fn agent_templates(
+        &self,
+        language: GuestLanguage,
+    ) -> anyhow::Result<&BTreeMap<AppTemplateName, AppTemplateAgent>> {
+        Ok(&self.language_templates(language)?.agent)
+    }
+
+    pub fn agent_template(
+        &self,
+        template_name: &AppTemplateName,
+    ) -> anyhow::Result<&AppTemplateAgent> {
+        self.language_templates(template_name.language())?
+            .agent
+            .get(template_name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} template '{}' not found",
+                    template_name.language(),
+                    template_name
+                )
+            })
+    }
+
+    pub fn search_agent_templates(
         &self,
         language: Option<GuestLanguage>,
         query: Option<&str>,
-    ) -> BTreeMap<GuestLanguage, BTreeMap<&AppTemplateName, &AppTemplateComponent>> {
+    ) -> BTreeMap<GuestLanguage, BTreeMap<&AppTemplateName, &AppTemplateAgent>> {
         let query = query.map(|q| q.to_lowercase());
         let query = query.as_ref();
 
@@ -109,11 +128,11 @@ impl AppTemplateRepo {
                 (
                     *lang,
                     lang_templates
-                        .component
+                        .agent
                         .iter()
                         .filter(|(name, template)| {
                             query.is_none_or(|q| {
-                                name.as_str().to_lowercase().contains(q)
+                                name.name().to_lowercase().contains(q)
                                     || template.0.description().to_lowercase().contains(q)
                             })
                         })
@@ -157,9 +176,18 @@ impl AppTemplateRepo {
                     entry.common_on_demand = Some(AppTemplateCommonOnDemand(template));
                 }
                 AppTemplateMetadata::Component { .. } => {
+                    if entry.component.is_some() {
+                        bail!(
+                            "Multiple component templates found for {}",
+                            template.language.name()
+                        );
+                    }
+                    entry.component = Some(AppTemplateComponent(template));
+                }
+                AppTemplateMetadata::Agent { .. } => {
                     entry
-                        .component
-                        .insert(template.name.clone(), AppTemplateComponent(template));
+                        .agent
+                        .insert(template.name.clone(), AppTemplateAgent(template));
                 }
             }
         }

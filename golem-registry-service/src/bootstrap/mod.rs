@@ -34,7 +34,9 @@ use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::plugin::{DbPluginRepo, PluginRepo};
+use crate::repo::registry_change::{DbRegistryChangeRepo, RegistryChangeRepo};
 use crate::repo::report::{DbReportRepo, ReportRepo};
+use crate::repo::resource_definition::{DbResourceDefinitionRepo, ResourceDefinitionRepo};
 use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
@@ -53,11 +55,16 @@ use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
+use crate::services::registry_change_notifier::{
+    LocalRegistryChangeNotifier, PostgresRegistryChangeNotifier, RegistryChangeNotifier,
+};
 use crate::services::reports::ReportsService;
+use crate::services::resource_definition::ResourceDefinitionService;
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;
 use anyhow::{Context, anyhow};
@@ -89,17 +96,21 @@ pub struct Services {
     pub component_write_service: Arc<ComponentWriteService>,
     pub deployed_routes_service: Arc<DeployedRoutesService>,
     pub deployed_mcp_service: Arc<DeployedMcpService>,
+    pub registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    pub registry_change_repo: Arc<dyn RegistryChangeRepo>,
     pub deployment_service: Arc<DeploymentService>,
     pub deployment_write_service: Arc<DeploymentWriteService>,
     pub domain_registration_service: Arc<DomainRegistrationService>,
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     pub environment_service: Arc<EnvironmentService>,
     pub environment_share_service: Arc<EnvironmentShareService>,
+    pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
     pub login_system: LoginSystem,
     pub plan_service: Arc<PlanService>,
     pub plugin_registration_service: Arc<PluginRegistrationService>,
+    pub resource_definition_service: Arc<ResourceDefinitionService>,
     pub reports_service: Arc<ReportsService>,
     pub security_scheme_service: Arc<SecuritySchemeService>,
     pub token_service: Arc<TokenService>,
@@ -111,6 +122,7 @@ struct Repos {
     agent_secret_repo: Arc<dyn AgentSecretRepo>,
     application_repo: Arc<dyn ApplicationRepo>,
     component_repo: Arc<dyn ComponentRepo>,
+    registry_change_repo: Arc<dyn RegistryChangeRepo>,
     deployment_repo: Arc<dyn DeploymentRepo>,
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
@@ -122,6 +134,7 @@ struct Repos {
     oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     plan_repo: Arc<dyn PlanRepo>,
     plugin_repo: Arc<dyn PluginRepo>,
+    resource_definition_repo: Arc<dyn ResourceDefinitionRepo>,
     reports_repo: Arc<dyn ReportRepo>,
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     token_repo: Arc<dyn TokenRepo>,
@@ -154,17 +167,32 @@ impl Services {
             .ok_or(anyhow!("No default plan"))?
             .plan_id;
 
+        let registry_change_notifier: Arc<dyn RegistryChangeNotifier> = match &config.db {
+            DbConfig::Postgres(pg_config) => Arc::new(PostgresRegistryChangeNotifier::new(
+                1024,
+                repos.registry_change_repo.clone(),
+                pg_config,
+            )),
+            _ => Arc::new(LocalRegistryChangeNotifier::new(1024)),
+        };
+
         let account_service = Arc::new(AccountService::new(
             repos.account_repo.clone(),
             plan_service.clone(),
             default_plan_id,
+            repos.registry_change_repo.clone(),
+            registry_change_notifier.clone(),
         ));
         account_service
             .create_initial_accounts(&config.initial_accounts)
             .await
             .map_err(|e| e.into_anyhow())?;
 
-        let token_service = Arc::new(TokenService::new(repos.token_repo, account_service.clone()));
+        let token_service = Arc::new(TokenService::new(
+            repos.token_repo,
+            account_service.clone(),
+            registry_change_notifier.clone(),
+        ));
         {
             let initial_tokens = config
                 .initial_accounts
@@ -179,6 +207,15 @@ impl Services {
 
         let auth_service = Arc::new(AuthService::new(repos.account_repo.clone()));
 
+        let builtin_plugin_owner_account_id = config
+            .initial_accounts
+            .values()
+            .find(|a| a.role == golem_common::model::auth::AccountRole::BuiltinPluginOwner)
+            .map(|a| a.id)
+            .ok_or(anyhow!(
+                "No builtin-plugin-owner account found in initial_accounts"
+            ))?;
+
         let application_service = Arc::new(ApplicationService::new(
             repos.application_repo.clone(),
             account_service.clone(),
@@ -189,11 +226,14 @@ impl Services {
             repos.environment_repo.clone(),
             application_service.clone(),
             account_usage_service.clone(),
+            repos.plugin_repo.clone(),
+            builtin_plugin_owner_account_id,
         ));
 
         let environment_share_service = Arc::new(EnvironmentShareService::new(
             repos.environment_share_repo.clone(),
             environment_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let deployment_service = Arc::new(DeploymentService::new(
@@ -219,6 +259,7 @@ impl Services {
             repos.environment_plugin_grant_repo.clone(),
             environment_service.clone(),
             plugin_registration_service.clone(),
+            builtin_plugin_owner_account_id,
         ));
 
         let component_write_service = Arc::new(ComponentWriteService::new(
@@ -259,11 +300,13 @@ impl Services {
             repos.domain_registration_repo.clone(),
             environment_service.clone(),
             domain_provisioner.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
             repos.security_scheme_repo.clone(),
             environment_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(
@@ -280,23 +323,56 @@ impl Services {
             domain_registration_service.clone(),
         ));
 
+        let resource_definition_service = Arc::new(ResourceDefinitionService::new(
+            environment_service.clone(),
+            repos.resource_definition_repo.clone(),
+        ));
+
+        let agent_secret_service = Arc::new(AgentSecretService::new(
+            repos.agent_secret_repo.clone(),
+            environment_service.clone(),
+        ));
+
         let deployment_write_service = Arc::new(DeploymentWriteService::new(
             environment_service.clone(),
             repos.deployment_repo.clone(),
             component_service.clone(),
             http_api_deployment_service.clone(),
             mcp_deployment_service.clone(),
+            agent_secret_service.clone(),
+            registry_change_notifier.clone(),
+            security_scheme_service.clone(),
         ));
 
         let deployed_routes_service =
             Arc::new(DeployedRoutesService::new(repos.deployment_repo.clone()));
 
-        let deployed_mcp_service = Arc::new(DeployedMcpService::new(repos.deployment_repo.clone()));
-
-        let agent_secret_service = Arc::new(AgentSecretService::new(
-            repos.agent_secret_repo.clone(),
-            environment_service.clone(),
+        let deployed_mcp_service = Arc::new(DeployedMcpService::new(
+            repos.deployment_repo.clone(),
+            security_scheme_service.clone(),
         ));
+
+        let environment_state_service = Arc::new(EnvironmentStateService::new(
+            deployment_service.clone(),
+            agent_secret_service.clone(),
+        ));
+
+        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+            &config.builtin_plugins,
+            builtin_plugin_owner_account_id,
+            &repos.plugin_repo,
+            &application_service,
+            &environment_service,
+            &component_service,
+            &component_write_service,
+            &deployment_service,
+            &deployment_write_service,
+            &plugin_registration_service,
+        )
+        .await
+        {
+            tracing::warn!("Failed to provision built-in plugins: {e}");
+        }
 
         Ok(Self {
             account_service,
@@ -310,12 +386,16 @@ impl Services {
             component_write_service,
             deployed_routes_service,
             deployed_mcp_service,
+            registry_change_notifier,
+            registry_change_repo: repos.registry_change_repo,
+            resource_definition_service,
             deployment_service,
             deployment_write_service,
             domain_registration_service,
             environment_plugin_grant_service,
             environment_service,
             environment_share_service,
+            environment_state_service,
             http_api_deployment_service,
             mcp_deployment_service,
             login_system,
@@ -362,6 +442,9 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
+            let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
+            let resource_definition_repo =
+                Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -369,6 +452,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 agent_secret_repo,
                 application_repo,
                 component_repo,
+                registry_change_repo,
                 deployment_repo,
                 domain_registration_repo,
                 environment_plugin_grant_repo,
@@ -380,6 +464,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 oauth2_webflow_state_repo,
                 plan_repo,
                 plugin_repo,
+                resource_definition_repo,
                 reports_repo,
                 security_scheme_repo,
                 token_repo,
@@ -415,6 +500,9 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
+            let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
+            let resource_definition_repo =
+                Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -422,6 +510,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 agent_secret_repo,
                 application_repo,
                 component_repo,
+                registry_change_repo,
                 deployment_repo,
                 domain_registration_repo,
                 environment_plugin_grant_repo,
@@ -433,6 +522,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 oauth2_webflow_state_repo,
                 plan_repo,
                 plugin_repo,
+                resource_definition_repo,
                 reports_repo,
                 security_scheme_repo,
                 token_repo,

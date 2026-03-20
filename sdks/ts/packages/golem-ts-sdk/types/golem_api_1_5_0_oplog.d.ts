@@ -38,6 +38,9 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AttributeValue = golemApi150Context.AttributeValue;
   export type SpanId = golemApi150Context.SpanId;
   export type TraceId = golemApi150Context.TraceId;
+  export type EnvironmentPluginGrantId = {
+    uuid: Uuid;
+  };
   export type WrappedFunctionType = 
   /**
    * The side-effect reads from the agent's local state (for example local file system,
@@ -80,11 +83,11 @@ declare module 'golem:api/oplog@1.5.0' {
     parameters: [string, string][];
   };
   export type RawLocalAgentConfigEntry = {
-    key: string[];
+    path: string[];
     value: WitValue;
   };
   export type LocalAgentConfigEntry = {
-    key: string[];
+    path: string[];
     value: ValueAndType;
   };
   export type CreateParameters = {
@@ -354,6 +357,14 @@ declare module 'golem:api/oplog@1.5.0' {
     data: Uint8Array;
     mimeType: string;
   };
+  export type OplogProcessorCheckpointParameters = {
+    timestamp: Datetime;
+    plugin: PluginInstallationDescription;
+    targetAgentId: AgentId;
+    confirmedUpTo: OplogIndex;
+    sendingUpTo: OplogIndex;
+    lastBatchStart: OplogIndex;
+  };
   export type Timestamp = {
     timestamp: Datetime;
   };
@@ -397,6 +408,9 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'internal-error'
     val: string
+  } |
+  {
+    tag: 'exceeded-table-limit'
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
@@ -408,7 +422,7 @@ declare module 'golem:api/oplog@1.5.0' {
     parent?: AgentId;
     componentSize: bigint;
     initialTotalLinearMemorySize: bigint;
-    initialActivePlugins: number[];
+    initialActivePlugins: EnvironmentPluginGrantId[];
     configVars: [string, string][];
     localAgentConfig: RawLocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
@@ -474,7 +488,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     newComponentSize: bigint;
-    newActivePlugins: number[];
+    newActivePlugins: EnvironmentPluginGrantId[];
   };
   export type ResourceTypeId = {
     name: string;
@@ -492,11 +506,11 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawActivatePluginParameters = {
     timestamp: Datetime;
-    pluginPriority: number;
+    pluginGrantId: EnvironmentPluginGrantId;
   };
   export type RawDeactivatePluginParameters = {
     timestamp: Datetime;
-    pluginPriority: number;
+    pluginGrantId: EnvironmentPluginGrantId;
   };
   export type RawBeginRemoteTransactionParameters = {
     timestamp: Datetime;
@@ -507,6 +521,14 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     data: OplogPayload;
     mimeType: string;
+  };
+  export type RawOplogProcessorCheckpointParameters = {
+    timestamp: Datetime;
+    pluginGrantId: EnvironmentPluginGrantId;
+    targetAgentId: AgentId;
+    confirmedUpTo: OplogIndex;
+    sendingUpTo: OplogIndex;
+    lastBatchStart: OplogIndex;
   };
   export type OplogEntry = 
   /** The initial agent oplog entry */
@@ -720,6 +742,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'snapshot'
     val: RawSnapshotParameters
+  } |
+  /** Checkpoint for oplog processor plugin delivery tracking */
+  {
+    tag: 'oplog-processor-checkpoint'
+    val: RawOplogProcessorCheckpointParameters
   };
   export type PublicOplogEntry = 
   /** The initial agent oplog entry */
@@ -933,6 +960,11 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'snapshot'
     val: SnapshotParameters
+  } |
+  /** Checkpoint for oplog processor plugin delivery tracking */
+  {
+    tag: 'oplog-processor-checkpoint'
+    val: OplogProcessorCheckpointParameters
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

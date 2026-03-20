@@ -1791,3 +1791,53 @@ async fn agent_update_constructor_signature(
 
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+async fn deployment_invalidates_agent_resolution_cache(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    // Deploy v1: it_agent_update_v1_release has CounterAgent with increment() but NO decrement()
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .name("it:agent-update")
+        .store()
+        .await?;
+
+    // Invoke CounterAgent.increment() — this populates the worker-service agent resolution
+    // cache with the v1 deployment's component_id and revision.
+    let agent_id = agent_id!("CounterAgent", "cache-test-1");
+    let _agent = user.start_agent(&component.id, agent_id.clone()).await?;
+    let result_v1 = user
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    assert_eq!(result_v1.into_return_value(), Some(Value::U32(1)));
+
+    // Update to v2: it_agent_update_v2_release has CounterAgent with both increment() AND
+    // decrement(). This triggers a new deployment revision and invalidation event.
+    // The agent type name "CounterAgent" is the same in both versions, so the cache
+    // entry from v1 must be invalidated for v2's resolution to take effect.
+    user.update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    // Allow invalidation event to propagate through gRPC stream to worker-service cache
+    sleep(Duration::from_secs(1)).await;
+
+    // Invoke CounterAgent.decrement() — this method only exists in v2.
+    // If the cache were stale (still pointing to v1's component), the worker-service
+    // would resolve to v1's component which has no decrement(), and this call would fail.
+    // Success proves the cache was invalidated and the new deployment is being used.
+    let agent_v2_id = agent_id!("CounterAgent", 42u64);
+    let _agent_v2 = user.start_agent(&component.id, agent_v2_id.clone()).await?;
+    let result_v2 = user
+        .invoke_and_await_agent(&component, &agent_v2_id, "decrement", data_value!())
+        .await?;
+    // Counter starts at 0, decrement returns option::none
+    assert_eq!(result_v2.into_return_value(), Some(Value::Option(None)));
+
+    Ok(())
+}

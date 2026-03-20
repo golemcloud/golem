@@ -4,7 +4,8 @@ package golem.mcp;
 
 import "golem/common/environment.proto";
 import "golem/common/account_id.proto";
-import "golem/registry/agent_deployment.proto";
+import "golem/registry/agent.proto";
+import "golem/customapi/core.proto";
 
 message CompiledMcp {
   golem.common.AccountId account_id = 1;
@@ -12,4 +13,6 @@ message CompiledMcp {
   uint64 deployment_revision = 3;
   string domain = 4;
   map<string, golem.registry.RegisteredAgentTypeImplementer> agent_type_implementers = 5;
+  golem.customapi.SecuritySchemeDetails security_scheme = 6;
+  repeated golem.registry.RegisteredAgentType registered_agent_types = 7;
 }

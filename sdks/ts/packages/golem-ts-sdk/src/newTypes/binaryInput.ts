@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { BinaryReference } from 'golem:agent/common@1.5.0';
-import * as Either from '../newTypes/either';
 
 /**
  * Represents unstructured binary input, which can be either a URL or inline binary data.
@@ -72,28 +71,28 @@ export const UnstructuredBinary = {
     parameterName: string,
     dataValue: BinaryReference,
     allowedMimeTypes: string[],
-  ): Either.Either<UnstructuredBinary<MT>, string> {
+  ): UnstructuredBinary<MT> {
     if (dataValue.tag === 'url') {
-      return Either.right({
+      return {
         tag: 'url',
         val: dataValue.val,
-      } as UnstructuredBinary<MT>);
+      } as UnstructuredBinary<MT>;
     }
 
     if (
       allowedMimeTypes.length > 0 &&
       !allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)
     ) {
-      return Either.left(
+      throw new Error(
         `Invalid value for parameter ${parameterName}. Mime type \`${dataValue.val.binaryType.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
       );
     }
 
-    return Either.right({
+    return {
       tag: 'inline',
       val: dataValue.val.data,
       mimeType: dataValue.val.binaryType.mimeType,
-    } as UnstructuredBinary<MT>);
+    } as UnstructuredBinary<MT>;
   },
 
   /**

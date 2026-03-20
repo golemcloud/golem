@@ -1,29 +1,21 @@
 [package]
-name = "oplog-processor"
+name = "oplog_processor"
 version = "0.0.1"
 edition = "2021"
 
-[lib]
-path = "src/lib.rs"
-crate-type = ["cdylib"]
-
 [profile.release]
+opt-level = "s"
 lto = true
-opt-level = 's'
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
 
 [dependencies]
-wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
-
+golem-rust = { path = "../../sdks/rust/golem-rust", features = [
+    "export_oplog_processor",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 uuid = { version = "1.10", features = ["v4"] }
-
-[package.metadata.component.bindings]
-generate_unused_types = true
-
-[package.metadata.component.target]
-path = "wit"
-
-[package.metadata.component.target.dependencies]
-"golem:core" = { path = "wit/deps/golem-core" }
-"golem:api" = { path = "wit/deps/golem-1.x" }
-"wasi:io" = { path = "wit/deps/io" }
-"wasi:clocks" = { path = "wit/deps/clocks" }
+wstd = { version = "=0.6.5", features = ["default", "json"] }

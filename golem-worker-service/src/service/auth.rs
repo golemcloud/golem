@@ -16,6 +16,7 @@ use crate::config::AuthServiceConfig;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -55,6 +56,15 @@ pub trait AuthService: Send + Sync {
         action: EnvironmentAction,
         auth_ctx: &AuthCtx,
     ) -> Result<AuthDetailsForEnvironment, AuthServiceError>;
+
+    async fn invalidate_tokens_for_account(&self, _account_id: AccountId) {}
+    async fn invalidate_environment_auth(
+        &self,
+        _environment_id: EnvironmentId,
+        _grantee_account_id: AccountId,
+    ) {
+    }
+    async fn clear_all_caches(&self) {}
 }
 
 #[derive(Clone)]
@@ -158,6 +168,63 @@ impl RemoteAuthService {
 
 #[async_trait]
 impl AuthService for RemoteAuthService {
+    async fn invalidate_tokens_for_account(&self, account_id: AccountId) {
+        let entries: Vec<TokenSecret> = self
+            .auth_ctx_cache
+            .iter()
+            .await
+            .into_iter()
+            .filter(|(_, auth_ctx)| auth_ctx.account_id() == account_id)
+            .map(|(key, _)| key)
+            .collect();
+        for key in entries {
+            self.auth_ctx_cache.remove(&key).await;
+        }
+
+        let env_entries: Vec<(EnvironmentId, AuthCtx)> = self
+            .environment_auth_details_cache
+            .iter()
+            .await
+            .into_iter()
+            .filter(|((_, auth_ctx), _)| auth_ctx.account_id() == account_id)
+            .map(|(key, _)| key)
+            .collect();
+        for key in env_entries {
+            self.environment_auth_details_cache.remove(&key).await;
+        }
+    }
+
+    async fn invalidate_environment_auth(
+        &self,
+        environment_id: EnvironmentId,
+        grantee_account_id: AccountId,
+    ) {
+        let entries: Vec<(EnvironmentId, AuthCtx)> = self
+            .environment_auth_details_cache
+            .iter()
+            .await
+            .into_iter()
+            .filter(|((env_id, auth_ctx), _)| {
+                *env_id == environment_id && auth_ctx.account_id() == grantee_account_id
+            })
+            .map(|(key, _)| key)
+            .collect();
+        for key in entries {
+            self.environment_auth_details_cache.remove(&key).await;
+        }
+    }
+
+    async fn clear_all_caches(&self) {
+        let auth_keys = self.auth_ctx_cache.keys().await;
+        for key in auth_keys {
+            self.auth_ctx_cache.remove(&key).await;
+        }
+        let env_keys = self.environment_auth_details_cache.keys().await;
+        for key in env_keys {
+            self.environment_auth_details_cache.remove(&key).await;
+        }
+    }
+
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
         let result = self
             .auth_ctx_cache

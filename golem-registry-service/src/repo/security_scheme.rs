@@ -18,6 +18,9 @@ use super::model::security_scheme::{
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::security_scheme::SecuritySchemeRecord;
+use crate::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -31,22 +34,27 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait SecuritySchemeRepo: Send + Sync {
+    /// Create a security scheme and record a change event in the same transaction.
     async fn create(
         &self,
         environment_id: Uuid,
         name: String,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError>;
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError>;
 
+    /// Update a security scheme and record a change event in the same transaction.
     async fn update(
         &self,
+        environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError>;
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError>;
 
+    /// Delete a security scheme and record a change event in the same transaction.
     async fn delete(
         &self,
+        environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError>;
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError>;
 
     async fn get_by_id(
         &self,
@@ -92,7 +100,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         environment_id: Uuid,
         name: String,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError> {
         let span = Self::span_environment_id(environment_id);
         self.repo
             .create(environment_id, name, revision)
@@ -102,18 +110,26 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
 
     async fn update(
         &self,
+        environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError> {
         let span = Self::span_security_scheme_id(revision.security_scheme_id);
-        self.repo.update(revision).instrument(span).await
+        self.repo
+            .update(environment_id, revision)
+            .instrument(span)
+            .await
     }
 
     async fn delete(
         &self,
+        environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError> {
         let span = Self::span_security_scheme_id(revision.security_scheme_id);
-        self.repo.delete(revision).instrument(span).await
+        self.repo
+            .delete(environment_id, revision)
+            .instrument(span)
+            .await
     }
 
     async fn get_by_id(
@@ -169,6 +185,20 @@ impl<DBP: Pool> DbSecuritySchemeRepo<DBP> {
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
     }
+
+    async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, E>
+    where
+        R: Send,
+        E: std::fmt::Debug + Send + From<golem_service_base::repo::RepoError>,
+        F: for<'f> FnOnce(
+                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> futures::future::BoxFuture<'f, Result<R, E>>
+            + Send,
+    {
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, api_name, f)
+            .await
+    }
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -209,102 +239,161 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         environment_id: Uuid,
         name: String,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
-            async move {
-                let security_scheme_record: SecuritySchemeRecord = tx
-                    .fetch_one_as(
-                        sqlx::query_as(indoc! {r#"
-                            INSERT INTO security_schemes (security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                            VALUES ($1, $2, $3, $4, $4, NULL, $5, $6)
-                            RETURNING security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(revision.security_scheme_id)
-                            .bind(environment_id)
-                            .bind(name)
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                    )
-                    .await
-                    .to_error_on_unique_violation(SecuritySchemeRepoError::SecuritySchemeViolatesUniqueness)?;
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError> {
+        let result = self
+            .with_tx_err("create", |tx| {
+                async move {
+                    let security_scheme_record: SecuritySchemeRecord = tx
+                        .fetch_one_as(
+                            sqlx::query_as(indoc! {r#"
+                                INSERT INTO security_schemes (security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id)
+                                VALUES ($1, $2, $3, $4, $4, NULL, $5, $6)
+                                RETURNING security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            "#})
+                                .bind(revision.security_scheme_id)
+                                .bind(environment_id)
+                                .bind(name)
+                                .bind(&revision.audit.created_at)
+                                .bind(revision.audit.created_by)
+                                .bind(revision.revision_id)
+                        )
+                        .await
+                        .to_error_on_unique_violation(SecuritySchemeRepoError::SecuritySchemeViolatesUniqueness)?;
 
-                let revision_record = Self::insert_revision(tx, revision).await?;
+                    let revision_record = Self::insert_revision(tx, revision).await?;
 
-                Ok(SecuritySchemeExtRevisionRecord {
-                    environment_id: security_scheme_record.environment_id,
-                    name: security_scheme_record.name,
-                    entity_created_at: security_scheme_record.audit.created_at,
-                    revision: revision_record
-                })
-            }.boxed()
-        }).await
+                    let change_event =
+                        NewRegistryChangeEvent::security_scheme_changed(environment_id);
+                    let event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx,
+                            &change_event,
+                        )
+                        .await?;
+
+                    Ok::<_, SecuritySchemeRepoError>((
+                        SecuritySchemeExtRevisionRecord {
+                            environment_id: security_scheme_record.environment_id,
+                            name: security_scheme_record.name,
+                            entity_created_at: security_scheme_record.audit.created_at,
+                            revision: revision_record,
+                        },
+                        event_id,
+                    ))
+                }
+                .boxed()
+            })
+            .await?;
+
+        self.db_pool.notify_change_event(result.1).await;
+
+        Ok(result)
     }
 
     async fn update(
         &self,
+        environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
-            async move {
-                let revision = Self::insert_revision(tx, revision).await?;
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError> {
+        let result = self
+            .with_tx_err("update", |tx| {
+                async move {
+                    let revision = Self::insert_revision(tx, revision).await?;
 
-                let security_scheme_record: SecuritySchemeRecord = tx
-                    .fetch_optional_as(
-                        sqlx::query_as(indoc! {r#"
-                            UPDATE security_schemes
-                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE security_scheme_id = $4
-                            RETURNING security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                            .bind(revision.security_scheme_id)
-                    ).await?
-                    .ok_or(SecuritySchemeRepoError::ConcurrentModification)?;
+                    let security_scheme_record: SecuritySchemeRecord = tx
+                        .fetch_optional_as(
+                            sqlx::query_as(indoc! {r#"
+                                UPDATE security_schemes
+                                SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                                WHERE security_scheme_id = $4
+                                RETURNING security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            "#})
+                                .bind(&revision.audit.created_at)
+                                .bind(revision.audit.created_by)
+                                .bind(revision.revision_id)
+                                .bind(revision.security_scheme_id)
+                        ).await?
+                        .ok_or(SecuritySchemeRepoError::ConcurrentModification)?;
 
-                Ok(SecuritySchemeExtRevisionRecord {
-                    environment_id: security_scheme_record.environment_id,
-                    name: security_scheme_record.name,
-                    entity_created_at: security_scheme_record.audit.created_at,
-                    revision
-                })
-            }.boxed()
-        }).await
+                    let change_event =
+                        NewRegistryChangeEvent::security_scheme_changed(environment_id);
+                    let event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx,
+                            &change_event,
+                        )
+                        .await?;
+
+                    Ok::<_, SecuritySchemeRepoError>((
+                        SecuritySchemeExtRevisionRecord {
+                            environment_id: security_scheme_record.environment_id,
+                            name: security_scheme_record.name,
+                            entity_created_at: security_scheme_record.audit.created_at,
+                            revision,
+                        },
+                        event_id,
+                    ))
+                }
+                .boxed()
+            })
+            .await?;
+
+        self.db_pool.notify_change_event(result.1).await;
+
+        Ok(result)
     }
 
     async fn delete(
         &self,
+        environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
-            async move {
-                let revision = Self::insert_revision(tx, revision.clone()).await?;
+    ) -> Result<(SecuritySchemeExtRevisionRecord, ChangeEventId), SecuritySchemeRepoError> {
+        let result = self
+            .with_tx_err("delete", |tx| {
+                async move {
+                    let revision = Self::insert_revision(tx, revision.clone()).await?;
 
-                let security_scheme_record: SecuritySchemeRecord = tx
-                    .fetch_optional_as(
-                        sqlx::query_as(indoc! {r#"
-                            UPDATE security_schemes
-                            SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE security_scheme_id = $4
-                            RETURNING security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(&revision.audit.created_at)
-                            .bind(revision.audit.created_by)
-                            .bind(revision.revision_id)
-                            .bind(revision.security_scheme_id)
-                    ).await?
-                    .ok_or(SecuritySchemeRepoError::ConcurrentModification)?;
+                    let security_scheme_record: SecuritySchemeRecord = tx
+                        .fetch_optional_as(
+                            sqlx::query_as(indoc! {r#"
+                                UPDATE security_schemes
+                                SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
+                                WHERE security_scheme_id = $4
+                                RETURNING security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                            "#})
+                                .bind(&revision.audit.created_at)
+                                .bind(revision.audit.created_by)
+                                .bind(revision.revision_id)
+                                .bind(revision.security_scheme_id)
+                        ).await?
+                        .ok_or(SecuritySchemeRepoError::ConcurrentModification)?;
 
-                Ok(SecuritySchemeExtRevisionRecord {
-                    environment_id: security_scheme_record.environment_id,
-                    name: security_scheme_record.name,
-                    entity_created_at: security_scheme_record.audit.created_at,
-                    revision
-                })
-            }.boxed()
-        }).await
+                    let change_event =
+                        NewRegistryChangeEvent::security_scheme_changed(environment_id);
+                    let event_id =
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                            tx,
+                            &change_event,
+                        )
+                        .await?;
+
+                    Ok::<_, SecuritySchemeRepoError>((
+                        SecuritySchemeExtRevisionRecord {
+                            environment_id: security_scheme_record.environment_id,
+                            name: security_scheme_record.name,
+                            entity_created_at: security_scheme_record.audit.created_at,
+                            revision,
+                        },
+                        event_id,
+                    ))
+                }
+                .boxed()
+            })
+            .await?;
+
+        self.db_pool.notify_change_event(result.1).await;
+
+        Ok(result)
     }
 
     async fn get_by_id(

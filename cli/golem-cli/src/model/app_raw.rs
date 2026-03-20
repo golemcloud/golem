@@ -15,7 +15,6 @@
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
-use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use crate::model::GuestLanguage;
 use crate::{fs, APP_MANIFEST_JSON_SCHEMA};
@@ -31,7 +30,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 use url::Url;
@@ -63,8 +62,8 @@ pub struct ApplicationWithSource {
 }
 
 impl ApplicationWithSource {
-    pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
-        Self::from_yaml_string(file.clone(), &fs::read_to_string(file.clone())?)
+    pub fn from_yaml_file(file: &Path) -> anyhow::Result<Self> {
+        Self::from_yaml_string(file.to_path_buf(), &fs::read_to_string(file)?)
             .with_context(|| anyhow!("Failed to load source {}", file.log_color_highlight()))
     }
 
@@ -103,6 +102,8 @@ pub struct Application {
     pub environments: IndexMap<String, Environment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub secret_defaults: IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>,
 }
 
 #[derive(Debug)]
@@ -225,7 +226,7 @@ pub struct ComponentTemplate {
     #[serde(flatten)]
     pub component_properties: ComponentLayerProperties,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub presets: IndexMap<String, ComponentLayerProperties>,
+    pub presets: IndexMap<String, ComponentPreset>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -233,10 +234,28 @@ pub struct ComponentTemplate {
 pub struct Component {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
     #[serde(flatten)]
     pub component_properties: ComponentLayerProperties,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub presets: IndexMap<String, ComponentLayerProperties>,
+    pub presets: IndexMap<String, ComponentPreset>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentPreset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Marker>,
+    #[serde(flatten)]
+    pub component_properties: ComponentLayerProperties,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnvironmentAgentSecret {
+    pub path: Vec<String>,
+    pub value: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -274,7 +293,8 @@ pub struct McpDeployment {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpDeploymentAgentOptions {
-    // MCP agent configuration options coming soon
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_scheme: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -414,12 +434,6 @@ pub struct InitialComponentFile {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<Marker>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_wit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generated_wit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
@@ -431,8 +445,6 @@ pub struct ComponentLayerProperties {
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component_type: Option<AppComponentType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -449,6 +461,24 @@ pub struct ComponentLayerProperties {
     pub config_vars_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_vars: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub agents: IndexMap<AgentTypeName, ComponentAgentProperties>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentAgentProperties {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<AgentConfigEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentConfigEntry {
+    pub path: Vec<String>,
+    pub value: serde_json::Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -495,6 +525,8 @@ pub struct ExternalCommand {
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub env: IndexMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rmdirs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

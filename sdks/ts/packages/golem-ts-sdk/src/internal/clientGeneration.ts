@@ -12,24 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { ClassMetadata, Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as WitValue from './mapping/values/WitValue';
-import * as Either from '../newTypes/either';
-import {
-  getAgentType,
-  makeAgentId,
-  RegisteredAgentType,
-  Uuid,
-  WasmRpc,
-  Datetime,
-} from 'golem:agent/host@1.5.0';
+import { makeAgentId, Uuid, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
 import { AgentClassName } from '../agentClassName';
+import * as WitType from './mapping/types/WitType';
+import * as Either from '../newTypes/either';
 import {
   AgentType,
   BinaryReference,
   DataValue,
   ElementValue,
   TextReference,
+  TypedAgentConfigValue,
 } from 'golem:agent/common@1.5.0';
 import { RemoteMethod } from '../baseAgent';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
@@ -40,19 +35,15 @@ import {
   serializeTsValueToTextReference,
 } from './mapping/values/serializer';
 import { TypeInfoInternal } from './typeInfoInternal';
-import {
-  deserializeDataValue,
-  ParameterDetail,
-  serializeToDataValue,
-} from './mapping/values/dataValue';
-import { randomUuid } from '../host/hostapi';
+import { deserializeDataValue, serializeToDataValue } from './mapping/values/dataValue';
+import { randomUuid, ValueAndType } from '../host/hostapi';
 import { AgentId } from '../agentId';
-import * as util from 'node:util';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
   agentType: AgentType,
   ctor: T,
+  configIncludedInArgs: boolean,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -61,21 +52,22 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
+  const shared = new WasmRpcProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const constructedId = shared.constructAgentId(args);
+    const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
   };
 }
 
-export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: any[]) => any>(
+export function getPhantomRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
   agentType: AgentType,
   ctor: T,
+  configIncludedInArgs: boolean,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -85,12 +77,12 @@ export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: 
     );
   }
 
-  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
+  const shared = new WasmRpcProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (finalPhantomId: Uuid, ...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const constructedId = shared.constructAgentId(args, finalPhantomId);
+    const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
   };
@@ -100,6 +92,7 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
   agentClassName: AgentClassName,
   agentType: AgentType,
   ctor: T,
+  configIncludedInArgs: boolean,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -108,13 +101,13 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
       `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
     );
   }
-  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
+  const shared = new WasmRpcProxyHandlerShared(metadata, agentClassName, agentType);
 
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
     const finalPhantomId = randomUuid();
-    const constructedId = shared.constructAgentId(args, finalPhantomId);
+    const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
   };
@@ -131,14 +124,15 @@ type CachedMethodInfo = {
   returnType: TypeInfoInternal;
 };
 
-type ConstructedAgentId = {
+type WasmRpcParams = {
   agentTypeName: string;
   constructorDataValue: DataValue;
   phantomId: Uuid | undefined;
   agentIdString: string;
+  agentConfigEntries: TypedAgentConfigValue[];
 };
 
-class WasmRpxProxyHandlerShared {
+class WasmRpcProxyHandlerShared {
   readonly metadata: ClassMetadata;
   readonly agentClassName: AgentClassName;
   readonly agentType: AgentType;
@@ -166,30 +160,40 @@ class WasmRpxProxyHandlerShared {
     }
   }
 
-  constructAgentId(args: any[], phantomId?: Uuid): ConstructedAgentId {
+  constructWasmRpcParams(
+    args: any[],
+    configIncludedInArgs: boolean,
+    phantomId?: Uuid,
+  ): WasmRpcParams {
     let constructorDataValue: DataValue;
+    const agentConfigEntries: TypedAgentConfigValue[] = [];
 
-    if (args.length === 1 && this.constructorParamTypes[0].tag === 'multimodal') {
-      const dataValueEither = serializeToDataValue(args[0], this.constructorParamTypes[0]);
+    let orderedConstructorParamsTypes;
+    if (configIncludedInArgs) {
+      orderedConstructorParamsTypes = [
+        ...this.constructorParamTypes.filter((cp) => cp.tag !== 'config'),
+        ...this.constructorParamTypes.filter((cp) => cp.tag === 'config'),
+      ];
+    } else {
+      orderedConstructorParamsTypes = this.constructorParamTypes.filter(
+        (cp) => cp.tag !== 'config',
+      );
+    }
 
-      if (Either.isLeft(dataValueEither)) {
-        throw new Error(
-          `Failed to serialize multimodal constructor argument: ${dataValueEither.val}. Input is ${util.format(args)}`,
-        );
-      }
-
-      constructorDataValue = dataValueEither.val;
+    if (args.length === 1 && orderedConstructorParamsTypes[0].tag === 'multimodal') {
+      constructorDataValue = serializeToDataValue(args[0], this.constructorParamTypes[0]);
     } else {
       const elementValues: ElementValue[] = [];
+
       for (const [index, arg] of args.entries()) {
-        const typeInfoInternal = this.constructorParamTypes[index];
+        if (index >= orderedConstructorParamsTypes.length) {
+          throw new Error('Received more args than expected');
+        }
+        let typeInfoInternal = orderedConstructorParamsTypes[index];
 
         switch (typeInfoInternal.tag) {
           case 'analysed':
-            const witValue = Either.getOrThrowWith(
-              WitValue.fromTsValueDefault(arg, typeInfoInternal.val),
-              (err) => new Error(`Failed to encode constructor parameter ${arg}: ${err}`),
-            );
+            const witValue = WitValue.fromTsValueDefault(arg, typeInfoInternal.val);
             const elementValue: ElementValue = {
               tag: 'component-model',
               val: witValue,
@@ -219,6 +223,11 @@ class WasmRpxProxyHandlerShared {
             break;
           case 'multimodal':
             throw new Error('Multimodal constructor parameters are not supported in remote calls');
+          case 'config': {
+            agentConfigEntries.push(
+              ...serializeRpcConfigObject(arg, typeInfoInternal.tsType.properties),
+            );
+          }
         }
       }
 
@@ -235,6 +244,7 @@ class WasmRpxProxyHandlerShared {
       constructorDataValue,
       phantomId,
       agentIdString,
+      agentConfigEntries,
     };
   }
 
@@ -290,7 +300,7 @@ class WasmRpxProxyHandlerShared {
 }
 
 class WasmRpcProxyHandler implements ProxyHandler<any> {
-  private readonly shared: WasmRpxProxyHandlerShared;
+  private readonly shared: WasmRpcProxyHandlerShared;
   private readonly agentId: AgentId;
   private readonly wasmRpc: WasmRpc;
 
@@ -298,19 +308,20 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
   private readonly getIdMethod: () => AgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
-    const [_typeName, _params, phantomId] = this.agentId.parsed();
+    const [, , phantomId] = this.agentId.parsed();
     return phantomId;
   };
   private readonly getAgentTypeMethod: () => AgentType = () => this.shared.agentType;
 
-  constructor(shared: WasmRpxProxyHandlerShared, constructedId: ConstructedAgentId) {
+  constructor(shared: WasmRpcProxyHandlerShared, rpcParams: WasmRpcParams) {
     this.shared = shared;
-    this.agentId = new AgentId(constructedId.agentIdString);
+    this.agentId = new AgentId(rpcParams.agentIdString);
 
     this.wasmRpc = new WasmRpc(
-      constructedId.agentTypeName,
-      constructedId.constructorDataValue,
-      constructedId.phantomId,
+      rpcParams.agentTypeName,
+      rpcParams.constructorDataValue,
+      rpcParams.phantomId,
+      rpcParams.agentConfigEntries,
     );
   }
 
@@ -409,10 +420,7 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
 
     switch (param.type.tag) {
       case 'analysed': {
-        const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(fnArg, param.type.val),
-          (err) => new Error(`Failed to serialize arg ${param.name}: ${err}`),
-        );
+        const witValue = WitValue.fromTsValueDefault(fnArg, param.type.val);
         elementValues.push({ tag: 'component-model', val: witValue });
         break;
       }
@@ -435,15 +443,9 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
           'Internal error: Value of `Config` should not be serialized at any point during RPC call',
         );
       case 'multimodal': {
-        const dataValueEither = serializeToDataValue(fnArg, param.type);
-        if (Either.isLeft(dataValueEither)) {
-          throw new Error(
-            `Failed to serialize multimodal arg ${param.name}: ${dataValueEither.val}`,
-          );
-        }
         // For a multimodal param, the serialized DataValue is itself the result;
         // we wrap it as a single tuple with the multimodal elements
-        const multimodalDv = dataValueEither.val;
+        const multimodalDv = serializeToDataValue(fnArg, param.type);
         if (multimodalDv.tag === 'multimodal') {
           // Each multimodal element becomes part of the overall DataValue
           // But since params are tuple-based, we need to wrap multimodal as a single element
@@ -465,17 +467,73 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
 }
 
 function deserializeRpcResult(resultDataValue: DataValue, typeInfoInternal: TypeInfoInternal): any {
-  return Either.getOrThrowWith(
-    deserializeDataValue(
-      resultDataValue,
-      [
-        {
-          name: 'returnValue',
-          type: typeInfoInternal,
-        },
-      ],
-      { tag: 'anonymous' },
-    ),
-    (err) => new Error(`Failed to deserialize return value of RPC call: ${err}`),
+  return deserializeDataValue(
+    resultDataValue,
+    [
+      {
+        name: 'returnValue',
+        type: typeInfoInternal,
+      },
+    ],
+    { tag: 'anonymous' },
   )[0];
+}
+
+function serializeRpcConfigObject(
+  rpcValue: unknown,
+  configProperties: Type.ConfigProperty[],
+): TypedAgentConfigValue[] {
+  const result: TypedAgentConfigValue[] = [];
+
+  if (rpcValue === null || typeof rpcValue !== 'object') {
+    throw new Error('rpcValue must be an object');
+  }
+
+  for (const prop of configProperties) {
+    if (prop.secret) {
+      continue;
+    }
+
+    let current: unknown = rpcValue;
+    let missing = false;
+
+    for (const key of prop.path) {
+      if (current === null || typeof current !== 'object') {
+        throw new Error(`Expected object while traversing config path ${prop.path.join('.')}`);
+      }
+
+      const record = current as Record<string, unknown>;
+      current = record[key];
+
+      if (current === undefined || current === null) {
+        missing = true;
+        break;
+      }
+    }
+
+    if (missing) {
+      continue;
+    }
+
+    const expectedType = prop.type;
+
+    const [witType, analysedType] = Either.getOrThrowWith(
+      WitType.fromTsType(expectedType, undefined),
+      (err) => new Error(`Failed to construct analysed type for rpc agent config: ${err}`),
+    );
+
+    const witValue = WitValue.fromTsValueDefault(current, analysedType);
+
+    const valueAndType: ValueAndType = {
+      typ: witType,
+      value: witValue,
+    };
+
+    result.push({
+      path: prop.path,
+      value: valueAndType,
+    });
+  }
+
+  return result;
 }

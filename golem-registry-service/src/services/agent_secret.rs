@@ -15,29 +15,28 @@
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::agent_secret::AgentSecretRepo;
 use crate::repo::model::agent_secrets::{
-    AgentSecretData, AgentSecretRepoError, AgentSecretRevisionRecord,
+    AgentSecretCreationRecord, AgentSecretRepoError, AgentSecretRevisionRecord,
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
-use golem_service_base::repo::blob::Blob;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use sqlx::types::Json;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentSecretError {
     #[error("Agent secret value does not match type: [{rendered_errors}]", rendered_errors = errors.join(", "))]
     AgentSecretValueDoesNotMatchType { errors: Vec<String> },
-    #[error("Agent secret for path {rendered_path} already exists in environment", rendered_path = path.join("."))]
-    AgentSecretForPathAlreadyExists { path: Vec<String> },
+    #[error("Agent secret for path {path} already exists in environment")]
+    AgentSecretForPathAlreadyExists { path: CanonicalAgentSecretPath },
     #[error("Environment {0} not found")]
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Agent secret {0} not found")]
@@ -113,24 +112,27 @@ impl AgentSecretService {
             .map(|vat| vat.value);
 
         let id = AgentSecretId::new();
-        let record = AgentSecretRevisionRecord::creation(id, secret_value, auth.account_id());
+
+        let agent_secret_path: CanonicalAgentSecretPath = data.path.into();
 
         let result = self
             .agent_secret_repo
-            .create(
-                environment_id.0,
-                record,
-                Json(data.path.clone()),
-                Blob::new(AgentSecretData {
-                    secret_type: data.secret_type,
-                }),
-            )
+            .create(AgentSecretCreationRecord::new(
+                id,
+                environment_id,
+                agent_secret_path.clone(),
+                data.secret_type,
+                secret_value,
+                auth.account_id(),
+            ))
             .await;
 
         match result {
             Ok(record) => Ok(record.try_into()?),
             Err(AgentSecretRepoError::SecretViolatesUniqueness) => {
-                Err(AgentSecretError::AgentSecretForPathAlreadyExists { path: data.path })
+                Err(AgentSecretError::AgentSecretForPathAlreadyExists {
+                    path: agent_secret_path,
+                })
             }
             Err(other) => Err(other.into()),
         }
@@ -201,7 +203,7 @@ impl AgentSecretService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteShare,
+            EnvironmentAction::DeleteAgentSecret,
         )?;
 
         if agent_secret.revision != current_revision {
@@ -235,7 +237,7 @@ impl AgentSecretService {
         Ok(environment_share)
     }
 
-    pub async fn get_agent_secrets_in_environment(
+    pub async fn list_in_environment(
         &self,
         environment_id: EnvironmentId,
         auth: &AuthCtx,
@@ -251,12 +253,30 @@ impl AgentSecretService {
                 other => other.into(),
             })?;
 
+        self.list_in_fetched_environment(&environment, auth).await
+    }
+
+    pub async fn list_in_fetched_environment(
+        &self,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<Vec<AgentSecret>, AgentSecretError> {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewAgentSecret,
         )?;
 
+        let result = self.list_in_environment_unchecked(environment.id).await?;
+
+        Ok(result)
+    }
+
+    // list in environment without checking auth / confirming the environment is not deleted.
+    pub async fn list_in_environment_unchecked(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<AgentSecret>, AgentSecretError> {
         let result = self
             .agent_secret_repo
             .get_for_environment(environment_id.0)

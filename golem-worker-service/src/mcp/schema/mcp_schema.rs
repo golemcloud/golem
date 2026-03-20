@@ -19,13 +19,13 @@ use golem_wasm::analysis::AnalysedType;
 use serde_json::{Map, Value, json};
 
 #[derive(Default)]
-pub struct McpSchema {
+pub struct McpInputSchema {
     pub properties: Map<FieldName, JsonTypeDescription>,
     pub required: Vec<FieldName>,
 }
 
-impl From<McpSchema> for rmcp::model::JsonObject {
-    fn from(value: McpSchema) -> Self {
+impl From<McpInputSchema> for rmcp::model::JsonObject {
+    fn from(value: McpInputSchema) -> Self {
         let json_value = json!({
             "type": "object",
             "properties": value.properties,
@@ -36,8 +36,8 @@ impl From<McpSchema> for rmcp::model::JsonObject {
     }
 }
 
-impl McpSchema {
-    pub fn prepend_schema(&mut self, mut new_schema: McpSchema) {
+impl McpInputSchema {
+    pub fn prepend_schema(&mut self, mut new_schema: McpInputSchema) {
         new_schema
             .properties
             .extend(std::mem::take(&mut self.properties));
@@ -49,21 +49,102 @@ impl McpSchema {
         *self = new_schema;
     }
 
-    pub fn from_named_element_schemas(schemas: &[NamedElementSchema]) -> McpSchema {
-        let named_types: Vec<(&str, &AnalysedType)> = schemas
-            .iter()
-            .map(|s| match &s.schema {
+    pub fn from_named_element_schemas(schemas: &[NamedElementSchema]) -> McpInputSchema {
+        let mut properties: Map<String, JsonTypeDescription> = Map::new();
+        let mut required = Vec::new();
+
+        for s in schemas {
+            let schema = match &s.schema {
                 ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-                    (s.name.as_str(), element_type)
+                    if !matches!(element_type, AnalysedType::Option(_)) {
+                        required.push(s.name.clone());
+                    }
+                    analysed_type_to_json_schema(element_type)
                 }
-                _ => todo!("Unsupported element schema type in MCP schema mapping"),
+                ElementSchema::UnstructuredText(descriptor) => {
+                    required.push(s.name.to_string());
+
+                    let language_code_description = match &descriptor.restrictions {
+                        Some(types) if !types.is_empty() => {
+                            let codes: Vec<&str> =
+                                types.iter().map(|t| t.language_code.as_str()).collect();
+                            format!("Language code. Must be one of: {}", codes.join(", "))
+                        }
+                        _ => "Language code".to_string(),
+                    };
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "data": {"type": "string", "description": "Text content"},
+                            "languageCode": {"type": "string", "description": language_code_description}
+                        },
+                        "required": ["data"]
+                    })
+                }
+                ElementSchema::UnstructuredBinary(descriptor) => {
+                    required.push(s.name.clone());
+                    let mime_type_description = match &descriptor.restrictions {
+                        Some(types) if !types.is_empty() => {
+                            let mimes: Vec<&str> =
+                                types.iter().map(|t| t.mime_type.as_str()).collect();
+                            format!("MIME type. Must be one of: {}", mimes.join(", "))
+                        }
+                        _ => "MIME type".to_string(),
+                    };
+
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "data": {"type": "string", "description": "Base64-encoded binary data"},
+                            "mimeType": {"type": "string", "description": mime_type_description}
+                        },
+                        "required": ["data", "mimeType"]
+                    })
+                }
+            };
+            properties.insert(s.name.clone(), schema);
+        }
+
+        McpInputSchema {
+            properties,
+            required,
+        }
+    }
+
+    pub fn from_multimodal_element_schemas(schemas: &[NamedElementSchema]) -> McpInputSchema {
+        let one_of: Vec<Value> = schemas
+            .iter()
+            .map(|s| {
+                let value_schema = element_schema_to_json_schema(&s.schema);
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "const": s.name},
+                        "value": value_schema
+                    },
+                    "required": ["name", "value"],
+                    "additionalProperties": false
+                })
             })
             .collect();
 
-        Self::from_record_fields(&named_types)
+        let array_schema = json!({
+            "type": "array",
+            "items": {
+                "oneOf": one_of
+            }
+        });
+
+        let mut properties: Map<String, JsonTypeDescription> = Map::new();
+        properties.insert("parts".to_string(), array_schema);
+
+        McpInputSchema {
+            properties,
+            required: vec!["parts".to_string()],
+        }
     }
 
-    pub fn from_record_fields(fields: &[(&str, &AnalysedType)]) -> McpSchema {
+    pub fn from_record_fields(fields: &[(&str, &AnalysedType)]) -> McpInputSchema {
         let mut properties: Map<String, JsonTypeDescription> = Map::new();
         let mut required = Vec::new();
 
@@ -74,7 +155,7 @@ impl McpSchema {
             }
         }
 
-        McpSchema {
+        McpInputSchema {
             properties,
             required,
         }
@@ -83,6 +164,48 @@ impl McpSchema {
 
 pub type JsonTypeDescription = Value;
 pub type FieldName = String;
+
+fn element_schema_to_json_schema(schema: &ElementSchema) -> JsonTypeDescription {
+    match schema {
+        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+            analysed_type_to_json_schema(element_type)
+        }
+        ElementSchema::UnstructuredText(descriptor) => {
+            let language_code_description = match &descriptor.restrictions {
+                Some(types) if !types.is_empty() => {
+                    let codes: Vec<&str> = types.iter().map(|t| t.language_code.as_str()).collect();
+                    format!("Language code. Must be one of: {}", codes.join(", "))
+                }
+                _ => "Language code".to_string(),
+            };
+            json!({
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Text content"},
+                    "languageCode": {"type": "string", "description": language_code_description}
+                },
+                "required": ["data"]
+            })
+        }
+        ElementSchema::UnstructuredBinary(descriptor) => {
+            let mime_type_description = match &descriptor.restrictions {
+                Some(types) if !types.is_empty() => {
+                    let mimes: Vec<&str> = types.iter().map(|t| t.mime_type.as_str()).collect();
+                    format!("MIME type. Must be one of: {}", mimes.join(", "))
+                }
+                _ => "MIME type".to_string(),
+            };
+            json!({
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Base64-encoded binary data"},
+                    "mimeType": {"type": "string", "description": mime_type_description}
+                },
+                "required": ["data", "mimeType"]
+            })
+        }
+    }
+}
 
 // Based on https://modelcontextprotocol.io/specification/2025-11-25/server/tools and
 // https://json-schema.org/draft/2020-12/json-schema-core (Example: oneOf)
@@ -128,7 +251,7 @@ fn analysed_type_to_json_schema(analysed_type: &AnalysedType) -> JsonTypeDescrip
                 .map(|f| (f.name.as_str(), &f.typ))
                 .collect();
 
-            let schema = McpSchema::from_record_fields(&fields);
+            let schema = McpInputSchema::from_record_fields(&fields);
 
             json!({
                 "type": "object",

@@ -15,6 +15,7 @@ import "golem/worker/agent_config.proto";
 import "golem/worker/cursor.proto";
 import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
@@ -117,7 +118,7 @@ message CreateWorkerRequest {
   golem.worker.AgentId agent_id = 1;
   map<string, string> env = 2;
   map<string, string> config_vars = 3;
-  repeated golem.worker.LocalAgentConfigEntry local_agent_config = 4;
+  repeated golem.worker.AgentConfigEntry agent_config = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 5;
   // Component's owner environment
@@ -422,16 +423,11 @@ message CancelInvocationResponse {
   }
 }
 
-enum AgentInvocationMode {
-  AGENT_INVOCATION_MODE_AWAIT = 0;
-  AGENT_INVOCATION_MODE_SCHEDULE = 1;
-}
-
 message InvokeAgentRequest {
   golem.worker.AgentId agent_id = 1;
-  string method_name = 5;
-  golem.component.UntypedDataValue method_parameters = 6;
-  AgentInvocationMode mode = 7;
+  optional string method_name = 5;
+  optional golem.component.UntypedDataValue method_parameters = 6;
+  golem.worker.AgentInvocationMode mode = 7;
   optional google.protobuf.Timestamp schedule_at = 8;
   optional golem.worker.IdempotencyKey idempotency_key = 9;
   golem.common.AccountId component_owner_account_id = 10;
@@ -452,4 +448,5 @@ message InvokeAgentSuccess {
   optional golem.component.UntypedDataValue result = 1;
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
+  optional golem.worker.InvocationStatus status = 4;
 }

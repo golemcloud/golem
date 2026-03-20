@@ -256,6 +256,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AccountSummaryReport",
                 "golem_common::model::reports::AccountSummaryReport",
             ),
+            // domain_registration
+            (
+                "ResourceDefinition",
+                "golem_common::model::resource_definition::ResourceDefinition",
+            ),
+            (
+                "ResourceDefinitionCreation",
+                "golem_common::model::resource_definition::ResourceDefinitionCreation",
+            ),
+            (
+                "ResourceDefinitionUpdate",
+                "golem_common::model::resource_definition::ResourceDefinitionUpdate",
+            ),
             // security_scheme
             (
                 "SecuritySchemeCreation",
@@ -279,12 +292,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::worker::RevertWorkerTarget",
             ),
             (
-                "WorkerCreationRequest",
+                "AgentCreationRequest",
                 "golem_common::model::worker::AgentCreationRequest",
-            ),
-            (
-                "WorkerCreationLocalAgentConfigEntry",
-                "golem_common::model::worker::WorkerCreationLocalAgentConfigEntry",
             ),
             (
                 "AgentMetadataDto",

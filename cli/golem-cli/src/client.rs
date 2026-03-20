@@ -16,10 +16,11 @@ use crate::auth::{Auth, Authentication};
 use crate::config::{AuthenticationConfigWithSource, ClientConfig, HttpClientConfig};
 use anyhow::bail;
 use golem_client::api::{
-    AccountClientLive, AccountSummaryClientLive, AgentClientLive, AgentTypesClientLive,
-    ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive,
-    ComponentClientLive, DeploymentClientLive, EnvironmentClientLive, HealthCheckClientLive,
-    LoginClientLive, McpDeploymentClientLive, PluginClientLive, TokenClientLive, WorkerClientLive,
+    AccountClientLive, AccountSummaryClientLive, AgentClientLive, AgentSecretsClientLive,
+    AgentTypesClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
+    ApplicationClientLive, ComponentClientLive, DeploymentClientLive, EnvironmentClientLive,
+    HealthCheckClientLive, LoginClientLive, McpDeploymentClientLive, PluginClientLive,
+    TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::model::account::AccountId;
@@ -33,6 +34,7 @@ pub struct GolemClients {
     pub account: AccountClientLive,
     pub account_summary: AccountSummaryClientLive,
     pub agent: AgentClientLive,
+    pub agent_secrets: AgentSecretsClientLive,
     pub agent_types: AgentTypesClientLive,
     pub api_deployment: ApiDeploymentClientLive,
     pub api_domain: ApiDomainClientLive,
@@ -57,10 +59,13 @@ impl GolemClients {
         auth_config: &AuthenticationConfigWithSource,
         config_dir: &Path,
     ) -> anyhow::Result<Self> {
-        let healthcheck_http_client = new_reqwest_client(&config.health_check_http_client_config)?;
+        let healthcheck_http_client: reqwest_middleware::ClientWithMiddleware =
+            new_reqwest_client(&config.health_check_http_client_config)?.into();
 
-        let service_http_client = new_reqwest_client(&config.service_http_client_config)?;
-        let invoke_http_client = new_reqwest_client(&config.invoke_http_client_config)?;
+        let service_http_client: reqwest_middleware::ClientWithMiddleware =
+            new_reqwest_client(&config.service_http_client_config)?.into();
+        let invoke_http_client: reqwest_middleware::ClientWithMiddleware =
+            new_reqwest_client(&config.invoke_http_client_config)?.into();
 
         let auth = Auth::new(LoginClientLive {
             context: ClientContext {
@@ -116,6 +121,9 @@ impl GolemClients {
             },
             agent: AgentClientLive {
                 context: worker_invoke_context(),
+            },
+            agent_secrets: AgentSecretsClientLive {
+                context: registry_context(),
             },
             agent_types: AgentTypesClientLive {
                 context: registry_context(),

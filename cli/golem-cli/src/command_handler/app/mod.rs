@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
-use crate::app::template::{AppTemplateCommon, AppTemplateComponent, AppTemplateName};
+use crate::app::template::AppTemplateName;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -23,16 +23,16 @@ use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
 };
+use crate::command_handler::app::template::TemplateHandler;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
 use crate::error::service::AnyhowMapServiceError;
-use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
-use crate::fs;
+use crate::error::{HintError, NonSuccessfulExit};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_anyhow_error, log_error, log_failed_to, log_finished_ok,
-    log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
+    log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
+    log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
     logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{
@@ -70,12 +70,13 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
 use tracing::debug;
 
 mod deploy_diff;
+mod template;
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
@@ -94,138 +95,19 @@ impl AppCommandHandler {
 
     pub async fn cmd_new(
         &self,
+        application_path: Option<PathBuf>,
         application_name: Option<ApplicationName>,
-        languages: Vec<GuestLanguage>,
+        component_name: Option<ComponentName>,
+        template_names: Vec<AppTemplateName>,
     ) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-
-        {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.opt();
-            match app_ctx {
-                Ok(None) => {
-                    // NOP, there is no app
-                }
-                _ => {
-                    log_error("The current directory is part of an existing application.");
-                    logln("");
-                    logln("Switch to a directory that is not part of an application or use");
-                    logln(format!(
-                        "the '{}' command to create a component in the current application.",
-                        "component new".log_color_highlight()
-                    ));
-                    logln("");
-                    bail!(NonSuccessfulExit);
-                }
-            }
-        }
-
-        let Some((application_name, components)) = ({
-            match application_name {
-                Some(application_name) => Some((application_name, vec![])),
-                None => self
-                    .ctx
-                    .interactive_handler()
-                    .select_new_app_name_and_components()?
-                    .map(|new_app| (new_app.app_name, new_app.templated_component_names)),
-            }
-        }) else {
-            log_error("Both APPLICATION_NAME and LANGUAGES are required in non-interactive mode");
-            logln("");
-            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
-        };
-
-        if components.is_empty() && languages.is_empty() {
-            log_error("LANGUAGES are required in non-interactive mode");
-            logln("");
-            logln("Either specify languages or use the new command without APPLICATION_NAME to use the interactive wizard!");
-            logln("");
-            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
-        }
-
-        let app_dir = PathBuf::from(&application_name.0);
-        if app_dir.exists() {
-            bail!(
-                "Application directory already exists: {}",
-                app_dir.log_color_error_highlight()
-            );
-        }
-
-        fs::create_dir_all(&app_dir)?;
-        log_action(
-            "Created",
-            format!(
-                "application directory: {}",
-                app_dir.display().to_string().log_color_highlight()
-            ),
-        );
-
-        let app_template_repo = self.ctx.app_template_repo()?;
-
-        if components.is_empty() {
-            {
-                let _indent = LogIndent::new();
-                for language in &languages {
-                    if let Some(common_template) = app_template_repo.common_template(*language)? {
-                        match common_template.generate(
-                            &application_name,
-                            &app_dir,
-                            self.ctx.sdk_overrides(),
-                        ) {
-                            Ok(()) => {
-                                log_action(
-                                    "Added",
-                                    format!(
-                                        "common template for {}",
-                                        common_template.0.language.name().log_color_highlight()
-                                    ),
-                                );
-                            }
-                            Err(error) => {
-                                bail!("Failed to add common template for new app: {:#}", error)
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            for (template_name, component_name) in &components {
-                log_action(
-                    "Adding",
-                    format!("component {}", component_name.0.log_color_highlight()),
-                );
-
-                self.generate_component(&application_name, component_name, &app_dir, template_name)?
-            }
-        }
-
-        log_action(
-            "Created",
-            format!("application {}", application_name.0.log_color_highlight()),
-        );
-
-        logln("");
-
-        if components.is_empty() {
-            logln(
-                format!(
-                    "To add components to the application, switch to the {} directory, and use the `{}` command.",
-                    application_name.0.log_color_highlight(),
-                    "component new".log_color_highlight(),
-                )
-            );
-        } else {
-            logln(
-                format!(
-                    "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
-                    application_name.0.log_color_highlight(),
-                    "build".log_color_highlight(),
-                    "deploy".log_color_highlight(),
-                )
-            );
-        }
-
-        Ok(())
+        TemplateHandler::new(self)
+            .cmd_new(
+                application_path,
+                application_name,
+                component_name,
+                template_names,
+            )
+            .await
     }
 
     pub async fn cmd_build(
@@ -497,6 +379,23 @@ impl AppCommandHandler {
         Ok(())
     }
 
+    pub fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
+        match filter {
+            Some(filter) => {
+                if let Some(language) = GuestLanguage::from_string(filter.clone()) {
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(Some(language), None)
+                } else {
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(None, Some(&filter))
+                }
+            }
+            None => self.ctx.app_handler().log_templates_help(None, None),
+        }
+    }
+
     pub async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
         let environment = self
             .ctx
@@ -541,6 +440,30 @@ impl AppCommandHandler {
                         .await
                         .map_service_error()?
                         .values)
+                },
+            )
+            .await
+    }
+
+    pub async fn get_agent_type_by_name(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        agent_type_name: &str,
+    ) -> anyhow::Result<Option<DeployedRegisteredAgentType>> {
+        environment
+            .with_current_deployment_revision_or_default_warn(
+                |current_deployment_revision| async move {
+                    self.ctx
+                        .golem_clients()
+                        .await?
+                        .environment
+                        .get_deployment_agent_type(
+                            &environment.environment_id.0,
+                            current_deployment_revision.into(),
+                            agent_type_name,
+                        )
+                        .await
+                        .map_service_error_not_found_as_opt()
                 },
             )
             .await
@@ -1513,7 +1436,19 @@ impl AppCommandHandler {
                     let mcp_deployment_handler = self.ctx.api_deployment_handler();
                     let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);
                     let agents = mcp_deployment
-                        .agents.keys().map(|k| (k.clone(), golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default()))
+                        .agents
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                golem_common::model::mcp_deployment::McpDeploymentAgentOptions {
+                                    security_scheme: v
+                                        .security_scheme
+                                        .as_ref()
+                                        .and_then(|s| s.parse().ok()),
+                                },
+                            )
+                        })
                         .collect();
 
                     mcp_deployment_handler
@@ -1539,6 +1474,14 @@ impl AppCommandHandler {
         &self,
         deploy_diff: &DeployDiff,
     ) -> anyhow::Result<CurrentDeployment> {
+        let agent_secret_defaults = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
+        };
+
         let clients = self.ctx.golem_clients().await?;
 
         log_action("Deploying", "staged changes to the environment");
@@ -1551,6 +1494,7 @@ impl AppCommandHandler {
                     current_revision: deploy_diff.current_deployment_revision(),
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
                     version: DeploymentVersion("".to_string()), // TODO: atomic
+                    agent_secret_defaults,
                 },
             )
             .await
@@ -1935,6 +1879,8 @@ impl AppCommandHandler {
         Ok(true)
     }
 
+    // TODO: FCL
+    /*
     pub fn get_templates(
         &self,
         requested_template_name: &str,
@@ -1996,6 +1942,7 @@ impl AppCommandHandler {
 
     pub fn generate_component(
         &self,
+        template_apply_plan: &mut TemplateApplyPlan,
         application_name: &ApplicationName,
         component_name: &ComponentName,
         app_dir: &Path,
@@ -2004,29 +1951,23 @@ impl AppCommandHandler {
         let (common_template, component_template) = self.get_templates(template_name)?;
 
         if let Some(common_template) = common_template {
-            common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())?;
+            template_apply_plan.add(
+                common_template.0.name.as_str(),
+                &common_template.generate(application_name, app_dir)?,
+            )?;
         }
 
-        match component_template.generate(
-            application_name,
-            component_name,
-            app_dir,
-            self.ctx.sdk_overrides(),
-        ) {
-            Ok(()) => {
-                log_action(
-                    "Added",
-                    format!(
-                        "new app component {}",
-                        component_name.0.log_color_highlight()
-                    ),
-                );
-            }
-            Err(error) => bail!("Failed to create new app component: {}", error),
-        }
+        template_apply_plan.add(
+            component_template.0.name.as_str(),
+            &component_template.generate(
+                application_name,
+                component_name,
+                app_dir
+            )?,
+        )?;
 
         Ok(())
-    }
+    }*/
 
     pub fn log_languages_help(&self) {
         logln(format!("\n{}", "Available languages:".underline().bold(),));
@@ -2056,25 +1997,16 @@ impl AppCommandHandler {
         let templates = self
             .ctx
             .app_template_repo()?
-            .search_component_templates(language_filter, template_filter);
+            .search_agent_templates(language_filter, template_filter);
 
         for (language, templates) in templates {
             logln(format!("- {}", language.to_string().bold()));
             for (template_name, template) in templates {
-                if template_name.as_str() == "default" {
-                    logln(format!(
-                        "  - {}: {}",
-                        language.id().bold(),
-                        template.0.description(),
-                    ));
-                } else {
-                    logln(format!(
-                        "  - {}/{}: {}",
-                        language.id().bold(),
-                        template.0.name.as_str().bold(),
-                        template.0.description(),
-                    ));
-                }
+                logln(format!(
+                    "  - {}: {}",
+                    template_name.as_str().bold(),
+                    template.0.description(),
+                ));
             }
         }
 

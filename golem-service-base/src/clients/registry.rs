@@ -17,32 +17,33 @@ use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::mcp::CompiledMcp;
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
 use crate::model::component::Component;
-use crate::model::{AccountResourceLimits, AgentDeploymentDetails, ResourceLimits};
+use crate::model::environment::EnvironmentState;
+use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
-    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentDeploymentsRequest,
-    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
+    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentTypeRequest,
+    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
-    GetDeployedComponentMetadataRequest, GetResourceLimitsRequest,
-    ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
-    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
-    batch_update_fuel_usage_response, download_component_response,
+    GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
+    GetResourceLimitsRequest, ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest,
+    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
-    get_agent_deployments_response, get_agent_type_response, get_all_agent_types_response,
+    get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_deployed_component_metadata_response,
-    get_resource_limits_response, resolve_agent_type_at_deployment_response,
-    resolve_agent_type_by_names_response, resolve_component_response,
-    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_component_metadata_response, get_current_environment_state_response,
+    get_deployed_component_metadata_response, get_resource_limits_response,
+    resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
+    resolve_component_response, resolve_latest_agent_type_by_names_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -178,7 +179,7 @@ pub trait RegistryService: Send + Sync {
         deployment_revision: Option<DeploymentRevision>,
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
-    ) -> Result<RegisteredAgentType, RegistryServiceError>;
+    ) -> Result<ResolvedAgentType, RegistryServiceError>;
 
     async fn get_active_routes_for_domain(
         &self,
@@ -190,10 +191,27 @@ pub trait RegistryService: Send + Sync {
         domain: &Domain,
     ) -> Result<CompiledMcp, RegistryServiceError>;
 
-    async fn get_agent_deployments(
+    async fn get_current_environment_state(
         &self,
         environment_id: EnvironmentId,
-    ) -> Result<HashMap<AgentTypeName, AgentDeploymentDetails>, RegistryServiceError>;
+    ) -> Result<EnvironmentState, RegistryServiceError>;
+
+    async fn subscribe_registry_invalidations(
+        &self,
+        last_seen_event_id: Option<u64>,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            golem_common::model::agent::RegistryInvalidationEvent,
+                            RegistryServiceError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        RegistryServiceError,
+    >;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -753,7 +771,7 @@ impl RegistryService for GrpcRegistryService {
         deployment_revision: Option<DeploymentRevision>,
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
-    ) -> Result<RegisteredAgentType, RegistryServiceError> {
+    ) -> Result<ResolvedAgentType, RegistryServiceError> {
         let response = self
             .client
             .call("resolve_agent_type_by_names", move |client| {
@@ -772,10 +790,23 @@ impl RegistryService for GrpcRegistryService {
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(resolve_agent_type_by_names_response::Result::Success(payload)) => Ok(payload
-                .agent_type
-                .ok_or("missing agent_type field")?
-                .try_into()?),
+            Some(resolve_agent_type_by_names_response::Result::Success(payload)) => {
+                let registered_agent_type = payload
+                    .agent_type
+                    .ok_or("missing agent_type field")?
+                    .try_into()?;
+                let environment_id = payload
+                    .environment_id
+                    .ok_or("missing environment_id field")?
+                    .try_into()?;
+                let deployment_revision = DeploymentRevision::try_from(payload.deployment_revision)
+                    .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+                Ok(ResolvedAgentType {
+                    registered_agent_type,
+                    environment_id,
+                    deployment_revision,
+                })
+            }
             Some(resolve_agent_type_by_names_response::Result::Error(error)) => Err(error.into()),
         }
     }
@@ -836,33 +867,181 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn get_agent_deployments(
+    async fn get_current_environment_state(
         &self,
         environment_id: EnvironmentId,
-    ) -> Result<HashMap<AgentTypeName, AgentDeploymentDetails>, RegistryServiceError> {
+    ) -> Result<EnvironmentState, RegistryServiceError> {
         let response = self
             .client
-            .call("get_active_domains_for_agent_types", move |client| {
-                let request = GetAgentDeploymentsRequest {
+            .call("get_current_environment_state", move |client| {
+                let request = GetCurrentEnvironmentStateRequest {
                     environment_id: Some(environment_id.into()),
                 };
-                Box::pin(client.get_agent_deployments(request))
+                Box::pin(client.get_current_environment_state(request))
             })
             .await?
             .into_inner();
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(get_agent_deployments_response::Result::Success(payload)) => {
-                let mut result = HashMap::new();
-                for entry in payload.agent_deployment_details {
-                    let converted = AgentDeploymentDetails::from(entry);
-                    result.insert(converted.agent_type_name.clone(), converted);
-                }
-                Ok(result)
+            Some(get_current_environment_state_response::Result::Success(payload)) => {
+                let converted = payload
+                    .environment_state
+                    .ok_or("missing environment_state field")?
+                    .try_into()?;
+                Ok(converted)
             }
-            Some(get_agent_deployments_response::Result::Error(error)) => Err(error.into()),
+            Some(get_current_environment_state_response::Result::Error(error)) => Err(error.into()),
         }
+    }
+
+    async fn subscribe_registry_invalidations(
+        &self,
+        last_seen_event_id: Option<u64>,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            golem_common::model::agent::RegistryInvalidationEvent,
+                            RegistryServiceError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        RegistryServiceError,
+    > {
+        use futures::StreamExt;
+        use golem_api_grpc::proto::golem::registry::v1::SubscribeRegistryInvalidationsRequest;
+
+        let response = self
+            .client
+            .call("subscribe_registry_invalidations", move |client| {
+                let request = SubscribeRegistryInvalidationsRequest { last_seen_event_id };
+                Box::pin(client.subscribe_registry_invalidations(request))
+            })
+            .await?
+            .into_inner();
+
+        let stream = response.map(move |result| match result {
+            Ok(event) => proto_registry_event_to_model(event),
+            Err(status) => Err(RegistryServiceError::from(status)),
+        });
+
+        Ok(Box::pin(stream))
+    }
+}
+
+fn proto_registry_event_to_model(
+    event: golem_api_grpc::proto::golem::registry::v1::RegistryInvalidationEvent,
+) -> Result<golem_common::model::agent::RegistryInvalidationEvent, RegistryServiceError> {
+    use golem_api_grpc::proto::golem::registry::v1::registry_invalidation_event::Payload;
+
+    let event_id = event.event_id;
+    match event.payload {
+        Some(Payload::CursorExpired(_)) => {
+            Ok(golem_common::model::agent::RegistryInvalidationEvent::CursorExpired { event_id })
+        }
+        Some(Payload::DeploymentChanged(dc)) => {
+            let environment_id = dc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in DeploymentChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::DeploymentChanged {
+                    event_id,
+                    environment_id,
+                    deployment_revision: dc.deployment_revision,
+                },
+            )
+        }
+        Some(Payload::DomainRegistrationChanged(drc)) => {
+            let environment_id = drc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in DomainRegistrationChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::DomainRegistrationChanged {
+                    event_id,
+                    environment_id,
+                    domains: drc.domains,
+                },
+            )
+        }
+        Some(Payload::AccountTokensInvalidated(at)) => {
+            let account_id = at
+                .account_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing account_id in AccountTokensInvalidated",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::AccountTokensInvalidated {
+                    event_id,
+                    account_id,
+                },
+            )
+        }
+        Some(Payload::PermissionsChanged(pc)) => {
+            let environment_id = pc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in PermissionsChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let grantee_account_id = pc
+                .grantee_account_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing grantee_account_id in PermissionsChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::EnvironmentPermissionsChanged {
+                    event_id,
+                    environment_id,
+                    grantee_account_id,
+                },
+            )
+        }
+        Some(Payload::SecuritySchemeChanged(sc)) => {
+            let environment_id = sc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in SecuritySchemeChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::SecuritySchemeChanged {
+                    event_id,
+                    environment_id,
+                },
+            )
+        }
+        None => Err(RegistryServiceError::internal_client_error(
+            "Missing payload in RegistryInvalidationEvent",
+        )),
     }
 }
 

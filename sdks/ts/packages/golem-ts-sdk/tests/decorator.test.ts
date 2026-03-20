@@ -27,7 +27,7 @@ import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
 import { FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
-import { toWitValue, Value } from '../src/internal/mapping/values/Value';
+import { WitNodeBuilder } from '../src/internal/mapping/values/WitNodeBuilder';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { Uuid } from 'golem:agent/host@1.5.0';
 import { AgentClassName } from '../src';
@@ -744,7 +744,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(barAgent.methods.length).toEqual(25);
     expect(barAgent.constructor.inputSchema.val.length).toEqual(6);
     expect(barAgent.typeName).toEqual('my-complex-agent');
-    expect(simpleAgent.methods.length).toEqual(45);
+    expect(simpleAgent.methods.length).toEqual(46);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 
@@ -829,7 +829,9 @@ describe('Annotated FooAgent class', () => {
       throw new Error('FooAgent not found in AgentInitiatorRegistry');
     }
 
-    const value: Value = { kind: 'string', value: 'hello' };
+    const builder = new WitNodeBuilder();
+    builder.string('hello');
+    const witValue = builder.build();
 
     const uuid: Uuid = {
       highBits: BigInt(1234),
@@ -841,7 +843,7 @@ describe('Annotated FooAgent class', () => {
     const fooResult = initiator.initiate(
       {
         tag: 'tuple',
-        val: [{ tag: 'component-model', val: toWitValue(value) }],
+        val: [{ tag: 'component-model', val: witValue }],
       },
       { tag: 'anonymous' },
     );

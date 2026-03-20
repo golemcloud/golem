@@ -20,7 +20,9 @@ use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
 };
-use crate::worker::{QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand};
+use crate::worker::{
+    FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
+};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use async_lock::Mutex;
@@ -111,7 +113,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             match final_decision {
                 None | Some(RetryDecision::None) => {
                     debug!("Invocation queue loop notifying parent about being stopped");
-                    self.parent.stop_internal(true, None).await;
+                    self.parent
+                        .stop_internal(
+                            true,
+                            None,
+                            FinalWorkerState::Unloaded {
+                                startup_failure: None,
+                            },
+                        )
+                        .await;
                     break;
                 }
                 Some(RetryDecision::TryStop(ts)) => {
@@ -122,7 +132,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         continue;
                     } else {
                         debug!("Invocation queue loop notifying parent about being stopped");
-                        self.parent.stop_internal(true, None).await;
+                        self.parent
+                            .stop_internal(
+                                true,
+                                None,
+                                FinalWorkerState::Unloaded {
+                                    startup_failure: None,
+                                },
+                            )
+                            .await;
                         break;
                     }
                 }
@@ -170,7 +188,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     agent_id: self.owned_agent_id.agent_id(),
                     result: Err(err.clone()),
                 });
-                self.parent.stop_internal(true, Some(err)).await;
+                self.parent
+                    .stop_internal(
+                        true,
+                        Some(err.clone()),
+                        FinalWorkerState::Unloaded {
+                            startup_failure: Some(err),
+                        },
+                    )
+                    .await;
                 None
             }
         }
@@ -212,7 +238,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 warn!("Failed to start the worker: {err}");
                 store.data().set_suspended();
 
-                self.parent.stop_internal(true, Some(err)).await;
+                self.parent
+                    .stop_internal(
+                        true,
+                        Some(err.clone()),
+                        FinalWorkerState::Unloaded {
+                            startup_failure: Some(err),
+                        },
+                    )
+                    .await;
                 Some(RetryDecision::None) // early return, we can't retry this
             }
         }
@@ -327,22 +361,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// first pending_updates, then pending_invocations
     async fn drain_pending_from_status(&mut self) -> CommandOutcome {
         loop {
-            let status = self.parent.last_known_status.read().await.clone();
+            let status = self.parent.get_non_detached_last_known_status().await;
 
             // First, try to process a pending update
-            if let Some(update) = status.pending_updates.front() {
-                let target_revision = *update.description.target_revision();
-                let mut store = self.store.lock().await;
-                let mut invocation = Invocation {
-                    owned_agent_id: self.owned_agent_id.clone(),
-                    parent: self.parent.clone(),
-                    instance: self.instance,
-                    store: store.deref_mut(),
-                };
-                match invocation.manual_update(target_revision).await {
-                    CommandOutcome::Continue => continue,
-                    other => break other,
-                }
+            if status.pending_updates.front().is_some() {
+                // if the update made it to pending_updates (instead of pending invocations), it is ready
+                // to be processed on next restart. So just restart here and let the recovery logic take over
+                break CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
             }
 
             // Then, try to process a pending invocation
@@ -357,17 +382,22 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
                 let invocation_span = invocation_span.unwrap_or(Span::current());
 
-                let mut store = self.store.lock().await;
-                let mut invocation = Invocation {
-                    owned_agent_id: self.owned_agent_id.clone(),
-                    parent: self.parent.clone(),
-                    instance: self.instance,
-                    store: store.deref_mut(),
-                };
-                match invocation
-                    .external_invocation(timestamped_invocation.clone(), &invocation_span)
-                    .await
-                {
+                let outcome = async {
+                    let mut store = self.store.lock().await;
+                    let mut invocation = Invocation {
+                        owned_agent_id: self.owned_agent_id.clone(),
+                        parent: self.parent.clone(),
+                        instance: self.instance,
+                        store: store.deref_mut(),
+                    };
+                    invocation
+                        .external_invocation(timestamped_invocation.clone(), &invocation_span)
+                        .await
+                }
+                .instrument(span!(parent: &invocation_span, Level::INFO, "invocation_queue_pickup"))
+                .await;
+
+                match outcome {
                     CommandOutcome::Continue => {
                         self.on_external_invocation_completed().await;
                         continue;
@@ -409,7 +439,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 warn!("Failed to resume replay: {err}");
                 store.data().set_suspended();
 
-                self.parent.stop_internal(true, Some(err)).await;
+                self.parent
+                    .stop_internal(
+                        true,
+                        Some(err.clone()),
+                        FinalWorkerState::Unloaded {
+                            startup_failure: Some(err),
+                        },
+                    )
+                    .await;
                 CommandOutcome::BreakOuterLoop
             }
         }
@@ -575,42 +613,53 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: IdempotencyKey,
         invocation: AgentInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
-        self.store
-            .data_mut()
-            .set_current_idempotency_key(idempotency_key.clone())
-            .await;
-
-        let component_metadata = self.store.data().component_metadata().metadata.clone();
-
-        Self::extend_invocation_context(
-            &mut invocation_context,
-            &idempotency_key,
-            &invocation,
-            &self.owned_agent_id.agent_id(),
-            &self.parent.parsed_agent_id,
-        );
-
-        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
-        self.store
-            .data_mut()
-            .set_current_invocation_context(invocation_context)
-            .await?;
-
-        if let Some(idempotency_key) = self.store.data().get_current_idempotency_key().await {
+        let (lowered, local_span_ids, inherited_span_ids, component_metadata) = async {
             self.store
-                .data()
-                .get_public_state()
-                .worker()
-                .store_invocation_resuming(&idempotency_key)
+                .data_mut()
+                .set_current_idempotency_key(idempotency_key.clone())
                 .await;
-        }
 
-        let invocation_for_lowering = invocation.clone();
-        let lowered = lower_invocation(
-            invocation_for_lowering,
-            &component_metadata,
-            self.parent.parsed_agent_id.as_ref(),
-        )?;
+            let component_metadata = self.store.data().component_metadata().metadata.clone();
+
+            Self::extend_invocation_context(
+                &mut invocation_context,
+                &idempotency_key,
+                &invocation,
+                &self.owned_agent_id.agent_id(),
+                &self.parent.parsed_agent_id,
+            );
+
+            let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+            self.store
+                .data_mut()
+                .set_current_invocation_context(invocation_context)
+                .await?;
+
+            if let Some(idempotency_key) = self.store.data().get_current_idempotency_key().await {
+                self.store
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .store_invocation_resuming(&idempotency_key)
+                    .await;
+            }
+
+            let invocation_for_lowering = invocation.clone();
+            let lowered = lower_invocation(
+                invocation_for_lowering,
+                &component_metadata,
+                self.parent.parsed_agent_id.as_ref(),
+            )?;
+
+            Ok::<_, WorkerExecutorError>((
+                lowered,
+                local_span_ids,
+                inherited_span_ids,
+                component_metadata,
+            ))
+        }
+        .instrument(span!(Level::INFO, "prepare_invocation_context"))
+        .await?;
 
         let result = invoke_observed_and_traced(
             lowered,
@@ -651,6 +700,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let output = AgentInvocationOutput {
             result: invocation_result,
             consumed_fuel: Some(consumed_fuel),
+            invocation_status: None,
             component_revision: Some(component_revision),
         };
         match self

@@ -30,17 +30,17 @@ use std::time::SystemTime;
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub struct LocalAgentConfigEntry {
+pub struct AgentConfigEntry {
     pub agent: AgentTypeName,
-    pub key: Vec<String>,
+    pub path: Vec<String>,
     pub value: ValueAndType,
 }
 
-impl From<LocalAgentConfigEntry> for golem_common::model::component::LocalAgentConfigEntry {
-    fn from(value: LocalAgentConfigEntry) -> Self {
+impl From<AgentConfigEntry> for golem_common::model::component::AgentConfigEntry {
+    fn from(value: AgentConfigEntry) -> Self {
         Self {
             agent: value.agent,
-            key: value.key,
+            path: value.path,
             value: value
                 .value
                 .to_json_value()
@@ -49,16 +49,14 @@ impl From<LocalAgentConfigEntry> for golem_common::model::component::LocalAgentC
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::LocalAgentConfigEntry>
-    for LocalAgentConfigEntry
-{
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentConfigEntry> for AgentConfigEntry {
     type Error = String;
     fn try_from(
-        value: golem_api_grpc::proto::golem::component::LocalAgentConfigEntry,
+        value: golem_api_grpc::proto::golem::component::AgentConfigEntry,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
             agent: AgentTypeName(value.agent),
-            key: value.key,
+            path: value.key,
             value: value
                 .value
                 .ok_or_else(|| "Missing field: value".to_string())?
@@ -67,13 +65,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::LocalAgentConfigEntry>
     }
 }
 
-impl From<LocalAgentConfigEntry>
-    for golem_api_grpc::proto::golem::component::LocalAgentConfigEntry
-{
-    fn from(value: LocalAgentConfigEntry) -> Self {
+impl From<AgentConfigEntry> for golem_api_grpc::proto::golem::component::AgentConfigEntry {
+    fn from(value: AgentConfigEntry) -> Self {
         Self {
             agent: value.agent.0,
-            key: value.key,
+            key: value.path,
             value: Some(value.value.into()),
         }
     }
@@ -95,7 +91,7 @@ pub struct Component {
     pub installed_plugins: Vec<InstalledPlugin>,
     pub env: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
-    pub local_agent_config: Vec<LocalAgentConfigEntry>,
+    pub agent_config: Vec<AgentConfigEntry>,
     /// Hash of the wasm before any transformations
     pub wasm_hash: diff::Hash,
     pub object_store_key: String,
@@ -117,10 +113,10 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             installed_plugins: value.installed_plugins,
             env: value.env,
             config_vars: value.config_vars,
-            local_agent_config: value
-                .local_agent_config
+            agent_config: value
+                .agent_config
                 .into_iter()
-                .map(golem_common::model::component::LocalAgentConfigEntry::from)
+                .map(golem_common::model::component::AgentConfigEntry::from)
                 .collect(),
             wasm_hash: value.wasm_hash,
             hash: value.hash,
@@ -190,10 +186,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
 
         let config_vars = value.config_vars.into_iter().collect::<BTreeMap<_, _>>();
 
-        let local_agent_config = value
-            .local_agent_config
+        let agent_config = value
+            .agent_config
             .into_iter()
-            .map(LocalAgentConfigEntry::try_from)
+            .map(AgentConfigEntry::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
         let hash = value.hash.ok_or("Missing hash field")?.try_into()?;
@@ -217,7 +213,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             installed_plugins,
             env,
             config_vars,
-            local_agent_config,
+            agent_config,
             wasm_hash,
             hash,
             object_store_key: value.object_store_key,
@@ -247,10 +243,10 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 .collect(),
             env: value.env.into_iter().collect(),
             config_vars: value.config_vars.into_iter().collect(),
-            local_agent_config: value
-                .local_agent_config
+            agent_config: value
+                .agent_config
                 .into_iter()
-                .map(golem_api_grpc::proto::golem::component::LocalAgentConfigEntry::from)
+                .map(golem_api_grpc::proto::golem::component::AgentConfigEntry::from)
                 .collect(),
             wasm_hash: Some(value.wasm_hash.into()),
             hash: Some(value.hash.into()),

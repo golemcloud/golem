@@ -1,0 +1,19 @@
+[package]
+name = "golem_it_mcp"
+version = "0.0.1"
+edition = "2021"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+log = { version = "0.4.29", features = ["kv"] }
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wstd = { version = "=0.6.5", features = ["default", "json"] }

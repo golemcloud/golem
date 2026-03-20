@@ -23,7 +23,7 @@ use golem_common::model::agent::{
     NamedElementSchema, NamedElementSchemas, RegisteredAgentTypeImplementer, Snapshotting,
 };
 use golem_common::model::base64::Base64;
-use golem_common::model::component::LocalAgentConfigEntry;
+use golem_common::model::component::AgentConfigEntry;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
     ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction,
@@ -99,6 +99,7 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             None,
             None,
             None,
+            Vec::new(),
         )
         .await?;
 
@@ -154,6 +155,7 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 ("var2".to_string(), "value2".to_string()),
             ])),
             None,
+            Vec::new(),
         )
         .await?;
 
@@ -190,7 +192,7 @@ async fn component_update_with_wrong_revision_is_rejected(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
-                local_agent_config: None,
+                agent_config: None,
                 agent_types: None,
                 plugin_updates: Vec::new(),
             },
@@ -262,7 +264,10 @@ async fn create_component_with_plugins_and_update_installations(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let oplog_plugin = client
         .create_plugin(
@@ -314,7 +319,7 @@ async fn create_component_with_plugins_and_update_installations(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
-                local_agent_config: None,
+                agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
                     environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
@@ -343,7 +348,7 @@ async fn create_component_with_plugins_and_update_installations(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
-                local_agent_config: None,
+                agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Uninstall(PluginUninstallation {
                     environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
@@ -366,7 +371,10 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let oplog_plugin = client
         .create_plugin(
@@ -410,7 +418,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
-                local_agent_config: None,
+                agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
                     environment_plugin_grant_id: oplog_plugin_grant.id,
@@ -454,7 +462,7 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
                 )]),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
-                local_agent_config: Vec::new(),
+                agent_config: Vec::new(),
                 agent_types: Vec::new(),
                 plugins: Vec::new(),
             },
@@ -572,7 +580,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                 file_options: BTreeMap::new(),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
-                local_agent_config: Vec::new(),
+                agent_config: Vec::new(),
                 agent_types: vec![agent_type.clone()],
                 plugins: Vec::new(),
             },
@@ -620,7 +628,10 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin_1 = client
         .create_plugin(
@@ -682,7 +693,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                 file_options: BTreeMap::new(),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
-                local_agent_config: Vec::new(),
+                agent_config: Vec::new(),
                 agent_types: Vec::new(),
                 plugins: vec![
                     PluginInstallation {
@@ -725,7 +736,10 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin = client
         .create_plugin(
@@ -761,7 +775,7 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                 file_options: BTreeMap::new(),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
-                local_agent_config: Vec::new(),
+                agent_config: Vec::new(),
                 agent_types: Vec::new(),
                 plugins: vec![
                     PluginInstallation {
@@ -804,7 +818,10 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin_1 = client
         .create_plugin(
@@ -872,7 +889,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
-                local_agent_config: None,
+                agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![
                     PluginInstallationAction::Install(PluginInstallation {
@@ -911,7 +928,10 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+    let oplog_component = user
+        .component(&env.id, "oplog_processor_release")
+        .store()
+        .await?;
 
     let plugin = client
         .create_plugin(
@@ -953,7 +973,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
-                local_agent_config: None,
+                agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![
                     PluginInstallationAction::Install(PluginInstallation {
@@ -985,21 +1005,21 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
 
 #[test]
 #[tracing::instrument]
-async fn create_with_local_agent_config(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn create_with_agent_config(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let (_, env) = user.app_and_env().await?;
 
     user.component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_local_agent_config(vec![
-            LocalAgentConfigEntry {
+        .with_agent_config(vec![
+            AgentConfigEntry {
                 agent: AgentTypeName("ConfigAgent".to_string()),
-                key: vec!["foo".to_string()],
+                path: vec!["foo".to_string()],
                 value: json!(1),
             },
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("ConfigAgent".to_string()),
-                key: vec!["nested".to_string(), "a".to_string()],
+                path: vec!["nested".to_string(), "a".to_string()],
                 value: json!(true),
             },
         ])
@@ -1011,7 +1031,7 @@ async fn create_with_local_agent_config(deps: &EnvBasedTestDependencies) -> anyh
 
 #[test]
 #[tracing::instrument]
-async fn local_agent_config_with_invalid_type_fails_with_400(
+async fn agent_config_with_invalid_type_fails_with_400(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -1020,9 +1040,9 @@ async fn local_agent_config_with_invalid_type_fails_with_400(
     let result = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_local_agent_config(vec![LocalAgentConfigEntry {
+        .with_agent_config(vec![AgentConfigEntry {
             agent: AgentTypeName("ConfigAgent".to_string()),
-            key: vec!["foo".to_string()],
+            path: vec!["foo".to_string()],
             value: json!(true),
         }])
         .store()
@@ -1045,7 +1065,7 @@ async fn local_agent_config_with_invalid_type_fails_with_400(
 
 #[test]
 #[tracing::instrument]
-async fn local_agent_config_with_undeclared_path_fails_with_409(
+async fn agent_config_with_undeclared_path_fails_with_409(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -1054,9 +1074,9 @@ async fn local_agent_config_with_undeclared_path_fails_with_409(
     let result = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_local_agent_config(vec![LocalAgentConfigEntry {
+        .with_agent_config(vec![AgentConfigEntry {
             agent: AgentTypeName("ConfigAgent".to_string()),
-            key: vec!["undeclared".to_string()],
+            path: vec!["undeclared".to_string()],
             value: json!(true),
         }])
         .store()
@@ -1079,7 +1099,7 @@ async fn local_agent_config_with_undeclared_path_fails_with_409(
 
 #[test]
 #[tracing::instrument]
-async fn add_new_local_agent_config_entry_during_update(
+async fn add_new_agent_config_entry_during_update(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -1088,9 +1108,9 @@ async fn add_new_local_agent_config_entry_during_update(
     let component = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_local_agent_config(vec![LocalAgentConfigEntry {
+        .with_agent_config(vec![AgentConfigEntry {
             agent: AgentTypeName("ConfigAgent".to_string()),
-            key: vec!["foo".to_string()],
+            path: vec!["foo".to_string()],
             value: json!(1),
         }])
         .store()
@@ -1105,17 +1125,18 @@ async fn add_new_local_agent_config_entry_during_update(
         None,
         None,
         Some(vec![
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("ConfigAgent".to_string()),
-                key: vec!["foo".to_string()],
+                path: vec!["foo".to_string()],
                 value: json!(2),
             },
-            LocalAgentConfigEntry {
+            AgentConfigEntry {
                 agent: AgentTypeName("ConfigAgent".to_string()),
-                key: vec!["bar".to_string()],
+                path: vec!["bar".to_string()],
                 value: json!("value"),
             },
         ]),
+        Vec::new(),
     )
     .await?;
 
@@ -1133,9 +1154,9 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
     let component = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_local_agent_config(vec![LocalAgentConfigEntry {
+        .with_agent_config(vec![AgentConfigEntry {
             agent: AgentTypeName("ConfigAgent".to_string()),
-            key: vec!["foo".to_string()],
+            path: vec!["foo".to_string()],
             value: json!(1),
         }])
         .store()
@@ -1151,17 +1172,18 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
             None,
             None,
             Some(vec![
-                LocalAgentConfigEntry {
+                AgentConfigEntry {
                     agent: AgentTypeName("ConfigAgent".to_string()),
-                    key: vec!["foo".to_string()],
+                    path: vec!["foo".to_string()],
                     value: json!(2),
                 },
-                LocalAgentConfigEntry {
+                AgentConfigEntry {
                     agent: AgentTypeName("ConfigAgent".to_string()),
-                    key: vec!["bar".to_string()],
+                    path: vec!["bar".to_string()],
                     value: json!(1),
                 },
             ]),
+            Vec::new(),
         )
         .await;
 

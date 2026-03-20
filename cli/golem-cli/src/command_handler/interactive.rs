@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::template::AppTemplateName;
 use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_warn, log_warn_action, logln, LogColorize};
 use crate::model::format::Format;
 use crate::model::worker::RawAgentId;
-use crate::model::{GuestLanguage, NewInteractiveApp};
+use crate::model::GuestLanguage;
 use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::Account;
@@ -29,14 +30,13 @@ use golem_common::model::environment::EnvironmentName;
 use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
-use inquire::{Confirm, CustomType, InquireError, Select, Text};
+use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 use url::Url;
 
 // NOTE: in the interactive handler is it okay to _read_ context (e.g. read selected component names)
@@ -326,19 +326,20 @@ impl InteractiveHandler {
         .prompt()?)
     }
 
-    pub fn select_new_app_name_and_components(&self) -> anyhow::Result<Option<NewInteractiveApp>> {
-        let Some(app_name) = Text::new("Application name:")
-            .with_validator(|value: &str| {
-                if std::env::current_dir()?.join(value).exists() {
-                    return Ok(Validation::Invalid(ErrorMessage::Custom(
-                        "The specified application name already exists as a directory!".to_string(),
-                    )));
-                }
+    pub fn select_new_app_name(
+        &self,
+        placeholder: Option<&str>,
+    ) -> anyhow::Result<Option<ApplicationName>> {
+        let mut prompt = Text::new("Application name:");
+        if let Some(placeholder) = placeholder {
+            prompt = prompt.with_placeholder(placeholder);
+        }
 
+        let Some(app_name) = prompt
+            .with_validator(|value: &str| {
                 if let Err(error) = ApplicationName::from_str(value) {
                     return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
                 }
-
                 Ok(Validation::Valid)
             })
             .prompt()
@@ -346,110 +347,83 @@ impl InteractiveHandler {
         else {
             return Ok(None);
         };
-        let app_name = ApplicationName(app_name);
 
-        let mut existing_component_names = HashSet::<String>::new();
-        let mut templated_component_names = Vec::<(String, ComponentName)>::new();
-
-        loop {
-            let Some(templated_component_name) = self
-                .select_new_component_template_and_package_name(existing_component_names.clone())?
-            else {
-                return Ok(None);
-            };
-
-            let Some(choice) = Select::new(
-                "Add another component or create application?",
-                AddComponentOrCreateApp::iter().collect_vec(),
-            )
-            .prompt()
-            .none_if_not_interactive_logged()?
-            else {
-                return Ok(None);
-            };
-
-            match choice {
-                AddComponentOrCreateApp::AddComponent => {
-                    existing_component_names.insert(templated_component_name.1 .0.clone());
-                    templated_component_names.push(templated_component_name);
-                    continue;
-                }
-                AddComponentOrCreateApp::CreateApp => {
-                    templated_component_names.push(templated_component_name);
-                    break;
-                }
-            }
-        }
-
-        Ok(Some(NewInteractiveApp {
-            app_name,
-            templated_component_names,
-        }))
+        Ok(Some(ApplicationName(app_name)))
     }
 
-    pub fn select_new_component_template_and_package_name(
-        &self,
-        existing_component_names: HashSet<String>,
-    ) -> anyhow::Result<Option<(String, ComponentName)>> {
-        let available_languages = self.ctx.app_template_repo()?.languages();
+    pub fn select_new_app_templates_ts(&self) -> anyhow::Result<Option<Vec<AppTemplateName>>> {
+        let app_template_repo = self.ctx.app_template_repo()?;
 
-        let Some(language) = Select::new(
-            "Select language for the new component",
-            GuestLanguage::iter()
-                .filter(|lang| available_languages.contains(lang))
-                .collect(),
-        )
-        .prompt()
-        .none_if_not_interactive_logged()?
+        let available_languages = app_template_repo
+            .languages()
+            .iter()
+            .copied()
+            .sorted()
+            .collect::<Vec<_>>();
+
+        let Some(language) = Select::new("Select languages:", available_languages)
+            .prompt()
+            .none_if_not_interactive_logged()?
         else {
             return Ok(None);
         };
 
-        let template_options = self
-            .ctx
-            .app_template_repo()?
-            .component_templates(language)?
+        let template_options = app_template_repo
+            .agent_templates(language)?
             .values()
             .map(|template| TemplateOption {
-                template_name: template.0.name.to_string(),
+                template_name: template.0.name.clone(),
                 description: template.0.description().to_string(),
             })
             .collect::<Vec<_>>();
 
-        let Some(template) =
-            Select::new("Select a template for the new component:", template_options)
-                .prompt()
-                .none_if_not_interactive_logged()?
-        else {
-            return Ok(None);
-        };
-
-        let Some(component_name) = Text::new("Component Package Name:")
-            .with_validator(move |value: &str| {
-                if existing_component_names.contains(value) {
-                    return Ok(Validation::Invalid(ErrorMessage::Custom(
-                        "The component name already exists!".to_string(),
-                    )));
-                }
-
-                if let Err(error) = ComponentName::from_str(value) {
-                    return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
-                }
-
-                Ok(Validation::Valid)
-            })
-            .with_placeholder("package-name:component-name")
+        let Some(selected) = MultiSelect::new("Select templates:", template_options)
             .prompt()
             .none_if_not_interactive_logged()?
         else {
             return Ok(None);
         };
-        let component_name = ComponentName(component_name);
 
-        Ok(Some((
-            format!("{}/{}", language.id(), template.template_name),
-            component_name,
-        )))
+        Ok(Some(
+            selected
+                .into_iter()
+                .map(|template| template.template_name)
+                .collect(),
+        ))
+    }
+
+    pub fn select_component_for_template(
+        &self,
+        template_name: &AppTemplateName,
+        component_names: Vec<ComponentName>,
+    ) -> anyhow::Result<Option<ComponentName>> {
+        let prompt = format!("Select component for template {}:", template_name.as_str());
+
+        Select::new(&prompt, component_names)
+            .prompt()
+            .none_if_not_interactive_logged()
+    }
+
+    pub fn confirm_multi_component_layout_upgrade(
+        &self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "The above multi-component layout upgrade steps for component {} will now be applied. Do you want to continue?",
+                component_name.as_str().log_color_highlight(),
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_template_plan_apply(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            "The above template plan steps will now be applied. Do you want to continue?",
+            None,
+        )
     }
 
     fn confirm<M: AsRef<str>>(
@@ -599,8 +573,9 @@ fn confirm<M: AsRef<str>>(
     result
 }
 
+#[derive(Clone)]
 struct TemplateOption {
-    pub template_name: String,
+    pub template_name: AppTemplateName,
     pub description: String,
 }
 
@@ -609,23 +584,8 @@ impl Display for TemplateOption {
         write!(
             f,
             "{}: {}",
-            self.template_name.log_color_highlight(),
+            self.template_name.as_str().log_color_highlight(),
             self.description
         )
-    }
-}
-
-#[derive(Debug, Clone, Copy, EnumIter)]
-enum AddComponentOrCreateApp {
-    CreateApp,
-    AddComponent,
-}
-
-impl Display for AddComponentOrCreateApp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AddComponentOrCreateApp::AddComponent => write!(f, "Add another component"),
-            AddComponentOrCreateApp::CreateApp => write!(f, "Create application"),
-        }
     }
 }

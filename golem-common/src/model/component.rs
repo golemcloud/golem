@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::diff::VecDiffable;
 use crate::model::diff;
+use itertools::Itertools;
 use uuid::Uuid;
 
 pub use crate::base_model::component::*;
-use itertools::Itertools;
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
@@ -65,15 +66,15 @@ impl ComponentDto {
                     )
                 })
                 .collect(),
-            local_agent_config_ordered_by_agent_and_key: self
-                .local_agent_config
+            ordered_agent_config: self
+                .agent_config
                 .iter()
-                .map(|lac| diff::LocalAgentConfigEntry {
+                .map(|lac| diff::AgentConfigEntry {
                     agent: lac.agent.0.clone(),
-                    key: lac.key.clone(),
-                    value: lac.value.clone(),
+                    path: lac.path.clone(),
+                    value: diff::into_normalized_json(lac.value.clone()),
                 })
-                .sorted_by_key(|lac| (lac.agent.clone(), lac.key.clone()))
+                .sorted_by(|v1, v2| v1.ordering_key().cmp(&v2.ordering_key()))
                 .collect(),
         }
     }

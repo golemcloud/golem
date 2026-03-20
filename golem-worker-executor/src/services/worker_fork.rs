@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::agent_webhooks::AgentWebhooksService;
+use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
-use super::HasAgentWebhooksService;
+use super::{HasAgentWebhooksService, HasEnvironmentStateService};
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
@@ -28,8 +29,8 @@ use crate::services::{
     active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
     scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
-    HasExtraDeps, HasFileLoader, HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin,
-    HasOplogService, HasPromiseService, HasResourceLimits, HasRpc,
+    HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasLeakSentinel,
+    HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
     HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
@@ -54,6 +55,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use uuid::Uuid;
+use wasmtime_wasi_http::HttpConnectionPool;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
@@ -106,6 +108,8 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
     pub shutdown_token: tokio_util::sync::CancellationToken,
+    pub http_connection_pool: Option<HttpConnectionPool>,
+    pub environment_state_service: Arc<dyn EnvironmentStateService>,
     pub extra_deps: Ctx::ExtraDeps,
     pub leak_sentinel: Arc<()>,
 }
@@ -288,6 +292,18 @@ impl<Ctx: WorkerCtx> HasLeakSentinel for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasHttpConnectionPool for DefaultWorkerFork<Ctx> {
+    fn http_connection_pool(&self) -> Option<HttpConnectionPool> {
+        self.http_connection_pool.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasEnvironmentStateService for DefaultWorkerFork<Ctx> {
+    fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
+        self.environment_state_service.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
@@ -318,6 +334,8 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
+            http_connection_pool: self.http_connection_pool.clone(),
+            environment_state_service: self.environment_state_service.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -353,9 +371,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<HttpConnectionPool>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -387,6 +407,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             oplog_processor_plugin,
             resource_limits,
             shutdown_token,
+            http_connection_pool,
+            environment_state_service,
             extra_deps,
             leak_sentinel,
         }
@@ -478,7 +500,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             environment_id,
             env: initial_source_worker_metadata.env,
             config_vars: initial_source_worker_metadata.config_vars,
-            local_agent_config: initial_source_worker_metadata.local_agent_config,
+            agent_config: initial_source_worker_metadata.agent_config,
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),

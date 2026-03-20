@@ -28,7 +28,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
@@ -63,7 +63,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         account_id: AccountId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+        worker_agent_config: Vec<WorkerAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -87,7 +87,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             owned_agent_id,
                             worker_env,
                             worker_config_vars,
-                            worker_local_agent_config,
+                            worker_agent_config,
                             component_revision,
                             parent,
                             &invocation_context_stack,

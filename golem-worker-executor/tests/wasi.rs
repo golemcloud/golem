@@ -3179,6 +3179,7 @@ async fn wasi_config_component_update(
                 ("k4".to_string(), "v4".to_string()),
             ])),
             None,
+            Vec::new(),
         )
         .await?;
 
@@ -3421,6 +3422,525 @@ async fn oplog_replay_after_parallel_http_requests(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Tests that two agents sharing a very limited HTTP connection pool
+/// (max 1 total connection) can both complete their requests, even though
+/// one agent occupies the pool with a slow streaming body for several seconds.
+#[test]
+#[tracing::instrument]
+async fn http_connection_pool_contention_between_agents(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_worker_executor::services::golem_config::{
+        HttpClientConfig, HttpClientEnabledConfig,
+    };
+    use golem_worker_executor_test_utils::start_with_http_client_config;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_http_client_config(
+        deps,
+        &context,
+        HttpClientConfig::Enabled(HttpClientEnabledConfig {
+            max_idle_per_host: 1,
+            max_connections_per_host: 1,
+            max_total_connections: 1,
+            ..Default::default()
+        }),
+    )
+    .await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    // Track when the slow stream starts being consumed
+    let (slow_started_tx, mut slow_started_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let slow_started_tx = Arc::new(slow_started_tx);
+
+    let http_server = spawn({
+        let slow_started_tx = slow_started_tx.clone();
+        async move {
+            let request_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let route = Router::new().route(
+                "/big-byte-array",
+                get(move || {
+                    let slow_started_tx = slow_started_tx.clone();
+                    let request_count = request_count.clone();
+                    async move {
+                        let n = request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if n == 0 {
+                            // First request: slow streaming body (~10s)
+                            let _ = slow_started_tx.send(()).await;
+                            let stream = stream::iter(0..100)
+                                .throttle(Duration::from_millis(100))
+                                .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header("Content-Type", "application/octet-stream")
+                                .body(axum::body::Body::from_stream(stream))
+                                .unwrap()
+                        } else {
+                            // Subsequent requests: fast response
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header("Content-Type", "application/octet-stream")
+                                .body(axum::body::Body::from(vec![0u8; 2048]))
+                                .unwrap()
+                        }
+                    }
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    let agent_id_slow = {
+        use golem_common::phantom_agent_id;
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
+    };
+    let agent_id_fast = {
+        use golem_common::phantom_agent_id;
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
+    };
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id_slow = executor
+        .start_agent_with(
+            &component.id,
+            agent_id_slow.clone(),
+            env.clone(),
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+    let worker_id_fast = executor
+        .start_agent_with(
+            &component.id,
+            agent_id_fast.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    executor.log_output(&worker_id_slow).await?;
+    executor.log_output(&worker_id_fast).await?;
+
+    // Start the slow agent's request (don't await it yet)
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_slow_clone = agent_id_slow.clone();
+    let slow_handle = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_slow_clone,
+                    "slow_body_stream",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait for the slow stream to actually start being consumed
+    slow_started_rx
+        .recv()
+        .await
+        .expect("slow stream should have started");
+
+    // Now invoke the fast agent — it must wait for the connection pool
+    let fast_start = Instant::now();
+    let fast_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id_fast,
+            "slow_body_stream",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let fast_elapsed = fast_start.elapsed();
+
+    info!("Fast agent completed in {fast_elapsed:?}");
+
+    // The slow agent should also have completed
+    let slow_result = slow_handle
+        .await??
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    // The fast invoke should have been blocked by the pool for most of the slow stream's duration
+    assert!(
+        fast_elapsed >= Duration::from_secs(5),
+        "Expected fast agent to be blocked by pool contention, but it completed in {fast_elapsed:?}"
+    );
+
+    // slow: 100 chunks * 1024 bytes = 102400
+    assert_eq!(slow_result, Value::U64(100 * 1024));
+    // fast: 2048 bytes
+    assert_eq!(fast_result, Value::U64(2048));
+
+    executor.check_oplog_is_queryable(&worker_id_slow).await?;
+    executor.check_oplog_is_queryable(&worker_id_fast).await?;
+
+    http_server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Same as http_connection_pool_contention_between_agents, but after both
+/// invocations complete the executor is dropped and restarted, then both
+/// agents are invoked again to verify they recover from oplog replay correctly.
+#[test]
+#[tracing::instrument]
+async fn http_connection_pool_contention_with_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_worker_executor::services::golem_config::{
+        HttpClientConfig, HttpClientEnabledConfig,
+    };
+    use golem_worker_executor_test_utils::start_with_http_client_config;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_http_client_config(
+        deps,
+        &context,
+        HttpClientConfig::Enabled(HttpClientEnabledConfig {
+            max_idle_per_host: 1,
+            max_connections_per_host: 1,
+            max_total_connections: 1,
+            ..Default::default()
+        }),
+    )
+    .await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    // Track when the slow stream starts being consumed
+    let (slow_started_tx, mut slow_started_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let slow_started_tx = Arc::new(slow_started_tx);
+
+    let http_server = spawn({
+        let slow_started_tx = slow_started_tx.clone();
+        async move {
+            let request_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let route = Router::new().route(
+                "/big-byte-array",
+                get(move || {
+                    let slow_started_tx = slow_started_tx.clone();
+                    let request_count = request_count.clone();
+                    async move {
+                        let n = request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if n == 0 {
+                            // First request: slow streaming body (~10s)
+                            let _ = slow_started_tx.send(()).await;
+                            let stream = stream::iter(0..100)
+                                .throttle(Duration::from_millis(100))
+                                .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header("Content-Type", "application/octet-stream")
+                                .body(axum::body::Body::from_stream(stream))
+                                .unwrap()
+                        } else {
+                            // Subsequent requests: fast response
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header("Content-Type", "application/octet-stream")
+                                .body(axum::body::Body::from(vec![0u8; 2048]))
+                                .unwrap()
+                        }
+                    }
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    let agent_id_slow = {
+        use golem_common::phantom_agent_id;
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
+    };
+    let agent_id_fast = {
+        use golem_common::phantom_agent_id;
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
+    };
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id_slow = executor
+        .start_agent_with(
+            &component.id,
+            agent_id_slow.clone(),
+            env.clone(),
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+    let worker_id_fast = executor
+        .start_agent_with(
+            &component.id,
+            agent_id_fast.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    executor.log_output(&worker_id_slow).await?;
+    executor.log_output(&worker_id_fast).await?;
+
+    // Start the slow agent's request (don't await it yet)
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_slow_clone = agent_id_slow.clone();
+    let slow_handle = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_slow_clone,
+                    "slow_body_stream",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait for the slow stream to actually start being consumed
+    slow_started_rx
+        .recv()
+        .await
+        .expect("slow stream should have started");
+
+    // Now invoke the fast agent with a short timeout — the pool is contended so
+    // the HTTP request cannot even start within 2s, causing the timeout to fire.
+    let fast_start = Instant::now();
+    let fast_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id_fast,
+            "slow_body_stream_with_timeout",
+            data_value!(2000u64), // 2 second timeout
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let fast_elapsed = fast_start.elapsed();
+
+    info!("Fast agent completed in {fast_elapsed:?} with result: {fast_result:?}");
+
+    // The fast agent should have timed out and returned None
+    assert_eq!(fast_result, Value::Option(None));
+
+    // The slow agent should also have completed
+    let slow_result = slow_handle
+        .await??
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    // slow: 100 chunks * 1024 bytes = 102400
+    assert_eq!(slow_result, Value::U64(100 * 1024));
+
+    // Drop executor and restart to force oplog replay on both agents
+    info!("Dropping executor to force restart...");
+    drop(executor);
+
+    info!("Restarting executor...");
+    let executor = start_with_http_client_config(
+        deps,
+        &context,
+        HttpClientConfig::Enabled(HttpClientEnabledConfig {
+            max_idle_per_host: 1,
+            max_connections_per_host: 1,
+            max_total_connections: 1,
+            ..Default::default()
+        }),
+    )
+    .await?;
+    info!("Executor restarted");
+
+    // After restart, invoke both agents again — triggers oplog replay.
+    // The slow agent should still work and get a fast response (server counter > 0).
+    let slow_result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id_slow,
+            "slow_body_stream",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(slow_result2, Value::U64(2048));
+
+    // The fast agent that previously timed out should also be usable after restart
+    let fast_result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id_fast,
+            "slow_body_stream",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(fast_result2, Value::U64(2048));
+
+    executor.check_oplog_is_queryable(&worker_id_slow).await?;
+    executor.check_oplog_is_queryable(&worker_id_fast).await?;
+
+    http_server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Calls slow_body_stream_with_timeout with a very small timeout (1ms) so
+/// the timer fires before the HTTP body finishes, then drops/restarts the
+/// executor to force oplog replay, and finally calls slow_body_stream
+/// (no timeout) to verify the agent recovers correctly. After that initial
+/// round-trip, repeats the timeout call in a loop to stress-test replay.
+#[test]
+#[tracing::instrument]
+async fn http_timeout_and_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn({
+        async move {
+            let route = Router::new().route(
+                "/big-byte-array",
+                get(move || async move {
+                    // Always return a slow streaming body (~10s)
+                    let stream = stream::iter(0..100)
+                        .throttle(Duration::from_millis(100))
+                        .map(|_| Ok::<Bytes, BoxError>(Bytes::from(vec![0u8; 1024])));
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/octet-stream")
+                        .body(axum::body::Body::from_stream(stream))
+                        .unwrap()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    let agent_id = {
+        use golem_common::phantom_agent_id;
+        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
+    };
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    // 1) Loop of timeout calls
+    for i in 0..10 {
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "slow_body_stream_with_timeout",
+                data_value!(0u64),
+            )
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        info!("Timeout call iteration {i}: {result:?}");
+        match &result {
+            Value::Option(None) | Value::Option(Some(_)) => {}
+            other => panic!("expected Option, got {other:?}"),
+        }
+    }
+
+    // 2) Drop executor and restart to force oplog replay
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    info!("Dropping executor to force restart...");
+    drop(executor);
+
+    info!("Restarting executor...");
+    let executor = start(deps, &context).await?;
+    info!("Executor restarted");
+
+    // 3) Single call without timeout — verifies recovery after replay
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "slow_body_stream", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    info!("Post-restart slow_body_stream result: {result:?}");
+    assert_eq!(result, Value::U64(100 * 1024));
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    http_server.abort();
     drop(executor);
     Ok(())
 }

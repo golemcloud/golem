@@ -51,6 +51,7 @@ colored = { workspace = true }
 crossbeam-channel = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
+dotenvy = { workspace = true }
 evcxr = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
@@ -75,6 +76,7 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+reqwest-middleware = { workspace = true }
 rustyline = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
@@ -98,6 +100,11 @@ toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-json = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-yaml = { workspace = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -117,6 +124,7 @@ openssl-sys = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+expectrl = { workspace = true }
 goldenfile = { workspace = true }
 golem-wasm = { workspace = true, features = ["proptest"] }
 log = { workspace = true }

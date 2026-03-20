@@ -15,6 +15,7 @@
 pub mod agent_types;
 pub mod build;
 pub mod context;
+pub mod edit;
 pub mod error;
 pub mod remote_components;
 pub mod template;

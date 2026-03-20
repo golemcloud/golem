@@ -480,7 +480,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.local_agent_config,
+                           cr.config_vars, cr.agent_config,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -508,7 +508,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.local_agent_config,
+                           cr.config_vars, cr.agent_config,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -536,7 +536,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                         cr.component_id, cr.revision_id, cr.hash,
                         cr.created_at, cr.created_by, cr.deleted,
                         cr.size, cr.metadata, cr.env,
-                        cr.config_vars, cr.local_agent_config,
+                        cr.config_vars, cr.agent_config,
                         cr.object_store_key, cr.binary_hash
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -571,7 +571,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.local_agent_config,
+                           cr.config_vars, cr.agent_config,
                            cr.object_store_key, cr.binary_hash
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -618,7 +618,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.local_agent_config,
+                           cr.config_vars, cr.agent_config,
                            cr.object_store_key, cr.binary_hash
                     FROM distinct_revs dr
                     JOIN component_revisions cr
@@ -649,11 +649,11 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.local_agent_config,
+                           cr.config_vars, cr.agent_config,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
-                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR cr.deleted = FALSE)
+                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR c.deleted_at IS NULL)
                 "#})
                 .bind(component_id)
                 .bind(revision_id)
@@ -678,7 +678,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.local_agent_config,
+                           cr.config_vars, cr.agent_config,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -706,7 +706,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.original_config_vars, cr.config_vars, cr.local_agent_config,
+                           cr.original_config_vars, cr.config_vars, cr.agent_config,
                            cr.binary_hash
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -743,7 +743,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.local_agent_config,
+                           cr.config_vars, cr.agent_config,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -777,7 +777,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.local_agent_config,
+                           cr.config_vars, cr.agent_config,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -967,13 +967,13 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                     (component_id, revision_id, hash,
                         created_at, created_by, deleted,
                         size, metadata, env,
-                        config_vars, local_agent_config,
+                        config_vars, agent_config,
                         object_store_key, binary_hash)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     RETURNING component_id, revision_id, hash,
                         created_at, created_by, deleted,
                         size, metadata, env,
-                        config_vars, local_agent_config,
+                        config_vars, agent_config,
                         object_store_key, binary_hash
                 "# })
                 .bind(revision.component_id)
@@ -984,7 +984,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(revision.metadata)
                 .bind(revision.env)
                 .bind(revision.config_vars)
-                .bind(revision.local_agent_config)
+                .bind(revision.agent_config)
                 .bind(revision.object_store_key)
                 .bind(revision.binary_hash),
             )

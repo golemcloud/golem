@@ -32,3 +32,22 @@ pub struct AuthorizationUrl {
     pub csrf_state: CsrfToken,
     pub nonce: Nonce,
 }
+
+/// Stored during MCP OAuth proxy `/authorize` — captures the MCP client's
+/// redirect_uri and state so we can redirect back after the provider callback.
+#[derive(Debug, Clone)]
+pub struct McpPendingAuth {
+    pub client_redirect_uri: String,
+    pub client_state: Option<String>,
+}
+
+/// Stored during MCP OAuth proxy `/callback` — holds the raw tokens obtained
+/// from the provider, indexed by a proxy authorization code that the MCP client
+/// will exchange via `/token`.
+#[derive(Debug, Clone)]
+pub struct McpProxyCodeEntry {
+    pub id_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_in: Option<u64>,
+    pub token_type: String,
+}

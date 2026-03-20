@@ -1,25 +1,29 @@
-[workspace]
-resolver = "2"
-members = ["components-rust/*"]
+[package]
+name = "golem_it_http_tests"
+version = "0.0.1"
+edition = "2021"
 
 [profile.release]
 opt-level = "s"
 lto = true
 
-[workspace.dependencies]
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
 
-golem-rust = { path = "../../sdks/rust/golem-rust", features = [
-    "export_golem_agentic",
-#    "golem_ai" # Uncomment to use Golem AI libraries
-] }
+[dependencies]
+# To use common shared agent definitions, place them in common_lib and uncomment the line below
+# common-lib = { path = "../../common-rust/common-lib" }
 
-# Advanced HTTP client, alternative of wstd::http
-golem-wasi-http = { version = "0.2.0", features = ["json"] }
-
-futures-concurrency = "7.6.3"
-wasi = { version = "=0.14.7+wasi-0.2.4" }
 log = { version = "0.4.29", features = ["kv"] }
-rand = "0.9.0"
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-wstd = {version = "=0.6.5", features = ["default", "json"] }
+time = { version = "0.3", features = ["formatting"] }
+golem-wasi-http = { version = "0.2.0", features = ["async", "json"] }
+wasi = { version = "=0.14.7+wasi-0.2.4" }
+futures-concurrency = "7.6.3"
+futures-util = "0.3.31"
+rand = "0.9.0"
+wasi-logger = { version = "0.1.2", features = ["kv"] }
+wstd = { version = "=0.6.5", features = ["default", "json"] }

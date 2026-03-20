@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.registry.v1;
 
 import "golem/auth/auth_ctx.proto";
+import "golem/auth/auth_details_for_environment.proto";
 import "golem/common/account_id.proto";
 import "golem/common/application.proto";
 import "golem/common/empty.proto";
@@ -13,13 +14,13 @@ import "golem/component/agent.proto";
 import "golem/component/component.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
-import "golem/registry/fuel_usage_update.proto";
-import "golem/registry/agent_deployment.proto";
-import "golem/registry/v1/registry_service_error.proto";
-import "golem/worker/worker_id.proto";
 import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
-import "golem/auth/auth_details_for_environment.proto";
+import "golem/registry/agent.proto";
+import "golem/registry/environment_state.proto";
+import "golem/registry/fuel_usage_update.proto";
+import "golem/registry/v1/registry_service_error.proto";
+import "golem/worker/worker_id.proto";
 
 service RegistryService {
   // auth api
@@ -50,7 +51,11 @@ service RegistryService {
   // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
   rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
-  rpc GetAgentDeployments (GetAgentDeploymentsRequest) returns (GetAgentDeploymentsResponse);
+  rpc GetCurrentEnvironmentState (GetCurrentEnvironmentStateRequest) returns (GetCurrentEnvironmentStateResponse);
+
+  // registry invalidation stream — multiplexed event types
+  rpc SubscribeRegistryInvalidations(SubscribeRegistryInvalidationsRequest)
+      returns (stream RegistryInvalidationEvent);
 }
 
 message AuthenticateTokenRequest {
@@ -307,6 +312,8 @@ message ResolveAgentTypeByNamesResponse {
 
 message ResolveAgentTypeByNamesSuccessResponse {
   RegisteredAgentType agent_type = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  uint64 deployment_revision = 3;
 }
 
 message GetActiveRoutesForDomainRequest {
@@ -339,17 +346,71 @@ message GetActiveMcpForDomainSuccessResponse {
   golem.mcp.CompiledMcp compiled_mcp = 1;
 }
 
-message GetAgentDeploymentsRequest {
+message GetCurrentEnvironmentStateRequest {
   golem.common.EnvironmentId environment_id = 1;
 }
 
-message GetAgentDeploymentsResponse {
+message GetCurrentEnvironmentStateResponse {
   oneof result {
-    GetAgentDeploymentsSuccessResponse success = 1;
+    GetCurrentEnvironmentStateSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
+}
 
-  message GetAgentDeploymentsSuccessResponse {
-    repeated AgentDeploymentDetails agent_deployment_details = 1;
+message GetCurrentEnvironmentStateSuccessResponse {
+  EnvironmentState environment_state = 1;
+}
+
+// ── Multiplexed registry invalidation stream ──
+
+message SubscribeRegistryInvalidationsRequest {
+  // The event_id of the last event the client successfully processed.
+  // If omitted, the server starts streaming from live events only (no replay).
+  optional uint64 last_seen_event_id = 1;
+}
+
+// Streamed to worker-service subscribers when any registry state changes.
+// Each event carries exactly one payload variant.
+message RegistryInvalidationEvent {
+  uint64 event_id = 1;
+  oneof payload {
+    CursorExpiredEvent cursor_expired = 2;
+    DeploymentChangedEvent deployment_changed = 3;
+    AccountTokensInvalidatedEvent account_tokens_invalidated = 4;
+    EnvironmentPermissionsChangedEvent permissions_changed = 5;
+    DomainRegistrationChangedEvent domain_registration_changed = 6;
+    SecuritySchemeChangedEvent security_scheme_changed = 7;
   }
+}
+
+// Sent when the client's cursor is older than the server's retention window.
+// The client must flush all caches and use this event's event_id as its new cursor.
+message CursorExpiredEvent {}
+
+// Sent when the current deployment for an environment changes.
+message DeploymentChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  uint64 deployment_revision = 2;
+}
+
+// Sent when domain registrations change (create/delete).
+message DomainRegistrationChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  repeated string domains = 2;
+}
+
+// Sent when an account's tokens are invalidated (token deleted or account soft-deleted).
+message AccountTokensInvalidatedEvent {
+  golem.common.AccountId account_id = 1;
+}
+
+// Sent when environment sharing permissions change (create/update/delete share).
+message EnvironmentPermissionsChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.common.AccountId grantee_account_id = 2;
+}
+
+// Sent when a security scheme is created, updated, or deleted.
+message SecuritySchemeChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
 }

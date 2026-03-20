@@ -38,7 +38,7 @@ pub struct AgentSecretsApi {
 #[OpenApi(
     prefix_path = "/v1",
     tag = ApiTags::RegistryService,
-    tag = ApiTags::EnvironmentShares
+    tag = ApiTags::AgentSecrets
 )]
 impl AgentSecretsApi {
     pub fn new(
@@ -127,7 +127,7 @@ impl AgentSecretsApi {
     ) -> ApiResult<Json<Page<AgentSecretDto>>> {
         let result = self
             .agent_secret_service
-            .get_agent_secrets_in_environment(environment_id, &auth)
+            .list_in_environment(environment_id, &auth)
             .await?;
 
         let converted = result.into_iter().map(AgentSecretDto::from).collect();

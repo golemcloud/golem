@@ -39,41 +39,55 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust1"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "test:rust1",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
     replace_string_in_file(
-        ctx.cwd_path_join("components-rust/test-rust1/src/lib.rs"),
+        ctx.cwd_path_join("test-rust1/src/lib.rs"),
         "CounterAgent",
         "CounterAgent1",
     )
     .unwrap();
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust2"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "test:rust2",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
     replace_string_in_file(
-        ctx.cwd_path_join("components-rust/test-rust2/src/lib.rs"),
+        ctx.cwd_path_join("test-rust2/src/lib.rs"),
         "CounterAgent",
         "CounterAgent2",
     )
     .unwrap();
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("test-rust1")
-                .join("golem.yaml"),
-        ),
+        ctx.cwd_path_join(Path::new("test-rust1").join("golem.yaml")),
         indoc! {"
             components:
               test:rust1:
@@ -86,11 +100,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     .unwrap();
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("test-rust2")
-                .join("golem.yaml"),
-        ),
+        ctx.cwd_path_join(Path::new("test-rust2").join("golem.yaml")),
         indoc! {"
             components:
               test:rust2:
@@ -170,11 +180,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     assert!(outputs.success_or_dump());
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("test-rust1")
-                .join("golem.yaml"),
-        ),
+        ctx.cwd_path_join(Path::new("test-rust1").join("golem.yaml")),
         indoc! {"
             components:
               test:rust1:
@@ -203,11 +209,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     assert!(outputs.stdout_contains("y: 2"));
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("test-rust1")
-                .join("golem.yaml"),
-        ),
+        ctx.cwd_path_join(Path::new("test-rust1").join("golem.yaml")),
         indoc! {"
             components:
               test:rust1:
@@ -253,11 +255,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     );
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("test-rust1")
-                .join("golem.yaml"),
-        ),
+        ctx.cwd_path_join(Path::new("test-rust1").join("golem.yaml")),
         indoc! {"
             components:
               test:rust1:
@@ -367,8 +365,8 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
 
     // Registering the plugin
 
-    let oplog_processor_component_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-components/oplog-processor.wasm");
+    let oplog_processor_component_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-components/oplog_processor_release.wasm");
 
     let plugin_manifest_path = "plugin.yaml";
     fs::write_str(
@@ -401,13 +399,23 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
     // Creating a test app
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust1"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "test:rust1",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
@@ -419,11 +427,7 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
     assert_eq!(outputs.stdout().count(), 5);
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("test-rust1")
-                .join("golem.yaml"),
-        ),
+        ctx.cwd_path_join(Path::new("test-rust1").join("golem.yaml")),
         indoc! {"
             components:
               test:rust1:

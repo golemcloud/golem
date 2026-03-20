@@ -19,7 +19,7 @@ use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    RawAgentId, WorkerMetadata, WorkerMetadataView, WorkerNameMatch, WorkersMetadataResponseView,
+    AgentMetadata, AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -79,19 +79,19 @@ impl MessageWithFields for WorkerCreateView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerGetView {
-    pub metadata: WorkerMetadataView,
+    pub metadata: AgentMetadataView,
     pub precise: bool,
 }
 
 impl WorkerGetView {
-    pub fn from_metadata(metadata: WorkerMetadata, precise: bool) -> Self {
+    pub fn from_metadata(metadata: AgentMetadata, precise: bool) -> Self {
         Self {
-            metadata: WorkerMetadataView::from(metadata),
+            metadata: AgentMetadataView::from(metadata),
             precise,
         }
     }
 
-    pub fn from_metadata_view(metadata: WorkerMetadataView) -> Self {
+    pub fn from_metadata_view(metadata: AgentMetadataView) -> Self {
         Self {
             metadata,
             precise: false,
@@ -231,8 +231,8 @@ struct WorkerMetadataTableView {
     pub created_at: Timestamp,
 }
 
-impl From<&WorkerMetadataView> for WorkerMetadataTableView {
-    fn from(value: &WorkerMetadataView) -> Self {
+impl From<&AgentMetadataView> for WorkerMetadataTableView {
+    fn from(value: &AgentMetadataView) -> Self {
         Self {
             component_name: value.component_name.clone(),
             // TODO: pretty print, once we have "metadata-less" agent-type parsing
@@ -245,9 +245,9 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
     }
 }
 
-impl TextView for WorkersMetadataResponseView {
+impl TextView for AgentsMetadataResponseView {
     fn log(&self) {
-        log_table::<_, WorkerMetadataTableView>(&self.workers);
+        log_table::<_, WorkerMetadataTableView>(&self.agents);
 
         if !self.cursors.is_empty() {
             logln("");
@@ -417,6 +417,7 @@ impl TextView for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
+                logln(format!("{pad}retry from:        {}", params.retry_from));
                 logln(format!(
                     "{pad}error:             {}",
                     format_error(&params.error)
@@ -895,6 +896,30 @@ impl TextView for PublicOplogEntry {
                     }
                 }
             }
+            PublicOplogEntry::OplogProcessorCheckpoint(params) => {
+                logln(format_message_highlight("OPLOG PROCESSOR CHECKPOINT"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}plugin:            {} v{}",
+                    format_id(&params.plugin.plugin_name),
+                    format_id(&params.plugin.plugin_version)
+                ));
+                logln(format!(
+                    "{pad}target:            {}",
+                    format_id(&params.target_agent_id)
+                ));
+                logln(format!(
+                    "{pad}confirmed up to:   {}",
+                    format_id(&params.confirmed_up_to)
+                ));
+                logln(format!(
+                    "{pad}sending up to:     {}",
+                    format_id(&params.sending_up_to)
+                ));
+            }
         }
     }
 }
@@ -1047,7 +1072,7 @@ pub fn format_timestamp(timestamp: u64) -> String {
     }
 }
 
-pub fn format_agent_name_match(agent_name_match: &WorkerNameMatch) -> String {
+pub fn format_agent_name_match(agent_name_match: &AgentNameMatch) -> String {
     format!(
         "{}{}/{}",
         match &agent_name_match.environment_reference() {

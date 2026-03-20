@@ -28,9 +28,9 @@ pub mod workerctx;
 #[cfg(test)]
 test_r::enable!();
 
-use self::services::agent_deployments::{AgentDeploymentsService, GrpcAgentDeploymentService};
 use self::services::agent_webhooks::AgentWebhooksService;
-use self::services::golem_config::AgentDeploymentsServiceConfig;
+use self::services::environment_state::{EnvironmentStateService, GrpcEnvironmentStateService};
+use self::services::golem_config::EnvironmentStateServiceConfig;
 use self::services::promise::LazyPromiseService;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
@@ -39,7 +39,8 @@ use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
-    EngineConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    EngineConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    KeyValueStorageInnerConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
@@ -61,8 +62,8 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{
-    rdbms, shard_manager, All, HasActiveWorkers, HasComponentService, HasConfig, HasOplogService,
-    HasWorkerActivator, HasWorkerService,
+    rdbms, shard_manager, All, HasActiveWorkers, HasAgentTypesService, HasComponentService,
+    HasConfig, HasEnvironmentStateService, HasOplogService, HasWorkerActivator, HasWorkerService,
 };
 use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use crate::storage::indexed::postgres::PostgresIndexedStorage;
@@ -71,6 +72,8 @@ use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
+use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
+use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
@@ -141,12 +144,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
-    fn create_agent_deployments_service(
+    fn create_environment_state_service(
         &self,
-        config: &AgentDeploymentsServiceConfig,
+        config: &EnvironmentStateServiceConfig,
         registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn AgentDeploymentsService> {
-        Arc::new(GrpcAgentDeploymentService::new(
+    ) -> Arc<dyn EnvironmentStateService> {
+        Arc::new(GrpcEnvironmentStateService::new(
             registry_service,
             config.cache_capacity,
             config.cache_ttl,
@@ -248,9 +251,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>>;
 
@@ -301,7 +306,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
         let shutdown = services::shutdown::Shutdown::new();
 
-        let (worker_executor_impl, epoch_thread, epoch_stop) =
+        let (worker_executor_impl, epoch_thread, epoch_stop, registry_service) =
             create_worker_executor_impl::<Ctx, Self>(
                 golem_config.clone(),
                 self,
@@ -310,6 +315,23 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 shutdown.token(),
             )
             .await?;
+
+        {
+            let registry_service = registry_service.clone();
+            let environment_state_service = worker_executor_impl.environment_state_service();
+            let agent_types_service = worker_executor_impl.agent_types();
+            let shutdown_token = shutdown.token();
+            join_set.spawn(async move {
+                services::registry_event_subscriber::run_registry_event_subscriber(
+                    registry_service,
+                    environment_state_service,
+                    agent_types_service,
+                    shutdown_token,
+                )
+                .await;
+                Ok(())
+            });
+        }
 
         let leak_detector = worker_executor_impl.leak_detector();
 
@@ -342,7 +364,15 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
     shutdown_token: tokio_util::sync::CancellationToken,
-) -> Result<(All<Ctx>, std::thread::JoinHandle<()>, Arc<AtomicBool>), anyhow::Error> {
+) -> Result<
+    (
+        All<Ctx>,
+        std::thread::JoinHandle<()>,
+        Arc<AtomicBool>,
+        Arc<dyn RegistryService>,
+    ),
+    anyhow::Error,
+> {
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -355,6 +385,30 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
                 Arc::new(RedisKeyValueStorage::new(pool.clone()));
             (Some(pool), None, key_value_storage)
+        }
+        KeyValueStorageConfig::Postgres(postgres) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                PostgresKeyValueStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            (None, None, key_value_storage)
+        }
+        KeyValueStorageConfig::NamespaceRouted(namespace_routed) => {
+            let (cache_redis, cache_sqlite, cache_storage) =
+                build_inner_key_value_storage(&namespace_routed.cache).await?;
+            let (persistent_redis, persistent_sqlite, persistent_storage) =
+                build_inner_key_value_storage(&namespace_routed.persistent).await?;
+
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                NamespaceRoutedKeyValueStorage::new(cache_storage, persistent_storage),
+            );
+
+            (
+                cache_redis.or(persistent_redis),
+                cache_sqlite.or(persistent_sqlite),
+                key_value_storage,
+            )
         }
         KeyValueStorageConfig::InMemory(_) => {
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
@@ -484,13 +538,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         blob_storage.clone(),
     );
 
-    let agent_deployments_service = bootstrap.create_agent_deployments_service(
-        &golem_config.agent_deployments_service,
+    let environment_state_service = bootstrap.create_environment_state_service(
+        &golem_config.environment_state_service,
         registry_service.clone(),
     );
 
     let agent_webhooks_service = Arc::new(AgentWebhooksService::new(
-        agent_deployments_service.clone(),
+        environment_state_service.clone(),
         golem_config
             .agent_webhooks_service
             .use_https_for_webhook_url,
@@ -503,7 +557,20 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         registry_service.clone(),
     );
 
-    let golem_config = Arc::new(golem_config.clone());
+    let http_connection_pool = match &golem_config.http_client {
+        HttpClientConfig::Enabled(config) => Some(wasmtime_wasi_http::HttpConnectionPool::new(
+            wasmtime_wasi_http::HttpConnectionPoolConfig {
+                max_idle_per_host: config.max_idle_per_host,
+                idle_timeout: config.idle_timeout,
+                connect_timeout: config.connect_timeout,
+                max_connections_per_host: config.max_connections_per_host,
+                max_total_connections: config.max_total_connections,
+                max_host_entries: config.max_host_entries,
+            },
+        )),
+        HttpClientConfig::Disabled(_) => None,
+    };
+    let golem_config = Arc::new(golem_config);
 
     let shard_service = Arc::new(ShardServiceDefault::new());
 
@@ -598,12 +665,15 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         component_service.clone(),
         shard_service.clone(),
         lazy_worker_activator.clone(),
+        worker_proxy.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
         base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
+        golem_config.oplog.plugin_max_commit_count,
+        golem_config.oplog.plugin_max_elapsed_time,
     ));
 
     let worker_service = Arc::new(DefaultWorkerService::new(
@@ -659,9 +729,11 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             file_loader,
             oplog_processor_plugin,
             agent_type_service,
+            environment_state_service,
             agent_webhooks_service,
-            registry_service,
+            registry_service.clone(),
             shutdown_token,
+            http_connection_pool,
             leak_sentinel,
         )
         .await?;
@@ -682,5 +754,60 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         ))
         .await;
 
-    Ok((all, epoch_thread, epoch_stop))
+    Ok((all, epoch_thread, epoch_stop, registry_service))
+}
+
+async fn build_inner_key_value_storage(
+    config: &KeyValueStorageInnerConfig,
+) -> Result<
+    (
+        Option<RedisPool>,
+        Option<SqlitePool>,
+        Arc<dyn KeyValueStorage + Send + Sync>,
+    ),
+    anyhow::Error,
+> {
+    match config {
+        KeyValueStorageInnerConfig::Redis(redis) => {
+            let pool = RedisPool::configured(redis)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(RedisKeyValueStorage::new(pool.clone()));
+            Ok((Some(pool), None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::Postgres(postgres) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                PostgresKeyValueStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            Ok((None, None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::InMemory(_) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(InMemoryKeyValueStorage::new());
+            Ok((None, None, key_value_storage))
+        }
+        KeyValueStorageInnerConfig::Sqlite(sqlite) => {
+            let pool = SqlitePool::configured(sqlite)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                SqliteKeyValueStorage::new(pool.clone())
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            );
+            Ok((None, Some(pool), key_value_storage))
+        }
+        KeyValueStorageInnerConfig::MultiSqlite(multi_sqlite) => {
+            let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                Arc::new(MultiSqliteKeyValueStorage::new(
+                    &multi_sqlite.root_dir,
+                    multi_sqlite.max_connections,
+                    multi_sqlite.foreign_keys,
+                ));
+            Ok((None, None, key_value_storage))
+        }
+    }
 }

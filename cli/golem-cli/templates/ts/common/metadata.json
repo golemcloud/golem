@@ -1,5 +1,4 @@
 {
   "type": "common",
-  "description": "Common template for TypeScript Agents",
-  "skipIfExists": "package.json"
+  "description": "Common template for TypeScript Agents"
 }

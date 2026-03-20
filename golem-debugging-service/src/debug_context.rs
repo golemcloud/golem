@@ -15,11 +15,12 @@
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::component::ComponentFilePath;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -48,6 +49,7 @@ use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
@@ -94,7 +96,7 @@ impl DurableWorkerCtxView<DebugContext> for DebugContext {
 
 #[async_trait]
 impl FuelManagement for DebugContext {
-    fn borrow_fuel(&mut self, _current_level: u64) -> bool {
+    fn ensure_fuel(&mut self, _current_level: u64) -> bool {
         true
     }
 
@@ -255,7 +257,7 @@ impl UpdateManagement for DebugContext {
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginPriority>,
+        new_active_plugins: HashSet<EnvironmentPluginGrantId>,
     ) {
         self.durable_ctx
             .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
@@ -336,9 +338,12 @@ impl HostWasmRpc for DebugContext {
         agent_type_name: String,
         constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
+        agent_config: Vec<
+            golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id)
+            .new(agent_type_name, constructor, phantom_id, agent_config)
             .await
     }
 
@@ -539,8 +544,10 @@ impl WorkerCtx for DebugContext {
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<uuid::Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -567,8 +574,10 @@ impl WorkerCtx for DebugContext {
             file_loader,
             worker_fork,
             agent_types_service,
+            environment_state_service,
             agent_webhooks_service,
             shard_service,
+            http_connection_pool,
             pending_update,
             original_phantom_id,
         )

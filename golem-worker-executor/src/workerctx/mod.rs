@@ -20,6 +20,7 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
@@ -37,9 +38,10 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component::{ComponentFilePath, ComponentRevision, PluginPriority};
+use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -137,8 +139,10 @@ pub trait WorkerCtx:
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError>;
@@ -201,8 +205,10 @@ pub trait WorkerCtx:
 ///passed to these functions.
 #[async_trait]
 pub trait FuelManagement {
-    /// Borrows some fuel to continue execution. Returns false if not enough fuel is available to continue execution and true otherwise.
-    fn borrow_fuel(&mut self, current_level: u64) -> bool;
+    /// Ensures fuel is available for continued execution, borrowing a new batch
+    /// from the account pool if the current pre-paid batch is exhausted.
+    /// Returns false if the account has no remaining fuel.
+    fn ensure_fuel(&mut self, current_level: u64) -> bool;
 
     /// Returns the amount of fuel consumed since the last call to return_fuel.
     fn return_fuel(&mut self, current_level: u64) -> u64;
@@ -309,7 +315,7 @@ pub trait UpdateManagement {
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginPriority>,
+        new_active_plugins: HashSet<EnvironmentPluginGrantId>,
     );
 }
 
