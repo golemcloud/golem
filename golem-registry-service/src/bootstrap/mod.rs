@@ -361,13 +361,10 @@ impl Services {
         if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
             &config.builtin_plugins,
             builtin_plugin_owner_account_id,
-            &repos.plugin_repo,
             &application_service,
             &environment_service,
             &component_service,
             &component_write_service,
-            &deployment_service,
-            &deployment_write_service,
             &plugin_registration_service,
         )
         .await

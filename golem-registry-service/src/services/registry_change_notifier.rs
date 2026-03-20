@@ -36,10 +36,8 @@ pub trait RegistryChangeNotifier: Send + Sync {
     /// No-op for implementations that don't need background tasks.
     fn start_background_tasks(
         &self,
-        _join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
-    ) {
-        // Default no-op
-    }
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    );
 }
 
 /// Local in-process notifier for single-node deployments (e.g., SQLite).
@@ -62,6 +60,12 @@ impl RegistryChangeNotifier for LocalRegistryChangeNotifier {
 
     fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent> {
         self.sender.subscribe()
+    }
+
+    fn start_background_tasks(
+        &self,
+        _join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) {
     }
 }
 
@@ -99,9 +103,7 @@ impl PostgresRegistryChangeNotifier {
 }
 
 impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
-    fn notify(&self, event: RegistryChangeEvent) {
-        let _ = self.sender.send(event);
-    }
+    fn notify(&self, _event: RegistryChangeEvent) {}
 
     fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent> {
         self.sender.subscribe()
