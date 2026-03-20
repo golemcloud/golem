@@ -53,7 +53,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tracing::Instrument;
+use tracing::{info, Instrument};
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
@@ -126,17 +126,20 @@ pub async fn launch_golem_services(
         write_startup_ports_file(ports_file, &startup_ports).await?;
     }
 
-    // TODO: agent: let's log the ports we use
+    info!(
+        router_port,
+        custom_request_port, mcp_port, "Started Golem services"
+    );
 
     Ok(join_set)
 }
 
-// TODO: agent: log info about where the file was written
 async fn write_startup_ports_file(path: &PathBuf, ports: &StartupPorts) -> anyhow::Result<()> {
     let temp_path = path.with_extension("tmp");
     let content = serde_json::to_vec_pretty(ports)?;
     tokio::fs::write(&temp_path, content).await?;
     tokio::fs::rename(&temp_path, path).await?;
+    info!(path = %path.display(), "Wrote startup ports file");
     Ok(())
 }
 

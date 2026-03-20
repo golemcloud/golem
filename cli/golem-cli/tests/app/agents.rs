@@ -998,16 +998,14 @@ async fn test_http_api_merging() {
 
     // Check that the merged manifest is loadable
     let outputs = ctx.cli(cmd::NO_ARGS).await;
-    // TODO: agent: inline
-    let local_domain = format!("http_api_merging.localhost:{}", ctx.custom_request_port());
     assert!(!outputs.success());
     assert!(!outputs.stdout_contains("error"));
-    assert!(outputs.stderr_contains_ordered([
+    assert!(outputs.stderr_contains_ordered(vec![
         "Application API definitions:",
         "  def-a@0.0.1",
         "  def-b@0.0.2",
         "Application API deployments for environment local:",
-        local_domain.as_str(),
+        &format!("http_api_merging.localhost:{}", ctx.custom_request_port()),
         "    def-a",
         "    def-b",
     ]));
@@ -1047,7 +1045,7 @@ async fn test_http_api_merging() {
     assert!(!outputs.success());
     assert!(outputs.stderr_contains(format!(
         "error: HTTP API Deployment local - {} - def-a is defined in multiple sources",
-        local_domain
+        format!("http_api_merging.localhost:{}", ctx.custom_request_port())
     )));
 
     // Let's switch back to the good config and deploy, then call the exposed APIs
@@ -1082,26 +1080,23 @@ async fn test_http_api_merging() {
 
     ctx.start_server().await;
 
-    // TODO: agent: inline all these
-    let local_domain = format!("http_api_merging.localhost:{}", ctx.custom_request_port());
-    let test_local_domain = format!(
-        "test_http_api_merging.localhost:{}",
-        ctx.custom_request_port()
-    );
-    let local_deployment_line = format!("+  {local_domain}:");
-    let test_local_deployment_line = format!("+  {test_local_domain}:");
-
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains_ordered([
+    assert!(outputs.stdout_contains_ordered(vec![
         "+httpApiDeployments:",
-        local_deployment_line.as_str(),
+        &format!(
+            "+  http_api_merging.localhost:{}:",
+            ctx.custom_request_port()
+        ),
         "+    apis:",
         "+    - def-a",
-        test_local_deployment_line.as_str(),
+        &format!(
+            "+  test_http_api_merging.localhost:{}:",
+            ctx.custom_request_port()
+        ),
         "+    apis:",
         "+    - def-b",
-        "Deployed all changes"
+        "Deployed all changes",
     ]));
 }
 

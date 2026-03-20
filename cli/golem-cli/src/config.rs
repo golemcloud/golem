@@ -28,6 +28,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
@@ -38,14 +39,22 @@ pub const BUILTIN_LOCAL_URL_ENV: &str = "GOLEM_BUILTIN_LOCAL_URL";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
 
-// TODO: agent: only allow overrides in debug builds, and use once or lazy init calculate it
+static BUILTIN_LOCAL_URL_ONCE: OnceLock<Url> = OnceLock::new();
+
 pub fn builtin_local_url() -> Url {
-    match std::env::var(BUILTIN_LOCAL_URL_ENV) {
-        Ok(override_url) => Url::parse(&override_url).unwrap_or_else(|err| {
-            panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")
-        }),
-        Err(_) => Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse BUILTIN_LOCAL_URL"),
-    }
+    BUILTIN_LOCAL_URL_ONCE
+        .get_or_init(|| {
+            if cfg!(debug_assertions) {
+                if let Ok(override_url) = std::env::var(BUILTIN_LOCAL_URL_ENV) {
+                    return Url::parse(&override_url).unwrap_or_else(|err| {
+                        panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")
+                    });
+                }
+            }
+
+            Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse BUILTIN_LOCAL_URL")
+        })
+        .clone()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -343,13 +352,11 @@ impl From<&Server> for ClientConfig {
             allow_insecure,
         } = match server {
             Server::Builtin(builtin) => match builtin {
-                BuiltinServer::Local => {
-                    BaseConfig {
-                        registry_url: builtin_local_url(),
-                        worker_url: builtin_local_url(),
-                        allow_insecure: false,
-                    }
-                }
+                BuiltinServer::Local => BaseConfig {
+                    registry_url: builtin_local_url(),
+                    worker_url: builtin_local_url(),
+                    allow_insecure: false,
+                },
                 BuiltinServer::Cloud => {
                     let cloud_url = Url::parse(CLOUD_URL).expect("Failed to parse CLOUD_URL");
                     BaseConfig {
