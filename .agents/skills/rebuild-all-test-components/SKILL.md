@@ -7,7 +7,15 @@ description: "Rebuilds all test WASM components from scratch. Use when explicitl
 
 Clean rebuild of every test WASM component in `test-components/`. This is a heavyweight operation — only use when all components need regeneration (e.g., after merge conflicts in `.wasm` files or major SDK/WIT changes).
 
-## Steps
+## Quick Path (single command)
+
+```shell
+cargo make build-test-components
+```
+
+This handles everything: builds `golem-cli`, the TS SDK, then cleans and rebuilds all test components.
+
+## Manual Steps (if needed)
 
 ### 1. Build golem-cli
 
@@ -52,7 +60,7 @@ If any component fails to build, fix the issue and re-run `./build-components.sh
 
 ### 5. Verify
 
-After rebuilding, the `.wasm` files in `test-components/` should be updated. Commit all changed `.wasm` files.
+After rebuilding, the `.wasm` files in `test-components/` should be present. Note: these files are gitignored and built on CI automatically.
 
 ## Troubleshooting
 

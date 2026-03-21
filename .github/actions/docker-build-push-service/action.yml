@@ -1,0 +1,29 @@
+name: 'Docker Build and Push Service'
+description: 'Extract metadata and build+push a Docker service image'
+inputs:
+  image-name:
+    description: 'Full Docker Hub image name (e.g., golemservices/golem-worker-executor)'
+    required: true
+  dockerfile:
+    description: 'Path to the Dockerfile'
+    required: true
+  platforms:
+    description: 'Target platforms (e.g., linux/amd64,linux/arm64)'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Extract metadata (tags, labels)
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ inputs.image-name }}
+    - name: Build and push image
+      uses: useblacksmith/build-push-action@v1
+      with:
+        context: .
+        file: ${{ inputs.dockerfile }}
+        push: true
+        platforms: ${{ inputs.platforms }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
