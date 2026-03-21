@@ -13,13 +13,11 @@
 // limitations under the License.
 
 use crate::config::BuiltinPluginsConfig;
-use crate::repo::plugin::PluginRepo;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
-use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
-
 use crate::services::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
+use futures::future::try_join_all;
 use golem_common::golem_version;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
@@ -27,7 +25,6 @@ use golem_common::model::application::{
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentCreation, ComponentName, ComponentUpdate};
-use golem_common::model::deployment::{DeploymentCreation, DeploymentVersion};
 use golem_common::model::diff;
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
@@ -39,7 +36,6 @@ use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use uuid::Uuid;
 
 const SYSTEM_APP_NAME: &str = "golem-system";
 const SYSTEM_ENV_NAME: &str = "builtin-plugins";
@@ -71,13 +67,10 @@ static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
 pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
     builtin_plugin_owner_account_id: AccountId,
-    plugin_repo: &Arc<dyn PluginRepo>,
     application_service: &Arc<ApplicationService>,
     environment_service: &Arc<EnvironmentService>,
     component_service: &Arc<ComponentService>,
     component_write_service: &Arc<ComponentWriteService>,
-    deployment_service: &Arc<DeploymentService>,
-    deployment_write_service: &Arc<DeploymentWriteService>,
     plugin_registration_service: &Arc<PluginRegistrationService>,
 ) -> anyhow::Result<()> {
     if !config.enabled {
@@ -103,8 +96,7 @@ pub async fn provision_builtin_plugins(
     )
     .await?;
 
-    let mut components = Vec::new();
-    for descriptor in BUILTIN_PLUGINS {
+    try_join_all(BUILTIN_PLUGINS.iter().map(|descriptor| async {
         let component = upload_or_update_component(
             component_service,
             component_write_service,
@@ -114,23 +106,20 @@ pub async fn provision_builtin_plugins(
             &auth,
         )
         .await?;
-        components.push((descriptor, component));
-    }
 
-    deploy_environment(deployment_service, deployment_write_service, env.id, &auth).await;
-
-    for (descriptor, component) in &components {
         register_plugin(
             plugin_registration_service,
-            plugin_repo,
             builtin_plugin_owner_account_id,
             descriptor,
             &plugin_version,
-            component,
+            &component,
             &auth,
         )
         .await?;
-    }
+
+        Ok::<_, anyhow::Error>(())
+    }))
+    .await?;
 
     tracing::info!("Built-in plugins provisioned successfully");
     Ok(())
@@ -292,49 +281,8 @@ async fn upload_or_update_component(
     }
 }
 
-async fn deploy_environment(
-    deployment_service: &Arc<DeploymentService>,
-    deployment_write_service: &Arc<DeploymentWriteService>,
-    env_id: EnvironmentId,
-    auth: &AuthCtx,
-) {
-    let plan = match deployment_service
-        .get_current_deployment_plan(env_id, auth)
-        .await
-    {
-        Ok(plan) => plan,
-        Err(e) => {
-            tracing::warn!("Failed to get deployment plan for environment {env_id}: {e}");
-            return;
-        }
-    };
-
-    match deployment_write_service
-        .create_deployment(
-            env_id,
-            DeploymentCreation {
-                current_revision: plan.current_revision,
-                expected_deployment_hash: plan.deployment_hash,
-                version: DeploymentVersion(Uuid::new_v4().to_string()),
-                agent_secret_defaults: Vec::new(),
-                quota_resource_defaults: Vec::new(),
-            },
-            auth,
-        )
-        .await
-    {
-        Ok(_) => {
-            tracing::info!("Deployed environment {env_id}");
-        }
-        Err(e) => {
-            tracing::warn!("Failed to deploy environment {env_id} (may already be deployed): {e}");
-        }
-    }
-}
-
 async fn register_plugin(
     plugin_registration_service: &Arc<PluginRegistrationService>,
-    plugin_repo: &Arc<dyn PluginRepo>,
     account_id: AccountId,
     descriptor: &BuiltinPluginDescriptor,
     plugin_version: &str,
@@ -358,18 +306,7 @@ async fn register_plugin(
         .await
     {
         Ok(_) => Ok(()),
-        Err(PluginRegistrationError::PluginNameAndVersionAlreadyExists) => {
-            let _record = plugin_repo
-                .get_by_name_and_version(account_id.0, plugin_name, plugin_version)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to look up existing plugin '{plugin_name}': {e}")
-                })?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Plugin '{plugin_name}' exists but could not be loaded")
-                })?;
-            Ok(())
-        }
+        Err(PluginRegistrationError::PluginNameAndVersionAlreadyExists) => Ok(()),
         Err(other) => Err(anyhow::anyhow!(
             "Failed to register plugin '{plugin_name}': {other}"
         )),
