@@ -42,10 +42,11 @@ use golem_common::model::oplog::{
     AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
     JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, OplogEntry, OplogIndex,
-    PluginInstallationDescription, ProcessOplogEntriesParameters, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotBasedUpdateParameters, UpdateDescription,
+    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
@@ -990,9 +991,11 @@ async fn agent_invocation_result_to_public(
                 snapshot: raw_snapshot_to_public(snapshot),
             }),
         ),
-        AgentInvocationResult::ProcessOplogEntries { error } => Ok(
-            PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters { error }),
-        ),
+        AgentInvocationResult::ProcessOplogEntries { error } => {
+            Ok(PublicAgentInvocationResult::ProcessOplogEntries(
+                ProcessOplogEntriesResultParameters { error },
+            ))
+        }
     }
 }
 

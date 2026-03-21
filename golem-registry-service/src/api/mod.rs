@@ -27,6 +27,7 @@ pub mod login;
 pub mod mcp_deployments;
 pub mod plugin_registrations;
 pub mod reports;
+pub mod resource_definitions;
 pub mod security_schemes;
 pub mod tokens;
 
@@ -45,6 +46,7 @@ use self::login::LoginApi;
 use self::mcp_deployments::McpDeploymentsApi;
 use self::plugin_registrations::PluginRegistrationsApi;
 use self::reports::ReportsApi;
+use self::resource_definitions::ResourceDefinitionsApi;
 use self::security_schemes::SecuritySchemesApi;
 use self::tokens::TokensApi;
 use crate::bootstrap::Services;
@@ -68,6 +70,7 @@ pub type Apis = (
     LoginApi,
     PluginRegistrationsApi,
     ReportsApi,
+    ResourceDefinitionsApi,
     SecuritySchemesApi,
     TokensApi,
 );
@@ -139,6 +142,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             ),
             ReportsApi::new(
                 services.reports_service.clone(),
+                services.auth_service.clone(),
+            ),
+            ResourceDefinitionsApi::new(
+                services.resource_definition_service.clone(),
                 services.auth_service.clone(),
             ),
             SecuritySchemesApi::new(

@@ -10,6 +10,9 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
+[builtin_plugins]
+enabled = false
+
 [component_compilation]
 type = "Enabled"
 
@@ -54,6 +57,14 @@ port = 9090
 type = "Disabled"
 
 [grpc.tls.config]
+
+[initial_accounts.builtin-plugin-owner]
+email = "builtin-plugin-owner@golem.cloud"
+id = "adb2694f-cd9f-425d-905d-ca2888c9c5de"
+name = "Builtin Plugin Owner"
+plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
+role = "builtin-plugin-owner"
+token = "32d6072d-64e9-4a4a-b8f9-fadf68bb446b"
 
 [initial_accounts.marketing]
 email = "marketing@user"

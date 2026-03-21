@@ -24,9 +24,7 @@ members = [
 
 exclude = [
     "cli/desktop-app/src-tauri",
-    "test-components/host-api-tests",
-    "test-components/http-tests",
-    "test-components/oplog-processor",
+    "test-components",
     "sdks/golem-rust"
 ]
 
@@ -106,9 +104,11 @@ derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 desert_rust = { version = "0.1.7", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
 dirs = "6.0.0"
+dotenvy = "0.15.7"
 drop-stream = "0.3.2"
 evcxr = "0.21.1"
 evicting_cache_map = "0.4.0"
+expectrl = "0.8.0"
 fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
@@ -208,7 +208,7 @@ reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "quer
 reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_30"] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
-rmcp = {version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
 rsa = "0.9.7"
 
 rustc-hash = "2.1.1"
@@ -243,8 +243,8 @@ tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
 test-r = { version = "3.0.3", default-features = true }
-testcontainers = { version = "0.23.3" }
-testcontainers-modules = { version = "0.11.6", features = ["postgres", "redis", "minio", "mysql", ] }
+testcontainers = { version = "0.27.1" }
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
@@ -269,6 +269,11 @@ tracing-opentelemetry = "0.31.0"
 tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
+tree-sitter = "0.26.5"
+tree-sitter-json = "0.24.8"
+tree-sitter-rust = "0.24.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-yaml = "0.7.2"
 tower = "0.5.2"
 try_match = "0.4.2"
 tryhard = "0.5.1"

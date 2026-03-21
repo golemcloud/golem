@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::DeployValidationError;
 use super::deployment_context::InProgressDeployedRegisteredAgentType;
 use super::http_parameter_conversion::build_http_agent_method_parameters;
+use super::ok_or_continue;
 use crate::model::api_definition::{
     UnboundCompiledRoute, UnboundRouteSecurity, UnboundSecuritySchemeRouteSecurity,
 };
-use crate::services::deployment::ok_or_continue;
-use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,

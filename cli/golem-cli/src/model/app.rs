@@ -22,13 +22,10 @@ use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::property::Property;
-use crate::model::component::AppComponentType;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
 use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
-
-use crate::app::template::AppTemplateName;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
@@ -105,28 +102,25 @@ impl BuildConfig {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RustDependencyOverride {
-    pub path_override: Option<PathBuf>,
-    pub version_override: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 pub struct ApplicationConfig {
     pub offline: bool,
-    pub golem_rust_override: RustDependencyOverride,
     pub dev_mode: bool,
     pub enable_wasmtime_fs_cache: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedRawApps {
+    pub app_root_dir: PathBuf,
+    pub calling_working_dir: PathBuf,
+    pub raw_apps: Vec<app_raw::ApplicationWithSource>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ApplicationSourceMode {
     Automatic,
     ByRootManifest(PathBuf),
-    Preloaded {
-        raw_apps: Vec<app_raw::ApplicationWithSource>,
-        calling_working_dir: PathBuf,
-    },
+    Preloaded(LoadedRawApps),
     None,
 }
 
@@ -288,13 +282,7 @@ pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
     fs::read_to_string(source)
         .ok()
         .and_then(|source| app_raw::Application::from_yaml_str(source.as_str()).ok())
-        .map(|app| {
-            if app.includes.is_empty() {
-                vec!["**/golem.yaml".to_string()]
-            } else {
-                app.includes
-            }
-        })
+        .map(|app| app.includes)
         .unwrap_or_default()
 }
 
@@ -327,6 +315,7 @@ pub struct ApplicationNameAndEnvironments {
 
 #[derive(Clone, Debug)]
 pub struct Application {
+    app_root_dir: PathBuf,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     component_preset_selector: ComponentPresetSelector,
@@ -384,13 +373,24 @@ impl Application {
         &self.environments
     }
 
+    pub fn app_root_dir(&self) -> &Path {
+        &self.app_root_dir
+    }
+
     pub fn from_raw_apps(
+        root_dir: PathBuf,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
         component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Self> {
-        build_application(application_name, environments, component_presets, apps)
+        build_application(
+            root_dir,
+            application_name,
+            environments,
+            component_presets,
+            apps,
+        )
     }
 
     pub fn all_sources(&self) -> &BTreeSet<PathBuf> {
@@ -570,23 +570,21 @@ struct PartitionedComponentPresets {
 }
 
 impl PartitionedComponentPresets {
-    fn new(presets: IndexMap<String, app_raw::ComponentLayerProperties>) -> Self {
+    fn new(presets: IndexMap<String, app_raw::ComponentPreset>) -> Self {
         let mut default_custom_preset = None;
         let mut custom_presets = IndexMap::new();
         let mut env_presets = IndexMap::new();
 
-        for (preset_name, properties) in presets {
+        for (preset_name, preset) in presets {
             match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
                 Some(env_name) => {
-                    env_presets.insert(env_name.to_string(), properties.into());
+                    env_presets.insert(env_name.to_string(), preset.component_properties.into());
                 }
                 None => {
-                    if properties.default == Some(app_raw::Marker)
-                        || default_custom_preset.is_none()
-                    {
+                    if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
-                    custom_presets.insert(preset_name, properties.into());
+                    custom_presets.insert(preset_name, preset.component_properties.into());
                 }
             }
         }
@@ -602,9 +600,9 @@ impl PartitionedComponentPresets {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ComponentLayerId {
-    TemplateCommon(AppTemplateName),
-    TemplateEnvironmentPresets(AppTemplateName),
-    TemplateCustomPresets(AppTemplateName),
+    TemplateCommon(String),
+    TemplateEnvironmentPresets(String),
+    TemplateCustomPresets(String),
     ComponentCommon(ComponentName),
     ComponentEnvironmentPresets(ComponentName),
     ComponentCustomPresets(ComponentName),
@@ -669,7 +667,7 @@ impl ComponentLayerId {
         }
     }
 
-    pub fn template_name(&self) -> Option<&AppTemplateName> {
+    pub fn template_name(&self) -> Option<&str> {
         match self {
             ComponentLayerId::TemplateCommon(template_name)
             | ComponentLayerId::TemplateEnvironmentPresets(template_name)
@@ -697,7 +695,7 @@ impl ComponentLayerId {
         parent_ids
             .into_vec()
             .into_iter()
-            .map(|parent_id| Self::TemplateCustomPresets(parent_id.into()))
+            .map(Self::TemplateCustomPresets)
             .collect()
     }
 }
@@ -720,17 +718,30 @@ enum ComponentLayerPropertiesKind {
     },
 }
 
+const EMPTY_STR: &str = "";
+
 #[derive(Debug, Clone)]
 pub struct ComponentLayerApplyContext {
     env: minijinja::Environment<'static>,
     component_name: Option<ComponentName>,
+    app_root_dir: Option<String>,
+    golem_temp_dir: Option<String>,
+    component_dir: Option<String>,
 }
 
 impl ComponentLayerApplyContext {
-    pub fn new(id: &ComponentLayerId) -> Self {
+    pub fn new(
+        component_name: Option<ComponentName>,
+        app_root_dir: Option<String>,
+        golem_temp_dir: Option<String>,
+        component_dir: Option<String>,
+    ) -> Self {
         Self {
             env: Self::new_template_env(),
-            component_name: id.component_name().cloned(),
+            component_name,
+            app_root_dir,
+            golem_temp_dir,
+            component_dir,
         }
     }
 
@@ -760,12 +771,14 @@ impl ComponentLayerApplyContext {
         &self.env
     }
 
-    fn template_context(&self) -> Option<impl Serialize> {
-        self.component_name.as_ref().map(|component_name| {
-            minijinja::context! {
-                componentName => component_name.0.as_str(),
-                component_name => component_name.0.as_str(),
-            }
+    fn template_context(&self) -> impl Serialize {
+        let component_name = self.component_name.as_ref().map(|name| name.0.as_str());
+        Some(minijinja::context! {
+            componentName => component_name,
+            component_name => component_name,
+            appRootDir => self.app_root_dir.as_deref().unwrap_or(EMPTY_STR),
+            golemTempDir => self.golem_temp_dir.as_deref().unwrap_or(EMPTY_STR),
+            componentDir => self.component_dir.as_deref().unwrap_or(EMPTY_STR),
         })
     }
 }
@@ -855,32 +868,8 @@ impl Layer for ComponentLayer {
 
         for properties in property_layers_to_apply {
             let template_env = ctx.template_env();
-            let template_ctx = self
-                .id
-                .is_template()
-                .then(|| ctx.template_context())
-                .flatten();
+            let template_ctx = self.id.is_template().then(|| ctx.template_context());
             let template_ctx = template_ctx.as_ref();
-
-            value.source_wit.apply_layer(
-                id,
-                selection,
-                properties
-                    .source_wit
-                    .value()
-                    .render_or_clone(template_env, template_ctx)
-                    .map_err(|err| format!("Failed to render sourceWit: {}", err))?,
-            );
-
-            value.generated_wit.apply_layer(
-                id,
-                selection,
-                properties
-                    .generated_wit
-                    .value()
-                    .render_or_clone(template_env, template_ctx)
-                    .map_err(|err| format!("Failed to render generatedWit: {}", err))?,
-            );
 
             value.component_wasm.apply_layer(
                 id,
@@ -941,10 +930,6 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value
-                .component_type
-                .apply_layer(id, selection, *properties.component_type.value());
-
             value.files.apply_layer(
                 id,
                 selection,
@@ -993,10 +978,6 @@ impl Layer for ComponentLayer {
 
         Ok(())
     }
-
-    fn root_id_to_context(id: &Self::Id) -> Self::ApplyContext {
-        ComponentLayerApplyContext::new(id)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -1011,14 +992,11 @@ impl<'a> Component<'a> {
         self.component_name
     }
 
-    pub fn component_type(&self) -> AppComponentType {
-        self.properties().component_type
-    }
-
+    // TODO: FCL: cleanup this, and make lang ids reserved for template names
     pub fn guess_language(&self) -> Option<GuestLanguage> {
         self.applied_layers().iter().find_map(|(id, _)| {
             id.template_name()
-                .and_then(|template_name| match template_name.as_str() {
+                .and_then(|template_name| match template_name {
                     "ts" => Some(GuestLanguage::TypeScript),
                     "rust" => Some(GuestLanguage::Rust),
                     _ => None,
@@ -1034,18 +1012,14 @@ impl<'a> Component<'a> {
         self.layer_properties().applied_layers.as_slice()
     }
 
-    pub fn source_dir(&self) -> &Path {
-        let parent = self.source().parent().unwrap_or_else(|| {
-            panic!(
-                "Failed to get parent for component, source: {}",
-                self.source().display()
-            )
-        });
-        if parent.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            parent
-        }
+    // The manifest component dir property
+    pub fn dir(&self) -> Option<&Path> {
+        self.properties().dir.as_deref()
+    }
+
+    // Fully resolved component dir
+    pub fn component_dir(&self) -> &Path {
+        &self.properties.value.0.component_dir
     }
 
     pub fn properties(&self) -> &ComponentProperties {
@@ -1058,10 +1032,6 @@ impl<'a> Component<'a> {
 
     pub fn name_as_safe_path_elem(&self) -> String {
         self.component_name.as_str().replace(":", "_")
-    }
-
-    pub fn source_wit(&self) -> PathBuf {
-        self.source_dir().join(&self.properties().source_wit)
     }
 
     pub fn generated_base_wit(&self) -> PathBuf {
@@ -1083,13 +1053,8 @@ impl<'a> Component<'a> {
             .join("exports.wit")
     }
 
-    pub fn generated_wit(&self) -> PathBuf {
-        self.source_dir()
-            .join(self.properties().generated_wit.clone())
-    }
-
     pub fn wasm(&self) -> PathBuf {
-        self.source_dir()
+        self.component_dir()
             .join(self.properties().component_wasm.clone())
     }
 
@@ -1098,7 +1063,7 @@ impl<'a> Component<'a> {
         self.properties()
             .output_wasm
             .as_ref()
-            .map(|output_wasm| self.source_dir().join(output_wasm))
+            .map(|output_wasm| self.component_dir().join(output_wasm))
             .unwrap_or_else(|| {
                 self.temp_dir
                     .join("final-wasm")
@@ -1139,10 +1104,6 @@ impl<'a> Component<'a> {
         &self.properties().plugins
     }
 
-    pub fn is_deployable(&self) -> bool {
-        self.properties().component_type.is_deployable()
-    }
-
     pub fn custom_commands(&self) -> &BTreeMap<String, Vec<app_raw::ExternalCommand>> {
         &self.properties().custom_commands
     }
@@ -1165,8 +1126,6 @@ pub struct ComponentLayerProperties {
     )]
     pub applied_layers: Vec<(ComponentLayerId, Option<String>)>,
 
-    pub source_wit: OptionalProperty<ComponentLayer, String>,
-    pub generated_wit: OptionalProperty<ComponentLayer, String>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1174,7 +1133,6 @@ pub struct ComponentLayerProperties {
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
-    pub component_type: OptionalProperty<ComponentLayer, AppComponentType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_merge_mode: Option<VecMergeMode>,
     pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
@@ -1196,15 +1154,12 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
     fn from(value: app_raw::ComponentLayerProperties) -> Self {
         Self {
             applied_layers: vec![],
-            source_wit: value.source_wit.into(),
-            generated_wit: value.generated_wit.into(),
             component_wasm: value.component_wasm.into(),
             output_wasm: value.output_wasm.into(),
             build_merge_mode: value.build_merge_mode,
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
-            component_type: value.component_type.into(),
             files_merge_mode: value.files_merge_mode,
             files: value.files.unwrap_or_default().into(),
             plugins_merge_mode: value.plugins_merge_mode,
@@ -1221,14 +1176,11 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
 
 impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
-        self.source_wit.compact_trace();
-        self.generated_wit.compact_trace();
         self.component_wasm.compact_trace();
         self.output_wasm.compact_trace();
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
-        self.component_type.compact_trace();
         self.files.compact_trace();
         self.plugins.compact_trace();
         self.env.compact_trace();
@@ -1263,14 +1215,13 @@ impl ComponentLayerProperties {
 
 #[derive(Clone, Debug)]
 pub struct ComponentProperties {
-    pub source_wit: String,
-    pub generated_wit: String,
+    pub dir: Option<PathBuf>, // Relative path starting from the defining golem.yaml
+    pub component_dir: PathBuf, // Resolved canonical component path
     pub component_wasm: String,
     pub output_wasm: Option<String>,
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub component_type: AppComponentType,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
@@ -1282,6 +1233,8 @@ impl ComponentProperties {
     fn from_merged(
         validation: &mut ValidationBuilder,
         source: &Path,
+        dir: Option<PathBuf>,
+        component_dir: PathBuf,
         merged: &ComponentLayerProperties,
     ) -> Self {
         let files =
@@ -1302,8 +1255,8 @@ impl ComponentProperties {
         }
 
         let properties = Self {
-            source_wit: merged.source_wit.value().clone().unwrap_or_default(),
-            generated_wit: merged.generated_wit.value().clone().unwrap_or_default(),
+            dir,
+            component_dir,
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
             output_wasm: merged.output_wasm.value().clone(),
             build: merged.build.value().clone(),
@@ -1314,7 +1267,6 @@ impl ComponentProperties {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             clean: merged.clean.value().clone(),
-            component_type: (*merged.component_type.value()).unwrap_or_default(),
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value()),
@@ -1327,11 +1279,7 @@ impl ComponentProperties {
             agent_config,
         };
 
-        for (name, value) in [
-            ("sourceWit", &properties.source_wit),
-            ("generatedWit", &properties.generated_wit),
-            ("componentWasm", &properties.component_wasm),
-        ] {
+        for (name, value) in [("componentWasm", &properties.component_wasm)] {
             if value.is_empty() {
                 validation.add_error(format!(
                     "Property {} is empty or undefined",
@@ -1517,13 +1465,13 @@ impl PluginInstallation {
 }
 
 mod app_builder {
-    use crate::app::template::AppTemplateName;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerId,
-        ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetName,
-        ComponentPresetSelector, ComponentProperties, PartitionedComponentPresets, WithSource,
+        Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerApplyContext,
+        ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
+        ComponentPresetName, ComponentPresetSelector, ComponentProperties,
+        PartitionedComponentPresets, WithSource, TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -1551,12 +1499,19 @@ mod app_builder {
 
     // Load full manifest EXCEPT environments
     pub fn build_application(
+        root_dir: PathBuf,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
         component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Application> {
-        AppBuilder::build_app(application_name, environments, component_presets, apps)
+        AppBuilder::build_app(
+            root_dir,
+            application_name,
+            environments,
+            component_presets,
+            apps,
+        )
     }
 
     // Load only environments
@@ -1571,7 +1526,7 @@ mod app_builder {
         App,
         Include,
         CustomCommand(String),
-        Template(AppTemplateName),
+        Template(String),
         Component(ComponentName),
         Environment(EnvironmentName),
         Bridge,
@@ -1621,13 +1576,17 @@ mod app_builder {
         default_environment_names: BTreeSet<EnvironmentName>,
         environments: IndexMap<EnvironmentName, app_raw::Environment>,
 
+        // "Consts" for component templating
+        app_root_dir_str: String,
+        golem_temp_dir_str: String,
+
         // For app build
         include: Vec<String>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
         clean: Vec<WithSource<String>>,
 
         raw_component_names: HashSet<String>,
-        component_names_to_source: BTreeMap<ComponentName, PathBuf>,
+        component_names_to_source_and_dir: BTreeMap<ComponentName, (PathBuf, Option<PathBuf>)>,
         component_custom_presets: BTreeSet<ComponentPresetName>,
         component_layer_store: Store<ComponentLayer>,
 
@@ -1656,13 +1615,32 @@ mod app_builder {
         //       flows that do not use manifest otherwise won't get blocked by high-level validation errors,
         //       and we do not "steal" manifest loading logs from those which do use the manifest fully.
         fn build_app(
+            app_root_dir: PathBuf,
             application_name: WithSource<ApplicationName>,
             environments: BTreeMap<EnvironmentName, app_raw::Environment>,
             component_presets: ComponentPresetSelector,
             apps: Vec<app_raw::ApplicationWithSource>,
         ) -> ValidatedResult<Application> {
-            let mut builder = Self::default();
             let mut validation = ValidationBuilder::default();
+            let mut builder = Self::default();
+
+            match Ok::<&PathBuf, anyhow::Error>(&app_root_dir).and_then(|app_root_dir| {
+                Ok((
+                    fs::path_to_str(app_root_dir).map(|path| path.to_string())?,
+                    fs::path_to_str(&app_root_dir.join(TEMP_DIR)).map(|path| path.to_string())?,
+                ))
+            }) {
+                Ok((app_root_dir_str, golem_temp_dir_str)) => {
+                    builder.app_root_dir_str = app_root_dir_str;
+                    builder.golem_temp_dir_str = golem_temp_dir_str;
+                }
+                Err(err) => {
+                    return ValidatedResult::from_error(format!(
+                        "Failed to get app root directory: {}",
+                        err
+                    ));
+                }
+            }
 
             for app in apps {
                 builder.add_raw_app(&mut validation, app);
@@ -1675,6 +1653,7 @@ mod app_builder {
             builder.validate_http_api_deployments(&mut validation, &environments);
 
             validation.build(Application {
+                app_root_dir,
                 environments,
                 component_preset_selector: component_presets,
                 application_name,
@@ -1771,7 +1750,6 @@ mod app_builder {
                     }
 
                     for (template_name, template) in app.application.component_templates {
-                        let template_name = AppTemplateName::from(template_name);
                         if self.add_entity_source(
                             UniqueSourceCheckedEntityKey::Template(template_name.clone()),
                             &app.source,
@@ -1797,8 +1775,8 @@ mod app_builder {
                             UniqueSourceCheckedEntityKey::Component(component_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
                             self.raw_component_names.insert(component_name.0.clone());
-                            self.component_names_to_source
-                                .insert(component_name.clone(), app.source.clone());
+                            self.component_names_to_source_and_dir
+                                .insert(component_name.clone(), (app.source.clone(), component.dir.as_ref().map(PathBuf::from)));
                             self.add_component(validation, component_name, component);
                         }
                     }
@@ -2003,7 +1981,7 @@ mod app_builder {
         fn add_component_template(
             &mut self,
             validation: &mut ValidationBuilder,
-            template_name: AppTemplateName,
+            template_name: String,
             template: app_raw::ComponentTemplate,
         ) {
             validation.with_context(
@@ -2182,7 +2160,7 @@ mod app_builder {
             validation: &mut ValidationBuilder,
             component_presets: &ComponentPresetSelector,
         ) {
-            for (component_name, source) in self.component_names_to_source.clone() {
+            for (component_name, (source, dir)) in self.component_names_to_source_and_dir.clone() {
                 validation.with_context(
                     vec![
                         ("source", source.to_string_lossy().to_string()),
@@ -2193,6 +2171,7 @@ mod app_builder {
                             validation,
                             component_presets,
                             source,
+                            dir,
                             component_name,
                         );
                     },
@@ -2205,16 +2184,49 @@ mod app_builder {
             validation: &mut ValidationBuilder,
             component_presets: &ComponentPresetSelector,
             source: PathBuf,
+            dir: Option<PathBuf>,
             component_name: ComponentName,
         ) {
+            let component_dir = match fs::parent_or_err(&source)
+                .and_then(fs::canonicalize_path)
+                .map(|path| {
+                    let path = dir.as_ref().map(|dir| path.join(dir)).unwrap_or(path);
+                    fs::normalize_path_lexically(&path)
+                }) {
+                Ok(path) => path,
+                Err(err) => {
+                    validation.add_error(err.to_string());
+                    return;
+                }
+            };
+
+            let component_dir_str =
+                match fs::path_to_str(&component_dir).map(|path| path.to_string()) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        validation.add_error(err.to_string());
+                        return;
+                    }
+                };
+
+            let ctx = ComponentLayerApplyContext::new(
+                Some(component_name.clone()),
+                Some(self.app_root_dir_str.clone()),
+                Some(self.golem_temp_dir_str.clone()),
+                Some(component_dir_str),
+            );
+
             match self.component_layer_store.value(
                 &ComponentLayerId::ComponentCustomPresets(component_name.clone()),
                 component_presets,
+                &ctx,
             ) {
                 Ok(component_layer_properties) => {
                     let component_properties = ComponentProperties::from_merged(
                         validation,
                         &source,
+                        dir,
+                        component_dir,
                         &component_layer_properties,
                     );
                     self.components.insert(
@@ -2371,11 +2383,12 @@ mod app_builder {
 
 #[cfg(test)]
 mod test {
+    use crate::fs;
     use crate::model::app::{Application, ApplicationNameAndEnvironments, ComponentPresetSelector};
     use crate::model::app_raw;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
+    use tempfile::TempDir;
     use test_r::test;
 
     #[test]
@@ -2393,8 +2406,6 @@ mod test {
 
             componentTemplates:
               malbogle:
-                sourceWit: dummy-source.wit
-                generatedWit: dummy-generated.wit
                 componentWasm: dummy-component.wasm
 
             components:
@@ -2402,13 +2413,13 @@ mod test {
                 templates: malbogle
                 presets:
                   a:
-                    sourceWit: a.wit
+                    componentWasm: a.wasm
                   b:
-                    sourceWit: b.wit
+                    componentWasm: b.wasm
 
         "# };
 
-        let app = load_app(
+        let (app, app_tmp_dir) = load_app(
             source,
             &ComponentPresetSelector {
                 environment: "local".parse().unwrap(),
@@ -2419,13 +2430,16 @@ mod test {
         let component_name = "app:main".parse().unwrap();
         let component = app.component(&component_name);
 
-        assert_eq!(component.source_wit(), PathBuf::from("./a.wit"));
+        assert_eq!(component.wasm(), app_tmp_dir.path().join("a.wasm"));
     }
 
-    fn load_app(source: &str, selector: &ComponentPresetSelector) -> Application {
-        let raw_app =
-            app_raw::ApplicationWithSource::from_yaml_string(PathBuf::from("golem.yaml"), source)
-                .unwrap();
+    fn load_app(source: &str, selector: &ComponentPresetSelector) -> (Application, TempDir) {
+        let tmp_dir = tempfile::tempdir().unwrap();
+
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+
+        let raw_app = app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path).unwrap();
         let raw_apps = vec![raw_app];
 
         let (app_name_and_envs, warns, errors) =
@@ -2440,11 +2454,16 @@ mod test {
             panic!("expected Some(ApplicationNameAndEnvironments)")
         };
 
-        let (app, warns, errors) =
-            Application::from_raw_apps(application_name, environments, selector.clone(), raw_apps)
-                .into_product();
+        let (app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            selector.clone(),
+            raw_apps,
+        )
+        .into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
-        app.unwrap()
+        (app.unwrap(), tmp_dir)
     }
 }

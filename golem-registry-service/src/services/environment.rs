@@ -18,13 +18,16 @@ use super::application::ApplicationService;
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment::EnvironmentRepoError;
+use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
+use crate::repo::plugin::PluginRepo;
 use crate::services::application::ApplicationError;
-use golem_common::model::account::AccountEmail;
+use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
     EnvironmentUpdate, EnvironmentWithDetails,
 };
+use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -88,6 +91,8 @@ pub struct EnvironmentService {
     environment_repo: Arc<dyn EnvironmentRepo>,
     application_service: Arc<ApplicationService>,
     account_usage_service: Arc<AccountUsageService>,
+    plugin_repo: Arc<dyn PluginRepo>,
+    builtin_plugin_owner_account_id: AccountId,
 }
 
 impl EnvironmentService {
@@ -95,11 +100,15 @@ impl EnvironmentService {
         environment_repo: Arc<dyn EnvironmentRepo>,
         application_service: Arc<ApplicationService>,
         account_usage_service: Arc<AccountUsageService>,
+        plugin_repo: Arc<dyn PluginRepo>,
+        builtin_plugin_owner_account_id: AccountId,
     ) -> Self {
         Self {
             environment_repo,
             application_service,
             account_usage_service,
+            plugin_repo,
+            builtin_plugin_owner_account_id,
         }
     }
 
@@ -128,9 +137,25 @@ impl EnvironmentService {
 
         let record = EnvironmentRevisionRecord::creation(data, auth.account_id());
 
+        let builtin_plugins = self
+            .plugin_repo
+            .list_by_account(self.builtin_plugin_owner_account_id.0)
+            .await?;
+
+        let plugin_grants: Vec<EnvironmentPluginGrantRecord> = builtin_plugins
+            .into_iter()
+            .map(|p| {
+                EnvironmentPluginGrantRecord::creation(
+                    EnvironmentId(record.environment_id),
+                    PluginRegistrationId(p.plugin_id),
+                    auth.account_id(),
+                )
+            })
+            .collect();
+
         let result = self
             .environment_repo
-            .create(application_id.0, record)
+            .create_with_plugin_grants(application_id.0, record, plugin_grants)
             .await
             .map_err(|err| match err {
                 EnvironmentRepoError::EnvironmentViolatesUniqueness => {

@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_apps=("host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-rpc" "agent-mcp" "oplog-processor")
+rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-rpc" "agent-mcp" "oplog-processor")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts")
 benchmark_apps=("benchmarks")
 
@@ -66,7 +66,6 @@ if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
     if should_clean; then
       echo "Cleaning $subdir..."
       "$GOLEM_CLI" clean
-      cargo clean
     fi
 
     if [ "$clean_only" = false ]; then
@@ -118,7 +117,6 @@ if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
       echo "Cleaning $subdir..."
       rm -rf node_modules
       "$GOLEM_CLI" clean
-      cargo clean
     fi
 
     if [ "$clean_only" = false ]; then

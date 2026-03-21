@@ -1,0 +1,806 @@
+[0mdirenv: loading ~/data/repos/golem/.envrc
+[0mdirenv: using flake path:./nix
+[0mdirenv: nix-direnv: Using cached dev shell
+Building the Rust test apps
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building oplog-processor...
+Selecting components
+  Found components: oplog:processor
+  Selected components and layers:
+    oplog:processor: rust, rust[release], rust-test-component, rust-test-component[release], oplog:processor
+Building components
+  Building oplog:processor
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to oplog:processor [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component oplog:processor
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor/golem-temp/agents/oplog_processor_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor/../oplog_processor_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/host-api-tests ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building host-api-tests...
+Selecting components
+  Found components: golem-it:host-api-tests
+  Selected components and layers:
+    golem-it:host-api-tests: rust, rust[release], rust-test-component, rust-test-component[release], golem-it:host-api-tests
+Building components
+  Building golem-it:host-api-tests
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/host-api-tests [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to golem-it:host-api-tests [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:host-api-tests
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/host-api-tests/golem-temp/agents/golem_it_host_api_tests_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/host-api-tests/../golem_it_host_api_tests_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/host-api-tests
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/http-tests ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building http-tests...
+Selecting components
+  Found components: golem-it:http-tests
+  Selected components and layers:
+    golem-it:http-tests: rust, rust[release], rust-test-component, rust-test-component[release], golem-it:http-tests
+Building components
+  Building golem-it:http-tests
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/http-tests [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to golem-it:http-tests [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:http-tests
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/http-tests/golem-temp/agents/golem_it_http_tests_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/http-tests/../golem_it_http_tests_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/http-tests
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/initial-file-system ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building initial-file-system...
+Selecting components
+  Found components: it:initial-file-system
+  Selected components and layers:
+    it:initial-file-system: rust, rust[release], rust-test-component, rust-test-component[release], it:initial-file-system
+Building components
+  Building it:initial-file-system
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/initial-file-system [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to it:initial-file-system [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component it:initial-file-system
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/initial-file-system/golem-temp/agents/it_initial_file_system_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/initial-file-system/../it_initial_file_system_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/initial-file-system
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-counters ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-counters...
+Selecting components
+  Found components: it:agent-counters
+  Selected components and layers:
+    it:agent-counters: rust, rust[release], rust-test-component, rust-test-component[release], it:agent-counters
+Building components
+  Building it:agent-counters
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-counters [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to it:agent-counters [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component it:agent-counters
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-counters/golem-temp/agents/it_agent_counters_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-counters/../it_agent_counters_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-counters
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v1 ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-updates-v1...
+Selecting components
+  Found components: it:agent-update
+  Selected components and layers:
+    it:agent-update: rust, rust[release], rust-test-component, rust-test-component[release], it:agent-update, it:agent-update[release]
+Building components
+  Building it:agent-update
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v1 [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to it:agent-update [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component it:agent-update
+    Executing external command 'cp golem-temp/agents/it_agent_update_release.wasm ../it_agent_update_v1_release.wasm' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v1
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v2 ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-updates-v2...
+Selecting components
+  Found components: it:agent-update
+  Selected components and layers:
+    it:agent-update: rust, rust[release], rust-test-component, rust-test-component[release], it:agent-update, it:agent-update[release]
+Building components
+  Building it:agent-update
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v2 [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to it:agent-update [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component it:agent-update
+    Executing external command 'cp golem-temp/agents/it_agent_update_release.wasm ../it_agent_update_v2_release.wasm' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v2
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v3 ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-updates-v3...
+Selecting components
+  Found components: it:agent-update
+  Selected components and layers:
+    it:agent-update: rust, rust[release], rust-test-component, rust-test-component[release], it:agent-update, it:agent-update[release]
+Building components
+  Building it:agent-update
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v3 [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to it:agent-update [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component it:agent-update
+    Executing external command 'cp golem-temp/agents/it_agent_update_release.wasm ../it_agent_update_v3_release.wasm' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v3
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v4 ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-updates-v4...
+Selecting components
+  Found components: it:agent-update
+  Selected components and layers:
+    it:agent-update: rust, rust[release], rust-test-component, rust-test-component[release], it:agent-update, it:agent-update[release]
+Building components
+  Building it:agent-update
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v4 [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to it:agent-update [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component it:agent-update
+    Executing external command 'cp golem-temp/agents/it_agent_update_release.wasm ../it_agent_update_v4_release.wasm' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-updates-v4
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building scalability...
+Selecting components
+  Found components: scalability:large-dynamic-memory, scalability:large-initial-memory
+  Selected components and layers:
+    scalability:large-dynamic-memory: rust, rust[release], rust-test-component, rust-test-component[release], scalability:large-dynamic-memory
+    scalability:large-initial-memory: rust, rust[release], rust-test-component, rust-test-component[release], scalability:large-initial-memory
+Building components
+  Building scalability:large-dynamic-memory
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability/scalability-large-dynamic-memory [UP-TO-DATE]
+  Building scalability:large-initial-memory
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability/scalability-large-initial-memory [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to scalability:large-dynamic-memory [UP-TO-DATE]
+  Skipping adding metadata to scalability:large-initial-memory [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component scalability:large-dynamic-memory
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability/golem-temp/agents/scalability_large_dynamic_memory_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability/../scalability_large_dynamic_memory_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability/scalability-large-dynamic-memory
+  Executing custom command copy for component scalability:large-initial-memory
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability/golem-temp/agents/scalability_large_initial_memory_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability/../scalability_large_initial_memory_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/scalability/scalability-large-initial-memory
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-rust ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-sdk-rust...
+Selecting components
+  Found components: golem-it:agent-sdk-rust
+  Selected components and layers:
+    golem-it:agent-sdk-rust: rust, rust[release], rust-test-component, rust-test-component[release], golem-it:agent-sdk-rust
+Building components
+  Building golem-it:agent-sdk-rust
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-rust [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to golem-it:agent-sdk-rust [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:agent-sdk-rust
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-rust/golem-temp/agents/golem_it_agent_sdk_rust_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-rust/../golem_it_agent_sdk_rust_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-rust
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-invocation-context ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-invocation-context...
+Selecting components
+  Found components: golem-it:agent-invocation-context
+  Selected components and layers:
+    golem-it:agent-invocation-context: rust, rust[release], rust-test-component, rust-test-component[release], golem-it:agent-invocation-context
+Building components
+  Building golem-it:agent-invocation-context
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-invocation-context [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to golem-it:agent-invocation-context [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:agent-invocation-context
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-invocation-context/golem-temp/agents/golem_it_agent_invocation_context_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-invocation-context/../golem_it_agent_invocation_context_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-invocation-context
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-rpc...
+Selecting components
+  Found components: golem-it:agent-rpc, golem-it:agent-rpc-rust
+  Selected components and layers:
+    golem-it:agent-rpc:      ts, ts-test-component, golem-it:agent-rpc
+    golem-it:agent-rpc-rust: rust, rust[release], rust-test-component, rust-test-component[release], golem-it:agent-rpc-rust
+Building components
+  Building golem-it:agent-rpc
+    Executing external command 'npx tsc --project "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc" --noEmit false --emitDeclarationOnly --declaration --outFile "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-temp/ts-check/golem-it-agent-rpc/main.d.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc
+    Detected missing node_modules, executing npm install
+npm |  
+npm |  added 33 packages, and audited 40 packages in 1s
+npm |  
+npm |  5 packages are looking for funding
+npm |    run `npm fund` for details
+npm |  
+npm |  1 high severity vulnerability
+npm |  
+npm |  To address all issues, run:
+npm |    npm audit fix
+npm |  
+npm |  Run `npm audit` for details.
+    Executing external command 'npx --no golem-typegen "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc/tsconfig.json" --files "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc/src/**/*.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-temp/ts-metadata/golem-it-agent-rpc
+    Creating directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-temp/ts-metadata/golem-it-agent-rpc
+npx |  [34mℹ[39m Starting type metadata generation…
+npx |  [34mℹ[39m Processing 1 source files…
+npx |  [32m✔[39m Metadata tracked for: TestAgent, ChildAgent, SimpleChildAgent, SelfRpcAgent
+npx |  [34mℹ[39m Saving metadata…
+npx |  [32m✔[39m Metadata saved successfully in .metadata/generated-types.ts!
+    Executing external command 'npx --no rollup -- -c "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-temp/common/ts/rollup.config.component.mjs"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc
+npx |  [36m
+npx |  [1mvirtual:agent-main[22m → [1m../golem-temp/ts-dist/golem-it-agent-rpc/main.js[22m...[39m
+npx |  [32mcreated [1m../golem-temp/ts-dist/golem-it-agent-rpc/main.js[22m in [1m435ms[22m[39m
+    Injecting JS module /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-temp/ts-dist/golem-it-agent-rpc/main.js into QuickJS WASM /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
+  Building golem-it:agent-rpc-rust
+    Executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc-rust
+cargo |     Compiling proc-macro2 v1.0.92
+cargo |     Compiling serde_core v1.0.228
+cargo |     Compiling unicode-ident v1.0.14
+cargo |     Compiling foldhash v0.2.0
+cargo |     Compiling zmij v1.0.21
+cargo |     Compiling equivalent v1.0.1
+cargo |     Compiling anyhow v1.0.102
+cargo |     Compiling serde_json v1.0.149
+cargo |     Compiling semver v1.0.27
+cargo |     Compiling bitflags v2.6.0
+cargo |     Compiling serde v1.0.228
+cargo |     Compiling itoa v1.0.14
+cargo |     Compiling memchr v2.7.4
+cargo |     Compiling id-arena v2.3.0
+cargo |     Compiling unicode-xid v0.2.6
+cargo |     Compiling log v0.4.29
+cargo |     Compiling autocfg v1.4.0
+cargo |     Compiling wit-bindgen v0.51.0
+cargo |     Compiling hashbrown v0.16.1
+cargo |     Compiling smallvec v1.15.1
+cargo |     Compiling leb128 v0.2.5
+cargo |     Compiling prettyplease v0.2.37
+cargo |     Compiling wasm-encoder v0.202.0
+cargo |     Compiling spdx v0.10.9
+cargo |     Compiling leb128fmt v0.1.0
+cargo |     Compiling heck v0.5.0
+cargo |     Compiling wit-bindgen-rust v0.24.0
+cargo |     Compiling bytes v1.11.1
+cargo |     Compiling unicode-segmentation v1.12.0
+cargo |     Compiling slab v0.4.9
+cargo |     Compiling wasip2 v1.0.2+wasi-0.2.9
+cargo |     Compiling num-traits v0.2.19
+cargo |     Compiling futures-core v0.3.31
+cargo |     Compiling getrandom v0.4.2
+cargo |     Compiling wit-bindgen-rt v0.24.0
+cargo |     Compiling winnow v1.0.0
+cargo |     Compiling wit-bindgen-rust v0.53.1
+cargo |     Compiling heck v0.4.1
+cargo |     Compiling wit-bindgen-rust-macro v0.24.0
+cargo |     Compiling quote v1.0.37
+cargo |     Compiling http v1.4.0
+cargo |     Compiling pin-project-lite v0.2.15
+cargo |     Compiling syn v2.0.117
+cargo |     Compiling waker-fn v1.2.0
+cargo |     Compiling futures-io v0.3.32
+cargo |     Compiling parking v2.2.1
+cargo |     Compiling wit-bindgen-rt v0.44.0
+cargo |     Compiling cfg-if v1.0.0
+cargo |     Compiling fastrand v1.9.0
+cargo |     Compiling wit-bindgen-rust-macro v0.53.1
+cargo |     Compiling toml_datetime v1.0.1+spec-1.1.0
+cargo |     Compiling futures-lite v1.13.0
+cargo |     Compiling either v1.15.0
+cargo |     Compiling dtor-proc-macro v0.0.5
+cargo |     Compiling sha1_smol v1.0.1
+cargo |     Compiling golem-wasm v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/golem-wasm)
+cargo |     Compiling async-task v4.7.1
+cargo |     Compiling wit-bindgen v0.53.1
+cargo |     Compiling itertools v0.14.0
+cargo |     Compiling ctor-proc-macro v0.0.6
+cargo |     Compiling humantime v2.3.0
+cargo |     Compiling http-body v1.0.1
+cargo |     Compiling dtor v0.0.6
+cargo |     Compiling http-body-util v0.1.3
+cargo |     Compiling toml_parser v1.0.10+spec-1.1.0
+cargo |     Compiling ctor v0.4.3
+cargo |     Compiling indexmap v2.13.0
+cargo |     Compiling uuid v1.22.0
+cargo |     Compiling wasmparser v0.202.0
+cargo |     Compiling wasmparser v0.245.1
+cargo |     Compiling toml_edit v0.25.5+spec-1.1.0
+cargo |     Compiling proc-macro-crate v3.5.0
+cargo |     Compiling serde_derive v1.0.228
+cargo |     Compiling wstd-macro v0.6.5
+cargo |     Compiling golem-rust-macro v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust-macro)
+cargo |     Compiling async-trait v0.1.89
+cargo |     Compiling wit-parser v0.202.0
+cargo |     Compiling wasm-metadata v0.202.0
+cargo |     Compiling wstd v0.6.5
+cargo |     Compiling chrono v0.4.44
+cargo |     Compiling wit-component v0.202.0
+cargo |     Compiling wit-bindgen-core v0.24.0
+cargo |     Compiling wasm-encoder v0.245.1
+cargo |     Compiling wit-parser v0.245.1
+cargo |     Compiling wasm-metadata v0.245.1
+cargo |     Compiling wit-component v0.245.1
+cargo |     Compiling wit-bindgen-core v0.53.1
+cargo |     Compiling wit-bindgen v0.24.0
+cargo |     Compiling wasi-logger v0.1.2
+cargo |     Compiling golem-rust v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust)
+cargo |     Compiling golem_it_agent_rpc_rust v0.0.1 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc-rust)
+cargo |      Finished `release` profile [optimized] target(s) in 24.37s
+Adding metadata to components
+  Adding metadata to golem-it:agent-rpc
+  Adding metadata to golem-it:agent-rpc-rust
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:agent-rpc
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-temp/agents/golem_it_agent_rpc.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/../golem_it_agent_rpc.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc
+  Executing custom command copy for component golem-it:agent-rpc-rust
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-temp/agents/golem_it_agent_rpc_rust_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/../golem_it_agent_rpc_rust_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-rpc/golem-it-agent-rpc-rust
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-mcp ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-mcp...
+Selecting components
+  Found components: golem-it:mcp
+  Selected components and layers:
+    golem-it:mcp: rust, rust[release], rust-test-component, rust-test-component[release], golem-it:mcp
+Building components
+  Building golem-it:mcp
+    Executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-mcp
+cargo |     Compiling proc-macro2 v1.0.92
+cargo |     Compiling unicode-ident v1.0.14
+cargo |     Compiling serde_core v1.0.228
+cargo |     Compiling foldhash v0.2.0
+cargo |     Compiling zmij v1.0.21
+cargo |     Compiling equivalent v1.0.1
+cargo |     Compiling anyhow v1.0.102
+cargo |     Compiling serde_json v1.0.149
+cargo |     Compiling semver v1.0.27
+cargo |     Compiling bitflags v2.6.0
+cargo |     Compiling serde v1.0.228
+cargo |     Compiling memchr v2.7.4
+cargo |     Compiling itoa v1.0.14
+cargo |     Compiling unicode-xid v0.2.6
+cargo |     Compiling log v0.4.29
+cargo |     Compiling id-arena v2.3.0
+cargo |     Compiling autocfg v1.4.0
+cargo |     Compiling prettyplease v0.2.37
+cargo |     Compiling hashbrown v0.16.1
+cargo |     Compiling smallvec v1.15.1
+cargo |     Compiling wit-bindgen v0.51.0
+cargo |     Compiling leb128 v0.2.5
+cargo |     Compiling wasm-encoder v0.202.0
+cargo |     Compiling spdx v0.10.9
+cargo |     Compiling leb128fmt v0.1.0
+cargo |     Compiling unicode-segmentation v1.12.0
+cargo |     Compiling bytes v1.11.1
+cargo |     Compiling heck v0.5.0
+cargo |     Compiling wit-bindgen-rust v0.24.0
+cargo |     Compiling slab v0.4.9
+cargo |     Compiling num-traits v0.2.19
+cargo |     Compiling wasip2 v1.0.2+wasi-0.2.9
+cargo |     Compiling pin-project-lite v0.2.15
+cargo |     Compiling winnow v1.0.0
+cargo |     Compiling wit-bindgen-rust-macro v0.24.0
+cargo |     Compiling heck v0.4.1
+cargo |     Compiling futures-core v0.3.31
+cargo |     Compiling wit-bindgen-rt v0.24.0
+cargo |     Compiling getrandom v0.4.2
+cargo |     Compiling wit-bindgen-rust v0.53.1
+cargo |     Compiling quote v1.0.37
+cargo |     Compiling http v1.4.0
+cargo |     Compiling syn v2.0.117
+cargo |     Compiling parking v2.2.1
+cargo |     Compiling fastrand v1.9.0
+cargo |     Compiling wit-bindgen-rust-macro v0.53.1
+cargo |     Compiling futures-io v0.3.32
+cargo |     Compiling toml_datetime v1.0.1+spec-1.1.0
+cargo |     Compiling wit-bindgen-rt v0.44.0
+cargo |     Compiling cfg-if v1.0.0
+cargo |     Compiling waker-fn v1.2.0
+cargo |     Compiling wit-bindgen v0.53.1
+cargo |     Compiling async-task v4.7.1
+cargo |     Compiling futures-lite v1.13.0
+cargo |     Compiling golem-wasm v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/golem-wasm)
+cargo |     Compiling dtor-proc-macro v0.0.5
+cargo |     Compiling either v1.15.0
+cargo |     Compiling sha1_smol v1.0.1
+cargo |     Compiling itertools v0.14.0
+cargo |     Compiling ctor-proc-macro v0.0.6
+cargo |     Compiling http-body v1.0.1
+cargo |     Compiling humantime v2.3.0
+cargo |     Compiling http-body-util v0.1.3
+cargo |     Compiling toml_parser v1.0.10+spec-1.1.0
+cargo |     Compiling dtor v0.0.6
+cargo |     Compiling ctor v0.4.3
+cargo |     Compiling indexmap v2.13.0
+cargo |     Compiling uuid v1.22.0
+cargo |     Compiling wasmparser v0.202.0
+cargo |     Compiling wasmparser v0.245.1
+cargo |     Compiling toml_edit v0.25.5+spec-1.1.0
+cargo |     Compiling proc-macro-crate v3.5.0
+cargo |     Compiling serde_derive v1.0.228
+cargo |     Compiling wstd-macro v0.6.5
+cargo |     Compiling async-trait v0.1.89
+cargo |     Compiling golem-rust-macro v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust-macro)
+cargo |     Compiling wit-parser v0.202.0
+cargo |     Compiling wasm-metadata v0.202.0
+cargo |     Compiling chrono v0.4.44
+cargo |     Compiling wstd v0.6.5
+cargo |     Compiling wit-bindgen-core v0.24.0
+cargo |     Compiling wit-component v0.202.0
+cargo |     Compiling wasm-encoder v0.245.1
+cargo |     Compiling wit-parser v0.245.1
+cargo |     Compiling wasm-metadata v0.245.1
+cargo |     Compiling wit-bindgen-core v0.53.1
+cargo |     Compiling wit-component v0.245.1
+cargo |     Compiling wit-bindgen v0.24.0
+cargo |     Compiling wasi-logger v0.1.2
+cargo |     Compiling golem-rust v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust)
+cargo |     Compiling golem_it_mcp v0.0.1 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-mcp)
+cargo |      Finished `release` profile [optimized] target(s) in 23.02s
+Adding metadata to components
+  Adding metadata to golem-it:mcp
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:mcp
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-mcp/golem-temp/agents/golem_it_mcp_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-mcp/../golem_it_mcp_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-mcp
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building oplog-processor...
+Selecting components
+  Found components: oplog:processor
+  Selected components and layers:
+    oplog:processor: rust, rust[release], rust-test-component, rust-test-component[release], oplog:processor
+Building components
+  Building oplog:processor
+    Skipping executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor [UP-TO-DATE]
+Adding metadata to components
+  Skipping adding metadata to oplog:processor [UP-TO-DATE]
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component oplog:processor
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor/golem-temp/agents/oplog_processor_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor/../oplog_processor_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/oplog-processor
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building the TS test apps
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-constructor-parameter-echo...
+
+added 33 packages, and audited 40 packages in 357ms
+
+5 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+Selecting components
+  Found components: golem-it:constructor-parameter-echo
+  Selected components and layers:
+    golem-it:constructor-parameter-echo: ts, ts-test-component, golem-it:constructor-parameter-echo
+Building components
+  Building golem-it:constructor-parameter-echo
+    Executing external command 'npx tsc --project "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo" --noEmit false --emitDeclarationOnly --declaration --outFile "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/golem-temp/ts-check/golem-it-constructor-parameter-echo/main.d.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo
+    Executing external command 'npx --no golem-typegen "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/tsconfig.json" --files "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/src/**/*.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/golem-temp/ts-metadata/golem-it-constructor-parameter-echo
+    Creating directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/golem-temp/ts-metadata/golem-it-constructor-parameter-echo
+npx |  [34mℹ[39m Starting type metadata generation…
+npx |  [34mℹ[39m Processing 1 source files…
+npx |  [32m✔[39m Metadata tracked for: EchoAgent, EphemeralEchoAgent, SnapshotCounterAgent
+npx |  [34mℹ[39m Saving metadata…
+npx |  [32m✔[39m Metadata saved successfully in .metadata/generated-types.ts!
+    Executing external command 'npx --no rollup -- -c "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/golem-temp/common/ts/rollup.config.component.mjs"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo
+npx |  [36m
+npx |  [1mvirtual:agent-main[22m → [1mgolem-temp/ts-dist/golem-it-constructor-parameter-echo/main.js[22m...[39m
+npx |  [32mcreated [1mgolem-temp/ts-dist/golem-it-constructor-parameter-echo/main.js[22m in [1m405ms[22m[39m
+    Injecting JS module /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/golem-temp/ts-dist/golem-it-constructor-parameter-echo/main.js into QuickJS WASM /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
+Adding metadata to components
+  Adding metadata to golem-it:constructor-parameter-echo
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:constructor-parameter-echo
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/golem-temp/agents/golem_it_constructor_parameter_echo.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo/../golem_it_constructor_parameter_echo.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-constructor-parameter-echo
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-promise...
+
+added 33 packages, and audited 40 packages in 362ms
+
+5 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+Selecting components
+  Found components: golem-it:agent-promise
+  Selected components and layers:
+    golem-it:agent-promise: ts, ts-test-component, golem-it:agent-promise
+Building components
+  Building golem-it:agent-promise
+    Executing external command 'npx tsc --project "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise" --noEmit false --emitDeclarationOnly --declaration --outFile "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/golem-temp/ts-check/golem-it-agent-promise/main.d.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise
+    Executing external command 'npx --no golem-typegen "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/tsconfig.json" --files "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/src/**/*.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/golem-temp/ts-metadata/golem-it-agent-promise
+    Creating directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/golem-temp/ts-metadata/golem-it-agent-promise
+npx |  [34mℹ[39m Starting type metadata generation…
+npx |  [34mℹ[39m Processing 1 source files…
+npx |  [32m✔[39m Metadata tracked for: PromiseAgent
+npx |  [34mℹ[39m Saving metadata…
+npx |  [32m✔[39m Metadata saved successfully in .metadata/generated-types.ts!
+    Executing external command 'npx --no rollup -- -c "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/golem-temp/common/ts/rollup.config.component.mjs"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise
+npx |  [36m
+npx |  [1mvirtual:agent-main[22m → [1mgolem-temp/ts-dist/golem-it-agent-promise/main.js[22m...[39m
+npx |  [32mcreated [1mgolem-temp/ts-dist/golem-it-agent-promise/main.js[22m in [1m409ms[22m[39m
+    Injecting JS module /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/golem-temp/ts-dist/golem-it-agent-promise/main.js into QuickJS WASM /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
+Adding metadata to components
+  Adding metadata to golem-it:agent-promise
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:agent-promise
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/golem-temp/agents/golem_it_agent_promise.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise/../golem_it_agent_promise.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-promise
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building agent-sdk-ts...
+
+added 32 packages, and audited 35 packages in 409ms
+
+5 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+Selecting components
+  Found components: golem-it:agent-sdk-ts
+  Selected components and layers:
+    golem-it:agent-sdk-ts: ts, ts-test-component, golem-it:agent-sdk-ts
+Building components
+  Building golem-it:agent-sdk-ts
+    Executing external command 'npx tsc --project "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts" --noEmit false --emitDeclarationOnly --declaration --outFile "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/golem-temp/ts-check/golem-it-agent-sdk-ts/main.d.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts
+    Executing external command 'npx --no golem-typegen "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/tsconfig.json" --files "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/src/**/*.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/golem-temp/ts-metadata/golem-it-agent-sdk-ts
+    Creating directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/golem-temp/ts-metadata/golem-it-agent-sdk-ts
+npx |  [34mℹ[39m Starting type metadata generation…
+npx |  [34mℹ[39m Processing 3 source files…
+npx |  [32m✔[39m Metadata tracked for: ConfigAgent, LocalConfigAgent, SharedConfigAgent, LocalCasingSharedConfigAgent, RpcLocalConfigAgent, HttpAgent, CorsAgent, WebhookAgent, PrincipalAgent
+npx |  [34mℹ[39m Saving metadata…
+npx |  [32m✔[39m Metadata saved successfully in .metadata/generated-types.ts!
+    Executing external command 'npx --no rollup -- -c "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/golem-temp/common/ts/rollup.config.component.mjs"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts
+npx |  [36m
+npx |  [1mvirtual:agent-main[22m → [1mgolem-temp/ts-dist/golem-it-agent-sdk-ts/main.js[22m...[39m
+npx |  [32mcreated [1mgolem-temp/ts-dist/golem-it-agent-sdk-ts/main.js[22m in [1m514ms[22m[39m
+    Injecting JS module /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/golem-temp/ts-dist/golem-it-agent-sdk-ts/main.js into QuickJS WASM /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
+Adding metadata to components
+  Adding metadata to golem-it:agent-sdk-ts
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component golem-it:agent-sdk-ts
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/golem-temp/agents/golem_it_agent_sdk_ts.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts/../golem_it_agent_sdk_ts.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/agent-sdk-ts
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building benchmark apps
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks ~/data/repos/golem/golem-oss/2970-file-system-quota/test-components
+Building benchmarks...
+
+added 33 packages, and audited 40 packages in 351ms
+
+5 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+Selecting components
+  Found components: benchmark:agent-rust, benchmark:agent-ts
+  Selected components and layers:
+    benchmark:agent-rust: rust, rust[release], rust-test-component, rust-test-component[release], benchmark:agent-rust
+    benchmark:agent-ts:   ts, ts-test-component, benchmark:agent-ts
+Building components
+  Building benchmark:agent-rust
+    Executing external command 'cargo build --target wasm32-wasip2 --release' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-rust
+cargo |  warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+cargo |  package:   /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-rust/Cargo.toml
+cargo |  workspace: /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/Cargo.toml
+cargo |  warning: virtual workspace defaulting to `resolver = "1"` despite one or more workspace members being on edition 2021 which implies `resolver = "2"`
+cargo |    |
+cargo |    = note: to keep the current resolver, specify `workspace.resolver = "1"` in the workspace root's manifest
+cargo |    = note: to use the edition 2021 resolver, specify `workspace.resolver = "2"` in the workspace root's manifest
+cargo |    = note: for more details see https://doc.rust-lang.org/cargo/reference/resolver.html#resolver-versions
+cargo |  warning: /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust/Cargo.toml: file `/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust/benches/agent_registry_bench.rs` found to be present in multiple build targets:
+cargo |    * `integration-test` target `agent_registry_bench`
+cargo |    * `bench` target `agent_registry_bench`
+cargo |  warning: /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust/Cargo.toml: file `/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust/benches/from_element_value_bench.rs` found to be present in multiple build targets:
+cargo |    * `integration-test` target `from_element_value_bench`
+cargo |    * `bench` target `from_element_value_bench`
+cargo |  warning: /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust/Cargo.toml: file `/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust/benches/eager_vs_lazy_format_bench.rs` found to be present in multiple build targets:
+cargo |    * `integration-test` target `eager_vs_lazy_format_bench`
+cargo |    * `bench` target `eager_vs_lazy_format_bench`
+cargo |   Downloading crates ...
+cargo |    Downloaded ctor-proc-macro v0.0.7
+cargo |    Downloaded dtor-proc-macro v0.0.6
+cargo |    Downloaded dtor v0.1.1
+cargo |    Downloaded itoa v1.0.15
+cargo |    Downloaded ctor v0.6.1
+cargo |    Downloaded ryu v1.0.20
+cargo |    Downloaded quote v1.0.42
+cargo |    Downloaded proc-macro2 v1.0.103
+cargo |    Downloaded toml_parser v1.0.6+spec-1.1.0
+cargo |    Downloaded http v1.3.1
+cargo |    Downloaded serde_json v1.0.145
+cargo |    Downloaded winnow v0.7.13
+cargo |    Downloaded chrono v0.4.42
+cargo |    Downloaded syn v2.0.110
+cargo |    Downloaded libc v0.2.177
+cargo |     Compiling serde_core v1.0.228
+cargo |     Compiling proc-macro2 v1.0.103
+cargo |     Compiling unicode-ident v1.0.22
+cargo |     Compiling quote v1.0.42
+cargo |     Compiling foldhash v0.2.0
+cargo |     Compiling equivalent v1.0.2
+cargo |     Compiling serde v1.0.228
+cargo |     Compiling anyhow v1.0.100
+cargo |     Compiling serde_json v1.0.145
+cargo |     Compiling semver v1.0.27
+cargo |     Compiling bitflags v2.10.0
+cargo |     Compiling ryu v1.0.20
+cargo |     Compiling memchr v2.7.6
+cargo |     Compiling itoa v1.0.15
+cargo |     Compiling log v0.4.29
+cargo |     Compiling id-arena v2.3.0
+cargo |     Compiling unicode-xid v0.2.6
+cargo |     Compiling hashbrown v0.16.1
+cargo |     Compiling wit-bindgen v0.51.0
+cargo |     Compiling leb128 v0.2.5
+cargo |     Compiling smallvec v1.15.1
+cargo |     Compiling prettyplease v0.2.37
+cargo |     Compiling wasm-encoder v0.202.0
+cargo |     Compiling spdx v0.10.9
+cargo |     Compiling leb128fmt v0.1.0
+cargo |     Compiling autocfg v1.5.0
+cargo |     Compiling heck v0.5.0
+cargo |     Compiling bytes v1.11.0
+cargo |     Compiling unicode-segmentation v1.12.0
+cargo |     Compiling wit-bindgen-rust v0.24.0
+cargo |     Compiling fnv v1.0.7
+cargo |     Compiling winnow v0.7.13
+cargo |     Compiling wit-bindgen-rt v0.24.0
+cargo |     Compiling wit-bindgen-rust-macro v0.24.0
+cargo |     Compiling wasip2 v1.0.2+wasi-0.2.9
+cargo |     Compiling getrandom v0.3.4
+cargo |     Compiling num-traits v0.2.19
+cargo |     Compiling pin-project-lite v0.2.16
+cargo |     Compiling heck v0.4.1
+cargo |     Compiling wit-bindgen-rust v0.53.1
+cargo |     Compiling futures-core v0.3.31
+cargo |     Compiling cfg-if v1.0.4
+cargo |     Compiling parking v2.2.1
+cargo |     Compiling wit-bindgen-rust-macro v0.53.1
+cargo |     Compiling wit-bindgen-rt v0.44.0
+cargo |     Compiling futures-io v0.3.31
+cargo |     Compiling toml_datetime v0.7.5+spec-1.1.0
+cargo |     Compiling http v1.3.1
+cargo |     Compiling waker-fn v1.2.0
+cargo |     Compiling fastrand v1.9.0
+cargo |     Compiling syn v2.0.110
+cargo |     Compiling sha1_smol v1.0.1
+cargo |     Compiling futures-lite v1.13.0
+cargo |     Compiling either v1.15.0
+cargo |     Compiling golem-wasm v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/golem-wasm)
+cargo |     Compiling wit-bindgen v0.53.1
+cargo |     Compiling dtor-proc-macro v0.0.5
+cargo |     Compiling slab v0.4.11
+cargo |     Compiling async-task v4.7.1
+cargo |     Compiling itertools v0.14.0
+cargo |     Compiling ctor-proc-macro v0.0.6
+cargo |     Compiling humantime v2.3.0
+cargo |     Compiling dtor-proc-macro v0.0.6
+cargo |     Compiling http-body v1.0.1
+cargo |     Compiling wit-bindgen-rt v0.42.1
+cargo |     Compiling ctor-proc-macro v0.0.7
+cargo |     Compiling dtor v0.0.6
+cargo |     Compiling http-body-util v0.1.3
+cargo |     Compiling ctor v0.4.3
+cargo |     Compiling toml_parser v1.0.6+spec-1.1.0
+cargo |     Compiling dtor v0.1.1
+cargo |     Compiling ctor v0.6.1
+cargo |     Compiling indexmap v2.13.0
+cargo |     Compiling uuid v1.19.0
+cargo |     Compiling wasmparser v0.245.1
+cargo |     Compiling wasmparser v0.202.0
+cargo |     Compiling toml_edit v0.23.10+spec-1.0.0
+cargo |     Compiling proc-macro-crate v3.4.0
+cargo |     Compiling serde_derive v1.0.228
+cargo |     Compiling wstd-macro v0.6.5
+cargo |     Compiling async-trait v0.1.89
+cargo |     Compiling golem-rust-macro v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust-macro)
+cargo |     Compiling wit-parser v0.202.0
+cargo |     Compiling wasm-metadata v0.202.0
+cargo |     Compiling chrono v0.4.42
+cargo |     Compiling wstd v0.6.5
+cargo |     Compiling wasm-encoder v0.245.1
+cargo |     Compiling wit-parser v0.245.1
+cargo |     Compiling wit-component v0.202.0
+cargo |     Compiling wit-bindgen-core v0.24.0
+cargo |     Compiling wasm-metadata v0.245.1
+cargo |     Compiling wit-bindgen-core v0.53.1
+cargo |     Compiling wit-component v0.245.1
+cargo |     Compiling wit-bindgen v0.24.0
+cargo |     Compiling wasi-logger v0.1.2
+cargo |     Compiling golem-rust v0.0.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/sdks/rust/golem-rust)
+cargo |     Compiling common-lib v0.1.0 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/common-rust/common-lib)
+cargo |     Compiling benchmark_agent_rust v0.0.1 (/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-rust)
+cargo |  warning: field `name` is never read
+cargo |    --> benchmark-agent-rust/src/lib.rs:21:5
+cargo |     |
+cargo |  20 | struct RustBenchmarkAgentImpl {
+cargo |     |        ---------------------- field in this struct
+cargo |  21 |     name: String,
+cargo |     |     ^^^^
+cargo |     |
+cargo |     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+cargo |  
+cargo |  warning: field `name` is never read
+cargo |    --> benchmark-agent-rust/src/lib.rs:63:5
+cargo |     |
+cargo |  62 | struct RustEphemeralBenchmarkAgentImpl {
+cargo |     |        ------------------------------- field in this struct
+cargo |  63 |     name: String,
+cargo |     |     ^^^^
+cargo |  
+cargo |  warning: `benchmark_agent_rust` (lib) generated 2 warnings
+cargo |      Finished `release` profile [optimized] target(s) in 32.24s
+  Building benchmark:agent-ts
+    Executing external command 'npx tsc --project "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-ts" --noEmit false --emitDeclarationOnly --declaration --outFile "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/golem-temp/ts-check/benchmark-agent-ts/main.d.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-ts
+    Executing external command 'npx --no golem-typegen "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-ts/tsconfig.json" --files "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-ts/src/**/*.ts"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/golem-temp/ts-metadata/benchmark-agent-ts
+    Creating directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/golem-temp/ts-metadata/benchmark-agent-ts
+npx |  [34mℹ[39m Starting type metadata generation…
+npx |  [34mℹ[39m Processing 1 source files…
+npx |  [32m✔[39m Metadata tracked for: BenchmarkAgent, RpcBenchmarkAgent
+npx |  [34mℹ[39m Saving metadata…
+npx |  [32m✔[39m Metadata saved successfully in .metadata/generated-types.ts!
+    Executing external command 'npx --no rollup -- -c "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/golem-temp/common/ts/rollup.config.component.mjs"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-ts
+npx |  [36m
+npx |  [1mvirtual:agent-main[22m → [1m../golem-temp/ts-dist/benchmark-agent-ts/main.js[22m...[39m
+npx |  [1m[33m(!) Unresolved dependencies[39m[22m
+npx |  [90mhttps://rollupjs.org/troubleshooting/#warning-treating-module-as-external-dependency[39m
+npx |  [1mcommon/lib[22m (imported by "src/main.ts")
+npx |  [32mcreated [1m../golem-temp/ts-dist/benchmark-agent-ts/main.js[22m in [1m454ms[22m[39m
+    Injecting JS module /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/golem-temp/ts-dist/benchmark-agent-ts/main.js into QuickJS WASM /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
+Adding metadata to components
+  Adding metadata to benchmark:agent-rust
+  Adding metadata to benchmark:agent-ts
+
+Finished building [OK]
+Executing custom command copy
+  Executing custom command copy for component benchmark:agent-rust
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/golem-temp/agents/benchmark_agent_rust_release.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/../benchmark_agent_rust_release.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-rust
+  Executing custom command copy for component benchmark:agent-ts
+    Executing external command 'cp "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/golem-temp/agents/benchmark_agent_ts.wasm" "/home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/../benchmark_agent_ts.wasm"' in directory /home/ai/data/repos/golem/golem-oss/2970-file-system-quota/test-components/benchmarks/benchmark-agent-ts
+~/data/repos/golem/golem-oss/2970-file-system-quota/test-components

@@ -23,7 +23,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{future, pin_mut, SinkExt, StreamExt, TryStreamExt};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
-use golem_common::model::{AgentEvent, IdempotencyKey, Timestamp};
+use golem_common::model::{AgentEvent, IdempotencyKey, LogLevel, Timestamp};
 use native_tls::TlsConnector;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -308,6 +308,22 @@ impl WorkerConnection {
                                     if idempotency_key_to_look_for == Some(idempotency_key) {
                                         goal_reached.store(true, Ordering::Release);
                                     }
+                                }
+                            }
+                            AgentEvent::PluginError {
+                                timestamp,
+                                plugin_name,
+                                message,
+                            } => {
+                                if matching {
+                                    output
+                                        .emit_log(
+                                            timestamp,
+                                            LogLevel::Error,
+                                            format!("plugin:{plugin_name}"),
+                                            message,
+                                        )
+                                        .await;
                                 }
                             }
                             AgentEvent::ClientLagged {

@@ -9,8 +9,15 @@
 app: benchmarks
 
 includes:
-- components-*/*/golem.yaml
 - ../golem-test-components-common.yaml
+
+components:
+  benchmark:agent-rust:
+    dir: "benchmark-agent-rust"
+    templates: rust, rust-test-component
+  benchmark:agent-ts:
+    dir: "benchmark-agent-ts"
+    templates: ts, ts-test-component
 
 environments:
   local:

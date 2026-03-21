@@ -7,35 +7,30 @@ componentTemplates:
         default: true
         build:
         - command: cargo build --target wasm32-wasip2
+          env:
+            CARGO_TARGET_DIR: "{{ componentDir }}/target"
           sources:
-          - src
-          - ../../common-rust
-          - Cargo.toml
-          - ../../Cargo.toml
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/Cargo.toml"
           targets:
-          - ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
-        sourceWit: .wit/wit
-        generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
-        outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
+          - "{{ componentDir }}/target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ componentDir }}/target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_debug.wasm"
         clean:
-        - src/bindings.rs
+        - "{{ appDir }}/target"
+        - "{{ componentDir }}/target"
       release:
         build:
         - command: cargo build --target wasm32-wasip2 --release
+          env:
+            CARGO_TARGET_DIR: "{{ componentDir }}/target"
           sources:
-          - src
-          - ../../common-rust
-          - Cargo.toml
-          - ../../Cargo.toml
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/Cargo.toml"
           targets:
-          - ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
-        sourceWit: .wit/wit
-        generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
-        outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
+          - "{{ componentDir }}/target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ componentDir }}/target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
         clean:
-        - src/bindings.rs
-customCommands:
-  cargo-clean:
-  - command: cargo clean
+        - "{{ appDir }}/target"
+        - "{{ componentDir }}/target"

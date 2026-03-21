@@ -553,9 +553,11 @@ impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
                     },
                 })
             }
-            PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters {
-                error,
-            }) => Self::ProcessOplogEntries(oplog::FallibleResultParameters { error }),
+            PublicAgentInvocationResult::ProcessOplogEntries(result) => {
+                Self::ProcessOplogEntries(oplog::FallibleResultParameters {
+                    error: result.error,
+                })
+            }
         }
     }
 }
