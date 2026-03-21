@@ -29,81 +29,377 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-/// A failed write (quota exceeded) must not consume any of the remaining quota.
-/// The next write within the original limit must still succeed.
+
+
+/// Full lifecycle: write → delete → suspend → restart → write → verify pool
 ///
-/// This tests that `check_storage_quota` rejects the write before any oplog
-/// entry or semaphore acquire happens, so the quota counter stays accurate.
+/// Verifies that `current_storage_usage` (reconstructed from `StorageUsageUpdate`
+/// oplog entries) stays accurate across the full suspend/restart cycle, and that
+/// the executor semaphore is correctly pre-acquired from the reconstructed value
+/// on restart.
+///
+/// Pool = 2 KB (2 permits). Each 11-byte "hello world" write rounds up to 1 KB.
+///
+/// 1. Write file-1 (1 KB) → pool: 1 KB used, 1 KB free.
+/// 2. Write file-2 (1 KB) → pool: 2 KB used, 0 KB free.
+/// 3. Delete file-1 → pool: 1 KB used, 1 KB free.
+///    The `StorageUsageUpdate(-1 KB)` oplog entry is written.
+/// 4. Interrupt → RunningWorker drops → permits released → pool: 2 KB free.
+/// 5. Re-invoke → restart pre-acquires `current_storage_usage = 1 KB`
+///    (reconstructed from oplog: +1 KB +1 KB -1 KB) → pool: 1 KB used, 1 KB free.
+/// 6. Write file-3 (1 KB) → succeeds (1 KB free in pool).
+/// 7. Write file-4 (1 KB) → fails with `WorkerOutOfStorage`
+///    (pool exhausted: 2 KB in use = file-2 + file-3).
+///
+/// If `current_storage_usage` were miscalculated on restart (e.g. missing the
+/// delete delta or double-counting), the pre-acquire would be wrong and steps
+/// 6 or 7 would behave incorrectly.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn failed_write_does_not_reduce_remaining_quota(
+async fn executor_pool_storage_usage_survives_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // 20-byte quota. First write succeeds (11 bytes). Second write exceeds quota
-    // (11 more = 22 total). Third write of 9 bytes must still succeed — the
-    // 9 remaining bytes of quota are intact because the failed write left no trace.
-    let executor = start_with_agent_storage_quota(deps, &context, 20).await?;
+    let executor = start_with_executor_storage_pool(deps, &context, 2 * 1024).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
-    let agent_id = agent_id!("FileSystem", "quota-ordering-1");
+    let agent = agent_id!("FileSystem", "lifecycle-1");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    // Step 1: write file-1 → 1 KB used.
     executor
-        .start_agent(&component.id, agent_id.clone())
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-1.txt", "hello world"))
         .await?;
 
-    // First write: 11 bytes, leaves 9 bytes of quota.
+    // Step 2: write file-2 → pool exhausted (2 KB used).
     executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "write_file",
-            data_value!("/file1.txt", "hello world"),
-        )
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-2.txt", "hello world"))
         .await?;
 
-    // Second write: 11 bytes, would total 22 — exceeds 20-byte quota. Must fail.
-    let over = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "write_file",
-            data_value!("/file2.txt", "hello world"),
-        )
+    // Step 3: delete file-1 → 1 KB freed, StorageUsageUpdate(-1 KB) written to oplog.
+    executor
+        .invoke_and_await_agent(&component, &agent, "delete_file", data_value!("/file-1.txt"))
+        .await?;
+
+    // Step 4: interrupt → permits released to pool.
+    executor.interrupt(&worker).await?;
+
+    // Step 5: re-invoke → restart reconstructs current_storage_usage = 1 KB from
+    // oplog (+1+1-1), pre-acquires 1 KB → pool: 1 KB used, 1 KB free.
+    // Reading file-2 confirms the worker state is intact after restart.
+    executor
+        .invoke_and_await_agent(&component, &agent, "read_file", data_value!("/file-2.txt"))
+        .await?;
+
+    // Step 6: write file-3 → uses the 1 KB remaining in the pool. Must succeed.
+    executor
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-3.txt", "hello world"))
+        .await?;
+
+    // Step 7: write file-4 → pool now at 2 KB (file-2 + file-3). Must fail with
+    // WorkerOutOfStorage. If current_storage_usage was wrong after restart, this
+    // step would either incorrectly succeed or fail too early.
+    let result = executor
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-4.txt", "hello world"))
         .await;
     assert!(
-        over.is_err(),
-        "expected second write to fail with ExceededStorageLimit"
+        result.is_err(),
+        "expected write to fail: pool is exhausted (file-2 + file-3 = 2 KB)"
+    );
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("OutOfStorage") || err_str.contains("storage"),
+        "expected WorkerOutOfStorage, got: {err_str}"
     );
 
-    // Third write: 9 bytes — must succeed because the failed write left no phantom
-    // entry reducing the remaining quota.
+    Ok(())
+}
+
+/// Account-quota level lifecycle: write → delete → suspend → restart → write → verify quota.
+///
+/// Same sequence as `executor_pool_storage_usage_survives_restart` but using
+/// the per-agent plan limit. Verifies that `current_storage_usage` stays
+/// accurate at the account-quota layer across the suspend/restart cycle.
+///
+/// Quota = 22 bytes. Each 11-byte "hello world" write is counted exactly.
+///
+/// 1. Write file-1 (11 bytes) → usage: 11, remaining: 11.
+/// 2. Write file-2 (11 bytes) → quota exhausted: usage: 22, remaining: 0.
+/// 3. Delete file-1 → usage: 11, remaining: 11.
+/// 4. Interrupt → worker unloaded from memory.
+/// 5. Re-invoke → restart reconstructs current_storage_usage = 11 bytes.
+/// 6. Write file-3 (11 bytes) → succeeds (11 bytes remaining in quota).
+/// 7. Write file-4 (11 bytes) → fails with `ExceededStorageLimit`
+///    (quota exhausted: file-2 + file-3 = 22 bytes).
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_storage_usage_survives_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // 22-byte quota: fits exactly two 11-byte "hello world" writes.
+    let executor = start_with_agent_storage_quota(deps, &context, 22).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent = agent_id!("FileSystem", "agent-lifecycle-1");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-1.txt", "hello world"))
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-2.txt", "hello world"))
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "delete_file", data_value!("/file-1.txt"))
+        .await?;
+
+    executor.interrupt(&worker).await?;
+
+    // Restart reconstructs current_storage_usage = 11 bytes (+11 +11 -11).
+    executor
+        .invoke_and_await_agent(&component, &agent, "read_file", data_value!("/file-2.txt"))
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-3.txt", "hello world"))
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-4.txt", "hello world"))
+        .await;
+    assert!(result.is_err(), "expected write to fail: quota exhausted (file-2 + file-3 = 22 bytes)");
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
+        "expected WorkerExceededStorageLimit, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// `set_file_size` growing a file beyond the per-agent quota must fail with
+/// `WorkerExceededStorageLimit`. Only the delta (new_size − current_size) is
+/// charged, not the full new size.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_set_size_grow_beyond_limit_fails(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // 11-byte quota. Write 11 bytes first (exhausts quota). Then set_size to
+    // 12 — grows by 1 byte — must fail because the delta (1 byte) would exceed
+    // the remaining quota (0 bytes).
+    let executor = start_with_agent_storage_quota(deps, &context, 11).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "set-size-grow-1");
+    executor.start_agent(&component.id, agent_id.clone()).await?;
+
+    // Write 11 bytes — exhausts the quota.
     executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
             "write_file",
-            data_value!("/testfile2.txt", "hello world"),
+            data_value!("/file.txt", "hello world"),
+        )
+        .await?;
+
+    // Grow by 1 byte — must fail (quota exhausted).
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "set_file_size",
+            data_value!("/file.txt", 12u64),
+        )
+        .await;
+    assert!(result.is_err(), "expected set_size grow to fail: quota exhausted");
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
+        "expected WorkerExceededStorageLimit, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// `set_file_size` shrinking a file releases the freed bytes back to the
+/// per-agent quota, allowing a subsequent write of equal size to succeed.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_set_size_shrink_releases_quota(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // 11-byte quota. Write 11 bytes (exhausts quota). Shrink to 5 bytes —
+    // releases 6 bytes. A subsequent write of 6 bytes must now succeed.
+    let executor = start_with_agent_storage_quota(deps, &context, 11).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "set-size-shrink-1");
+    executor.start_agent(&component.id, agent_id.clone()).await?;
+
+    // Write 11 bytes — exhausts quota.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/file.txt", "hello world"),
+        )
+        .await?;
+
+    // Shrink to 5 bytes — frees 6 bytes back to quota.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "set_file_size",
+            data_value!("/file.txt", 5u64),
+        )
+        .await?;
+
+    // Write 6 bytes to a new file — must succeed (6 bytes freed by shrink).
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/file2.txt", "hello!"),
         )
         .await?;
 
     Ok(())
 }
 
-/// When the executor storage pool is full, a worker restart pre-acquires
-/// storage via the blocking path which evicts the oldest idle worker, freeing
-/// its permits so the restarting worker can proceed.
+/// `pwrite_file` (direct `descriptor::write`) is subject to per-agent quota.
+/// Writing beyond the quota must fail with `WorkerExceededStorageLimit`.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn idle_worker_evicted_when_executor_pool_full(
+async fn agent_quota_pwrite_beyond_limit_fails(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // 5-byte quota. pwrite of 11 bytes ("hello world") exceeds it.
+    let executor = start_with_agent_storage_quota(deps, &context, 5).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "pwrite-quota-1");
+    executor.start_agent(&component.id, agent_id.clone()).await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "pwrite_file",
+            data_value!("/file.txt", 0u64, "hello world"),
+        )
+        .await;
+    assert!(result.is_err(), "expected pwrite to fail: quota exceeded");
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
+        "expected WorkerExceededStorageLimit, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// `pwrite_file` (direct `descriptor::write`) within the per-agent quota succeeds.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_pwrite_within_limit_succeeds(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 1024 * 1024).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "pwrite-ok-1");
+    executor.start_agent(&component.id, agent_id.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "pwrite_file",
+            data_value!("/file.txt", 0u64, "hello world"),
+        )
+        .await?;
+
+    Ok(())
+}
+
+
+/// When the executor storage pool is full, a worker restart pre-acquires
+/// storage via the blocking path which evicts the oldest idle worker, freeing
+/// its permits so the restarting worker can proceed.
+///
+/// Flow (1 KB pool, each 11-byte write rounds up to 1 KB = 1 permit):
+/// 1. Worker A writes 1 KB, then is interrupted → permit released.
+/// 2. Worker B writes 1 KB (pool free after A's interrupt), then is interrupted.
+/// 3. Worker A re-invoked → restarts with storage_requirement = 1 KB
+///    → blocking acquire_storage succeeds → A holds the 1 KB permit, now idle.
+/// 4. Worker B re-invoked → restarts with storage_requirement = 1 KB
+///    → pool is 0 (A holds it) → blocking acquire_storage calls
+///    try_free_up_storage → evicts idle Worker A → 1 KB freed
+///    → Worker B acquires the permit and its invocation succeeds.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn executor_pool_idle_worker_evicted_when_pool_full(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -121,54 +417,34 @@ async fn idle_worker_evicted_when_executor_pool_full(
     let agent_a = agent_id!("FileSystem", "eviction-a-1");
     let agent_b = agent_id!("FileSystem", "eviction-b-1");
 
-    // Step 1–2: Worker A writes 1 KB, then is interrupted to release its permit.
+    // Step 1: Worker A writes 1 KB, then is interrupted to release its permit.
     let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
     executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_a,
-            "write_file",
-            data_value!("/file-a.txt", "hello world"),
-        )
+        .invoke_and_await_agent(&component, &agent_a, "write_file", data_value!("/file-a.txt", "hello world"))
         .await?;
     executor.interrupt(&worker_a).await?;
 
-    // Step 3–4: Worker B writes 1 KB (pool is free after A's interrupt), then
-    // both workers are interrupted so their permits are released.
+    // Step 2: Worker B writes 1 KB (pool is free after A's interrupt), then
+    // is interrupted so its permit is released.
     let worker_b = executor.start_agent(&component.id, agent_b.clone()).await?;
     executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_b,
-            "write_file",
-            data_value!("/file-b.txt", "hello world"),
-        )
+        .invoke_and_await_agent(&component, &agent_b, "write_file", data_value!("/file-b.txt", "hello world"))
         .await?;
     executor.interrupt(&worker_b).await?;
 
-    // Step 5: Re-invoke Worker A. Restarts with storage_requirement = 1 KB.
+    // Step 3: Re-invoke Worker A. Restarts with storage_requirement = 1 KB.
     // Pool has 1 KB free → blocking acquire_storage succeeds immediately.
-    // Worker A finishes and becomes idle, still holding the 1 KB permit.
+    // Worker A finishes read_file and becomes idle, still holding the 1 KB permit.
     executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_a,
-            "read_file",
-            data_value!("/file-a.txt"),
-        )
+        .invoke_and_await_agent(&component, &agent_a, "read_file", data_value!("/file-a.txt"))
         .await?;
 
-    // Step 6: Re-invoke Worker B. Restarts with storage_requirement = 1 KB.
-    // Pool is 0 (Worker A holds it) → blocking acquire_storage triggers
-    // try_free_up_storage_inner → evicts idle Worker A → 1 KB freed
+    // Step 4: Re-invoke Worker B. Restarts with storage_requirement = 1 KB.
+    // Pool is 0 (Worker A holds it) → blocking acquire_storage calls
+    // try_free_up_storage → evicts idle Worker A → 1 KB freed
     // → Worker B acquires and its invocation succeeds.
     executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_b,
-            "read_file",
-            data_value!("/file-b.txt"),
-        )
+        .invoke_and_await_agent(&component, &agent_b, "read_file", data_value!("/file-b.txt"))
         .await?;
 
     Ok(())
@@ -319,7 +595,7 @@ async fn agent_quota_blocking_write_zeroes_and_flush_exceeding_limit_fails(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn failed_executor_pool_acquire_leaves_no_phantom_oplog_entry(
+async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,

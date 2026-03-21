@@ -65,6 +65,13 @@ pub trait FileSystem {
     fn write_zeroes_to_stdout(&self, len: u64) -> Result<(), String>;
     fn blocking_write_zeroes_and_flush_to_file(&self, path: String, len: u64)
         -> Result<(), String>;
+    /// Set the size of a file using `descriptor::set_size` (the WASI pwrite-truncate path).
+    /// If `new_size` is larger than the current file size the file is grown (zero-filled).
+    /// If smaller, the file is truncated.  This exercises the quota grow/shrink paths.
+    fn set_file_size(&self, path: String, new_size: u64) -> Result<(), String>;
+    /// Write `contents` at `offset` using `descriptor::write` (the direct pwrite path),
+    /// bypassing the output-stream API.  This exercises the descriptor-write quota path.
+    fn pwrite_file(&self, path: String, offset: u64, contents: String) -> Result<(), String>;
 }
 
 pub struct FileSystemImpl {
@@ -276,6 +283,38 @@ impl FileSystem for FileSystemImpl {
         let stream: OutputStream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
         stream
             .blocking_write_zeroes_and_flush(len)
+            .map_err(|e| format!("{e:?}"))
+    }
+
+    fn set_file_size(&self, path: String, new_size: u64) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let rel = path.trim_start_matches('/');
+        let fd: Descriptor = root
+            .open_at(
+                PathFlags::empty(),
+                rel,
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        fd.set_size(new_size).map_err(|e| format!("{e:?}"))
+    }
+
+    fn pwrite_file(&self, path: String, offset: u64, contents: String) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let rel = path.trim_start_matches('/');
+        let fd: Descriptor = root
+            .open_at(
+                PathFlags::empty(),
+                rel,
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        fd.write(contents.as_bytes(), offset)
+            .map(|_| ())
             .map_err(|e| format!("{e:?}"))
     }
 
