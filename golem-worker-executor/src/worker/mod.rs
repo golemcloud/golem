@@ -71,7 +71,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
@@ -124,6 +124,11 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     last_resume_request: Mutex<Timestamp>,
     pub(crate) snapshot_recovery_disabled: AtomicBool,
+    /// Bytes that triggered the last `WorkerOutOfStorage` trap. Set by
+    /// `acquire_storage_space` on failure so `WaitingWorker::new` can request
+    /// at least that many bytes from the blocking eviction path, ensuring
+    /// enough idle workers are evicted to satisfy the pending write.
+    desired_extra_storage: AtomicU64,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -319,6 +324,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status_detached: AtomicBool::new(false),
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
+            desired_extra_storage: AtomicU64::new(0),
         };
 
         // Wire the worker event service into the forwarding oplog so plugin errors
@@ -842,9 +848,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Return `freed_bytes` to the storage semaphore pool.
     /// Called from `DurableWorkerCtx::release_storage_space` when a file is
-    /// deleted or truncated (Phase 5). Should only be called from the invocation loop.
-    pub fn release_storage_space(&self, freed_bytes: u64) {
-        self.active_workers().release_storage(freed_bytes);
+    /// deleted or truncated. Should only be called from the invocation loop.
+    ///
+    /// The permits are returned by splitting them off `RunningWorker.storage_permit`
+    /// and dropping the split portion. This correctly reduces the permit count held
+    /// by the `RunningWorker`, preventing double-return when it later drops.
+    pub async fn release_storage_space(&self, freed_bytes: u64) {
+        let permits_to_release =
+            crate::services::active_workers::bytes_to_storage_permits(freed_bytes);
+        if permits_to_release == 0 {
+            return;
+        }
+        if let WorkerInstance::Running(ref mut running) = &mut *self.instance.lock().await {
+            if let Some(ref mut permit) = running.storage_permit {
+                // Split off `permits_to_release` permits and drop them.
+                // Dropping an OwnedSemaphorePermit returns its permits to the
+                // semaphore automatically — no separate add_permits needed.
+                let n = permits_to_release as usize;
+                let to_drop = if permit.num_permits() >= n {
+                    permit.split(n)
+                } else {
+                    // Defensive: releasing more than we hold — drop all.
+                    permit.split(permit.num_permits())
+                };
+                drop(to_drop); // returns permits to the semaphore
+            }
+        }
     }
 
     /// Acquire storage semaphore permits for a write operation.
@@ -857,8 +886,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Running(ref mut running) => {
                 if let Some(permit) = self.active_workers().try_acquire_storage(new_bytes).await {
                     running.merge_extra_storage_permits(permit);
+                    // Success — clear any pending desired_extra_storage.
+                    self.desired_extra_storage.store(0, Ordering::Relaxed);
                     Ok(())
                 } else {
+                    // Record the requested size so WaitingWorker can evict enough
+                    // idle workers to satisfy this write on the next restart.
+                    self.desired_extra_storage
+                        .store(new_bytes, Ordering::Relaxed);
                     Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfStorage))
                 }
             }
@@ -2133,17 +2168,50 @@ impl WaitingWorker {
         let handle = tokio::task::spawn(
             async move {
                 let permit = parent.active_workers().acquire(memory_requirement).await;
-                // Pre-acquire storage permits from the last-known usage so that
-                // replay can skip re-acquiring them (acquire_storage_space is a
-                // no-op during replay). Uses the blocking acquire so that the worker
-                // waits until storage is available, allowing eviction if needed.
-                let storage_permit = if storage_requirement > 0 {
-                    Some(
-                        parent
-                            .active_workers()
-                            .acquire_storage(storage_requirement)
-                            .await,
-                    )
+                // Pre-acquire storage permits for this restart.
+                //
+                // We need to acquire `storage_requirement + desired_extra` total:
+                // - `storage_requirement`: bytes to hold as the pre-acquired permit
+                //   for replay (mirrors what the worker held before being evicted).
+                //   The old RunningWorker already returned these bytes to the pool
+                //   when it dropped, so the pool likely already has them — the
+                //   blocking acquire will find them without needing to evict anyone.
+                // - `desired_extra`: bytes for the write that triggered WorkerOutOfStorage.
+                //   The pool may not have these yet, so the blocking acquire will
+                //   evict idle workers only for the missing portion.
+                //
+                // After acquiring, we release `desired_extra` back to the pool so
+                // it is available for the pending write to re-acquire at runtime.
+                //
+                // Example: prior writes = 3 KB, failing write needs 1 KB extra.
+                //   Old RunningWorker drops → 3 KB returned to pool.
+                //   acquire_bytes = 4 KB. Pool has 3 KB → 1 KB gap → evict 1 KB.
+                //   Hold 3 KB as storage_permit, release 1 KB → pool has 1 KB free.
+                //   Pending write re-acquires 1 KB → succeeds.
+                let desired_extra = parent
+                    .desired_extra_storage
+                    .load(Ordering::Relaxed);
+                let acquire_bytes = storage_requirement + desired_extra;
+                let storage_permit = if acquire_bytes > 0 {
+                    let mut permit = parent
+                        .active_workers()
+                        .acquire_storage(acquire_bytes)
+                        .await;
+                    // Release the `desired_extra` portion back to the pool.
+                    if desired_extra > 0 {
+                        let extra_permits =
+                            crate::services::active_workers::bytes_to_storage_permits(
+                                desired_extra,
+                            ) as usize;
+                        if let Some(extra) = permit.split(extra_permits) {
+                            drop(extra); // returns to semaphore
+                        }
+                    }
+                    if permit.num_permits() > 0 {
+                        Some(permit)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };

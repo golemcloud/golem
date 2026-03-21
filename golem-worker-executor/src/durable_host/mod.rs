@@ -507,7 +507,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     /// Release `freed_bytes` back to the executor semaphore pool.
-    /// Called when files are deleted or truncated (Phase 5).
+    /// Called when files are deleted or truncated.
     /// During replay this is a no-op.
     pub async fn release_storage_space(&mut self, freed_bytes: u64) {
         if self.state.is_replay() {
@@ -523,7 +523,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await;
         self.public_state
             .worker()
-            .release_storage_space(freed_bytes);
+            .release_storage_space(freed_bytes)
+            .await;
         self.state.current_storage_usage -= freed_bytes;
     }
 
@@ -3035,7 +3036,7 @@ struct PrivateDurableWorkerState {
     total_linear_memory_size: u64,
     /// Running total of storage bytes acquired from the executor semaphore pool
     /// by this worker since it last started. Incremented on every successful
-    /// write; decremented when files are deleted or truncated (Phase 5).
+    /// write; decremented when files are deleted or truncated.
     current_storage_usage: u64,
 
     invocation_context: InvocationContext,
