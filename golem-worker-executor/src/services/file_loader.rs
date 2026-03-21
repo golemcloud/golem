@@ -438,7 +438,12 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let _token = loader
-            .get_read_only_to(env_id, hash, &dir.path().join("f.txt"), content.len() as u64)
+            .get_read_only_to(
+                env_id,
+                hash,
+                &dir.path().join("f.txt"),
+                content.len() as u64,
+            )
             .await
             .unwrap();
 
@@ -456,14 +461,24 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let _t1 = loader
-            .get_read_only_to(env_id, hash, &dir.path().join("f1.txt"), content.len() as u64)
+            .get_read_only_to(
+                env_id,
+                hash,
+                &dir.path().join("f1.txt"),
+                content.len() as u64,
+            )
             .await
             .unwrap();
 
         let permits_after_first = semaphore.available_bytes();
 
         let _t2 = loader
-            .get_read_only_to(env_id, hash, &dir.path().join("f2.txt"), content.len() as u64)
+            .get_read_only_to(
+                env_id,
+                hash,
+                &dir.path().join("f2.txt"),
+                content.len() as u64,
+            )
             .await
             .unwrap();
 
@@ -484,11 +499,21 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let t1 = loader
-            .get_read_only_to(env_id, hash, &dir.path().join("f1.txt"), content.len() as u64)
+            .get_read_only_to(
+                env_id,
+                hash,
+                &dir.path().join("f1.txt"),
+                content.len() as u64,
+            )
             .await
             .unwrap();
         let t2 = loader
-            .get_read_only_to(env_id, hash, &dir.path().join("f2.txt"), content.len() as u64)
+            .get_read_only_to(
+                env_id,
+                hash,
+                &dir.path().join("f2.txt"),
+                content.len() as u64,
+            )
             .await
             .unwrap();
 

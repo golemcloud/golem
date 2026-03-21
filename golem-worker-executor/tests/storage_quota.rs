@@ -29,8 +29,6 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-
-
 /// Full lifecycle: write → delete → suspend → restart → write → verify pool
 ///
 /// Verifies that `current_storage_usage` (reconstructed from `StorageUsageUpdate`
@@ -76,17 +74,32 @@ async fn executor_pool_storage_usage_survives_restart(
 
     // Step 1: write file-1 → 1 KB used.
     executor
-        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-1.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/file-1.txt", "hello world"),
+        )
         .await?;
 
     // Step 2: write file-2 → pool exhausted (2 KB used).
     executor
-        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-2.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/file-2.txt", "hello world"),
+        )
         .await?;
 
     // Step 3: delete file-1 → 1 KB freed, StorageUsageUpdate(-1 KB) written to oplog.
     executor
-        .invoke_and_await_agent(&component, &agent, "delete_file", data_value!("/file-1.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "delete_file",
+            data_value!("/file-1.txt"),
+        )
         .await?;
 
     // Step 4: interrupt → permits released to pool.
@@ -101,14 +114,24 @@ async fn executor_pool_storage_usage_survives_restart(
 
     // Step 6: write file-3 → uses the 1 KB remaining in the pool. Must succeed.
     executor
-        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-3.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/file-3.txt", "hello world"),
+        )
         .await?;
 
     // Step 7: write file-4 → pool now at 2 KB (file-2 + file-3). Must fail with
     // WorkerOutOfStorage. If current_storage_usage was wrong after restart, this
     // step would either incorrectly succeed or fail too early.
     let result = executor
-        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-4.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/file-4.txt", "hello world"),
+        )
         .await;
     assert!(
         result.is_err(),
@@ -161,15 +184,30 @@ async fn agent_quota_storage_usage_survives_restart(
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
     executor
-        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-1.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/file-1.txt", "hello world"),
+        )
         .await?;
 
     executor
-        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-2.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/file-2.txt", "hello world"),
+        )
         .await?;
 
     executor
-        .invoke_and_await_agent(&component, &agent, "delete_file", data_value!("/file-1.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "delete_file",
+            data_value!("/file-1.txt"),
+        )
         .await?;
 
     executor.interrupt(&worker).await?;
@@ -180,13 +218,26 @@ async fn agent_quota_storage_usage_survives_restart(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-3.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/file-3.txt", "hello world"),
+        )
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component, &agent, "write_file", data_value!("/file-4.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/file-4.txt", "hello world"),
+        )
         .await;
-    assert!(result.is_err(), "expected write to fail: quota exhausted (file-2 + file-3 = 22 bytes)");
+    assert!(
+        result.is_err(),
+        "expected write to fail: quota exhausted (file-2 + file-3 = 22 bytes)"
+    );
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
@@ -220,7 +271,9 @@ async fn agent_quota_set_size_grow_beyond_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "set-size-grow-1");
-    executor.start_agent(&component.id, agent_id.clone()).await?;
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     // Write 11 bytes — exhausts the quota.
     executor
@@ -241,7 +294,10 @@ async fn agent_quota_set_size_grow_beyond_limit_fails(
             data_value!("/file.txt", 12u64),
         )
         .await;
-    assert!(result.is_err(), "expected set_size grow to fail: quota exhausted");
+    assert!(
+        result.is_err(),
+        "expected set_size grow to fail: quota exhausted"
+    );
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
@@ -273,7 +329,9 @@ async fn agent_quota_set_size_shrink_releases_quota(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "set-size-shrink-1");
-    executor.start_agent(&component.id, agent_id.clone()).await?;
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     // Write 11 bytes — exhausts quota.
     executor
@@ -329,7 +387,9 @@ async fn agent_quota_pwrite_beyond_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "pwrite-quota-1");
-    executor.start_agent(&component.id, agent_id.clone()).await?;
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let result = executor
         .invoke_and_await_agent(
@@ -368,7 +428,9 @@ async fn agent_quota_pwrite_within_limit_succeeds(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "pwrite-ok-1");
-    executor.start_agent(&component.id, agent_id.clone()).await?;
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     executor
         .invoke_and_await_agent(
@@ -381,7 +443,6 @@ async fn agent_quota_pwrite_within_limit_succeeds(
 
     Ok(())
 }
-
 
 /// When the executor storage pool is full, a worker restart pre-acquires
 /// storage via the blocking path which evicts the oldest idle worker, freeing
@@ -420,7 +481,12 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
     // Step 1: Worker A writes 1 KB, then is interrupted to release its permit.
     let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
     executor
-        .invoke_and_await_agent(&component, &agent_a, "write_file", data_value!("/file-a.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "write_file",
+            data_value!("/file-a.txt", "hello world"),
+        )
         .await?;
     executor.interrupt(&worker_a).await?;
 
@@ -428,7 +494,12 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
     // is interrupted so its permit is released.
     let worker_b = executor.start_agent(&component.id, agent_b.clone()).await?;
     executor
-        .invoke_and_await_agent(&component, &agent_b, "write_file", data_value!("/file-b.txt", "hello world"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "write_file",
+            data_value!("/file-b.txt", "hello world"),
+        )
         .await?;
     executor.interrupt(&worker_b).await?;
 
@@ -436,7 +507,12 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
     // Pool has 1 KB free → blocking acquire_storage succeeds immediately.
     // Worker A finishes read_file and becomes idle, still holding the 1 KB permit.
     executor
-        .invoke_and_await_agent(&component, &agent_a, "read_file", data_value!("/file-a.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "read_file",
+            data_value!("/file-a.txt"),
+        )
         .await?;
 
     // Step 4: Re-invoke Worker B. Restarts with storage_requirement = 1 KB.
@@ -444,7 +520,12 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
     // try_free_up_storage → evicts idle Worker A → 1 KB freed
     // → Worker B acquires and its invocation succeeds.
     executor
-        .invoke_and_await_agent(&component, &agent_b, "read_file", data_value!("/file-b.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "read_file",
+            data_value!("/file-b.txt"),
+        )
         .await?;
 
     Ok(())
