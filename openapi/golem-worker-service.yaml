@@ -3346,6 +3346,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StorageUsageUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -3388,6 +3389,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          StorageUsageUpdate: '#/components/schemas/PublicOplogEntry_r#StorageUsageUpdateParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -3863,6 +3865,18 @@ components:
             - StartSpan
             example: StartSpan
       - $ref: '#/components/schemas/r#StartSpanParams'
+    PublicOplogEntry_r#StorageUsageUpdateParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - StorageUsageUpdate
+            example: StorageUsageUpdate
+      - $ref: '#/components/schemas/r#StorageUsageUpdateParams'
     PublicOplogEntry_r#SuccessfulUpdateParams:
       allOf:
       - type: object
@@ -5237,6 +5251,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PublicAttribute'
+    r#StorageUsageUpdateParams:
+      type: object
+      title: r#StorageUsageUpdateParams
+      required:
+      - timestamp
+      - delta
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        delta:
+          type: integer
+          format: int64
     r#SuccessfulUpdateParams:
       type: object
       title: r#SuccessfulUpdateParams

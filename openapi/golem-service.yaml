@@ -11163,6 +11163,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          StorageUsageUpdate: '#/components/schemas/PublicOplogEntry_r#StorageUsageUpdateParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -11204,6 +11205,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StorageUsageUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -11679,6 +11681,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#StartSpanParams'
+    PublicOplogEntry_r#StorageUsageUpdateParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StorageUsageUpdate
+            type: string
+            enum:
+            - StorageUsageUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/r#StorageUsageUpdateParams'
     PublicOplogEntry_r#SuccessfulUpdateParams:
       allOf:
       - type: object
@@ -13053,6 +13067,19 @@ components:
       - timestamp
       - spanId
       - attributes
+    r#StorageUsageUpdateParams:
+      title: r#StorageUsageUpdateParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        delta:
+          type: integer
+          format: int64
+      required:
+      - timestamp
+      - delta
     r#SuccessfulUpdateParams:
       title: r#SuccessfulUpdateParams
       type: object
@@ -14626,10 +14653,14 @@ components:
           type: string
         permissions:
           $ref: '#/components/schemas/ComponentFilePermissions'
+        size:
+          type: integer
+          format: uint64
       required:
       - contentHash
       - path
       - permissions
+      - size
     InstalledPlugin:
       title: InstalledPlugin
       type: object
@@ -15127,6 +15158,9 @@ components:
         maxTableElementsPerWorker:
           type: integer
           format: uint64
+        maxDiskSpacePerWorker:
+          type: integer
+          format: uint64
       required:
       - planId
       - name
@@ -15140,6 +15174,7 @@ components:
       - monthlyUploadLimit
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
+      - maxDiskSpacePerWorker
     PluginInstallation:
       title: PluginInstallation
       type: object
