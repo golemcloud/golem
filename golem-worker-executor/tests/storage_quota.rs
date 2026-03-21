@@ -97,6 +97,83 @@ async fn failed_write_does_not_reduce_remaining_quota(
     Ok(())
 }
 
+/// When the executor storage pool is full, a worker restart pre-acquires
+/// storage via the blocking path which evicts the oldest idle worker, freeing
+/// its permits so the restarting worker can proceed.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn idle_worker_evicted_when_executor_pool_full(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // 1 KB pool = 1 permit. Each 11-byte write rounds up to 1 KB.
+    let executor = start_with_executor_storage_pool(deps, &context, 1024).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_a = agent_id!("FileSystem", "eviction-a-1");
+    let agent_b = agent_id!("FileSystem", "eviction-b-1");
+
+    // Step 1–2: Worker A writes 1 KB, then is interrupted to release its permit.
+    let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "write_file",
+            data_value!("/file-a.txt", "hello world"),
+        )
+        .await?;
+    executor.interrupt(&worker_a).await?;
+
+    // Step 3–4: Worker B writes 1 KB (pool is free after A's interrupt), then
+    // both workers are interrupted so their permits are released.
+    let worker_b = executor.start_agent(&component.id, agent_b.clone()).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "write_file",
+            data_value!("/file-b.txt", "hello world"),
+        )
+        .await?;
+    executor.interrupt(&worker_b).await?;
+
+    // Step 5: Re-invoke Worker A. Restarts with storage_requirement = 1 KB.
+    // Pool has 1 KB free → blocking acquire_storage succeeds immediately.
+    // Worker A finishes and becomes idle, still holding the 1 KB permit.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "read_file",
+            data_value!("/file-a.txt"),
+        )
+        .await?;
+
+    // Step 6: Re-invoke Worker B. Restarts with storage_requirement = 1 KB.
+    // Pool is 0 (Worker A holds it) → blocking acquire_storage triggers
+    // try_free_up_storage_inner → evicts idle Worker A → 1 KB freed
+    // → Worker B acquires and its invocation succeeds.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "read_file",
+            data_value!("/file-b.txt"),
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// `write_zeroes` on a file-backed output stream must be subject to storage
 /// quota. Writing more zeroes than the per-agent quota allows must fail with
 /// `WorkerExceededStorageLimit`.

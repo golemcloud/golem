@@ -387,7 +387,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.worker_storage
             .acquire(storage_bytes, || {
                 let workers = workers.clone();
-                async move { Self::try_free_up_storage_inner(&workers, storage_bytes).await }
+                async move { Self::try_free_up_storage(&workers, storage_bytes).await }
             })
             .await
     }
@@ -411,43 +411,41 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.worker_storage.clone()
     }
 
-    async fn try_free_up_storage_inner(
+    async fn try_free_up_storage(
         workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
         storage_bytes: u64,
     ) -> bool {
-        let permits_needed = bytes_to_storage_permits(storage_bytes) as u64;
         let mut possibilities = Vec::new();
 
         debug!("Collecting storage eviction possibilities");
         for (agent_id, worker) in workers.iter().await {
             if worker.is_currently_idle_but_running().await {
-                if let Ok(memory) = worker.memory_requirement().await {
+                if let Ok(storage) = worker.storage_requirement().await {
                     let last_changed = worker.last_execution_state_change();
-                    possibilities.push((agent_id, worker, memory, last_changed));
+                    possibilities.push((agent_id, worker, storage, last_changed));
                 }
             }
         }
 
-        // Evict oldest-idle first
+        // Evict oldest-idle first (sort ascending by timestamp, pop from end)
         possibilities
-            .sort_by_key(|(_agent_id, _worker, _memory, last_changed)| last_changed.to_millis());
+            .sort_by_key(|(_agent_id, _worker, _storage, last_changed)| last_changed.to_millis());
         possibilities.reverse();
 
-        let mut evicted = 0u64;
-        while evicted < permits_needed && !possibilities.is_empty() {
-            let (agent_id, worker, _memory, _) = possibilities.pop().unwrap();
+        let mut freed: u64 = 0;
+        while freed < storage_bytes && !possibilities.is_empty() {
+            let (agent_id, worker, storage, _) = possibilities.pop().unwrap();
             debug!("Trying to stop {agent_id} to free up storage");
             if worker.stop_if_idle().await {
-                debug!("Stopped {agent_id} to free up storage");
-                evicted += 1;
+                debug!("Stopped {agent_id}, freed {storage} bytes of storage");
+                freed += storage;
             }
         }
 
-        if evicted > 0 {
-            debug!("Evicted {evicted} worker(s) to free storage; re-checking availability");
+        if freed > 0 {
+            debug!("Freed {freed} bytes by evicting worker(s); re-checking availability");
         }
-        // Actual freed bytes come from storage_permit being dropped on stop
-        evicted >= permits_needed
+        freed >= storage_bytes
     }
 }
 

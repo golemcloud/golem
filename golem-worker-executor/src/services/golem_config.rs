@@ -1332,10 +1332,36 @@ impl Default for MemoryConfig {
 /// exhausted, idle workers are evicted to free space. Use
 /// `total_worker_storage_bytes_override` in tests to create a small,
 /// predictable pool.
+///
+/// # Permit release vs actual disk reclaim — configure with headroom
+///
+/// When a worker is evicted its storage semaphore permits are released at the
+/// moment `RunningWorker` drops, which is **slightly before** the worker's
+/// temp directory is deleted from disk. The directory is removed when the
+/// invocation task fully unwinds (dropping the wasmtime `Store` and its
+/// contained `TempDir`). In practice this gap is sub-millisecond, but it means
+/// the semaphore can briefly report available space that has not yet been
+/// reclaimed on disk.
+///
+/// This is the same race that exists for the memory semaphore
+/// (`MemoryConfig::total_memory`): memory permits are released when
+/// `RunningWorker` drops, before the wasmtime linear memory is actually freed.
+/// It has never caused problems in production because the semaphore is not
+/// configured to 100% of physical capacity.
+///
+/// **Recommended practice:** assuming the executor's temp directory has a
+/// dedicated volume (e.g. a pod-local tmpfs or block device mounted at `/tmp`),
+/// set `total_worker_storage_bytes` to around 80–90% of that volume's
+/// capacity. The headroom absorbs the transient over-commitment window
+/// described above and any filesystem metadata overhead for the temp directory
+/// tree itself.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorageConfig {
     /// Override the total storage pool size (bytes). When `None`, the default
     /// of 10 GB is used. Set to a small value in tests to trigger eviction.
+    ///
+    /// Should be set to ~80–90% of the dedicated volume capacity, not 100% —
+    /// see the `StorageConfig` doc comment for the rationale.
     pub total_worker_storage_bytes_override: Option<u64>,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
