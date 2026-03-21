@@ -36,7 +36,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 ///
 /// Extracted as a standalone struct so it can be unit-tested independently of
 /// the `WorkerCtx`-generic `ActiveWorkers`.
-pub(crate) struct StorageSemaphore {
+pub struct StorageSemaphore {
     semaphore: Arc<Semaphore>,
     /// Held during non-blocking priority acquires to interrupt any in-progress
     /// blocking `acquire` loops, preventing starvation of high-priority callers.
@@ -402,9 +402,13 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     /// Return `freed_bytes` to the storage pool without dropping the whole permit.
-    /// Used when a file is deleted or truncated (Phase 5).
+    /// Used when a file is deleted or truncated
     pub fn release_storage(&self, freed_bytes: u64) {
         self.worker_storage.release(freed_bytes);
+    }
+
+    pub fn storage_semaphore(&self) -> Arc<StorageSemaphore> {
+        self.worker_storage.clone()
     }
 
     async fn try_free_up_storage_inner(

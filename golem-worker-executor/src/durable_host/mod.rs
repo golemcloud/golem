@@ -224,14 +224,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        // Acquire storage semaphore permits for all initial component files.
-        // The permit is held by the RunningWorker and released when it stops.
+        // Acquire storage semaphore permits for read-write initial component files.
+        //
+        // Read-only files are hardlinked from the FileLoader shared cache, so
+        // they occupy disk space only once per unique content hash regardless of
+        // how many workers reference them. FileLoader acquires the semaphore
+        // permit on the first cache miss and releases it when the last
+        // FileUseToken for that entry is dropped — no per-worker charge here.
+        //
+        // Read-write files are copied per-worker (each worker gets its own
+        // private inode and data blocks), so they must be charged individually.
         if let Some(worker) = invocation_queue.upgrade() {
-            let total_initial_bytes: u64 = component_metadata.files.iter().map(|f| f.size).sum();
-            worker
-                .acquire_initial_storage(total_initial_bytes)
-                .await
-                .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
+            let rw_bytes: u64 = component_metadata
+                .files
+                .iter()
+                .filter(|f| f.permissions == ComponentFilePermissions::ReadWrite)
+                .map(|f| f.size)
+                .sum();
+            if rw_bytes > 0 {
+                worker
+                    .acquire_initial_storage(rw_bytes)
+                    .await
+                    .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
+            }
         }
 
         let config_vars = effective_config_vars(
@@ -3529,7 +3544,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path)
+                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -3618,7 +3633,7 @@ async fn update_filesystem(
                     };
 
                     let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path)
+                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
@@ -3635,7 +3650,7 @@ async fn update_filesystem(
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(environment_id, file.content_hash, &path)
+                            .get_read_only_to(environment_id, file.content_hash, &path, file.size)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
