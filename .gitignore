@@ -22,6 +22,8 @@ logs
 data
 sdks/**/node_modules/
 sdks/**/dist/
+golem-skills/**/node_modules/
+golem-skills/**/dist/
 .DS_Store
 
 # locally kept custom dev files
