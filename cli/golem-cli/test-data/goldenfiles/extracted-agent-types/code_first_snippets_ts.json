@@ -70,6 +70,7 @@
                     }
                   ],
                   "name": "UnionType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "Option"
@@ -1042,6 +1043,7 @@
                     }
                   ],
                   "name": "ResultLike",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -1072,6 +1074,7 @@
                     }
                   ],
                   "name": "ResultLikeWithNoTag",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1119,6 +1122,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined1",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1154,6 +1158,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined2",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1189,6 +1194,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined3",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1210,6 +1216,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined4",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1280,6 +1287,7 @@
                       }
                     ],
                     "name": "UnionType",
+                    "owner": "./model",
                     "type": "Variant"
                   },
                   "type": "Option"
@@ -1444,6 +1452,7 @@
                     }
                   ],
                   "name": "TaggedUnion",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -1542,6 +1551,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -1563,6 +1573,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -1586,6 +1597,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -1628,6 +1640,7 @@
                     "type": "Str"
                   },
                   "ok": null,
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -1691,6 +1704,7 @@
                     "type": "Record"
                   },
                   "name": "ListComplexType",
+                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -2167,6 +2181,7 @@
                     }
                   ],
                   "name": "ObjectComplexType",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2455,6 +2470,7 @@
                     }
                   ],
                   "name": "ObjectType",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2548,6 +2564,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined1",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2583,6 +2600,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined2",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2618,6 +2636,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined3",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2639,6 +2658,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined4",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2709,6 +2729,7 @@
                       }
                     ],
                     "name": "UnionType",
+                    "owner": "./model",
                     "type": "Variant"
                   },
                   "type": "Option"
@@ -2990,6 +3011,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "./model",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -3049,6 +3071,7 @@
                     }
                   ],
                   "name": "ResultLike",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -3104,6 +3127,7 @@
                   "err": null,
                   "name": "ResultLikeWithVoid",
                   "ok": null,
+                  "owner": "./model",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -3162,6 +3186,7 @@
                     }
                   ],
                   "name": "ResultLikeWithNoTag",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -3404,6 +3429,7 @@
                     }
                   ],
                   "name": "TaggedUnion",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -3603,6 +3629,7 @@
                     "type": "Tuple"
                   },
                   "name": "MapType",
+                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -3682,6 +3709,7 @@
                     }
                   ],
                   "name": "TupleComplexType",
+                  "owner": "./model",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -3761,6 +3789,7 @@
                     }
                   ],
                   "name": "TupleType",
+                  "owner": "./model",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -4276,6 +4305,7 @@
                     }
                   ],
                   "name": "UnionComplexType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4803,6 +4833,7 @@
                     }
                   ],
                   "name": "UnionType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4906,6 +4937,7 @@
                     }
                   ],
                   "name": "UnionWithLiterals",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4967,6 +4999,7 @@
                     "baz"
                   ],
                   "name": "UnionWithOnlyLiterals",
+                  "owner": "./model",
                   "type": "Enum"
                 },
                 "type": "ComponentModel"
@@ -6078,6 +6111,7 @@
                     }
                   ],
                   "name": "ResultLike",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -6108,6 +6142,7 @@
                     }
                   ],
                   "name": "ResultLikeWithNoTag",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6155,6 +6190,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined1",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6190,6 +6226,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined2",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6225,6 +6262,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined3",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6246,6 +6284,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined4",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6316,6 +6355,7 @@
                       }
                     ],
                     "name": "UnionType",
+                    "owner": "./model",
                     "type": "Variant"
                   },
                   "type": "Option"
@@ -6480,6 +6520,7 @@
                     }
                   ],
                   "name": "TaggedUnion",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -6578,6 +6619,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -6622,6 +6664,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -6664,6 +6707,7 @@
                     "type": "Str"
                   },
                   "ok": null,
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -6723,6 +6767,7 @@
                     }
                   ],
                   "name": "ResultLikeWithNoTag",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6803,6 +6848,7 @@
                     "type": "Record"
                   },
                   "name": "ListComplexType",
+                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -6874,6 +6920,7 @@
                     "type": "Tuple"
                   },
                   "name": "MapType",
+                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -7337,6 +7384,7 @@
                     }
                   ],
                   "name": "ObjectComplexType",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7625,6 +7673,7 @@
                     }
                   ],
                   "name": "ObjectType",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7718,6 +7767,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined1",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7753,6 +7803,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined2",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7788,6 +7839,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined3",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7809,6 +7861,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined4",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7879,6 +7932,7 @@
                       }
                     ],
                     "name": "UnionType",
+                    "owner": "./model",
                     "type": "Variant"
                   },
                   "type": "Option"
@@ -8160,6 +8214,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "./model",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -8219,6 +8274,7 @@
                     }
                   ],
                   "name": "ResultLike",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -8274,6 +8330,7 @@
                   "err": null,
                   "name": "ResultLikeWithVoid",
                   "ok": null,
+                  "owner": "./model",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -8498,6 +8555,7 @@
                     }
                   ],
                   "name": "TaggedUnion",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -8718,6 +8776,7 @@
                     }
                   ],
                   "name": "TupleComplexType",
+                  "owner": "./model",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -8797,6 +8856,7 @@
                     }
                   ],
                   "name": "TupleType",
+                  "owner": "./model",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -9312,6 +9372,7 @@
                     }
                   ],
                   "name": "UnionComplexType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9839,6 +9900,7 @@
                     }
                   ],
                   "name": "UnionType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9942,6 +10004,7 @@
                     }
                   ],
                   "name": "UnionWithLiterals",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -10003,6 +10066,7 @@
                     "baz"
                   ],
                   "name": "UnionWithOnlyLiterals",
+                  "owner": "./model",
                   "type": "Enum"
                 },
                 "type": "ComponentModel"
