@@ -34,27 +34,44 @@ use url::Url;
 use uuid::Uuid;
 
 pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
-pub const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
-pub const BUILTIN_LOCAL_URL_ENV: &str = "GOLEM_BUILTIN_LOCAL_URL";
+const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
+const BUILTIN_LOCAL_URL_ENV: &str = "GOLEM_BUILTIN_LOCAL_URL";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
 
-static BUILTIN_LOCAL_URL_ONCE: OnceLock<Url> = OnceLock::new();
+struct BuiltinLocalUrlState {
+    url: Url,
+    uses_default: bool,
+}
+
+static BUILTIN_LOCAL_URL_ONCE: OnceLock<BuiltinLocalUrlState> = OnceLock::new();
+
+fn builtin_local_url_state() -> &'static BuiltinLocalUrlState {
+    BUILTIN_LOCAL_URL_ONCE.get_or_init(|| {
+        if cfg!(debug_assertions) {
+            if let Ok(override_url) = std::env::var(BUILTIN_LOCAL_URL_ENV) {
+                return BuiltinLocalUrlState {
+                    url: Url::parse(&override_url).unwrap_or_else(|err| {
+                        panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")
+                    }),
+                    uses_default: false,
+                };
+            }
+        }
+
+        BuiltinLocalUrlState {
+            url: Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse BUILTIN_LOCAL_URL"),
+            uses_default: true,
+        }
+    })
+}
 
 pub fn builtin_local_url() -> Url {
-    BUILTIN_LOCAL_URL_ONCE
-        .get_or_init(|| {
-            if cfg!(debug_assertions) {
-                if let Ok(override_url) = std::env::var(BUILTIN_LOCAL_URL_ENV) {
-                    return Url::parse(&override_url).unwrap_or_else(|err| {
-                        panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")
-                    });
-                }
-            }
+    builtin_local_url_state().url.clone()
+}
 
-            Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse BUILTIN_LOCAL_URL")
-        })
-        .clone()
+pub fn uses_default_builtin_local_url() -> bool {
+    builtin_local_url_state().uses_default
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

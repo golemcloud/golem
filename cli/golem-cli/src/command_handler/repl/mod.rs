@@ -17,7 +17,7 @@ use crate::command::shared_args::PostDeployArgs;
 use crate::command_handler::repl::rust::RustRepl;
 use crate::command_handler::repl::typescript::TypeScriptRepl;
 use crate::command_handler::Handlers;
-use crate::config::BUILTIN_LOCAL_URL_ENV;
+use crate::config::{builtin_local_url, uses_default_builtin_local_url};
 use crate::context::Context;
 use crate::fs;
 use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
@@ -250,18 +250,22 @@ impl ReplHandler {
 
         match environment.environment.server.as_ref() {
             Some(Server::Builtin(BuiltinServer::Local)) | None => {
-                if let Ok(local_url_override) = std::env::var(BUILTIN_LOCAL_URL_ENV) {
+                if uses_default_builtin_local_url() {
+                    env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "local".to_string());
+                } else {
+                    let local_url_override = builtin_local_url();
                     env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "custom".to_string());
                     env_vars.insert(
                         "GOLEM_REPL_SERVER_CUSTOM_URL".to_string(),
-                        local_url_override,
+                        local_url_override
+                            .as_str()
+                            .trim_end_matches('/')
+                            .to_string(),
                     );
                     env_vars.insert(
                         "GOLEM_REPL_SERVER_TOKEN".to_string(),
                         LOCAL_WELL_KNOWN_TOKEN.to_string(),
                     );
-                } else {
-                    env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "local".to_string());
                 }
             }
             Some(Server::Builtin(BuiltinServer::Cloud)) => {
