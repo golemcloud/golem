@@ -187,16 +187,50 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Filesize, FsError> {
         self.fail_if_read_only(&fd)?;
 
-        let new_bytes = buffer.len() as u64;
-        self.check_filesystem_storage_quota(new_bytes)
-            .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
-        self.acquire_filesystem_storage_space(new_bytes)
-            .await
-            .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
+        let current_size = {
+            let fd_borrow = Resource::new_borrow(fd.rep());
+            let mut view = self.as_wasi_view();
+            match HostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
+                Ok(s) => s.size,
+                Err(_) => 0,
+            }
+        };
+
+        let requested_end = offset.saturating_add(buffer.len() as u64);
+        let requested_growth = requested_end.saturating_sub(current_size);
+        if requested_growth > 0 {
+            self.check_filesystem_storage_quota(requested_growth)
+                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
+            self.acquire_filesystem_storage_space(requested_growth)
+                .await
+                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
+        }
 
         self.observe_function_call("filesystem::types::descriptor", "write");
-        let mut view = self.as_wasi_view();
-        HostDescriptor::write(&mut view.filesystem(), fd, buffer, offset).await
+        let result = {
+            let mut view = self.as_wasi_view();
+            HostDescriptor::write(&mut view.filesystem(), fd, buffer, offset).await
+        };
+
+        if requested_growth > 0 {
+            match result {
+                Ok(written) => {
+                    let actual_end = offset.saturating_add(written);
+                    let actual_growth = actual_end.saturating_sub(current_size);
+                    let over_reserved = requested_growth.saturating_sub(actual_growth);
+                    if over_reserved > 0 {
+                        self.release_filesystem_storage_space(over_reserved).await;
+                    }
+                    Ok(written)
+                }
+                Err(err) => {
+                    self.release_filesystem_storage_space(requested_growth).await;
+                    Err(err)
+                }
+            }
+        } else {
+            result
+        }
     }
 
     async fn read_directory(
@@ -446,17 +480,43 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
+        let truncated_size = if open_flags.contains(OpenFlags::TRUNCATE) {
+            let fd_borrow = Resource::new_borrow(self_.rep());
+            let mut view = self.as_wasi_view();
+            match HostDescriptor::stat_at(
+                &mut view.filesystem(),
+                fd_borrow,
+                path_flags,
+                path.clone(),
+            )
+            .await
+            {
+                Ok(s) => s.size,
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
         self.observe_function_call("filesystem::types::descriptor", "open_at");
-        let mut view = self.as_wasi_view();
-        HostDescriptor::open_at(
-            &mut view.filesystem(),
-            self_,
-            path_flags,
-            path,
-            open_flags,
-            flags,
-        )
-        .await
+        let result = {
+            let mut view = self.as_wasi_view();
+            HostDescriptor::open_at(
+                &mut view.filesystem(),
+                self_,
+                path_flags,
+                path,
+                open_flags,
+                flags,
+            )
+            .await
+        };
+
+        if result.is_ok() && truncated_size > 0 {
+            self.release_filesystem_storage_space(truncated_size).await;
+        }
+
+        result
     }
 
     async fn readlink_at(

@@ -240,6 +240,53 @@ async fn agent_quota_freed_after_file_deletion(
     Ok(())
 }
 
+/// Rewriting the same file with the same content via `write_file` should not
+/// consume additional quota, because the resulting file size does not grow.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_overwrite_same_file_should_not_double_charge(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // Exactly 11 bytes: enough for one "hello world" payload. Overwrite of the
+    // same file with the same payload must also succeed.
+    let executor = start_with_agent_storage_quota(deps, &context, 11).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "agent-quota-overwrite-same-file-1");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/same.txt", "hello world"),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/same.txt", "hello world"),
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// `write_zeroes` on a file-backed output stream must be subject to storage
 /// quota. Writing more zeroes than the per-agent quota allows must fail with
 /// `AgentExceededFilesystemStorageLimit`.
@@ -650,6 +697,53 @@ async fn agent_quota_pwrite_within_limit_succeeds(
         content,
         Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
     );
+
+    Ok(())
+}
+
+/// Overwriting the same byte range via direct `descriptor::write` (`pwrite_file`)
+/// must not consume additional quota when file size does not grow.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_pwrite_overwrite_same_range_should_not_double_charge(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // Exactly 11 bytes: enough for one "hello world" payload.
+    let executor = start_with_agent_storage_quota(deps, &context, 11).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "agent-quota-pwrite-overwrite-1");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "pwrite_file",
+            data_value!("/pwrite.txt", 0u64, "hello world"),
+        )
+        .await?;
+
+    // Same offset and same payload: logical size remains 11 bytes.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "pwrite_file",
+            data_value!("/pwrite.txt", 0u64, "hello world"),
+        )
+        .await?;
 
     Ok(())
 }
