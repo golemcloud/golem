@@ -38,7 +38,7 @@ impl DbColumn {
 
 impl Display for DbColumn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: unknown", self.name)
+        write!(f, "{}", self.name)
     }
 }
 
@@ -50,7 +50,7 @@ impl From<DbColumn> for SerializableDbColumn {
             db_type: SerializableDbColumnType {
                 nodes: vec![SerializableDbColumnTypeNode::Text],
             },
-            db_type_name: "unknown".to_string(),
+            db_type_name: String::new(),
         }
     }
 }
@@ -84,7 +84,7 @@ pub enum DbValue {
     Char(u16),
     String(String),
     Uuid(Uuid),
-    /// Milliseconds since Unix epoch (UTC).
+    /// Days since Unix epoch (UTC midnight), stored as ms in the wire format.
     Date(i64),
     /// (milliseconds since epoch, sub-millisecond nanoseconds 0..999_999).
     Timestamp(i64, i32),
@@ -92,6 +92,46 @@ pub enum DbValue {
     Time(i64),
     Decimal(BigDecimal),
     ByteArray(Vec<u8>),
+}
+
+impl DbValue {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            DbValue::Null           => "NULL",
+            DbValue::Boolean(_)     => "BOOLEAN",
+            DbValue::Byte(_)        => "TINYINT",
+            DbValue::Short(_)       => "SMALLINT",
+            DbValue::Int(_)         => "INT",
+            DbValue::Long(_)        => "BIGINT",
+            DbValue::Float(_)       => "FLOAT",
+            DbValue::Double(_)      => "DOUBLE",
+            DbValue::Char(_)        => "CHAR",
+            DbValue::String(_)      => "VARCHAR",
+            DbValue::Uuid(_)        => "UUID",
+            DbValue::Date(_)        => "DATE",
+            DbValue::Timestamp(..)  => "TIMESTAMP",
+            DbValue::Time(_)        => "TIME",
+            DbValue::Decimal(_)     => "DECIMAL",
+            DbValue::ByteArray(_)   => "BINARY",
+        }
+    }
+
+    pub fn as_bool(&self)       -> Option<bool>       { if let DbValue::Boolean(v) = self { Some(*v) } else { None } }
+    pub fn as_byte(&self)       -> Option<i8>         { if let DbValue::Byte(v)    = self { Some(*v) } else { None } }
+    pub fn as_short(&self)      -> Option<i16>        { if let DbValue::Short(v)   = self { Some(*v) } else { None } }
+    pub fn as_int(&self)        -> Option<i32>        { if let DbValue::Int(v)     = self { Some(*v) } else { None } }
+    pub fn as_long(&self)       -> Option<i64>        { if let DbValue::Long(v)    = self { Some(*v) } else { None } }
+    pub fn as_float(&self)      -> Option<f32>        { if let DbValue::Float(v)   = self { Some(*v) } else { None } }
+    pub fn as_double(&self)     -> Option<f64>        { if let DbValue::Double(v)  = self { Some(*v) } else { None } }
+    pub fn as_char(&self)       -> Option<u16>        { if let DbValue::Char(v)    = self { Some(*v) } else { None } }
+    pub fn as_str(&self)        -> Option<&str>       { if let DbValue::String(v)  = self { Some(v)  } else { None } }
+    pub fn as_uuid(&self)       -> Option<&Uuid>      { if let DbValue::Uuid(v)    = self { Some(v)  } else { None } }
+    pub fn as_date_ms(&self)    -> Option<i64>        { if let DbValue::Date(ms)   = self { Some(*ms) } else { None } }
+    pub fn as_timestamp(&self)  -> Option<(i64, i32)> { if let DbValue::Timestamp(ms, ns) = self { Some((*ms, *ns)) } else { None } }
+    pub fn as_time_ms(&self)    -> Option<i64>        { if let DbValue::Time(ms)   = self { Some(*ms) } else { None } }
+    pub fn as_decimal(&self)    -> Option<&BigDecimal> { if let DbValue::Decimal(v) = self { Some(v) } else { None } }
+    pub fn as_bytes(&self)      -> Option<&[u8]>      { if let DbValue::ByteArray(v) = self { Some(v) } else { None } }
+    pub fn is_null(&self)       -> bool               { matches!(self, DbValue::Null) }
 }
 
 impl Display for DbValue {
@@ -108,7 +148,12 @@ impl Display for DbValue {
             DbValue::Char(v) => write!(f, "{}", char::from_u32(*v as u32).unwrap_or('\u{FFFD}')),
             DbValue::String(v) => write!(f, "{v}"),
             DbValue::Uuid(v) => write!(f, "{v}"),
-            DbValue::Date(v) => write!(f, "{v}ms"),
+            DbValue::Date(ms) => {
+                let date = chrono::DateTime::from_timestamp_millis(*ms)
+                    .map(|dt| dt.date_naive())
+                    .unwrap_or_default();
+                write!(f, "{date}")
+            }
             DbValue::Timestamp(ms, ns) => write!(f, "{ms}ms+{ns}ns"),
             DbValue::Time(v) => write!(f, "{v}ms"),
             DbValue::Decimal(v) => write!(f, "{v}"),
@@ -137,8 +182,10 @@ impl From<DbValue> for SerializableDbValue {
             DbValue::String(v) => SerializableDbValueNode::Text(v),
             DbValue::Uuid(v) => SerializableDbValueNode::Uuid(v),
             DbValue::Date(ms) => {
-                let dt = Utc.timestamp_millis_opt(ms).single().unwrap_or_default();
-                SerializableDbValueNode::Timestamp(dt.naive_utc())
+                let date = chrono::DateTime::from_timestamp_millis(ms)
+                    .map(|dt| dt.date_naive())
+                    .unwrap_or_default();
+                SerializableDbValueNode::Date(date)
             }
             DbValue::Timestamp(ms, nanos) => {
                 let dt = Utc.timestamp_millis_opt(ms).single().unwrap_or_default();
@@ -194,9 +241,15 @@ impl TryFrom<SerializableDbValue> for DbValue {
             | SerializableDbValueNode::Mediumtext(v)
             | SerializableDbValueNode::Longtext(v) => DbValue::String(v),
             SerializableDbValueNode::Uuid(v) => DbValue::Uuid(v),
+            SerializableDbValueNode::Date(v) => {
+                let ms = v.and_hms_opt(0, 0, 0)
+                    .map(|dt| dt.and_utc().timestamp_millis())
+                    .unwrap_or(0);
+                DbValue::Date(ms)
+            }
             SerializableDbValueNode::Timestamp(v) => {
                 let ms = v.and_utc().timestamp_millis();
-                DbValue::Date(ms)
+                DbValue::Timestamp(ms, 0)
             }
             SerializableDbValueNode::Timestamptz(v) => {
                 let ms = v.timestamp_millis();

@@ -22,7 +22,7 @@ use crate::services::rdbms::{
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::StreamExt;
-use golem_common::model::{RdbmsPoolKey, TransactionId, WorkerId};
+use golem_common::model::{AgentId, RdbmsPoolKey, TransactionId};
 use ignite_client::{
     IgniteClient, IgniteClientConfig, IgniteError, IgniteValue, QueryStream as IgniteQueryStream,
     Transaction as IgniteTransaction,
@@ -168,7 +168,7 @@ fn convert_query_result(result: ignite_client::QueryResult) -> DbResult<IgniteTy
                 .values()
                 .iter()
                 .cloned()
-                .map(|v| ignite_to_service(v))
+                .map(ignite_to_service)
                 .collect(),
         })
         .collect();
@@ -213,10 +213,10 @@ impl DbResultStream<IgniteType> for IgniteResultStream {
                         .values()
                         .iter()
                         .cloned()
-                        .map(|v| ignite_to_service(v))
+                        .map(ignite_to_service)
                         .collect(),
                 }),
-                Some(Err(e)) => return Err(RdbmsError::from(IgniteError::from(e))),
+                Some(Err(e)) => return Err(RdbmsError::from(e)),
                 None => {
                     self.done.store(true, Ordering::Relaxed);
                     break;
@@ -372,11 +372,13 @@ impl DbTransaction<IgniteType> for IgniteDbTransaction {
 
 // ── IgniteRdbms ───────────────────────────────────────────────────────────────
 
+type ClientPool = Arc<DashMap<RdbmsPoolKey, (Arc<IgniteClient>, HashSet<AgentId>)>>;
+
 #[derive(Clone)]
 pub(crate) struct IgniteRdbms {
     _config: RdbmsConfig,
     /// Pool key → (IgniteClient, set of worker IDs).
-    clients: Arc<DashMap<RdbmsPoolKey, (Arc<IgniteClient>, HashSet<WorkerId>)>>,
+    clients: ClientPool,
     /// Transaction ID → status (for replay support).
     tx_statuses: Arc<DashMap<TransactionId, RdbmsTransactionStatus>>,
 }
@@ -393,6 +395,20 @@ impl IgniteRdbms {
     fn get_client(&self, key: &RdbmsPoolKey) -> Option<Arc<IgniteClient>> {
         self.clients.get(key).map(|r| r.0.clone())
     }
+
+    async fn get_or_create_client(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &AgentId,
+    ) -> Result<Arc<IgniteClient>, RdbmsError> {
+        if let Some(client) = self.get_client(key) {
+            return Ok(client);
+        }
+        self.create(key.address.as_str(), worker_id).await?;
+        self.get_client(key).ok_or_else(|| {
+            RdbmsError::ConnectionFailure(format!("no client for {}", key))
+        })
+    }
 }
 
 #[async_trait]
@@ -400,9 +416,9 @@ impl Rdbms<IgniteType> for IgniteRdbms {
     async fn create(
         &self,
         address: &str,
-        worker_id: &WorkerId,
+        worker_id: &AgentId,
     ) -> Result<RdbmsPoolKey, RdbmsError> {
-        let key = RdbmsPoolKey::from(address).map_err(|e| RdbmsError::ConnectionFailure(e))?;
+        let key = RdbmsPoolKey::from(address).map_err(RdbmsError::ConnectionFailure)?;
         if !self.clients.contains_key(&key) {
             let cfg = parse_config(&key.address)?;
             info!(pool_key = key.to_string(), "ignite: creating client");
@@ -422,14 +438,14 @@ impl Rdbms<IgniteType> for IgniteRdbms {
         Ok(key)
     }
 
-    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &AgentId) -> bool {
         self.clients
             .get(key)
             .map(|r| r.1.contains(worker_id))
             .unwrap_or(false)
     }
 
-    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &AgentId) -> bool {
         if let Some(mut entry) = self.clients.get_mut(key) {
             return entry.1.remove(worker_id);
         }
@@ -439,7 +455,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
     async fn execute(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        worker_id: &AgentId,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<u64, RdbmsError>
@@ -451,16 +467,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
             "ignite execute: {statement}, params: {}",
             params.len()
         );
-        let client = self
-            .get_client(key)
-            .or_else(|| {
-                // Auto-create if worker has drifted (e.g. replay)
-                let _ = futures::executor::block_on(self.create(key.address.as_str(), worker_id));
-                self.get_client(key)
-            })
-            .ok_or_else(|| {
-                RdbmsError::ConnectionFailure(format!("no client for {}", key.to_string()))
-            })?;
+        let client = self.get_or_create_client(key, worker_id).await?;
         let ignite_params: Vec<IgniteValue> = params.into_iter().map(service_to_ignite).collect();
         let result = client
             .execute(statement, ignite_params)
@@ -476,7 +483,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
     async fn query_stream(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        worker_id: &AgentId,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultStream<IgniteType> + Send + Sync>, RdbmsError>
@@ -488,15 +495,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
             "ignite query_stream: {statement}, params: {}",
             params.len()
         );
-        let client = self
-            .get_client(key)
-            .or_else(|| {
-                let _ = futures::executor::block_on(self.create(key.address.as_str(), worker_id));
-                self.get_client(key)
-            })
-            .ok_or_else(|| {
-                RdbmsError::ConnectionFailure(format!("no client for {}", key.to_string()))
-            })?;
+        let client = self.get_or_create_client(key, worker_id).await?;
         let ignite_params: Vec<IgniteValue> = params.into_iter().map(service_to_ignite).collect();
         let qs = client
             .query_stream(statement, ignite_params)
@@ -517,7 +516,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
     async fn query(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        worker_id: &AgentId,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<DbResult<IgniteType>, RdbmsError>
@@ -529,15 +528,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
             "ignite query: {statement}, params: {}",
             params.len()
         );
-        let client = self
-            .get_client(key)
-            .or_else(|| {
-                let _ = futures::executor::block_on(self.create(key.address.as_str(), worker_id));
-                self.get_client(key)
-            })
-            .ok_or_else(|| {
-                RdbmsError::ConnectionFailure(format!("no client for {}", key.to_string()))
-            })?;
+        let client = self.get_or_create_client(key, worker_id).await?;
         let ignite_params: Vec<IgniteValue> = params.into_iter().map(service_to_ignite).collect();
         let result = client.query(statement, ignite_params).await.map_err(|e| {
             error!(pool_key = key.to_string(), "ignite query error: {e}");
@@ -549,18 +540,10 @@ impl Rdbms<IgniteType> for IgniteRdbms {
     async fn begin_transaction(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        worker_id: &AgentId,
     ) -> Result<Arc<dyn DbTransaction<IgniteType> + Send + Sync>, RdbmsError> {
         debug!(pool_key = key.to_string(), "ignite begin_transaction");
-        let client = self
-            .get_client(key)
-            .or_else(|| {
-                let _ = futures::executor::block_on(self.create(key.address.as_str(), worker_id));
-                self.get_client(key)
-            })
-            .ok_or_else(|| {
-                RdbmsError::ConnectionFailure(format!("no client for {}", key.to_string()))
-            })?;
+        let client = self.get_or_create_client(key, worker_id).await?;
         let tx = client.begin_transaction().await.map_err(|e| {
             error!(
                 pool_key = key.to_string(),
@@ -575,7 +558,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
     async fn get_transaction_status(
         &self,
         _key: &RdbmsPoolKey,
-        _worker_id: &WorkerId,
+        _worker_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         Ok(self
@@ -588,7 +571,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
     async fn cleanup_transaction(
         &self,
         _key: &RdbmsPoolKey,
-        _worker_id: &WorkerId,
+        _worker_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<(), RdbmsError> {
         self.tx_statuses.remove(transaction_id);

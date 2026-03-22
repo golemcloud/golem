@@ -49,7 +49,7 @@ interface ignite2 {
   }
 
   // ── Metadata ───────────────────────────────────────────────────────────────
-  record db-column { ordinal: u64, name: string, db-type-name: string }
+  record db-column { ordinal: u64, name: string }
   record db-row    { values: list<db-value> }
   record db-result { columns: list<db-column>, rows: list<db-row> }
 
