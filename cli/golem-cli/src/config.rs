@@ -416,7 +416,7 @@ impl HttpClientConfig {
     pub fn new_for_file_download(allow_insecure: bool) -> Self {
         Self {
             allow_insecure,
-            timeout: Some(Duration::from_secs(60)),
+            timeout: Some(Duration::from_secs(120)),
             connect_timeout: Some(Duration::from_secs(10)),
             read_timeout: Some(Duration::from_secs(60)),
         }
