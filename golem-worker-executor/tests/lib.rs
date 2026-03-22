@@ -36,6 +36,7 @@ pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
 pub mod rdbms;
+pub mod ignite_service;
 pub mod rdbms_service;
 pub mod resource_limits;
 pub mod revert;
@@ -63,6 +64,7 @@ tag_suite!(wasi, group3);
 tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
 
+tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 
