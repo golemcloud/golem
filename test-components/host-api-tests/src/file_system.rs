@@ -61,10 +61,9 @@ pub trait FileSystem {
     fn remove_file(&self, path: String) -> Result<(), String>;
     fn rename_file(&self, source: String, destination: String) -> Result<(), String>;
     fn hash(&self, path: String) -> Result<HashResult, String>;
-    fn write_zeroes_to_file(&self, path: String, len: u64) -> Result<(), String>;
-    fn write_zeroes_to_stdout(&self, len: u64) -> Result<(), String>;
-    fn blocking_write_zeroes_and_flush_to_file(&self, path: String, len: u64)
-        -> Result<(), String>;
+    fn stream_to_file(&self, path: String, len: u64) -> Result<(), String>;
+    fn stream_to_stdout(&self, len: u64) -> Result<(), String>;
+    fn blocking_stream_and_flush_to_file(&self, path: String, len: u64) -> Result<(), String>;
     /// Set the size of a file using `descriptor::set_size` (the WASI pwrite-truncate path).
     /// If `new_size` is larger than the current file size the file is grown (zero-filled).
     /// If smaller, the file is truncated.  This exercises the quota grow/shrink paths.
@@ -243,7 +242,7 @@ impl FileSystem for FileSystemImpl {
         fs::rename(source, destination).map_err(|err| err.to_string())
     }
 
-    fn write_zeroes_to_file(&self, path: String, len: u64) -> Result<(), String> {
+    fn stream_to_file(&self, path: String, len: u64) -> Result<(), String> {
         let dirs = wasi::filesystem::preopens::get_directories();
         let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
         let rel = path.trim_start_matches('/');
@@ -259,16 +258,12 @@ impl FileSystem for FileSystemImpl {
         stream.write_zeroes(len).map_err(|e| format!("{e:?}"))
     }
 
-    fn write_zeroes_to_stdout(&self, len: u64) -> Result<(), String> {
+    fn stream_to_stdout(&self, len: u64) -> Result<(), String> {
         let stdout: OutputStream = wasi::cli::stdout::get_stdout();
         stdout.write_zeroes(len).map_err(|e| format!("{e:?}"))
     }
 
-    fn blocking_write_zeroes_and_flush_to_file(
-        &self,
-        path: String,
-        len: u64,
-    ) -> Result<(), String> {
+    fn blocking_stream_and_flush_to_file(&self, path: String, len: u64) -> Result<(), String> {
         let dirs = wasi::filesystem::preopens::get_directories();
         let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
         let rel = path.trim_start_matches('/');

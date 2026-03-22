@@ -287,20 +287,20 @@ async fn agent_quota_overwrite_same_file_should_not_double_charge(
     Ok(())
 }
 
-/// `write_zeroes` on a file-backed output stream must be subject to storage
-/// quota. Writing more zeroes than the per-agent quota allows must fail with
+/// Stream-based writes on a file-backed output stream must be subject to
+/// storage quota. Writing more bytes than the per-agent quota allows must fail with
 /// `AgentExceededFilesystemStorageLimit`.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn agent_quota_write_zeroes_to_file_exceeding_limit_fails(
+async fn agent_quota_stream_write_exceeding_limit_fails(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // 5-byte quota — 1024 zeroes exceeds it.
+    // 5-byte quota — writing 1024 bytes via stream exceeds it.
     let executor = start_with_agent_storage_quota(deps, &context, 5).await?;
 
     let component = executor
@@ -308,7 +308,7 @@ async fn agent_quota_write_zeroes_to_file_exceeding_limit_fails(
         .store()
         .await?;
 
-    let agent_id = agent_id!("FileSystem", "write-zeroes-quota-1");
+    let agent_id = agent_id!("FileSystem", "stream-write-quota-1");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -317,14 +317,14 @@ async fn agent_quota_write_zeroes_to_file_exceeding_limit_fails(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "write_zeroes_to_file",
-            data_value!("/zeroes.bin", 1024u64),
+            "stream_to_file",
+            data_value!("/stream.bin", 1024u64),
         )
         .await;
 
     assert!(
         result.is_err(),
-        "expected write_zeroes to fail when quota exceeded"
+        "expected stream_to_file to fail when quota exceeded"
     );
     let err_str = format!("{result:?}");
     assert!(
@@ -335,18 +335,18 @@ async fn agent_quota_write_zeroes_to_file_exceeding_limit_fails(
     Ok(())
 }
 
-/// `write_zeroes_to_file` within the per-agent quota succeeds.
+/// Stream-based writes within the per-agent quota succeed.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn agent_quota_write_zeroes_to_file_within_limit_succeeds(
+async fn agent_quota_stream_write_within_limit_succeeds(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // 1 MB quota — 1024 zeroes is well within it.
+    // 1 MB quota — writing 1024 bytes via stream is within it.
     let executor = start_with_agent_storage_quota(deps, &context, 1024 * 1024).await?;
 
     let component = executor
@@ -354,7 +354,7 @@ async fn agent_quota_write_zeroes_to_file_within_limit_succeeds(
         .store()
         .await?;
 
-    let agent_id = agent_id!("FileSystem", "write-zeroes-quota-ok-1");
+    let agent_id = agent_id!("FileSystem", "stream-write-quota-ok-1");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -363,21 +363,124 @@ async fn agent_quota_write_zeroes_to_file_within_limit_succeeds(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "write_zeroes_to_file",
-            data_value!("/zeroes.bin", 1024u64),
+            "stream_to_file",
+            data_value!("/stream.bin", 1024u64),
         )
         .await?;
 
     Ok(())
 }
 
-/// `write_zeroes` on stdout must NOT charge storage quota — console streams
-/// are exempt. Even with a very tight per-agent quota (1 byte), writing a
-/// large number of zeroes to stdout must succeed.
+/// A failed stream-write attempt that exceeds stream permit (`check_write`)
+/// must roll back any pre-reserved executor pool allocation so another worker
+/// can still allocate and write.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn agent_quota_write_zeroes_to_stdout_does_not_charge_quota(
+async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // 2 MiB executor pool so the failing worker can reserve 2 MiB first.
+    let executor = start_with_executor_storage_pool(deps, &context, 2 * 1024 * 1024).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let failing_agent_id = agent_id!("FileSystem", "stream-write-failed-no-leak-a-1");
+    executor
+        .start_agent(&component.id, failing_agent_id.clone())
+        .await?;
+
+    let failed = executor
+        .invoke_and_await_agent(
+            &component,
+            &failing_agent_id,
+            "stream_to_file",
+            data_value!("/big.bin", 2 * 1024 * 1024u64),
+        )
+        .await;
+    assert!(
+        failed.is_err(),
+        "expected oversized stream_to_file to fail"
+    );
+
+    // A second worker should still be able to allocate and write if the first
+    // worker's failed attempt released pool permits.
+    let succeeding_agent_id = agent_id!("FileSystem", "stream-write-failed-no-leak-b-1");
+    executor
+        .start_agent(&component.id, succeeding_agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &succeeding_agent_id,
+            "stream_to_file",
+            data_value!("/small.bin", 1024u64),
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Overwriting the same file with `stream_to_file` must not double-charge
+/// quota when the file does not grow.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_stream_overwrite_same_file_should_not_double_charge(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 1024).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "stream-overwrite-same-file-1");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "stream_to_file",
+            data_value!("/same-stream.bin", 1024u64),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "stream_to_file",
+            data_value!("/same-stream.bin", 1024u64),
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Stream writes on stdout must NOT charge storage quota — console streams
+/// are exempt. Even with a very tight per-agent quota (1 byte), a large
+/// stream write to stdout must succeed.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_stream_to_stdout_does_not_charge_quota(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -393,7 +496,7 @@ async fn agent_quota_write_zeroes_to_stdout_does_not_charge_quota(
         .store()
         .await?;
 
-    let agent_id = agent_id!("FileSystem", "write-zeroes-stdout-1");
+    let agent_id = agent_id!("FileSystem", "stream-stdout-1");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -402,7 +505,7 @@ async fn agent_quota_write_zeroes_to_stdout_does_not_charge_quota(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "write_zeroes_to_stdout",
+            "stream_to_stdout",
             data_value!(1024u64),
         )
         .await?;
@@ -410,19 +513,19 @@ async fn agent_quota_write_zeroes_to_stdout_does_not_charge_quota(
     Ok(())
 }
 
-/// `blocking_write_zeroes_and_flush` on a file-backed output stream must be
+/// `blocking_stream_and_flush_to_file` on a file-backed output stream must be
 /// subject to storage quota. Exceeding the limit must fail.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn agent_quota_blocking_write_zeroes_and_flush_exceeding_limit_fails(
+async fn agent_quota_blocking_stream_and_flush_exceeding_limit_fails(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // 5-byte quota — 1024 zeroes exceeds it.
+    // 5-byte quota — writing 1024 bytes via stream exceeds it.
     let executor = start_with_agent_storage_quota(deps, &context, 5).await?;
 
     let component = executor
@@ -430,7 +533,7 @@ async fn agent_quota_blocking_write_zeroes_and_flush_exceeding_limit_fails(
         .store()
         .await?;
 
-    let agent_id = agent_id!("FileSystem", "blocking-write-zeroes-quota-1");
+    let agent_id = agent_id!("FileSystem", "blocking-stream-write-quota-1");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -439,14 +542,14 @@ async fn agent_quota_blocking_write_zeroes_and_flush_exceeding_limit_fails(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "blocking_write_zeroes_and_flush_to_file",
-            data_value!("/zeroes.bin", 1024u64),
+            "blocking_stream_and_flush_to_file",
+            data_value!("/stream.bin", 1024u64),
         )
         .await;
 
     assert!(
         result.is_err(),
-        "expected blocking_write_zeroes_and_flush to fail when quota exceeded"
+        "expected blocking_stream_and_flush_to_file to fail when quota exceeded"
     );
     let err_str = format!("{result:?}");
     assert!(
@@ -457,12 +560,12 @@ async fn agent_quota_blocking_write_zeroes_and_flush_exceeding_limit_fails(
     Ok(())
 }
 
-/// `blocking_write_zeroes_and_flush` on a file-backed stream within the
+/// `blocking_stream_and_flush_to_file` on a file-backed stream within the
 /// per-agent quota succeeds.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn agent_quota_blocking_write_zeroes_and_flush_within_limit_succeeds(
+async fn agent_quota_blocking_stream_and_flush_within_limit_succeeds(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -476,7 +579,7 @@ async fn agent_quota_blocking_write_zeroes_and_flush_within_limit_succeeds(
         .store()
         .await?;
 
-    let agent_id = agent_id!("FileSystem", "blocking-write-zeroes-quota-ok-1");
+    let agent_id = agent_id!("FileSystem", "blocking-stream-write-quota-ok-1");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -485,8 +588,8 @@ async fn agent_quota_blocking_write_zeroes_and_flush_within_limit_succeeds(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "blocking_write_zeroes_and_flush_to_file",
-            data_value!("/zeroes.bin", 1024u64),
+            "blocking_stream_and_flush_to_file",
+            data_value!("/stream.bin", 1024u64),
         )
         .await?;
 
@@ -749,7 +852,7 @@ async fn agent_quota_pwrite_overwrite_same_range_should_not_double_charge(
 }
 
 /// Storage quota is cumulative across write paths. Writing via `write_file`
-/// and then via `write_zeroes_to_file` both count against the same per-agent
+/// and then via `stream_to_file` both count against the same per-agent
 /// quota. If their combined sizes exceed the limit, the second write fails.
 #[test]
 #[tracing::instrument]
@@ -762,7 +865,7 @@ async fn agent_quota_cumulative_across_write_paths(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     // 15-byte quota. First write: 11 bytes ("hello world") via write_file.
-    // Second write: 8 zeroes via write_zeroes — combined 19 bytes > 15 → fails.
+    // Second write: 8 bytes via stream_to_file — combined 19 bytes > 15 → fails.
     let executor = start_with_agent_storage_quota(deps, &context, 15).await?;
 
     let component = executor
@@ -785,19 +888,19 @@ async fn agent_quota_cumulative_across_write_paths(
         )
         .await?;
 
-    // Second write: 8 zeroes via write_zeroes — would total 19 bytes > 15 → fails.
+    // Second write: 8 bytes via stream API — would total 19 bytes > 15 → fails.
     let result = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "write_zeroes_to_file",
-            data_value!("/zeroes.bin", 8u64),
+            "stream_to_file",
+            data_value!("/stream.bin", 8u64),
         )
         .await;
 
     assert!(
         result.is_err(),
-        "expected write_zeroes to fail: combined writes exceed quota"
+        "expected stream_to_file to fail: combined writes exceed quota"
     );
     let err_str = format!("{result:?}");
     assert!(

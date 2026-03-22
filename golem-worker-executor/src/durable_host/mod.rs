@@ -3002,6 +3002,19 @@ pub(crate) struct HttpOutputStreamState {
     pub request: HostRequestHttpRequest,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FilesystemOutputStreamState {
+    pub descriptor_rep: u32,
+    pub position: Option<u64>,
+    pub pending_reservation: Option<PendingFilesystemReservation>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingFilesystemReservation {
+    pub base_size: u64,
+    pub reserved_growth: u64,
+}
+
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -3037,6 +3050,10 @@ struct PrivateDurableWorkerState {
     /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
     /// before outgoing_handler::handle() is called and the HttpRequestState is created.
     pending_http_outgoing_request_body: HashMap<u32, u32>,
+
+    /// Tracks file-backed wasi output streams so quota charging can be based on
+    /// actual file growth instead of requested write size.
+    open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -3180,6 +3197,7 @@ impl PrivateDurableWorkerState {
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
+            open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,
             total_linear_memory_size,

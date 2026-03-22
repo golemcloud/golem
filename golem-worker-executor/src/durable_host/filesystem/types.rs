@@ -30,7 +30,9 @@ use wasmtime_wasi::p2::FsError;
 use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::runtime::spawn_blocking;
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{
+    Durability, DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
@@ -59,7 +61,17 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Resource<OutputStream>, FsError> {
         self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
-        HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)
+        let descriptor_rep = fd.rep();
+        let stream = HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)?;
+        self.state.open_filesystem_output_streams.insert(
+            stream.rep(),
+            FilesystemOutputStreamState {
+                descriptor_rep,
+                position: Some(offset),
+                pending_reservation: None,
+            },
+        );
+        Ok(stream)
     }
 
     fn append_via_stream(
@@ -67,7 +79,17 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
     ) -> Result<Resource<OutputStream>, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
-        HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)
+        let descriptor_rep = self_.rep();
+        let stream = HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)?;
+        self.state.open_filesystem_output_streams.insert(
+            stream.rep(),
+            FilesystemOutputStreamState {
+                descriptor_rep,
+                position: None,
+                pending_reservation: None,
+            },
+        );
+        Ok(stream)
     }
 
     async fn advise(
