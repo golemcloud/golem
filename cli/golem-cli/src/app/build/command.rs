@@ -376,7 +376,8 @@ pub async fn execute_external_command(
 
                 process
                     .args(command_tokens.iter().skip(1))
-                    .current_dir(&build_dir);
+                    .current_dir(&build_dir)
+                    .envs(&command.env);
 
                 configure_external_command_env(&mut process, command_tokens[0].as_str(), ctx);
 
