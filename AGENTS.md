@@ -99,5 +99,6 @@ All crate dependencies must have their versions specified in the root workspace 
 - `golem-rib/` - Rib language implementation
 - `cli/` - CLI tools (golem-cli, golem)
 - `sdks/` - Language-specific SDKs (Rust, TypeScript) - **not part of main build flow, see SDK-specific AGENTS.md**
+- `golem-skills/` - Skill definitions and skill testing harness
 - `integration-tests/` - Integration test suite
 - `test-components/` - Test WASM components
