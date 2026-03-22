@@ -103,7 +103,7 @@ async fn agent_quota_write_exceeding_limit_fails(
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -149,7 +149,7 @@ async fn agent_quota_exceeded_limit_is_not_retried(
             &component,
             &agent_id,
             "write_file",
-            data_value!("/testfile2.txt", "hello world"),
+            data_value!("/testfile2.txt", "hello world 2"),
         )
         .await;
     assert!(
@@ -212,8 +212,7 @@ async fn agent_quota_freed_after_file_deletion(
         .await?;
 
     // Write a second file with distinct content within the 11-byte quota.
-    // "hi world!!" is 10 bytes — different from "hello world" so we'd catch
-    // stale data, and fits within the freed quota.
+    // "hi world!!" is 10 bytes
     executor
         .invoke_and_await_agent(
             &component,
@@ -223,7 +222,6 @@ async fn agent_quota_freed_after_file_deletion(
         )
         .await?;
 
-    // Verify distinct content — confirms the write committed and quota was freed.
     let content = executor
         .invoke_and_await_agent(
             &component,
@@ -244,7 +242,7 @@ async fn agent_quota_freed_after_file_deletion(
 
 /// `write_zeroes` on a file-backed output stream must be subject to storage
 /// quota. Writing more zeroes than the per-agent quota allows must fail with
-/// `WorkerAgentExceededFilesystemStorageLimit`.
+/// `AgentExceededFilesystemStorageLimit`.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -284,7 +282,7 @@ async fn agent_quota_write_zeroes_to_file_exceeding_limit_fails(
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -366,8 +364,7 @@ async fn agent_quota_write_zeroes_to_stdout_does_not_charge_quota(
 }
 
 /// `blocking_write_zeroes_and_flush` on a file-backed output stream must be
-/// subject to storage quota — it now correctly composes `write_zeroes` and
-/// `blocking_flush`, both of which enforce quota. Exceeding the limit must fail.
+/// subject to storage quota. Exceeding the limit must fail.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -407,7 +404,7 @@ async fn agent_quota_blocking_write_zeroes_and_flush_exceeding_limit_fails(
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -503,7 +500,7 @@ async fn agent_quota_set_size_grow_beyond_limit_fails(
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -569,7 +566,7 @@ async fn agent_quota_set_size_shrink_releases_quota(
 }
 
 /// `pwrite_file` (direct `descriptor::write`) is subject to per-agent quota.
-/// Writing beyond the quota must fail with `WorkerAgentExceededFilesystemStorageLimit`.
+/// Writing beyond the quota must fail with `AgentExceededFilesystemStorageLimit`.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -605,7 +602,7 @@ async fn agent_quota_pwrite_beyond_limit_fails(
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -642,6 +639,17 @@ async fn agent_quota_pwrite_within_limit_succeeds(
             data_value!("/file.txt", 0u64, "hello world"),
         )
         .await?;
+
+    let content = executor
+        .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/file.txt"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
+
+    assert_eq!(
+        content,
+        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
+    );
 
     Ok(())
 }
@@ -700,7 +708,7 @@ async fn agent_quota_cumulative_across_write_paths(
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -811,7 +819,7 @@ async fn agent_quota_storage_usage_survives_restart(
     let err_str = format!("{result:?}");
     assert!(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
-        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -996,7 +1004,7 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
         )
         .await?;
 
-    // Verify file2 and file3 content — distinct strings confirm correct writes.
+    // Verify file2 and file3 content
     let read2 = executor
         .invoke_and_await_agent(
             &component,
