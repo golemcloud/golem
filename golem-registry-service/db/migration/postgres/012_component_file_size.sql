@@ -1,0 +1,1 @@
+ALTER TABLE component_files ADD COLUMN file_size BIGINT NOT NULL DEFAULT 0;

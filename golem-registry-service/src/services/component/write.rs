@@ -40,6 +40,7 @@ use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::component::{AgentConfigEntry, Component};
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -438,12 +439,13 @@ impl ComponentWriteService {
 
         let mut result = Vec::new();
 
-        for (path, key) in uploaded_files {
+        for (path, (key, size)) in uploaded_files {
             let options = file_options.get(&path).cloned().unwrap_or_default();
             result.push(InitialComponentFile {
                 path,
                 content_hash: key,
                 permissions: options.permissions,
+                size,
             });
         }
 
@@ -472,13 +474,14 @@ impl ComponentWriteService {
             }
         }
 
-        for (path, key) in uploaded_files {
+        for (path, (key, size)) in uploaded_files {
             result.insert(
                 path.clone(),
                 InitialComponentFile {
                     content_hash: key,
                     path,
                     permissions: ComponentFilePermissions::default(),
+                    size,
                 },
             );
         }
@@ -497,11 +500,16 @@ impl ComponentWriteService {
         &self,
         environment_id: EnvironmentId,
         archive: NamedTempFile,
-    ) -> Result<HashMap<ComponentFilePath, ComponentFileContentHash>, ComponentError> {
+    ) -> Result<HashMap<ComponentFilePath, (ComponentFileContentHash, u64)>, ComponentError> {
         let to_upload = super::utils::prepare_component_files_for_upload(archive).await?;
 
         let tasks = to_upload.into_iter().map(|(path, stream)| async move {
             info!("Uploading file: {}", path.to_string());
+
+            let size = stream
+                .length()
+                .await
+                .context("Failed to get component file size")?;
 
             let key = self
                 .initial_component_files_service
@@ -509,7 +517,7 @@ impl ComponentWriteService {
                 .await
                 .context("Failed to upload component files")?;
 
-            Ok::<_, ComponentError>((path, key))
+            Ok::<_, ComponentError>((path, (key, size)))
         });
 
         let uploaded = futures::future::try_join_all(tasks).await?;

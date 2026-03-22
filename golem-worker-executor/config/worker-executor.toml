@@ -45,6 +45,9 @@ cache_eviction_interval = "1m"
 nanos = 0
 secs = 300
 
+[filesystem_storage]
+acquire_retry_delay = "500ms"
+
 [grpc]
 port = 9093
 
@@ -329,6 +332,9 @@ without_time = false
 # nanos = 0
 # secs = 300
 # 
+# [filesystem_storage]
+# acquire_retry_delay = "500ms"
+# 
 # [grpc]
 # port = 9093
 # 
@@ -574,6 +580,9 @@ without_time = false
 # [environment_state_service.cache_ttl]
 # nanos = 0
 # secs = 300
+# 
+# [filesystem_storage]
+# acquire_retry_delay = "500ms"
 # 
 # [grpc]
 # port = 9093

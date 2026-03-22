@@ -435,6 +435,7 @@ pub struct ComponentFileRecord {
     pub audit: RevisionAuditFields,
     pub file_content_hash: SqlBlake3Hash,
     pub file_permissions: SqlComponentFilePermissions,
+    pub file_size: i64,
 }
 
 impl ComponentFileRecord {
@@ -450,6 +451,7 @@ impl ComponentFileRecord {
             file_path: file.path.to_abs_string(),
             file_content_hash: file.content_hash.0.into(),
             file_permissions: file.permissions.into(),
+            file_size: file.size as i64,
             audit: RevisionAuditFields::new(actor.0),
         }
     }
@@ -463,6 +465,7 @@ impl TryFrom<ComponentFileRecord> for InitialComponentFile {
             path: ComponentFilePath::from_abs_str(&value.file_path)
                 .map_err(|e| anyhow!("Failed converting component file record to model: {e}"))?,
             permissions: value.file_permissions.into(),
+            size: value.file_size.max(0) as u64,
         })
     }
 }

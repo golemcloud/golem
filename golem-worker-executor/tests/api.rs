@@ -1497,7 +1497,7 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 1572864);
+    assert_eq!(metadata2.total_linear_memory_size, 1638400);
     Ok(())
 }
 
@@ -1911,6 +1911,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
     let executor = start_customized(
         deps,
         &context,
+        None,
         None,
         Some(RetryConfig {
             max_attempts: 30,
