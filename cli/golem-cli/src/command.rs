@@ -59,7 +59,7 @@ pub struct GolemCliCommand {
     pub global_flags: GolemCliGlobalFlags,
 
     #[clap(subcommand)]
-    pub subcommand: GolemCliSubcommand,
+    pub subcommand: Option<GolemCliSubcommand>,
 }
 
 impl GolemCliCommand {
@@ -195,6 +195,14 @@ pub struct GolemCliGlobalFlags {
     /// Enable experimental, development-only features
     #[arg(long, global = true, display_order = 112)]
     pub dev_mode: bool,
+
+    /// Run golem-cli as an MCP server over HTTP/SSE
+    #[arg(long, global = true, display_order = 113)]
+    pub serve: bool,
+
+    /// Port for the MCP HTTP/SSE server
+    #[arg(long, global = true, requires = "serve", display_order = 114)]
+    pub serve_port: Option<u16>,
 
     #[command(flatten)]
     verbosity: Verbosity,
@@ -406,6 +414,13 @@ impl GolemCliCommand {
                             }
                         }
                     };
+
+                if fallback_command.global_flags.serve {
+                    return GolemCliCommandParseResult::FullMatch(GolemCliCommand {
+                        global_flags: fallback_command.global_flags,
+                        subcommand: None,
+                    });
+                }
 
                 let partial_match = match error.kind() {
                     ErrorKind::DisplayHelp => {
