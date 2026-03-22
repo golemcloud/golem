@@ -1,0 +1,20 @@
+Implement Model Context Protocol (MCP) server #1926.
+
+This PR implements an MCP adapter for the Golem CLI with HTTP and SSE transports. 
+It cleanly wraps the existing CLI commands into MCP tools without duplicating business logic, and adds `manifest.resources` discovery to introspect `golem.yaml`/`golem.yml` configurations for agents.
+
+### E2E Test Verification:
+
+```text
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.74s
+     Running tests/lib.rs (target/debug/deps/integration-73e5ff943b576eb5)
+
+Running 1 tests
+
+[1/1] Running test: integration::mcp_server::mcp_server_starts_and_responds_to_health_check
+[1/1] Finished test: integration::mcp_server::mcp_server_starts_and_responds_to_health_check [PASSED]
+
+test result: ok; 1 passed; 0 failed; 0 ignored; 0 measured; 96 filtered out; finished in 6.620s
+```
+
+cc @jdegoes @Lu-Gru

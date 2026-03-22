@@ -59,3 +59,4 @@ static CRATE_PATH: &str = env!("CARGO_MANIFEST_DIR");
 pub fn crate_path() -> &'static Path {
     Path::new(CRATE_PATH)
 }
+mod mcp_server;

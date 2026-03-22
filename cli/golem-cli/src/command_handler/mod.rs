@@ -41,6 +41,7 @@ use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{log_anyhow_error, logln, set_log_output, Output};
+use crate::mcp_adapter::McpServer;
 use crate::{command_name, init_tracing};
 use anyhow::anyhow;
 use clap::CommandFactory;
@@ -139,18 +140,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         let result = match GolemCliCommand::try_parse_from_lenient(args_iterator, true) {
             GolemCliCommandParseResult::FullMatch(command) => {
                 #[cfg(feature = "server-commands")]
-                let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
-                    Hooks::override_verbosity(command.global_flags.verbosity())
-                } else {
-                    command.global_flags.verbosity()
-                };
+                let verbosity =
+                    if matches!(command.subcommand, Some(GolemCliSubcommand::Server { .. })) {
+                        Hooks::override_verbosity(command.global_flags.verbosity())
+                    } else {
+                        command.global_flags.verbosity()
+                    };
                 #[cfg(feature = "server-commands")]
-                let pretty_mode = if matches!(command.subcommand, GolemCliSubcommand::Server { .. })
-                {
-                    Hooks::override_pretty_mode()
-                } else {
-                    false
-                };
+                let pretty_mode =
+                    if matches!(command.subcommand, Some(GolemCliSubcommand::Server { .. })) {
+                        Hooks::override_pretty_mode()
+                    } else {
+                        false
+                    };
                 #[cfg(not(feature = "server-commands"))]
                 let verbosity = command.global_flags.verbosity();
                 #[cfg(not(feature = "server-commands"))]
@@ -250,7 +252,15 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         command: GolemCliCommand,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
         Box::pin(async move {
-            match command.subcommand {
+            if command.global_flags.serve {
+                let port = command.global_flags.serve_port.unwrap_or(1232);
+                return McpServer::new(self.ctx.clone()).run(port).await;
+            }
+
+            match command
+                .subcommand
+                .expect("subcommand required unless --serve is used")
+            {
                 // App scoped root commands
                 GolemCliSubcommand::New {
                     application_path,
