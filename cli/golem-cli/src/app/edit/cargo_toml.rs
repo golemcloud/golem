@@ -156,16 +156,23 @@ fn merge_items(base: &mut Item, update: &Item) {
         for (key, update_item) in update_table.iter() {
             if key == "features" {
                 if let (Some(base_features), Some(update_features)) = (
-                    base_table
-                        .get_mut("features")
-                        .and_then(|it| it.as_array_mut()),
+                    base_table.get("features").and_then(|it| it.as_array()),
                     update_item.as_array(),
                 ) {
-                    for feature in update_features.iter().filter_map(|v| v.as_str()) {
-                        if !base_features.iter().any(|v| v.as_str() == Some(feature)) {
-                            base_features.push(feature);
-                        }
-                    }
+                    let existing = base_features
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>();
+                    let update = update_features
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>();
+                    base_table.insert(
+                        "features",
+                        value(features_to_array(merge_features(existing, &update))),
+                    );
                     continue;
                 }
             }
@@ -236,10 +243,10 @@ impl VersionSpec {
 }
 
 fn merge_features(existing: Vec<String>, new_features: &[String]) -> Vec<String> {
-    let mut merged = existing;
-    for feature in new_features {
-        if !merged.iter().any(|item| item == feature) {
-            merged.push(feature.clone());
+    let mut merged = Vec::new();
+    for feature in existing.into_iter().chain(new_features.iter().cloned()) {
+        if !merged.iter().any(|item| item == &feature) {
+            merged.push(feature);
         }
     }
     merged

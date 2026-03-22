@@ -1002,7 +1002,7 @@ shared:
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 128, .. ProptestConfig::default()
+        cases: 512, .. ProptestConfig::default()
     })]
 
     #[test]
