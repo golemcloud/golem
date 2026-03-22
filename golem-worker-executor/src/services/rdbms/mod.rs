@@ -207,8 +207,8 @@ pub struct RdbmsServiceDefault {
 impl RdbmsServiceDefault {
     pub fn new(config: RdbmsConfig) -> Self {
         Self {
-            ignite: IgniteType::new_rdbms(config.clone()),
-            mysql: MysqlType::new_rdbms(config.clone()),
+            ignite: IgniteType::new_rdbms(config),
+            mysql: MysqlType::new_rdbms(config),
             postgres: PostgresType::new_rdbms(config),
         }
     }

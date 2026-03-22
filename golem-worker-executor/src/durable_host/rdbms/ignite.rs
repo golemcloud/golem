@@ -106,7 +106,7 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Vec<DbColumn>, Error>> {
         let cols: anyhow::Result<Vec<DbColumn>> =
             db_result_stream_durable_get_columns(self, &self_).await;
-        cols.map(|v| Ok(v))
+        cols.map(Ok)
     }
 
     async fn get_next(
@@ -115,7 +115,7 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Option<Vec<DbRow>>, Error>> {
         let rows: anyhow::Result<Option<Vec<DbRow>>> =
             db_result_stream_durable_get_next(self, &self_).await;
-        rows.map(|v| Ok(v))
+        rows.map(Ok)
     }
 
     async fn drop(&mut self, rep: Resource<DbResultStreamEntry>) -> anyhow::Result<()> {
@@ -282,7 +282,6 @@ impl From<ignite_types::DbColumn> for DbColumn {
         Self {
             ordinal: value.ordinal as u64,
             name: value.name,
-            db_type_name: "unknown".to_string(),
         }
     }
 }
