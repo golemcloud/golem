@@ -496,7 +496,7 @@ pub async fn start_customized(
             ..Default::default()
         },
         filesystem_storage: FilesystemStorageConfig {
-            total_worker_filesystem_storage_bytes_override: system_storage_override,
+            total_worker_filesystem_storage_bytes: system_storage_override,
             ..Default::default()
         },
         agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),

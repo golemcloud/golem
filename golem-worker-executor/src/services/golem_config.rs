@@ -1330,7 +1330,7 @@ impl Default for MemoryConfig {
 /// The semaphore pool size is `total_worker_filesystem_storage_bytes`. Workers acquire
 /// permits proportional to their estimated storage usage; when the pool is
 /// exhausted, idle workers are evicted to free space. Use
-/// `total_worker_filesystem_storage_bytes_override` in tests to create a small,
+/// `total_worker_filesystem_storage_bytes` in tests to create a small,
 /// predictable pool.
 ///
 /// # Permit release vs actual disk reclaim — configure with headroom
@@ -1362,7 +1362,8 @@ pub struct FilesystemStorageConfig {
     ///
     /// Should be set to ~80–90% of the dedicated volume capacity, not 100% —
     /// see the `FilesystemStorageConfig` doc comment for the rationale.
-    pub total_worker_filesystem_storage_bytes_override: Option<u64>,
+    #[serde(alias = "total_worker_filesystem_storage_bytes_override")]
+    pub total_worker_filesystem_storage_bytes: Option<u64>,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
 }
@@ -1370,7 +1371,7 @@ pub struct FilesystemStorageConfig {
 impl FilesystemStorageConfig {
     /// The total number of bytes available to the storage semaphore pool.
     pub fn worker_filesystem_storage(&self) -> usize {
-        self.total_worker_filesystem_storage_bytes_override
+        self.total_worker_filesystem_storage_bytes
             .unwrap_or(10 * 1024 * 1024 * 1024) // 10 GB default
             as usize
     }
@@ -1379,8 +1380,8 @@ impl FilesystemStorageConfig {
 impl SafeDisplay for FilesystemStorageConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        if let Some(ovrd) = &self.total_worker_filesystem_storage_bytes_override {
-            let _ = writeln!(&mut result, "total worker storage bytes override: {ovrd}");
+        if let Some(limit) = &self.total_worker_filesystem_storage_bytes {
+            let _ = writeln!(&mut result, "total worker storage bytes: {limit}");
         }
         let _ = writeln!(
             &mut result,
@@ -1394,7 +1395,7 @@ impl SafeDisplay for FilesystemStorageConfig {
 impl Default for FilesystemStorageConfig {
     fn default() -> Self {
         Self {
-            total_worker_filesystem_storage_bytes_override: None,
+            total_worker_filesystem_storage_bytes: None,
             acquire_retry_delay: Duration::from_millis(500),
         }
     }

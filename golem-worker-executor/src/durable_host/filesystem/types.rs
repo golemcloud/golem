@@ -62,7 +62,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
         let descriptor_rep = fd.rep();
-        let stream = HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)?;
+        let stream =
+            HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)?;
         self.state.open_filesystem_output_streams.insert(
             stream.rep(),
             FilesystemOutputStreamState {
@@ -80,7 +81,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Resource<OutputStream>, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
         let descriptor_rep = self_.rep();
-        let stream = HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)?;
+        let stream =
+            HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)?;
         self.state.open_filesystem_output_streams.insert(
             stream.rep(),
             FilesystemOutputStreamState {
@@ -246,7 +248,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                     Ok(written)
                 }
                 Err(err) => {
-                    self.release_filesystem_storage_space(requested_growth).await;
+                    self.release_filesystem_storage_space(requested_growth)
+                        .await;
                     Err(err)
                 }
             }

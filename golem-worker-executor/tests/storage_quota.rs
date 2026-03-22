@@ -405,10 +405,7 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
             data_value!("/big.bin", 2 * 1024 * 1024u64),
         )
         .await;
-    assert!(
-        failed.is_err(),
-        "expected oversized stream_to_file to fail"
-    );
+    assert!(failed.is_err(), "expected oversized stream_to_file to fail");
 
     // A second worker should still be able to allocate and write if the first
     // worker's failed attempt released pool permits.

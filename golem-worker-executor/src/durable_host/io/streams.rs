@@ -780,7 +780,11 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
             .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
     }
 
-    if let Some(state) = ctx.state.open_filesystem_output_streams.get_mut(&stream_rep) {
+    if let Some(state) = ctx
+        .state
+        .open_filesystem_output_streams
+        .get_mut(&stream_rep)
+    {
         state.pending_reservation = Some(PendingFilesystemReservation {
             base_size: current_size,
             reserved_growth: requested_growth,
@@ -795,7 +799,11 @@ fn mark_filesystem_stream_write_enqueued<Ctx: WorkerCtx>(
     stream_rep: u32,
     write_len: u64,
 ) {
-    if let Some(state) = ctx.state.open_filesystem_output_streams.get_mut(&stream_rep) {
+    if let Some(state) = ctx
+        .state
+        .open_filesystem_output_streams
+        .get_mut(&stream_rep)
+    {
         if let Some(position) = &mut state.position {
             *position = position.saturating_add(write_len);
         }
