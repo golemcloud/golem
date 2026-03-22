@@ -56,7 +56,7 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::RdbmsService;
-use golem_worker_executor::services::resource_limits::ResourceLimits;
+use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use golem_worker_executor::services::rpc::Rpc;
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -551,6 +551,13 @@ impl WorkerCtx for DebugContext {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<uuid::Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
+        let account_resource_limits = Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+        ));
+
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id,
             agent_id,
@@ -568,6 +575,7 @@ impl WorkerCtx for DebugContext {
             rpc,
             worker_proxy,
             component_service,
+            account_resource_limits,
             config,
             worker_config,
             execution_status,

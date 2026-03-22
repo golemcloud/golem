@@ -843,6 +843,12 @@ impl WorkerCtx for TestWorkerCtx {
             oplog.clone(),
             extra_deps,
         ));
+        let account_resource_limits = Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+        ));
 
         let durable_ctx = DurableWorkerCtx::create(
             owned_agent_id,
@@ -861,6 +867,7 @@ impl WorkerCtx for TestWorkerCtx {
             rpc,
             worker_proxy,
             component_service,
+            account_resource_limits,
             config,
             worker_config,
             execution_status,

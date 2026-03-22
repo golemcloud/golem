@@ -754,6 +754,7 @@ impl WorkerCtx for Context {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
+        let account_resource_limits = resource_limits.initialize_account(account_id).await?;
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id.clone(),
             agent_id,
@@ -771,6 +772,7 @@ impl WorkerCtx for Context {
             rpc,
             worker_proxy,
             component_service,
+            account_resource_limits.clone(),
             config.clone(),
             worker_config.clone(),
             execution_status,
@@ -785,11 +787,7 @@ impl WorkerCtx for Context {
             original_phantom_id,
         )
         .await?;
-        let account_resource_limits = resource_limits.initialize_account(account_id).await?;
-        let mut ctx = Self::new(golem_ctx, config, account_resource_limits);
-        ctx.durable_ctx
-            .set_max_disk_space(ctx.resource_limit_entry.max_disk_space_limit());
-        Ok(ctx)
+        Ok(Self::new(golem_ctx, config, account_resource_limits))
     }
 
     fn as_wasi_view(&mut self) -> impl WasiView {

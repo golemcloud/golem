@@ -50,6 +50,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
+use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
@@ -153,10 +154,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     state: PrivateDurableWorkerState,
     temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
-    /// Per-plan storage limit (bytes). Set after creation via `set_max_disk_space`
-    /// once the `AtomicResourceEntry` is initialised for the account. Defaults to
-    /// `u64::MAX` (unlimited) until explicitly set.
-    max_disk_space: u64,
+    resource_limits: Arc<AtomicResourceEntry>,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -178,6 +176,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService>,
+        resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
         worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -332,14 +331,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await,
             temp_dir,
             execution_status,
-            max_disk_space: u64::MAX, // unlimited until set_max_disk_space is called
+            resource_limits,
         })
-    }
-
-    /// Set the per-plan storage limit. Called from the concrete `WorkerCtx::create`
-    /// implementation after the `AtomicResourceEntry` is initialised.
-    pub fn set_max_disk_space(&mut self, limit: u64) {
-        self.max_disk_space = limit;
     }
 
     fn table(&mut self) -> &mut ResourceTable {
@@ -455,7 +448,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn max_disk_space(&self) -> u64 {
-        self.max_disk_space
+        self.resource_limits.max_disk_space_limit()
     }
 
     /// Check whether acquiring `new_bytes` would breach the per-plan storage
@@ -472,7 +465,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .state
             .current_filesystem_storage_usage
             .saturating_add(new_bytes);
-        if after > self.max_disk_space {
+        if after > self.resource_limits.max_disk_space_limit() {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
             ))
