@@ -327,7 +327,7 @@ oplog_entry! {
     /// Updated storage usage by a signed delta (positive = write, negative = delete/shrink)
     FilesystemStorageUsageUpdate {
         hint: true
-        wit_raw_type: "storage-usage-update-parameters"
+        wit_raw_type: "filesystem-storage-usage-update-parameters"
         raw {
             delta: i64
         }

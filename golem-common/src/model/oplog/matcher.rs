@@ -289,8 +289,8 @@ impl PublicOplogEntry {
                     || Self::string_match("grow-memory", &[], query_path, query)
             }
             PublicOplogEntry::FilesystemStorageUsageUpdate(_params) => {
-                Self::string_match("storageusageupdate", &[], query_path, query)
-                    || Self::string_match("storage-usage-update", &[], query_path, query)
+                Self::string_match("filesystemstorageusageupdate", &[], query_path, query)
+                    || Self::string_match("filesystem-storage-usage-update", &[], query_path, query)
             }
             PublicOplogEntry::CreateResource(_params) => {
                 Self::string_match("createresource", &[], query_path, query)
