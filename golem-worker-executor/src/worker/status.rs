@@ -2619,4 +2619,100 @@ mod test {
         assert_eq!(state.sending_up_to, OplogIndex::from_u64(10));
         assert_eq!(state.target_agent_id, None);
     }
+
+    fn make_fs_entry(idx: u64, delta: i64) -> (OplogIndex, OplogEntry) {
+        (
+            OplogIndex::from_u64(idx),
+            OplogEntry::FilesystemStorageUsageUpdate {
+                timestamp: Timestamp::now_utc(),
+                delta,
+            },
+        )
+    }
+
+    fn make_create_entry(idx: u64) -> (OplogIndex, OplogEntry) {
+        use golem_common::base_model::account::AccountId;
+        use golem_common::base_model::component::{ComponentId, ComponentRevision};
+        use golem_common::base_model::environment::EnvironmentId;
+        use golem_common::model::AgentId;
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "w".to_string(),
+        };
+        (
+            OplogIndex::from_u64(idx),
+            OplogEntry::create(
+                agent_id,
+                ComponentRevision::INITIAL,
+                vec![],
+                EnvironmentId::new(),
+                AccountId::new(),
+                None,
+                0,
+                0,
+                Default::default(),
+                Default::default(),
+                vec![],
+                None,
+            ),
+        )
+    }
+
+    /// `FilesystemStorageUsageUpdate` entries inside a deleted (skipped) region
+    /// are excluded from `current_filesystem_storage_usage`. Only live entries count.
+    #[test]
+    fn filesystem_storage_usage_in_deleted_region_is_skipped() {
+        use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
+        let mut builder = DeletedRegionsBuilder::default();
+        // Mark indices 2..=4 as deleted.
+        builder.add(OplogRegion {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(4),
+        });
+        let deleted = builder.build();
+
+        let entries: BTreeMap<OplogIndex, OplogEntry> = BTreeMap::from([
+            make_fs_entry(2, 1024), // deleted — must be skipped
+            make_fs_entry(3, 2048), // deleted — must be skipped
+            make_fs_entry(5, 512),  // live
+        ]);
+
+        let result = super::calculate_current_filesystem_storage_usage(0, &deleted, &entries);
+        assert_eq!(
+            result, 512,
+            "only the live entry outside the deleted region counts"
+        );
+    }
+
+    /// A `Create` entry mid-oplog resets `current_filesystem_storage_usage` to zero,
+    /// discarding usage accumulated before it (including the seed).
+    #[test]
+    fn filesystem_storage_usage_reset_to_zero_on_create() {
+        let deleted = DeletedRegions::default();
+
+        let entries: BTreeMap<OplogIndex, OplogEntry> = BTreeMap::from([
+            make_fs_entry(1, 1024), // before Create → should be wiped
+            make_create_entry(2),   // resets counter to 0
+            make_fs_entry(3, 512),  // after Create → counts
+        ]);
+
+        // Seed with prior usage to confirm Create overrides the seed too.
+        let result = super::calculate_current_filesystem_storage_usage(999, &deleted, &entries);
+        assert_eq!(
+            result, 512,
+            "Create must reset usage to 0 before accumulating post-Create deltas"
+        );
+    }
+
+    /// `current` seed is used as the starting value when there are no `Create`
+    /// entries and no deleted regions.
+    #[test]
+    fn filesystem_storage_usage_uses_seed_when_no_create() {
+        let deleted = DeletedRegions::default();
+
+        let entries: BTreeMap<OplogIndex, OplogEntry> = BTreeMap::from([make_fs_entry(1, 512)]);
+
+        let result = super::calculate_current_filesystem_storage_usage(1024, &deleted, &entries);
+        assert_eq!(result, 1536, "seed + delta");
+    }
 }

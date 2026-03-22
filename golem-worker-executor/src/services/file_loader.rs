@@ -530,4 +530,31 @@ mod tests {
             "all tokens dropped — full pool must be restored"
         );
     }
+
+    /// When the semaphore pool is exhausted, `get_read_only_to` fails with an
+    /// error and the cache entry is cleaned up — a subsequent load of the same
+    /// hash (after the pool is freed) must succeed and download fresh.
+    #[test]
+    async fn ro_load_fails_and_cleans_up_when_pool_exhausted() {
+        let content = b"hello world";
+        let pool_bytes = 0; // 0 bytes → 0 permits → all acquires fail immediately
+        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // Load must fail because the pool is empty.
+        let result = loader
+            .get_read_only_to(
+                env_id,
+                hash,
+                &dir.path().join("f.txt"),
+                content.len() as u64,
+            )
+            .await;
+        assert!(result.is_err(), "expected failure when pool is exhausted");
+
+        // The failed load must have cleaned up the stale cache entry so the
+        // pool is still at 0 permits (no leak).
+        assert_eq!(semaphore.available_bytes(), 0);
+    }
 }
