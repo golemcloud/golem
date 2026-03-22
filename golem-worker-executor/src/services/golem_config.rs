@@ -52,7 +52,7 @@ pub struct GolemConfig {
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
-    pub storage: StorageConfig,
+    pub filesystem_storage: FilesystemStorageConfig,
     pub rdbms: RdbmsConfig,
     pub resource_limits: ResourceLimitsConfig,
     pub component_cache: ComponentCacheConfig,
@@ -214,7 +214,7 @@ impl Default for GolemConfig {
             active_workers: ActiveWorkersConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
-            storage: StorageConfig::default(),
+            filesystem_storage: FilesystemStorageConfig::default(),
             rdbms: RdbmsConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
             component_cache: ComponentCacheConfig::default(),
@@ -1327,10 +1327,10 @@ impl Default for MemoryConfig {
 
 /// Configuration for the executor-wide worker storage semaphore.
 ///
-/// The semaphore pool size is `total_worker_storage_bytes`. Workers acquire
+/// The semaphore pool size is `total_worker_filesystem_storage_bytes`. Workers acquire
 /// permits proportional to their estimated storage usage; when the pool is
 /// exhausted, idle workers are evicted to free space. Use
-/// `total_worker_storage_bytes_override` in tests to create a small,
+/// `total_worker_filesystem_storage_bytes_override` in tests to create a small,
 /// predictable pool.
 ///
 /// # Permit release vs actual disk reclaim — configure with headroom
@@ -1351,35 +1351,35 @@ impl Default for MemoryConfig {
 ///
 /// **Recommended practice:** assuming the executor's temp directory has a
 /// dedicated volume (e.g. a pod-local tmpfs or block device mounted at `/tmp`),
-/// set `total_worker_storage_bytes` to around 80–90% of that volume's
+/// set `total_worker_filesystem_storage_bytes` to around 80–90% of that volume's
 /// capacity. The headroom absorbs the transient over-commitment window
 /// described above and any filesystem metadata overhead for the temp directory
 /// tree itself.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StorageConfig {
+pub struct FilesystemStorageConfig {
     /// Override the total storage pool size (bytes). When `None`, the default
     /// of 10 GB is used. Set to a small value in tests to trigger eviction.
     ///
     /// Should be set to ~80–90% of the dedicated volume capacity, not 100% —
-    /// see the `StorageConfig` doc comment for the rationale.
-    pub total_worker_storage_bytes_override: Option<u64>,
+    /// see the `FilesystemStorageConfig` doc comment for the rationale.
+    pub total_worker_filesystem_storage_bytes_override: Option<u64>,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
 }
 
-impl StorageConfig {
+impl FilesystemStorageConfig {
     /// The total number of bytes available to the storage semaphore pool.
-    pub fn worker_storage(&self) -> usize {
-        self.total_worker_storage_bytes_override
+    pub fn worker_filesystem_storage(&self) -> usize {
+        self.total_worker_filesystem_storage_bytes_override
             .unwrap_or(10 * 1024 * 1024 * 1024) // 10 GB default
             as usize
     }
 }
 
-impl SafeDisplay for StorageConfig {
+impl SafeDisplay for FilesystemStorageConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        if let Some(ovrd) = &self.total_worker_storage_bytes_override {
+        if let Some(ovrd) = &self.total_worker_filesystem_storage_bytes_override {
             let _ = writeln!(&mut result, "total worker storage bytes override: {ovrd}");
         }
         let _ = writeln!(
@@ -1391,10 +1391,10 @@ impl SafeDisplay for StorageConfig {
     }
 }
 
-impl Default for StorageConfig {
+impl Default for FilesystemStorageConfig {
     fn default() -> Self {
         Self {
-            total_worker_storage_bytes_override: None,
+            total_worker_filesystem_storage_bytes_override: None,
             acquire_retry_delay: Duration::from_millis(500),
         }
     }

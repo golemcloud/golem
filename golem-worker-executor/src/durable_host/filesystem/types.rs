@@ -124,9 +124,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         if size > current_size {
             let delta = size - current_size;
-            self.check_storage_quota(delta)
+            self.check_filesystem_storage_quota(delta)
                 .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
-            self.acquire_storage_space(delta)
+            self.acquire_filesystem_storage_space(delta)
                 .await
                 .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
         }
@@ -141,7 +141,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // Release permits if the truncation succeeded and actually shrank the file.
         if result.is_ok() && size < current_size {
-            self.release_storage_space(current_size - size).await;
+            self.release_filesystem_storage_space(current_size - size)
+                .await;
         }
 
         result
@@ -187,9 +188,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
 
         let new_bytes = buffer.len() as u64;
-        self.check_storage_quota(new_bytes)
+        self.check_filesystem_storage_quota(new_bytes)
             .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
-        self.acquire_storage_space(new_bytes)
+        self.acquire_filesystem_storage_space(new_bytes)
             .await
             .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
 
@@ -546,7 +547,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // Only release permits if the unlink actually succeeded.
         if result.is_ok() {
-            self.release_storage_space(file_size).await;
+            self.release_filesystem_storage_space(file_size).await;
         }
 
         result

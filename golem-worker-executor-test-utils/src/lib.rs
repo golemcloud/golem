@@ -88,10 +88,11 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
-    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig, ShardManagerServiceConfig,
-    ShardManagerServiceSingleShardConfig, SnapshotPolicy, StorageConfig,
+    EnvironmentStateServiceConfig, FilesystemStorageConfig, GolemConfig, GrpcApiConfig,
+    HttpClientConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig,
+    KeyValueStorageConfig, MemoryConfig, OplogConfig, ResourceLimitsConfig,
+    ResourceLimitsDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -494,8 +495,8 @@ pub async fn start_customized(
             system_memory_override,
             ..Default::default()
         },
-        storage: StorageConfig {
-            total_worker_storage_bytes_override: system_storage_override,
+        filesystem_storage: FilesystemStorageConfig {
+            total_worker_filesystem_storage_bytes_override: system_storage_override,
             ..Default::default()
         },
         agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
@@ -1157,7 +1158,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(
             &golem_config.memory,
-            &golem_config.storage,
+            &golem_config.filesystem_storage,
         ))
     }
 
@@ -1396,7 +1397,9 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     ) -> Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>> {
         Arc::new(ActiveWorkers::<
             golem_worker_executor::workerctx::default::Context,
-        >::new(&golem_config.memory, &golem_config.storage))
+        >::new(
+            &golem_config.memory, &golem_config.filesystem_storage
+        ))
     }
 
     fn create_environment_state_service(
@@ -1759,12 +1762,12 @@ pub async fn start_with_table_limit(
 /// A `ResourceLimits` implementation that provides a fixed per-worker disk
 /// space limit while keeping fuel, memory, and table elements unlimited.
 /// Used by storage quota tests.
-struct FixedStorageQuotaResourceLimits {
+struct FixedFilesystemStorageQuotaResourceLimits {
     max_disk_space_bytes: u64,
 }
 
 #[async_trait]
-impl ResourceLimits for FixedStorageQuotaResourceLimits {
+impl ResourceLimits for FixedFilesystemStorageQuotaResourceLimits {
     async fn initialize_account(
         &self,
         _account_id: golem_common::model::account::AccountId,
@@ -1783,9 +1786,9 @@ impl ResourceLimits for FixedStorageQuotaResourceLimits {
 
 /// Starts a worker executor with a per-agent plan-level storage limit.
 ///
-/// Uses the production [`Context`] so that `check_storage_quota` enforces
-/// `max_disk_space_bytes` against each agent's `current_storage_usage`.
-/// Exceeding it returns `WorkerExceededStorageLimit` (permanent, not retried).
+/// Uses the production [`Context`] so that `check_filesystem_quota` enforces
+/// `max_disk_space_bytes` against each agent's `current_filesystem_storage_usage`.
+/// Exceeding it returns `WorkerAgentExceededFilesystemStorageLimit` (permanent, not retried).
 /// The executor-wide semaphore pool is left unlimited (10 GB default).
 pub async fn start_with_agent_storage_quota(
     deps: &WorkerExecutorTestDependencies,
@@ -1795,7 +1798,7 @@ pub async fn start_with_agent_storage_quota(
     run_production_context_bootstrap(
         deps,
         context,
-        Arc::new(FixedStorageQuotaResourceLimits {
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
             max_disk_space_bytes,
         }),
         "Timeout waiting for agent-storage-quota server to start",
@@ -1806,7 +1809,7 @@ pub async fn start_with_agent_storage_quota(
 /// Starts a worker executor with a constrained executor-wide storage pool.
 ///
 /// The pool is shared across all agents on the node. Uses `TestWorkerCtx`
-/// (no per-agent plan limit). Exhausting the pool returns `WorkerOutOfStorage`
+/// (no per-agent plan limit). Exhausting the pool returns `NodeOutOfFilesystemStorage`
 /// (retriable). Use this to test node-level storage pressure and eviction.
 pub async fn start_with_executor_storage_pool(
     deps: &WorkerExecutorTestDependencies,

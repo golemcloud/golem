@@ -90,7 +90,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     ) -> Arc<ActiveWorkers<DebugContext>> {
         Arc::new(ActiveWorkers::<DebugContext>::new(
             &golem_config.memory,
-            &golem_config.storage,
+            &golem_config.filesystem_storage,
         ))
     }
 

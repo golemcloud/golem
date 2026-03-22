@@ -30,7 +30,6 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -103,8 +102,8 @@ async fn agent_quota_write_exceeding_limit_fails(
     );
     let err_str = format!("{result:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
-        "expected WorkerExceededStorageLimit, got: {err_str}"
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -142,7 +141,7 @@ async fn agent_quota_exceeded_limit_is_not_retried(
         .await;
     assert!(
         first.is_err(),
-        "expected first write to fail with ExceededStorageLimit"
+        "expected first write to fail with AgentExceededFilesystemStorageLimit"
     );
 
     let second = executor
@@ -160,7 +159,7 @@ async fn agent_quota_exceeded_limit_is_not_retried(
 
     let err_str = format!("{second:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit")
+        err_str.contains("AgentExceededFilesystemStorageLimit")
             || err_str.contains("storage")
             || err_str.contains("already exists")
             || err_str.contains("AlreadyExists"),
@@ -226,7 +225,12 @@ async fn agent_quota_freed_after_file_deletion(
 
     // Verify distinct content — confirms the write committed and quota was freed.
     let content = executor
-        .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/testfile2.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "read_file",
+            data_value!("/testfile2.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
@@ -240,7 +244,7 @@ async fn agent_quota_freed_after_file_deletion(
 
 /// `write_zeroes` on a file-backed output stream must be subject to storage
 /// quota. Writing more zeroes than the per-agent quota allows must fail with
-/// `WorkerExceededStorageLimit`.
+/// `WorkerAgentExceededFilesystemStorageLimit`.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -279,8 +283,8 @@ async fn agent_quota_write_zeroes_to_file_exceeding_limit_fails(
     );
     let err_str = format!("{result:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
-        "expected WorkerExceededStorageLimit, got: {err_str}"
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -402,8 +406,8 @@ async fn agent_quota_blocking_write_zeroes_and_flush_exceeding_limit_fails(
     );
     let err_str = format!("{result:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
-        "expected WorkerExceededStorageLimit, got: {err_str}"
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -446,7 +450,7 @@ async fn agent_quota_blocking_write_zeroes_and_flush_within_limit_succeeds(
 }
 
 /// `set_file_size` growing a file beyond the per-agent quota must fail with
-/// `WorkerExceededStorageLimit`. Only the delta (new_size − current_size) is
+/// `AgentExceededFilesystemStorageLimit`. Only the delta (new_size − current_size) is
 /// charged, not the full new size.
 #[test]
 #[tracing::instrument]
@@ -498,8 +502,8 @@ async fn agent_quota_set_size_grow_beyond_limit_fails(
     );
     let err_str = format!("{result:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
-        "expected WorkerExceededStorageLimit, got: {err_str}"
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -565,7 +569,7 @@ async fn agent_quota_set_size_shrink_releases_quota(
 }
 
 /// `pwrite_file` (direct `descriptor::write`) is subject to per-agent quota.
-/// Writing beyond the quota must fail with `WorkerExceededStorageLimit`.
+/// Writing beyond the quota must fail with `WorkerAgentExceededFilesystemStorageLimit`.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -600,8 +604,8 @@ async fn agent_quota_pwrite_beyond_limit_fails(
     assert!(result.is_err(), "expected pwrite to fail: quota exceeded");
     let err_str = format!("{result:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
-        "expected WorkerExceededStorageLimit, got: {err_str}"
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -695,8 +699,8 @@ async fn agent_quota_cumulative_across_write_paths(
     );
     let err_str = format!("{result:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
-        "expected WorkerExceededStorageLimit, got: {err_str}"
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -705,7 +709,7 @@ async fn agent_quota_cumulative_across_write_paths(
 /// Account-quota level lifecycle: write → delete → suspend → restart → write → verify quota.
 ///
 /// Same sequence as `executor_pool_storage_usage_survives_restart` but using
-/// the per-agent plan limit. Verifies that `current_storage_usage` stays
+/// the per-agent plan limit. Verifies that `current_filesystem_storage_usage` stays
 /// accurate at the account-quota layer across the suspend/restart cycle.
 ///
 /// Quota = 22 bytes. Each 11-byte "hello world" write is counted exactly.
@@ -714,9 +718,9 @@ async fn agent_quota_cumulative_across_write_paths(
 /// 2. Write file-2 (11 bytes) → quota exhausted: usage: 22, remaining: 0.
 /// 3. Delete file-1 → usage: 11, remaining: 11.
 /// 4. Interrupt → worker unloaded from memory.
-/// 5. Re-invoke → restart reconstructs current_storage_usage = 11 bytes.
+/// 5. Re-invoke → restart reconstructs current_filesystem_storage_usage = 11 bytes.
 /// 6. Write file-3 (11 bytes) → succeeds (11 bytes remaining in quota).
-/// 7. Write file-4 (11 bytes) → fails with `ExceededStorageLimit`
+/// 7. Write file-4 (11 bytes) → fails with `AgentExceededFilesystemStorageLimit`
 ///    (quota exhausted: file-2 + file-3 = 22 bytes).
 #[test]
 #[tracing::instrument]
@@ -768,7 +772,7 @@ async fn agent_quota_storage_usage_survives_restart(
 
     executor.interrupt(&worker).await?;
 
-    // Restart reconstructs current_storage_usage = 16 bytes (+16 +16 -16).
+    // Restart reconstructs current_filesystem_storage_usage = 16 bytes (+16 +16 -16).
     // Verify file-2 has its distinct content — confirms the right file survived.
     // file-1 was deleted; reading file-1 would return an error, not file-2's content.
     let content = executor
@@ -778,7 +782,9 @@ async fn agent_quota_storage_usage_survives_restart(
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         content,
-        Value::Result(Ok(Some(Box::new(Value::String("unique-content-2".to_string())))))
+        Value::Result(Ok(Some(Box::new(Value::String(
+            "unique-content-2".to_string()
+        )))))
     );
 
     executor
@@ -804,8 +810,8 @@ async fn agent_quota_storage_usage_survives_restart(
     );
     let err_str = format!("{result:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
-        "expected WorkerExceededStorageLimit, got: {err_str}"
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
     Ok(())
@@ -900,22 +906,22 @@ async fn executor_pool_freed_after_file_deletion(
     Ok(())
 }
 
-/// A failed executor-pool acquire (`WorkerOutOfStorage`) must not leave a
-/// phantom `StorageUsageUpdate` in the oplog.
+/// A failed executor-pool acquire (`NodeOutOfFilesystemStorage`) must not leave a
+/// phantom `FilesystemStorageUsageUpdate` in the oplog.
 ///
-/// `StorageUsageUpdate` is written to the oplog only AFTER `acquire_storage_space`
+/// `FilesystemStorageUsageUpdate` is written to the oplog only AFTER `acquire_filesystem_space`
 /// succeeds. If a transient failure during the `ReacquirePermits` retry loop
-/// wrote a phantom entry, `current_storage_usage` would be inflated on restart
+/// wrote a phantom entry, `current_filesystem_storage_usage` would be inflated on restart
 /// and the pool pre-acquire would consume more than the actual files on disk.
 ///
-/// Pool = 3 KB (no agent quota so only `WorkerOutOfStorage` can fire).
+/// Pool = 3 KB (no agent quota so only `NodeOutOfFilesystemStorage` can fire).
 ///
 /// 1. Write file1 (1 KB) → usage: 1 KB, pool: 2 KB free.
 /// 2. Write file2 (2 KB) → usage: 3 KB, pool: 0 KB.
-///    May transiently hit WorkerOutOfStorage and retry — no phantom must be written.
+///    May transiently hit NodeOutOfFilesystemStorage and retry — no phantom must be written.
 /// 3. Delete file1 → usage: 2 KB, pool: 1 KB free.
 /// 4. Interrupt → RunningWorker drops → pool: 3 KB free.
-/// 5. Restart → pre-acquires `current_storage_usage = 2 KB` from oplog → pool: 1 KB free.
+/// 5. Restart → pre-acquires `current_filesystem_storage_usage = 2 KB` from oplog → pool: 1 KB free.
 /// 6. Write file3 (1 KB) → must succeed.
 ///    If phantom entries inflated usage to > 2 KB, pre-acquire would leave < 1 KB
 ///    free and file3 would fail.
@@ -929,7 +935,7 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // 3 KB pool, no per-agent quota. Only WorkerOutOfStorage (retriable) can fire.
+    // 3 KB pool, no per-agent quota. Only NodeOutOfFilesystemStorage (retriable) can fire.
     let executor = start_with_executor_storage_pool(deps, &context, 3 * 1024).await?;
 
     let component = executor
@@ -938,7 +944,9 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "exec-ordering-1");
-    let worker = executor.start_agent(&component.id, agent_id.clone()).await?;
+    let worker = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let content_1kb = "A".repeat(1024);
     let content_2kb = "B".repeat(2 * 1024);
@@ -947,7 +955,9 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
     // Step 1: write 1 KB → pool: 2 KB free, usage: 1 KB.
     executor
         .invoke_and_await_agent(
-            &component, &agent_id, "write_file",
+            &component,
+            &agent_id,
+            "write_file",
             data_value!("/file1.txt", content_1kb.as_str()),
         )
         .await?;
@@ -955,7 +965,9 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
     // Step 2: write 2 KB → pool: 0 KB, usage: 3 KB.
     executor
         .invoke_and_await_agent(
-            &component, &agent_id, "write_file",
+            &component,
+            &agent_id,
+            "write_file",
             data_value!("/file2.txt", content_2kb.as_str()),
         )
         .await?;
@@ -963,7 +975,9 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
     // Step 3: delete file1 → usage drops to 2 KB, pool: 1 KB free.
     executor
         .invoke_and_await_agent(
-            &component, &agent_id, "delete_file",
+            &component,
+            &agent_id,
+            "delete_file",
             data_value!("/file1.txt"),
         )
         .await?;
@@ -975,14 +989,21 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
     // failures) → pool: 1 KB free. Write file3 (1 KB) → must succeed.
     executor
         .invoke_and_await_agent(
-            &component, &agent_id, "write_file",
+            &component,
+            &agent_id,
+            "write_file",
             data_value!("/file3.txt", content_file3.as_str()),
         )
         .await?;
 
     // Verify file2 and file3 content — distinct strings confirm correct writes.
     let read2 = executor
-        .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/file2.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "read_file",
+            data_value!("/file2.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
@@ -992,7 +1013,12 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
     );
 
     let read3 = executor
-        .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/file3.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "read_file",
+            data_value!("/file3.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value"))?;
@@ -1011,9 +1037,9 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
 /// Flow (1 KB pool, each 11-byte write rounds up to 1 KB = 1 permit):
 /// 1. Worker A writes 1 KB, then is interrupted → permit released.
 /// 2. Worker B writes 1 KB (pool free after A's interrupt), then is interrupted.
-/// 3. Worker A re-invoked → restarts with storage_requirement = 1 KB
+/// 3. Worker A re-invoked → restarts with filesystem_storage_requirement = 1 KB
 ///    → blocking acquire_storage succeeds → A holds the 1 KB permit, now idle.
-/// 4. Worker B re-invoked → restarts with storage_requirement = 1 KB
+/// 4. Worker B re-invoked → restarts with filesystem_storage_requirement = 1 KB
 ///    → pool is 0 (A holds it) → blocking acquire_storage calls
 ///    try_free_up_storage → evicts idle Worker A → 1 KB freed
 ///    → Worker B acquires the permit and its invocation succeeds.
@@ -1069,11 +1095,16 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
         .await?;
     executor.interrupt(&worker_b).await?;
 
-    // Step 3: Re-invoke Worker A. Restarts with storage_requirement = 2 KB.
+    // Step 3: Re-invoke Worker A. Restarts with filesystem_storage_requirement = 2 KB.
     // Pool has 4 KB free → blocking acquire_storage acquires 2 permits.
     // Worker A reads file and becomes idle, holding 2 permits.
     let read_a = executor
-        .invoke_and_await_agent(&component, &agent_a, "read_file", data_value!("/file-a.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "read_file",
+            data_value!("/file-a.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
@@ -1082,12 +1113,17 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
         Value::Result(Ok(Some(Box::new(Value::String(content_a.clone())))))
     );
 
-    // Step 4: Re-invoke Worker B. Restarts with storage_requirement = 2 KB.
+    // Step 4: Re-invoke Worker B. Restarts with filesystem_storage_requirement = 2 KB.
     // Pool has 2 KB free (Worker A holds 2) — not enough for B's 2 KB requirement.
     // Blocking acquire_storage calls try_free_up_storage → evicts idle Worker A
     // (freeing 2 permits) → Worker B acquires its 2 permits and reads successfully.
     let read_b = executor
-        .invoke_and_await_agent(&component, &agent_b, "read_file", data_value!("/file-b.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "read_file",
+            data_value!("/file-b.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
@@ -1100,21 +1136,21 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
 }
 
 /// When the executor pool is exhausted by an idle worker, a second worker's
-/// first-time write triggers eviction of the idle worker via `desired_extra_storage`,
+/// first-time write triggers eviction of the idle worker via `desired_extra_filesystem_storage`,
 /// freeing enough permits for the write to succeed.
 ///
 /// Worker A writes 2 KB and goes idle (holding 2 permits). Worker B tries to
-/// write 2 KB — pool is exhausted → `WorkerOutOfStorage` → `ReacquirePermits`.
-/// `desired_extra_storage` is set to 2 KB so the blocking `acquire_storage` in
+/// write 2 KB — pool is exhausted → `NodeOutOfFilesystemStorage` → `ReacquirePermits`.
+/// `desired_extra_filesystem_storage` is set to 2 KB so the blocking `acquire_storage` in
 /// the restart path requests 2 KB from `try_free_up_storage`, which evicts idle
 /// Worker A (freeing 2 permits). Worker B then succeeds.
 ///
-/// Uses >1 KB content to verify that `desired_extra_storage` correctly drives
+/// Uses >1 KB content to verify that `desired_extra_filesystem_storage` correctly drives
 /// multi-permit eviction rather than just the 1-permit minimum.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn executor_pool_idle_worker_evicted_on_first_write_out_of_storage(
+async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem_storage(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1148,7 +1184,7 @@ async fn executor_pool_idle_worker_evicted_on_first_write_out_of_storage(
         )
         .await?;
 
-    // Worker B writes 2 KB. Pool is full → WorkerOutOfStorage → desired_extra_storage
+    // Worker B writes 2 KB. Pool is full → NodeOutOfFilesystemStorage → desired_extra_filesystem_storage
     // set to 2 KB → ReacquirePermits → blocking acquire_storage requests 2 KB
     // → try_free_up_storage evicts idle Worker A (freeing 2 permits)
     // → Worker B acquires 2 permits and its write succeeds.
@@ -1164,7 +1200,12 @@ async fn executor_pool_idle_worker_evicted_on_first_write_out_of_storage(
 
     // Verify Worker B's file has the correct unique content.
     let content = executor
-        .invoke_and_await_agent(&component, &agent_b, "read_file", data_value!("/file-b.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "read_file",
+            data_value!("/file-b.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
@@ -1185,14 +1226,14 @@ async fn executor_pool_idle_worker_evicted_on_first_write_out_of_storage(
 ///   Worker B writes 1 KB → pool: 3 KB free.
 ///   Worker C writes 3 KB → pool: 0 KB free. C goes idle.
 ///
-/// C then tries to write an extra 2 KB. Pool is exhausted → WorkerOutOfStorage.
-/// `desired_extra_storage = 2 KB`. On `ReacquirePermits` restart:
+/// C then tries to write an extra 2 KB. Pool is exhausted → NodeOutOfFilesystemStorage.
+/// `desired_extra_filesystem_storage = 2 KB`. On `ReacquirePermits` restart:
 ///   - Old C RunningWorker drops → 3 KB returned to pool (pool: 3 KB free).
-///   - `acquire_bytes = storage_requirement(3KB) + desired_extra(2KB) = 5 KB`.
+///   - `acquire_bytes = filesystem_storage_requirement(3KB) + desired_extra(2KB) = 5 KB`.
 ///   - Pool has 3 KB → gap = 2 KB → eviction targets 2 KB → evicts idle Worker A
 ///     (holding 2 KB) → pool: 3 + 2 = 5 KB free.
 ///   - Acquires 5 KB, releases 2 KB (desired_extra) → pool: 2 KB free.
-///   - C holds 3 KB as storage_permit (its existing files).
+///   - C holds 3 KB as filesystem_storage_permit (its existing files).
 ///   - C's pending 2 KB write re-acquires → succeeds.
 ///   - Worker B (1 KB) is NOT evicted — only the minimum gap was cleared.
 ///
@@ -1221,7 +1262,7 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
 
     // Content strings sized to consume specific permit counts.
     let content_a = "A".repeat(2 * 1024); // 2 KB → 2 permits
-    let content_b = "B".repeat(1 * 1024); // 1 KB → 1 permit
+    let content_b = "B".repeat(1024); // 1 KB → 1 permit
     let content_c1 = "C".repeat(3 * 1024); // 3 KB → 3 permits
     let content_c2 = "D".repeat(2 * 1024); // 2 KB → the extra write that fails
 
@@ -1259,7 +1300,7 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
         .await?;
 
     // Worker C tries to write 2 KB more. Pool is exhausted →
-    // WorkerOutOfStorage → desired_extra_storage = 2 KB → ReacquirePermits.
+    // NodeOutOfFilesystemStorage → desired_extra_filesystem_storage = 2 KB → ReacquirePermits.
     // C's old RunningWorker drops returning 3 KB → pool: 3 KB.
     // acquire_bytes = 3+2 = 5 KB → gap = 2 KB → evicts idle Worker A (2 KB).
     // Pool after eviction: 5 KB → acquire 5 KB → release 2 KB → pool: 2 KB free.
@@ -1287,7 +1328,12 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
 
     // Verify Worker B's file content is intact.
     let read_b = executor
-        .invoke_and_await_agent(&component, &agent_b, "read_file", data_value!("/file-b.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "read_file",
+            data_value!("/file-b.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
@@ -1298,7 +1344,12 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
 
     // Verify Worker C's first file — confirms prior state survived the eviction/restart.
     let read_c1 = executor
-        .invoke_and_await_agent(&component, &agent_c, "read_file", data_value!("/file-c1.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_c,
+            "read_file",
+            data_value!("/file-c1.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
@@ -1309,7 +1360,12 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
 
     // Verify Worker C's second file — the write that triggered eviction.
     let read_c2 = executor
-        .invoke_and_await_agent(&component, &agent_c, "read_file", data_value!("/file-c2.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_c,
+            "read_file",
+            data_value!("/file-c2.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
@@ -1323,7 +1379,7 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
 
 /// Full lifecycle: write → delete → interrupt → restart → verify pool accounting.
 ///
-/// Verifies that `current_storage_usage` is reconstructed correctly from the oplog
+/// Verifies that `current_filesystem_storage_usage` is reconstructed correctly from the oplog
 /// across an interrupt/restart cycle, and that the executor semaphore reflects the
 /// reconstructed value accurately.
 ///
@@ -1332,16 +1388,16 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
 /// Worker A:
 ///   1. Writes file-1 (1 KB) → pool: 1 KB used.
 ///   2. Writes file-2 (1 KB) → pool: 2 KB used, exhausted.
-///   3. Deletes file-1 → pool: 1 KB used. StorageUsageUpdate(-1KB) written to oplog.
+///   3. Deletes file-1 → pool: 1 KB used. FilesystemStorageUsageUpdate(-1KB) written to oplog.
 ///   4. Interrupted → RunningWorker drops → 1 KB permit returned → pool: 1 KB free.
 ///
 /// Worker B (different agent, same pool):
 ///   5. Writes 1 KB → should succeed because pool has 1 KB free.
-///      If A's current_storage_usage was wrong (e.g. 2 KB instead of 1 KB), A would
+///      If A's current_filesystem_storage_usage was wrong (e.g. 2 KB instead of 1 KB), A would
 ///      have consumed 2 KB on restart pre-acquire, leaving 0 KB free, and B would fail.
 ///
 /// Worker A re-invoked:
-///   6. Restart reconstructs current_storage_usage = 1 KB from oplog (+1+1-1).
+///   6. Restart reconstructs current_filesystem_storage_usage = 1 KB from oplog (+1+1-1).
 ///      Pre-acquires 1 KB from the pool. Pool: 0 KB free.
 ///      Reads file-2 to confirm durable state is intact.
 #[test]
@@ -1368,17 +1424,32 @@ async fn executor_pool_storage_usage_survives_restart(
 
     // Step 1: Worker A writes file-1 → 1 KB used, 1 KB free.
     executor
-        .invoke_and_await_agent(&component, &agent_a, "write_file", data_value!("/file-1.txt", "content-a-file1"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "write_file",
+            data_value!("/file-1.txt", "content-a-file1"),
+        )
         .await?;
 
     // Step 2: Worker A writes file-2 → pool exhausted (2 KB used).
     executor
-        .invoke_and_await_agent(&component, &agent_a, "write_file", data_value!("/file-2.txt", "content-a-file2"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "write_file",
+            data_value!("/file-2.txt", "content-a-file2"),
+        )
         .await?;
 
-    // Step 3: Worker A deletes file-1 → 1 KB freed. StorageUsageUpdate(-1 KB) → oplog.
+    // Step 3: Worker A deletes file-1 → 1 KB freed. FilesystemStorageUsageUpdate(-1 KB) → oplog.
     executor
-        .invoke_and_await_agent(&component, &agent_a, "delete_file", data_value!("/file-1.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "delete_file",
+            data_value!("/file-1.txt"),
+        )
         .await?;
 
     // Step 4: Interrupt Worker A → RunningWorker drops → 1 KB permit returned.
@@ -1386,38 +1457,56 @@ async fn executor_pool_storage_usage_survives_restart(
     executor.interrupt(&worker_a).await?;
 
     // Step 5: Worker B writes 1 KB. Pool has 1 KB free → must succeed.
-    // If Worker A's current_storage_usage was incorrectly reconstructed as 2 KB
+    // If Worker A's current_filesystem_storage_usage was incorrectly reconstructed as 2 KB
     // (missing the delete delta), its restart would pre-acquire 2 KB leaving 0 KB
     // free, and Worker B's write would fail.
     executor.start_agent(&component.id, agent_b.clone()).await?;
     executor
-        .invoke_and_await_agent(&component, &agent_b, "write_file", data_value!("/file-b.txt", "content-b-file1"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "write_file",
+            data_value!("/file-b.txt", "content-b-file1"),
+        )
         .await?;
 
     // Verify Worker B's file has the correct unique content.
     let content_b = executor
-        .invoke_and_await_agent(&component, &agent_b, "read_file", data_value!("/file-b.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_b,
+            "read_file",
+            data_value!("/file-b.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         content_b,
-        Value::Result(Ok(Some(Box::new(Value::String("content-b-file1".to_string())))))
+        Value::Result(Ok(Some(Box::new(Value::String(
+            "content-b-file1".to_string()
+        )))))
     );
 
-    // Step 6: Re-invoke Worker A. Restart reconstructs current_storage_usage = 1 KB.
+    // Step 6: Re-invoke Worker A. Restart reconstructs current_filesystem_storage_usage = 1 KB.
     // Reads file-2 — confirms durable state survived the interrupt with correct content.
     // file-1 was deleted; file-2 must still have its distinct original content.
     let content_a = executor
-        .invoke_and_await_agent(&component, &agent_a, "read_file", data_value!("/file-2.txt"))
+        .invoke_and_await_agent(
+            &component,
+            &agent_a,
+            "read_file",
+            data_value!("/file-2.txt"),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow::anyhow!("expected return value from read_file"))?;
     assert_eq!(
         content_a,
-        Value::Result(Ok(Some(Box::new(Value::String("content-a-file2".to_string())))))
+        Value::Result(Ok(Some(Box::new(Value::String(
+            "content-a-file2".to_string()
+        )))))
     );
 
     Ok(())
 }
-

@@ -20,14 +20,14 @@ use golem_common::model::oplog::public_oplog_entry::{
     CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType,
-    PublicRetryConfig, PublicSpanData, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    StorageUsageUpdateParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostCallParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams,
+    SnapshotParams, StartSpanParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
     WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -205,8 +205,10 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     delta,
                 })
             }
-            PublicOplogEntry::StorageUsageUpdate(StorageUsageUpdateParams { timestamp, delta }) => {
-                Self::StorageUsageUpdate(oplog::StorageUsageUpdateParameters {
+            PublicOplogEntry::FilesystemStorageUsageUpdate(
+                FilesystemStorageUsageUpdateParams { timestamp, delta },
+            ) => {
+                Self::FilesystemStorageUsageUpdate(oplog::FilesystemStorageUsageUpdateParameters {
                     timestamp: timestamp.into(),
                     delta,
                 })
@@ -674,8 +676,10 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
             oplog::WorkerError::ExceededMemoryLimit => Self::ExceededMemoryLimit,
             oplog::WorkerError::InternalError(msg) => Self::InternalError(msg),
             oplog::WorkerError::ExceededTableLimit => Self::ExceededTableLimit,
-            oplog::WorkerError::OutOfStorage => Self::OutOfStorage,
-            oplog::WorkerError::ExceededStorageLimit => Self::ExceededStorageLimit,
+            oplog::WorkerError::NodeOutOfFilesystemStorage => Self::NodeOutOfFilesystemStorage,
+            oplog::WorkerError::AgentExceededFilesystemStorageLimit => {
+                Self::AgentExceededFilesystemStorageLimit
+            }
         }
     }
 }
@@ -935,7 +939,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 delta: params.delta,
             }),
-            oplog::OplogEntry::StorageUsageUpdate(params) => Ok(Self::StorageUsageUpdate {
+            oplog::OplogEntry::FilesystemStorageUsageUpdate(params) => Ok(Self::FilesystemStorageUsageUpdate {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 delta: params.delta,
             }),

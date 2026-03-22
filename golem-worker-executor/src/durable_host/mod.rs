@@ -243,7 +243,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .sum();
             if rw_bytes > 0 {
                 worker
-                    .acquire_initial_storage(rw_bytes)
+                    .acquire_initial_filesystem_storage(rw_bytes)
                     .await
                     .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
             }
@@ -314,7 +314,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.deleted_regions.clone(),
                 component_metadata,
                 worker_config.total_linear_memory_size,
-                worker_config.current_storage_usage,
+                worker_config.current_filesystem_storage_usage,
                 worker_fork,
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
@@ -450,8 +450,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.total_linear_memory_size
     }
 
-    pub fn current_storage_usage(&self) -> u64 {
-        self.state.current_storage_usage
+    pub fn current_filesystem_storage_usage(&self) -> u64 {
+        self.state.current_filesystem_storage_usage
     }
 
     pub fn max_disk_space(&self) -> u64 {
@@ -459,18 +459,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     /// Check whether acquiring `new_bytes` would breach the per-plan storage
-    /// limit. Returns `WorkerExceededStorageLimit` (permanent) if so.
+    /// limit. Returns `WorkerAgentExceededFilesystemStorageLimit` (permanent) if so.
     /// Does NOT check the executor semaphore pool — that is done by
-    /// `acquire_storage_space`.
+    /// `acquire_filesystem_space`.
     ///
     /// No-op during replay.
-    pub fn check_storage_quota(&self, new_bytes: u64) -> anyhow::Result<()> {
+    pub fn check_filesystem_storage_quota(&self, new_bytes: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             return Ok(());
         }
-        let after = self.state.current_storage_usage.saturating_add(new_bytes);
+        let after = self
+            .state
+            .current_filesystem_storage_usage
+            .saturating_add(new_bytes);
         if after > self.max_disk_space {
-            Err(anyhow!(GolemSpecificWasmTrap::WorkerExceededStorageLimit))
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
+            ))
         } else {
             Ok(())
         }
@@ -479,53 +484,57 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Acquire `new_bytes` of storage from the executor semaphore pool.
     ///
     /// - During replay: no-op (permits were pre-acquired at startup).
-    /// - During live execution: calls `Worker::acquire_storage_space`, which
+    /// - During live execution: calls `Worker::acquire_filesystem_space`, which
     ///   tries the semaphore non-blockingly. On failure returns
-    ///   `WorkerOutOfStorage` (retriable via `ReacquirePermits`).
+    ///   `NodeOutOfFilesystemStorage` (retriable via `ReacquirePermits`).
     ///
-    /// Call `check_storage_quota` before calling this to enforce the per-plan
-    /// limit (`WorkerExceededStorageLimit`). This method only checks the
-    /// executor-wide semaphore pool (`WorkerOutOfStorage`).
-    pub async fn acquire_storage_space(&mut self, new_bytes: u64) -> anyhow::Result<()> {
+    /// Call `check_filesystem_quota` before calling this to enforce the per-plan
+    /// limit (`WorkerAgentExceededFilesystemStorageLimit`). This method only checks the
+    /// executor-wide semaphore pool (`NodeOutOfFilesystemStorage`).
+    pub async fn acquire_filesystem_storage_space(&mut self, new_bytes: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             return Ok(());
         }
         // Acquire the semaphore permit first (non-blocking try). Writing the
         // oplog entry after a confirmed acquire ensures the oplog accurately
         // reflects only committed storage changes — a failed acquire leaves no
-        // phantom delta that would inflate `current_storage_usage` on restart.
+        // phantom delta that would inflate `current_filesystem_storage_usage` on restart.
         self.public_state
             .worker()
-            .acquire_storage_space(new_bytes)
+            .acquire_filesystem_storage_space(new_bytes)
             .await?;
         self.public_state
             .worker()
-            .add_to_oplog(OplogEntry::storage_usage_update(new_bytes as i64))
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                new_bytes as i64,
+            ))
             .await;
-        self.state.current_storage_usage += new_bytes;
+        self.state.current_filesystem_storage_usage += new_bytes;
         Ok(())
     }
 
     /// Release `freed_bytes` back to the executor semaphore pool.
     /// Called when files are deleted or truncated.
     /// During replay this is a no-op.
-    pub async fn release_storage_space(&mut self, freed_bytes: u64) {
+    pub async fn release_filesystem_storage_space(&mut self, freed_bytes: u64) {
         if self.state.is_replay() {
             return;
         }
-        let freed_bytes = freed_bytes.min(self.state.current_storage_usage);
+        let freed_bytes = freed_bytes.min(self.state.current_filesystem_storage_usage);
         if freed_bytes == 0 {
             return;
         }
         self.public_state
             .worker()
-            .add_to_oplog(OplogEntry::storage_usage_update(-(freed_bytes as i64)))
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                -(freed_bytes as i64),
+            ))
             .await;
         self.public_state
             .worker()
-            .release_storage_space(freed_bytes)
+            .release_filesystem_storage_space(freed_bytes)
             .await;
-        self.state.current_storage_usage -= freed_bytes;
+        self.state.current_filesystem_storage_usage -= freed_bytes;
     }
 
     pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
@@ -580,11 +589,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
-                error: AgentError::OutOfStorage,
+                error: AgentError::NodeOutOfFilesystemStorage,
                 ..
             } => RetryDecision::ReacquirePermits,
             TrapType::Error {
-                error: AgentError::ExceededStorageLimit,
+                error: AgentError::AgentExceededFilesystemStorageLimit,
                 ..
             } => RetryDecision::None,
             TrapType::Error {
@@ -3037,7 +3046,7 @@ struct PrivateDurableWorkerState {
     /// Running total of storage bytes acquired from the executor semaphore pool
     /// by this worker since it last started. Incremented on every successful
     /// write; decremented when files are deleted or truncated.
-    current_storage_usage: u64,
+    current_filesystem_storage_usage: u64,
 
     invocation_context: InvocationContext,
     current_span_id: SpanId,
@@ -3112,7 +3121,7 @@ impl PrivateDurableWorkerState {
         deleted_regions: DeletedRegions,
         component_metadata: Component,
         total_linear_memory_size: u64,
-        current_storage_usage: u64,
+        current_filesystem_storage_usage: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
@@ -3174,7 +3183,7 @@ impl PrivateDurableWorkerState {
             snapshotting_mode: None,
             component_metadata,
             total_linear_memory_size,
-            current_storage_usage,
+            current_filesystem_storage_usage,
             replay_state,
             invocation_context,
             current_span_id,

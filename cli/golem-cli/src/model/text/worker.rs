@@ -662,7 +662,7 @@ impl TextView for PublicOplogEntry {
                     format_id(&format_binary_size(&params.delta)),
                 ));
             }
-            PublicOplogEntry::StorageUsageUpdate(params) => {
+            PublicOplogEntry::FilesystemStorageUsageUpdate(params) => {
                 logln(format_message_highlight("STORAGE USAGE UPDATE"));
                 logln(format!(
                     "{pad}at:                {}",

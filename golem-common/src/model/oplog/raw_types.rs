@@ -357,9 +357,9 @@ pub enum AgentError {
     // The worker tried to grow its function table beyond the limits of the plan
     ExceededTableLimit,
     // The executor-wide storage semaphore pool is exhausted (retriable)
-    OutOfStorage,
+    NodeOutOfFilesystemStorage,
     // The worker tried to use more storage than allowed by its plan (permanent)
-    ExceededStorageLimit,
+    AgentExceededFilesystemStorageLimit,
 }
 
 impl AgentError {
@@ -372,8 +372,8 @@ impl AgentError {
             Self::ExceededMemoryLimit => "Exceeded plan memory limit",
             Self::InternalError(message) => message,
             Self::ExceededTableLimit => "Exceeded plan function table limit",
-            Self::OutOfStorage => "Out of storage space",
-            Self::ExceededStorageLimit => "Exceeded plan storage limit",
+            Self::NodeOutOfFilesystemStorage => "Out of storage space",
+            Self::AgentExceededFilesystemStorageLimit => "Exceeded plan storage limit",
         }
     }
 

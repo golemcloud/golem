@@ -29,7 +29,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::debug;
 
-use crate::services::active_workers::StorageSemaphore;
+use crate::services::active_workers::FilesystemStorageSemaphore;
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
@@ -58,7 +58,7 @@ pub struct FileLoader {
     /// cache entry and released automatically when the last `FileUseToken`
     /// holding that entry is dropped. Subsequent workers that hardlink to the
     /// same cache file do not acquire additional permits.
-    storage_semaphore: StdMutex<Option<Arc<StorageSemaphore>>>,
+    filesystem_storage_semaphore: StdMutex<Option<Arc<FilesystemStorageSemaphore>>>,
 }
 
 impl FileLoader {
@@ -74,14 +74,14 @@ impl FileLoader {
             cache: Mutex::new(HashMap::new()),
             cache_dir,
             item_counter: AtomicU64::new(0),
-            storage_semaphore: StdMutex::new(None),
+            filesystem_storage_semaphore: StdMutex::new(None),
         })
     }
 
     /// Wire up the executor-wide storage semaphore. Must be called after both
     /// `FileLoader` and `ActiveWorkers` have been constructed.
-    pub fn set_storage_semaphore(&self, semaphore: Arc<StorageSemaphore>) {
-        *self.storage_semaphore.lock().unwrap() = Some(semaphore);
+    pub fn set_filesystem_storage_semaphore(&self, semaphore: Arc<FilesystemStorageSemaphore>) {
+        *self.filesystem_storage_semaphore.lock().unwrap() = Some(semaphore);
     }
 
     /// Read-only files can be safely shared between workers. Download once to cache and hardlink to target.
@@ -253,8 +253,8 @@ impl FileLoader {
                 // `file_size` new bytes to the shared cache directory. If the
                 // pool is exhausted we fail immediately; the worker will be
                 // retried once space is freed.
-                let storage_permit = {
-                    let sem_opt = self.storage_semaphore.lock().unwrap().clone();
+                let filesystem_storage_permit = {
+                    let sem_opt = self.filesystem_storage_semaphore.lock().unwrap().clone();
                     if let Some(sem) = sem_opt {
                         match sem.try_acquire(file_size).await {
                             Some(permit) => Some(permit),
@@ -280,12 +280,12 @@ impl FileLoader {
                         // we successfully downloaded the file and set it to read-only, set the cache entry to the file
                         *prelocked_entry = Ok(InitializedCacheEntry {
                             path: path.clone(),
-                            _storage_permit: storage_permit,
+                            _filesystem_storage_permit: filesystem_storage_permit,
                         });
                     }
                     Err(e) => {
                         // we failed to set the file to read-only, we need to fail the entry, remove it from the cache and return the error
-                        // storage_permit is dropped here, returning permits to the semaphore
+                        // filesystem_storage_permit is dropped here, returning permits to the semaphore
                         *prelocked_entry = Err(format!("Other thread failed to download: {e}"));
                         self.cache.lock().await.remove(&key);
 
@@ -363,7 +363,7 @@ struct InitializedCacheEntry {
     /// Acquired on cache miss (first download); `None` when no semaphore is
     /// configured. Dropped automatically when the last `FileUseToken` holding
     /// this entry is released, returning the permits to the executor pool.
-    _storage_permit: Option<OwnedSemaphorePermit>,
+    _filesystem_storage_permit: Option<OwnedSemaphorePermit>,
 }
 
 impl Drop for InitializedCacheEntry {
@@ -372,14 +372,14 @@ impl Drop for InitializedCacheEntry {
         if let Err(e) = std::fs::remove_file(&self.path) {
             tracing::error!("Failed to remove file {}: {}", self.path.display(), e);
         }
-        // _storage_permit is dropped here, returning permits to the semaphore.
+        // _filesystem_storage_permit is dropped here, returning permits to the semaphore.
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::active_workers::StorageSemaphore;
+    use crate::services::active_workers::FilesystemStorageSemaphore;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::widen_infallible;
     use golem_service_base::replayable_stream::ReplayableStream as _;
@@ -399,7 +399,7 @@ mod tests {
         content: &[u8],
     ) -> (
         FileLoader,
-        Arc<StorageSemaphore>,
+        Arc<FilesystemStorageSemaphore>,
         ComponentFileContentHash,
         EnvironmentId,
     ) {
@@ -411,8 +411,11 @@ mod tests {
         let loader_svc = Arc::new(InitialComponentFilesService::new(blob));
 
         let loader = FileLoader::new(loader_svc).unwrap();
-        let semaphore = Arc::new(StorageSemaphore::new(pool_bytes, Duration::from_millis(1)));
-        loader.set_storage_semaphore(semaphore.clone());
+        let semaphore = Arc::new(FilesystemStorageSemaphore::new(
+            pool_bytes,
+            Duration::from_millis(1),
+        ));
+        loader.set_filesystem_storage_semaphore(semaphore.clone());
 
         let env_id = EnvironmentId::new();
         let data: Vec<u8> = content.to_vec();

@@ -287,7 +287,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     delta: bigint;
   };
-  export type StorageUsageUpdateParameters = {
+  export type FilesystemStorageUsageUpdateParameters = {
     timestamp: Datetime;
     delta: bigint;
   };
@@ -417,10 +417,10 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'exceeded-table-limit'
   } |
   {
-    tag: 'out-of-storage'
+    tag: 'node-out-of-filesystem-storage'
   } |
   {
-    tag: 'exceeded-storage-limit'
+    tag: 'agent-exceeded-filesystem-storage-limit'
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
@@ -663,10 +663,10 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'grow-memory'
     val: GrowMemoryParameters
   } |
-  /** Updated storage usage by a signed delta */
+  /** Updated filesystem usage by a signed delta */
   {
-    tag: 'storage-usage-update'
-    val: StorageUsageUpdateParameters
+    tag: 'filesystem-storage-usage-update'
+    val: FilesystemStorageUsageUpdateParameters
   } |
   /** Created a resource instance */
   {
@@ -886,10 +886,10 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'grow-memory'
     val: GrowMemoryParameters
   } |
-  /** Updated storage usage by a signed delta */
+  /** Updated filesystem usage by a signed delta */
   {
-    tag: 'storage-usage-update'
-    val: StorageUsageUpdateParameters
+    tag: 'filesystem-storage-usage-update'
+    val: FilesystemStorageUsageUpdateParameters
   } |
   /** Created a resource instance */
   {

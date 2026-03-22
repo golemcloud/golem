@@ -183,8 +183,8 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         &new_entries,
     );
 
-    let current_storage_usage = calculate_current_storage_usage(
-        last_known.current_storage_usage,
+    let current_filesystem_storage_usage = calculate_current_filesystem_storage_usage(
+        last_known.current_filesystem_storage_usage,
         &skipped_regions,
         &new_entries,
     );
@@ -220,7 +220,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         component_size,
         owned_resources,
         total_linear_memory_size,
-        current_storage_usage,
+        current_filesystem_storage_usage,
         active_plugins,
         oplog_processor_checkpoints,
         deleted_regions,
@@ -341,7 +341,7 @@ fn calculate_latest_worker_status(
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
             OplogEntry::GrowMemory { .. } => {}
-            OplogEntry::StorageUsageUpdate { .. } => {}
+            OplogEntry::FilesystemStorageUsageUpdate { .. } => {}
             OplogEntry::CreateResource { .. } => {}
             OplogEntry::DropResource { .. } => {}
             OplogEntry::Log { .. } => {
@@ -800,15 +800,15 @@ fn calculate_total_linear_memory_size(
     result
 }
 
-/// Accumulates `StorageUsageUpdate` hint entries to reconstruct the current
+/// Accumulates `FilesystemStorageUsageUpdate` hint entries to reconstruct the current
 /// storage usage at any point in the oplog. Used to populate
-/// `AgentStatusRecord::current_storage_usage` for pre-acquiring storage permits
+/// `AgentStatusRecord::current_filesystem_storage_usage` for pre-acquiring storage permits
 /// when a worker restarts.
 ///
 /// Mirrors `calculate_total_linear_memory_size`: entries in skipped regions
 /// are excluded, and `Create` resets the counter to zero (a newly created worker
 /// has no written files yet).
-fn calculate_current_storage_usage(
+fn calculate_current_filesystem_storage_usage(
     current: u64,
     skipped_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
@@ -823,7 +823,7 @@ fn calculate_current_storage_usage(
             OplogEntry::Create { .. } => {
                 result = 0;
             }
-            OplogEntry::StorageUsageUpdate { delta, .. } => {
+            OplogEntry::FilesystemStorageUsageUpdate { delta, .. } => {
                 result = result.saturating_add(*delta);
             }
             _ => {}
@@ -1005,8 +1005,8 @@ fn is_worker_error_retriable(
         AgentError::ExceededMemoryLimit => false,
         AgentError::ExceededTableLimit => false,
         AgentError::InternalError(_) => false,
-        AgentError::OutOfStorage => true,
-        AgentError::ExceededStorageLimit => false,
+        AgentError::NodeOutOfFilesystemStorage => true,
+        AgentError::AgentExceededFilesystemStorageLimit => false,
     }
 }
 
@@ -1059,8 +1059,8 @@ mod test {
     async fn storage_usage_accumulated_from_deltas() {
         let test_case = TestCase::builder(0)
             .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
-            .storage_usage_update(1024)
-            .storage_usage_update(2048)
+            .filesystem_storage_usage_update(1024)
+            .filesystem_storage_usage_update(2048)
             .build();
 
         run_test_case(test_case).await;
@@ -1070,8 +1070,8 @@ mod test {
     async fn storage_usage_decremented_on_negative_delta() {
         let test_case = TestCase::builder(0)
             .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
-            .storage_usage_update(1024)
-            .storage_usage_update(-512)
+            .filesystem_storage_usage_update(1024)
+            .filesystem_storage_usage_update(-512)
             .build();
 
         run_test_case(test_case).await;
@@ -1081,8 +1081,8 @@ mod test {
     async fn storage_usage_clamped_at_zero_on_underflow() {
         let test_case = TestCase::builder(0)
             .agent_invocation_started("a", vec![], IdempotencyKey::fresh())
-            .storage_usage_update(100)
-            .storage_usage_update(-9999) // larger than total acquired
+            .filesystem_storage_usage_update(100)
+            .filesystem_storage_usage_update(-9999) // larger than total acquired
             .build();
 
         run_test_case(test_case).await;
@@ -1794,16 +1794,17 @@ mod test {
             )
         }
 
-        pub fn storage_usage_update(self, delta: i64) -> Self {
+        pub fn filesystem_storage_usage_update(self, delta: i64) -> Self {
             self.add(
-                OplogEntry::StorageUsageUpdate {
+                OplogEntry::FilesystemStorageUsageUpdate {
                     timestamp: Timestamp::now_utc(),
                     delta,
                 },
                 |mut status| {
-                    status.current_storage_usage = (status.current_storage_usage as i64)
-                        .saturating_add(delta)
-                        .max(0) as u64;
+                    status.current_filesystem_storage_usage =
+                        (status.current_filesystem_storage_usage as i64)
+                            .saturating_add(delta)
+                            .max(0) as u64;
                     status
                 },
             )

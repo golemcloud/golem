@@ -63,7 +63,7 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Context>> {
         Arc::new(ActiveWorkers::<Context>::new(
             &golem_config.memory,
-            &golem_config.storage,
+            &golem_config.filesystem_storage,
         ))
     }
 

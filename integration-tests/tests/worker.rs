@@ -1845,7 +1845,7 @@ async fn deployment_invalidates_agent_resolution_cache(
 /// Verifies that the per-agent disk space quota from the plan is enforced
 /// end-to-end through the full Golem stack. The user's plan is changed to one
 /// with a 5-byte disk quota; writing "hello world" (11 bytes) must then fail
-/// with `WorkerExceededStorageLimit`.
+/// with `WorkerAgentExceededFilesystemStorageLimit`.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -1896,8 +1896,8 @@ async fn agent_exceeds_per_plan_disk_space_quota(
     );
     let err_str = format!("{result:?}");
     assert!(
-        err_str.contains("ExceededStorageLimit") || err_str.contains("storage"),
-        "expected WorkerExceededStorageLimit from plan quota enforcement, got: {err_str}"
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit from plan quota enforcement, got: {err_str}"
     );
 
     Ok(())

@@ -627,7 +627,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     // initial component files are charged against the pool only on the first
     // download (cache miss). Subsequent workers that hardlink to the same cached
     // file do not consume additional permits.
-    file_loader.set_storage_semaphore(active_workers.storage_semaphore());
+    file_loader.set_filesystem_storage_semaphore(active_workers.filesystem_storage_semaphore());
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
         active_workers.clone(),
