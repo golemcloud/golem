@@ -14,19 +14,21 @@
 
 use crate::app::context::ApplicationContext;
 use crate::command::shared_args::PostDeployArgs;
+use crate::command_handler::Handlers;
 use crate::command_handler::repl::rust::RustRepl;
 use crate::command_handler::repl::typescript::TypeScriptRepl;
-use crate::command_handler::Handlers;
+use crate::config::BUILTIN_LOCAL_URL_ENV;
 use crate::context::Context;
 use crate::fs;
+use crate::model::GuestLanguage;
 use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::DeployConfig;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
-use crate::model::GuestLanguage;
 use anyhow::bail;
+use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use golem_common::model::component::ComponentName;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -248,7 +250,19 @@ impl ReplHandler {
 
         match environment.environment.server.as_ref() {
             Some(Server::Builtin(BuiltinServer::Local)) | None => {
-                env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "local".to_string());
+                if let Ok(local_url_override) = std::env::var(BUILTIN_LOCAL_URL_ENV) {
+                    env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "custom".to_string());
+                    env_vars.insert(
+                        "GOLEM_REPL_SERVER_CUSTOM_URL".to_string(),
+                        local_url_override,
+                    );
+                    env_vars.insert(
+                        "GOLEM_REPL_SERVER_TOKEN".to_string(),
+                        LOCAL_WELL_KNOWN_TOKEN.to_string(),
+                    );
+                } else {
+                    env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "local".to_string());
+                }
             }
             Some(Server::Builtin(BuiltinServer::Cloud)) => {
                 env_vars.insert("GOLEM_REPL_SERVER_KIND".to_string(), "cloud".to_string());
