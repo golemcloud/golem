@@ -534,7 +534,7 @@ fn bridge_tests_objectcomplextype(
                 "b": 2.2,
                 "c": false
             },
-            "e": { "tag": "UnionType2", "val": 5.5 },
+            "e": { "tag": "UnionType1", "val": 5.5 },
             "f": ["item"],
             "g": [{"a": "obj", "b": 1.1, "c": true}],
             "h": ["str", 2.2, false],
@@ -555,7 +555,7 @@ fn bridge_tests_objectcomplextype(
                                 Value::Bool(false),
                             ]),
                             Value::Variant {
-                                case_idx: 1,
+                                case_idx: 0,
                                 case_value: Some(Box::new(Value::F64(5.5))),
                             },
                             Value::List(vec![Value::String("item".to_string())]),
@@ -596,13 +596,13 @@ fn bridge_tests_uniontype(#[tagged_as("ts_code_first_snippets_foo_agent")] pkg: 
     assert_function_input_encoding(
         pkg.target_dir(),
         "FunUnionType",
-        json!([{ "tag": "UnionType4", "val": true }]),
+        json!([{ "tag": "UnionType3", "val": true }]),
         UntypedJsonDataValue::Tuple(UntypedJsonElementValues {
             elements: vec![UntypedJsonElementValue::ComponentModel(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
-                            case_idx: 3,
+                            case_idx: 2,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
                         pkg.input_element_type_by_name("funUnionType", "unionType"),
@@ -1339,7 +1339,7 @@ fn bridge_tests_objectcomplextype_output(
                                 Value::Bool(true),
                             ]),
                             Value::Variant {
-                                case_idx: 0,
+                                case_idx: 1,
                                 case_value: Some(Box::new(Value::String("hello".to_string()))),
                             },
                             Value::List(vec![
@@ -1383,7 +1383,7 @@ fn bridge_tests_objectcomplextype_output(
             "b": 42.1,
             "c": false,
             "d": {"a": "nested", "b": 10.1, "c": true},
-            "e": {"tag": "UnionType1", "val": "hello"},
+            "e": {"tag": "UnionType2", "val": "hello"},
             "f": ["str1", "str2"],
             "g": [{"a": "item1", "b": 1.1, "c": true}],
             "h": ["t1", 100.1, false],
@@ -1406,7 +1406,7 @@ fn bridge_tests_uniontype_output(
                 JsonComponentModelValue {
                     value: ValueAndType::new(
                         Value::Variant {
-                            case_idx: 3,
+                            case_idx: 2,
                             case_value: Some(Box::new(Value::Bool(true))),
                         },
                         pkg.output_element_type_by_name("funUnionType", "returnValue"),
@@ -1416,7 +1416,7 @@ fn bridge_tests_uniontype_output(
                 },
             )],
         }),
-        json!({"tag": "UnionType4", "val": true}),
+        json!({"tag": "UnionType3", "val": true}),
     );
 }
 
