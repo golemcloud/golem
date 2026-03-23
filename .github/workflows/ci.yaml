@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.0.24"
+  WASM_RQUICKJS_VERSION: "v0.1.2"
 
 jobs:
   build-and-store:
@@ -310,7 +310,7 @@ jobs:
           version: latest
       - name: Install wasm-rquickjs
         if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
+        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
       - name: Install cargo-test-r
         run: cargo binstall --force --locked cargo-test-r@2.2.4
@@ -472,7 +472,7 @@ jobs:
       - name: Install cargo-component
         run: cargo binstall --force cargo-component@0.21.1
       - name: Install wasm-rquickjs
-        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
+        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
       - name: Install dependencies
         working-directory: sdks/ts

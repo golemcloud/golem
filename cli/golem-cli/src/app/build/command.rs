@@ -14,7 +14,8 @@
 
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    InjectToPrebuiltQuickJsCommandMarkerHash, ResolvedExternalCommandMarkerHash,
+    InjectToPrebuiltQuickJsCommandMarkerHash, PreinitializeJsCommandMarkerHash,
+    ResolvedExternalCommandMarkerHash,
 };
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::{BuildContext, ToolsWithEnsuredCommonDeps};
@@ -23,7 +24,9 @@ use crate::composition::{compose, Plug};
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app_raw;
-use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
+use crate::model::app_raw::{
+    GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
+};
 use crate::process::{with_hidden_output_unless_error, CommandExt, HiddenOutput};
 use anyhow::{anyhow, Context as AnyhowContext};
 use camino::Utf8Path;
@@ -55,6 +58,9 @@ pub async fn execute_build_command(
         }
         app_raw::BuildCommand::InjectToPrebuiltQuickJs(command) => {
             execute_inject_to_prebuilt_quick_js(ctx, &base_build_dir, command).await
+        }
+        app_raw::BuildCommand::PreinitializeJs(command) => {
+            execute_preinitialize_js(ctx, &base_build_dir, command).await
         }
     }
 }
@@ -118,6 +124,47 @@ async fn execute_inject_to_prebuilt_quick_js(
                     "injecting JS module {} into QuickJS WASM {}",
                     js_module.log_color_highlight(),
                     base_wasm.log_color_highlight()
+                ));
+            },
+        )
+        .await
+}
+
+async fn execute_preinitialize_js(
+    ctx: &BuildContext<'_>,
+    base_build_dir: &Path,
+    command: &PreinitializeJs,
+) -> anyhow::Result<()> {
+    let base_build_dir = Utf8Path::from_path(base_build_dir).unwrap();
+    let input = base_build_dir.join(&command.preinitialize_js);
+    let output = base_build_dir.join(&command.into);
+
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(PreinitializeJsCommandMarkerHash {
+            build_dir: base_build_dir.as_std_path(),
+            command,
+        })?
+        .with_sources(|| [&input])
+        .with_targets(|| [&output])
+        .run_async_or_skip(
+            || async {
+                log_action(
+                    "Pre-initializing",
+                    format!(
+                        "JS component {} into {}",
+                        input.log_color_highlight(),
+                        output.log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
+
+                wasm_rquickjs::optimize_component(&input, &output, "wizer-initialize").await
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "pre-initializing JS component {} into {}",
+                    input.log_color_highlight(),
+                    output.log_color_highlight()
                 ));
             },
         )

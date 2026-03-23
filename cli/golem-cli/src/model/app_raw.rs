@@ -497,6 +497,7 @@ pub enum BuildCommand {
     QuickJSCrate(GenerateQuickJSCrate),
     QuickJSDTS(GenerateQuickJSDTS),
     InjectToPrebuiltQuickJs(InjectToPrebuiltQuickJs),
+    PreinitializeJs(PreinitializeJs),
 }
 
 impl BuildCommand {
@@ -506,6 +507,7 @@ impl BuildCommand {
             BuildCommand::QuickJSCrate(_) => None,
             BuildCommand::QuickJSDTS(_) => None,
             BuildCommand::InjectToPrebuiltQuickJs(_) => None,
+            BuildCommand::PreinitializeJs(_) => None,
         }
     }
 
@@ -515,6 +517,7 @@ impl BuildCommand {
             BuildCommand::QuickJSCrate(cmd) => vec![cmd.generate_quickjs_crate.clone()],
             BuildCommand::QuickJSDTS(cmd) => vec![cmd.generate_quickjs_dts.clone()],
             BuildCommand::InjectToPrebuiltQuickJs(cmd) => vec![cmd.into.clone()],
+            BuildCommand::PreinitializeJs(cmd) => vec![cmd.into.clone()],
         }
     }
 }
@@ -566,6 +569,15 @@ pub struct InjectToPrebuiltQuickJs {
     /// The path to the intermediate WASM containing the JS module
     pub module_wasm: String,
     /// The path to the output WASM component containing the injected JS module
+    pub into: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreinitializeJs {
+    /// The path to the input WASM component to pre-initialize
+    pub preinitialize_js: String,
+    /// The path to the pre-initialized output WASM component
     pub into: String,
 }
 

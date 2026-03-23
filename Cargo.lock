@@ -12463,13 +12463,11 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.0.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca09f72439f06de42d88101598fbb28e30142fa8c3b25818bc32024e4e9aa4ed"
+version = "0.0.0"
+source = "git+https://github.com/golemcloud/wasm-rquickjs.git?tag=v0.1.2#27300594a52110cb34f74c4e8c38091d12cccdc3"
 dependencies = [
  "anyhow",
  "camino",
- "fs_extra",
  "heck",
  "include_dir",
  "indexmap 2.13.0",
@@ -12477,7 +12475,12 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+ "tokio",
  "toml_edit 0.22.27",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+ "wasmtime-wizer",
  "wit-bindgen-core 0.43.0",
  "wit-encoder",
  "wit-parser 0.235.0",
@@ -12879,6 +12882,19 @@ dependencies = [
  "bytes",
  "futures",
  "tracing",
+ "wasmtime",
+]
+
+[[package]]
+name = "wasmtime-wizer"
+version = "42.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cb0722df2d5a01e7074593437d7ec503105e9b783a680c19d109372e3f23ac2"
+dependencies = [
+ "log",
+ "rayon",
+ "wasm-encoder 0.244.0",
+ "wasmparser 0.244.0",
  "wasmtime",
 ]
 
