@@ -28,14 +28,51 @@ use std::fmt::{Display, Formatter};
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
 
 pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
-pub const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
+const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
+const BUILTIN_LOCAL_URL_ENV: &str = "GOLEM_BUILTIN_LOCAL_URL";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
+
+struct BuiltinLocalUrlState {
+    url: Url,
+    uses_default: bool,
+}
+
+static BUILTIN_LOCAL_URL_ONCE: OnceLock<BuiltinLocalUrlState> = OnceLock::new();
+
+fn builtin_local_url_state() -> &'static BuiltinLocalUrlState {
+    BUILTIN_LOCAL_URL_ONCE.get_or_init(|| {
+        if cfg!(debug_assertions) {
+            if let Ok(override_url) = std::env::var(BUILTIN_LOCAL_URL_ENV) {
+                return BuiltinLocalUrlState {
+                    url: Url::parse(&override_url).unwrap_or_else(|err| {
+                        panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")
+                    }),
+                    uses_default: false,
+                };
+            }
+        }
+
+        BuiltinLocalUrlState {
+            url: Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse BUILTIN_LOCAL_URL"),
+            uses_default: true,
+        }
+    })
+}
+
+pub fn builtin_local_url() -> Url {
+    builtin_local_url_state().url.clone()
+}
+
+pub fn uses_default_builtin_local_url() -> bool {
+    builtin_local_url_state().uses_default
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -113,9 +150,8 @@ pub struct Profile {
 
 impl Profile {
     pub fn default_local_profile() -> Self {
-        let url = Url::parse(BUILTIN_LOCAL_URL).unwrap();
         Self {
-            custom_url: Some(url),
+            custom_url: Some(builtin_local_url()),
             custom_worker_url: None,
             allow_insecure: false,
             config: ProfileConfig::default(),
@@ -333,15 +369,11 @@ impl From<&Server> for ClientConfig {
             allow_insecure,
         } = match server {
             Server::Builtin(builtin) => match builtin {
-                BuiltinServer::Local => {
-                    let local_url =
-                        Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse DEFAULT_OSS_URL");
-                    BaseConfig {
-                        registry_url: local_url.clone(),
-                        worker_url: local_url.clone(),
-                        allow_insecure: false,
-                    }
-                }
+                BuiltinServer::Local => BaseConfig {
+                    registry_url: builtin_local_url(),
+                    worker_url: builtin_local_url(),
+                    allow_insecure: false,
+                },
                 BuiltinServer::Cloud => {
                     let cloud_url = Url::parse(CLOUD_URL).expect("Failed to parse CLOUD_URL");
                     BaseConfig {

@@ -18,11 +18,11 @@ use crate::client::{new_reqwest_client, GolemClients};
 use crate::command::shared_args::PostDeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
+use crate::config::{builtin_local_url, ClientConfig, ProfileName};
 use crate::config::{
     ApplicationEnvironmentConfigId, AuthenticationConfig, AuthenticationConfigWithSource,
-    AuthenticationSource, Config, NamedProfile, BUILTIN_LOCAL_URL,
+    AuthenticationSource, Config, NamedProfile,
 };
-use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
@@ -460,7 +460,7 @@ impl Context {
                             ApplicationEnvironmentConfigId {
                                 application_name: env.application_name.clone(),
                                 environment_name: env.environment_name.clone(),
-                                server_url: BUILTIN_LOCAL_URL.parse()?,
+                                server_url: builtin_local_url(),
                             },
                         ),
                     })
