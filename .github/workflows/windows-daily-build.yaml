@@ -22,7 +22,6 @@ jobs:
           cache-prefix-key: 'v3-rust'
           cache-shared-key: 'windows-daily'
           cache-save-if: 'true'
-          purge-v8: 'false'
 
       - name: Building all executables
         env:
