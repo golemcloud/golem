@@ -157,7 +157,6 @@ declare module 'golem:rdbms/ignite2@1.5.0' {
   export type DbColumn = {
     ordinal: bigint;
     name: string;
-    dbTypeName: string;
   };
   export type DbRow = {
     values: DbValue[];

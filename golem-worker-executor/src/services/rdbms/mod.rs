@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod metrics;
 pub mod ignite;
+pub(crate) mod metrics;
 pub mod mysql;
 pub mod postgres;
 pub(crate) mod sqlx_common;

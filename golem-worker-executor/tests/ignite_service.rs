@@ -194,12 +194,7 @@ async fn ignite_create_insert_select_test(ignite_rdb: &DockerIgniteRdb) {
 
     // cleanup
     rdbms
-        .execute(
-            &key,
-            &worker_id,
-            &format!("DROP TABLE {table}"),
-            vec![],
-        )
+        .execute(&key, &worker_id, &format!("DROP TABLE {table}"), vec![])
         .await
         .ok();
 

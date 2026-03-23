@@ -341,8 +341,10 @@ impl DbTransaction<IgniteType> for IgniteDbTransaction {
             .take()
             .ok_or_else(|| RdbmsError::Other("transaction already finalised".to_string()))?;
         tx.commit().await.map_err(RdbmsError::from)?;
-        self.tx_statuses
-            .insert(self.transaction_id.clone(), RdbmsTransactionStatus::Committed);
+        self.tx_statuses.insert(
+            self.transaction_id.clone(),
+            RdbmsTransactionStatus::Committed,
+        );
         Ok(())
     }
 
@@ -354,8 +356,10 @@ impl DbTransaction<IgniteType> for IgniteDbTransaction {
             .take()
             .ok_or_else(|| RdbmsError::Other("transaction already finalised".to_string()))?;
         tx.rollback().await.map_err(RdbmsError::from)?;
-        self.tx_statuses
-            .insert(self.transaction_id.clone(), RdbmsTransactionStatus::RolledBack);
+        self.tx_statuses.insert(
+            self.transaction_id.clone(),
+            RdbmsTransactionStatus::RolledBack,
+        );
         Ok(())
     }
 
@@ -363,8 +367,10 @@ impl DbTransaction<IgniteType> for IgniteDbTransaction {
         let tx = self.inner.lock().await.take();
         if let Some(tx) = tx {
             tx.rollback().await.map_err(RdbmsError::from)?;
-            self.tx_statuses
-                .insert(self.transaction_id.clone(), RdbmsTransactionStatus::RolledBack);
+            self.tx_statuses.insert(
+                self.transaction_id.clone(),
+                RdbmsTransactionStatus::RolledBack,
+            );
         }
         Ok(())
     }
@@ -405,19 +411,14 @@ impl IgniteRdbms {
             return Ok(client);
         }
         self.create(key.address.as_str(), worker_id).await?;
-        self.get_client(key).ok_or_else(|| {
-            RdbmsError::ConnectionFailure(format!("no client for {}", key))
-        })
+        self.get_client(key)
+            .ok_or_else(|| RdbmsError::ConnectionFailure(format!("no client for {}", key)))
     }
 }
 
 #[async_trait]
 impl Rdbms<IgniteType> for IgniteRdbms {
-    async fn create(
-        &self,
-        address: &str,
-        worker_id: &AgentId,
-    ) -> Result<RdbmsPoolKey, RdbmsError> {
+    async fn create(&self, address: &str, worker_id: &AgentId) -> Result<RdbmsPoolKey, RdbmsError> {
         let key = RdbmsPoolKey::from(address).map_err(RdbmsError::ConnectionFailure)?;
         if !self.clients.contains_key(&key) {
             let cfg = parse_config(&key.address)?;

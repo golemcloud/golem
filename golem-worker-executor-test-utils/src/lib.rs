@@ -1867,10 +1867,8 @@ struct TestRdmsService {
 
 impl TestRdmsService {
     fn new(rdbms: Arc<dyn rdbms::RdbmsService>, additional_test_deps: AdditionalTestDeps) -> Self {
-        let ignite: Arc<dyn Rdbms<IgniteType> + Send + Sync> = Arc::new(TestRdms::new(
-            rdbms.ignite(),
-            additional_test_deps.clone(),
-        ));
+        let ignite: Arc<dyn Rdbms<IgniteType> + Send + Sync> =
+            Arc::new(TestRdms::new(rdbms.ignite(), additional_test_deps.clone()));
         let mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync> =
             Arc::new(TestRdms::new(rdbms.mysql(), additional_test_deps.clone()));
         let postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync> = Arc::new(TestRdms::new(

@@ -324,4 +324,3 @@ impl FromRdbmsValue<crate::services::rdbms::DbResult<IgniteType>> for DbResult {
         })
     }
 }
-

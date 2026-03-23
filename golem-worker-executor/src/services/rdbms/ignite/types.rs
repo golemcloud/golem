@@ -97,41 +97,133 @@ pub enum DbValue {
 impl DbValue {
     pub fn type_name(&self) -> &'static str {
         match self {
-            DbValue::Null           => "NULL",
-            DbValue::Boolean(_)     => "BOOLEAN",
-            DbValue::Byte(_)        => "TINYINT",
-            DbValue::Short(_)       => "SMALLINT",
-            DbValue::Int(_)         => "INT",
-            DbValue::Long(_)        => "BIGINT",
-            DbValue::Float(_)       => "FLOAT",
-            DbValue::Double(_)      => "DOUBLE",
-            DbValue::Char(_)        => "CHAR",
-            DbValue::String(_)      => "VARCHAR",
-            DbValue::Uuid(_)        => "UUID",
-            DbValue::Date(_)        => "DATE",
-            DbValue::Timestamp(..)  => "TIMESTAMP",
-            DbValue::Time(_)        => "TIME",
-            DbValue::Decimal(_)     => "DECIMAL",
-            DbValue::ByteArray(_)   => "BINARY",
+            DbValue::Null => "NULL",
+            DbValue::Boolean(_) => "BOOLEAN",
+            DbValue::Byte(_) => "TINYINT",
+            DbValue::Short(_) => "SMALLINT",
+            DbValue::Int(_) => "INT",
+            DbValue::Long(_) => "BIGINT",
+            DbValue::Float(_) => "FLOAT",
+            DbValue::Double(_) => "DOUBLE",
+            DbValue::Char(_) => "CHAR",
+            DbValue::String(_) => "VARCHAR",
+            DbValue::Uuid(_) => "UUID",
+            DbValue::Date(_) => "DATE",
+            DbValue::Timestamp(..) => "TIMESTAMP",
+            DbValue::Time(_) => "TIME",
+            DbValue::Decimal(_) => "DECIMAL",
+            DbValue::ByteArray(_) => "BINARY",
         }
     }
 
-    pub fn as_bool(&self)       -> Option<bool>       { if let DbValue::Boolean(v) = self { Some(*v) } else { None } }
-    pub fn as_byte(&self)       -> Option<i8>         { if let DbValue::Byte(v)    = self { Some(*v) } else { None } }
-    pub fn as_short(&self)      -> Option<i16>        { if let DbValue::Short(v)   = self { Some(*v) } else { None } }
-    pub fn as_int(&self)        -> Option<i32>        { if let DbValue::Int(v)     = self { Some(*v) } else { None } }
-    pub fn as_long(&self)       -> Option<i64>        { if let DbValue::Long(v)    = self { Some(*v) } else { None } }
-    pub fn as_float(&self)      -> Option<f32>        { if let DbValue::Float(v)   = self { Some(*v) } else { None } }
-    pub fn as_double(&self)     -> Option<f64>        { if let DbValue::Double(v)  = self { Some(*v) } else { None } }
-    pub fn as_char(&self)       -> Option<u16>        { if let DbValue::Char(v)    = self { Some(*v) } else { None } }
-    pub fn as_str(&self)        -> Option<&str>       { if let DbValue::String(v)  = self { Some(v)  } else { None } }
-    pub fn as_uuid(&self)       -> Option<&Uuid>      { if let DbValue::Uuid(v)    = self { Some(v)  } else { None } }
-    pub fn as_date_ms(&self)    -> Option<i64>        { if let DbValue::Date(ms)   = self { Some(*ms) } else { None } }
-    pub fn as_timestamp(&self)  -> Option<(i64, i32)> { if let DbValue::Timestamp(ms, ns) = self { Some((*ms, *ns)) } else { None } }
-    pub fn as_time_ms(&self)    -> Option<i64>        { if let DbValue::Time(ms)   = self { Some(*ms) } else { None } }
-    pub fn as_decimal(&self)    -> Option<&BigDecimal> { if let DbValue::Decimal(v) = self { Some(v) } else { None } }
-    pub fn as_bytes(&self)      -> Option<&[u8]>      { if let DbValue::ByteArray(v) = self { Some(v) } else { None } }
-    pub fn is_null(&self)       -> bool               { matches!(self, DbValue::Null) }
+    pub fn as_bool(&self) -> Option<bool> {
+        if let DbValue::Boolean(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+    pub fn as_byte(&self) -> Option<i8> {
+        if let DbValue::Byte(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+    pub fn as_short(&self) -> Option<i16> {
+        if let DbValue::Short(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+    pub fn as_int(&self) -> Option<i32> {
+        if let DbValue::Int(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+    pub fn as_long(&self) -> Option<i64> {
+        if let DbValue::Long(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+    pub fn as_float(&self) -> Option<f32> {
+        if let DbValue::Float(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+    pub fn as_double(&self) -> Option<f64> {
+        if let DbValue::Double(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+    pub fn as_char(&self) -> Option<u16> {
+        if let DbValue::Char(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+    pub fn as_str(&self) -> Option<&str> {
+        if let DbValue::String(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub fn as_uuid(&self) -> Option<&Uuid> {
+        if let DbValue::Uuid(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub fn as_date_ms(&self) -> Option<i64> {
+        if let DbValue::Date(ms) = self {
+            Some(*ms)
+        } else {
+            None
+        }
+    }
+    pub fn as_timestamp(&self) -> Option<(i64, i32)> {
+        if let DbValue::Timestamp(ms, ns) = self {
+            Some((*ms, *ns))
+        } else {
+            None
+        }
+    }
+    pub fn as_time_ms(&self) -> Option<i64> {
+        if let DbValue::Time(ms) = self {
+            Some(*ms)
+        } else {
+            None
+        }
+    }
+    pub fn as_decimal(&self) -> Option<&BigDecimal> {
+        if let DbValue::Decimal(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        if let DbValue::ByteArray(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+    pub fn is_null(&self) -> bool {
+        matches!(self, DbValue::Null)
+    }
 }
 
 impl Display for DbValue {
@@ -242,7 +334,8 @@ impl TryFrom<SerializableDbValue> for DbValue {
             | SerializableDbValueNode::Longtext(v) => DbValue::String(v),
             SerializableDbValueNode::Uuid(v) => DbValue::Uuid(v),
             SerializableDbValueNode::Date(v) => {
-                let ms = v.and_hms_opt(0, 0, 0)
+                let ms = v
+                    .and_hms_opt(0, 0, 0)
                     .map(|dt| dt.and_utc().timestamp_millis())
                     .unwrap_or(0);
                 DbValue::Date(ms)
