@@ -30,7 +30,11 @@ type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::Tc
 pub struct WebSocketConnectionEntry {
     writer: Mutex<SplitSink<WsStream, tungstenite::Message>>,
     reader: Mutex<SplitStream<WsStream>>,
+    /// Held for the lifetime of the connection to limit concurrent WebSocket
+    /// connections per executor. Released when the connection is dropped.
+    _permit: tokio::sync::OwnedSemaphorePermit,
 }
+
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
@@ -47,17 +51,25 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             Err(e) => return Ok(Err(Error::ConnectionFailure(e.to_string()))),
         };
 
+        // Acquire a permit from the per-executor connection pool to limit
+        // concurrent WebSocket connections and protect against socket exhaustion.
+        let permit = self.websocket_connection_pool.acquire().await?;
+
         match connect_async(request).await {
             Ok((ws_stream, _response)) => {
                 let (writer, reader) = ws_stream.split();
                 let entry = WebSocketConnectionEntry {
                     writer: Mutex::new(writer),
                     reader: Mutex::new(reader),
+                    _permit: permit,
                 };
                 let resource = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(resource))
             }
-            Err(e) => Ok(Err(Error::ConnectionFailure(e.to_string()))),
+            Err(e) => {
+                // permit is dropped here, releasing the slot
+                Ok(Err(Error::ConnectionFailure(e.to_string())))
+            }
         }
     }
 

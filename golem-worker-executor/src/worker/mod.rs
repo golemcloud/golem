@@ -36,8 +36,9 @@ use crate::services::{
     HasBlobStoreService, HasComponentService, HasConfig, HasEnvironmentStateService, HasEvents,
     HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasOplog,
     HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -2344,6 +2345,7 @@ impl RunningWorker {
             parent.agent_webhooks(),
             parent.shard_service(),
             parent.http_connection_pool(),
+            parent.websocket_connection_pool(),
             pending_update,
             worker_metadata.original_phantom_id,
         )

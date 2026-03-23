@@ -42,6 +42,7 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, NoAdditionalDeps};
 use crate::worker::{RetryDecision, Worker};
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
     InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
@@ -747,6 +748,7 @@ impl WorkerCtx for Context {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -777,6 +779,7 @@ impl WorkerCtx for Context {
             agent_webhooks_service,
             shard_service,
             http_connection_pool,
+            websocket_connection_pool,
             pending_update,
             original_phantom_id,
         )

@@ -14,6 +14,7 @@
 
 pub mod default;
 
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
@@ -143,6 +144,7 @@ pub trait WorkerCtx:
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError>;

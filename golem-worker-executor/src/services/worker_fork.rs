@@ -16,6 +16,7 @@ use super::agent_webhooks::AgentWebhooksService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService};
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
@@ -32,8 +33,8 @@ use crate::services::{
     HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasLeakSentinel,
     HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
 };
 use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
@@ -109,6 +110,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub resource_limits: Arc<dyn ResourceLimits>,
     pub shutdown_token: tokio_util::sync::CancellationToken,
     pub http_connection_pool: Option<HttpConnectionPool>,
+    pub websocket_connection_pool: WebSocketConnectionPool,
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     pub extra_deps: Ctx::ExtraDeps,
     pub leak_sentinel: Arc<()>,
@@ -298,6 +300,12 @@ impl<Ctx: WorkerCtx> HasHttpConnectionPool for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWebSocketConnectionPool for DefaultWorkerFork<Ctx> {
+    fn websocket_connection_pool(&self) -> WebSocketConnectionPool {
+        self.websocket_connection_pool.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasEnvironmentStateService for DefaultWorkerFork<Ctx> {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.environment_state_service.clone()
@@ -335,6 +343,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
+            websocket_connection_pool: self.websocket_connection_pool.clone(),
             environment_state_service: self.environment_state_service.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
@@ -376,6 +385,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         agent_webhooks: Arc<AgentWebhooksService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -408,6 +418,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             environment_state_service,
             extra_deps,
             leak_sentinel,

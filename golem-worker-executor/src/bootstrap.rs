@@ -38,6 +38,7 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_fork::DefaultWorkerFork;
 use crate::services::worker_proxy::WorkerProxy;
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::{rdbms, resource_limits, All, NoAdditionalDeps};
 use crate::wasi_host::create_linker;
 use crate::workerctx::default::Context;
@@ -108,6 +109,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits = resource_limits::configured(
@@ -151,6 +153,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -188,6 +191,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -222,6 +226,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             environment_state_service.clone(),
             additional_deps,
             leak_sentinel,

@@ -93,6 +93,7 @@ impl DebugConfig {
                 ShardManagerServiceSingleShardConfig {},
             ),
             registry_service: self.registry_service,
+            max_websocket_connections: 100,
         }
     }
 }
