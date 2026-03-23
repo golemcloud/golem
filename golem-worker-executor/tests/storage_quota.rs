@@ -1712,3 +1712,119 @@ async fn executor_pool_storage_usage_survives_restart(
 
     Ok(())
 }
+
+/// `blocking_splice` from an input stream to a file-backed output stream must
+/// be subject to storage quota.  After writing an 11-byte file that nearly
+/// exhausts the 20-byte quota, splicing those 11 bytes into a second file
+/// (total 22 bytes) must fail with `AgentExceededFilesystemStorageLimit`.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_blocking_splice_exceeding_limit_fails(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // 20-byte quota — "hello world" (11 bytes) fits once but not twice.
+    let executor = start_with_agent_storage_quota(deps, &context, 20).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "blocking-splice-quota-1");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Write the source file — consumes 11 of 20 bytes.
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/src.txt", "hello world"),
+        )
+        .await?;
+
+    // Splice source into a new destination — needs 11 more bytes (total 22),
+    // which exceeds the 20-byte quota.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "blocking_splice",
+            data_value!("/src.txt", "/dst.txt"),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "expected blocking_splice to fail when total bytes exceed agent quota"
+    );
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// Same as `agent_quota_blocking_splice_exceeding_limit_fails` but exercises
+/// the non-blocking `output-stream.splice` path.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn agent_quota_splice_exceeding_limit_fails(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_quota(deps, &context, 20).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "splice-quota-1");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/src.txt", "hello world"),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "splice",
+            data_value!("/src.txt", "/dst.txt"),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "expected splice to fail when total bytes exceed agent quota"
+    );
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
+    );
+
+    Ok(())
+}

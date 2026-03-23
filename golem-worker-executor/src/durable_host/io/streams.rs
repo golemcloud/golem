@@ -546,7 +546,21 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "splice");
-            HostOutputStream::splice(self.table(), self_, src, len).await
+
+            let stream_rep = self_.rep();
+            reserve_filesystem_stream_growth(self, stream_rep, len).await?;
+
+            let result = HostOutputStream::splice(self.table(), self_, src, len).await;
+            match &result {
+                Ok(spliced) => {
+                    mark_filesystem_stream_write_enqueued(self, stream_rep, *spliced);
+                    reconcile_pending_filesystem_stream_reservation(self, stream_rep).await;
+                }
+                Err(_) => {
+                    rollback_pending_filesystem_stream_reservation(self, stream_rep).await;
+                }
+            }
+            result
         }
     }
 
@@ -585,7 +599,21 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "blocking_splice");
-            HostOutputStream::blocking_splice(self.table(), self_, src, len).await
+
+            let stream_rep = self_.rep();
+            reserve_filesystem_stream_growth(self, stream_rep, len).await?;
+
+            let result = HostOutputStream::blocking_splice(self.table(), self_, src, len).await;
+            match &result {
+                Ok(spliced) => {
+                    mark_filesystem_stream_write_enqueued(self, stream_rep, *spliced);
+                    reconcile_pending_filesystem_stream_reservation(self, stream_rep).await;
+                }
+                Err(_) => {
+                    rollback_pending_filesystem_stream_reservation(self, stream_rep).await;
+                }
+            }
+            result
         }
     }
 
