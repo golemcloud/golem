@@ -380,6 +380,7 @@ dependencies = ["wit"]
 description = "Runs only untagged and rdbms worker-executor-tests"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
+cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture $JUNIT_OPTS
 cargo-test-r run --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
 cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
 '''
@@ -1159,6 +1160,23 @@ cd plugins/otlp-exporter
 exec --fail-on-error ../../target/debug/golem build -P release --force-build
 exec --fail-on-error ../../target/debug/golem exec -P release copy
 cd ../..
+'''
+
+## ** BUILD TEST COMPONENTS **
+
+[tasks.build-test-components]
+description = "Builds all test WASM components (requires golem-cli and TS SDK to be built first)"
+dependencies = ["build", "build-sdk-ts"]
+script = '''
+cd test-components
+./build-components.sh rebuild
+'''
+
+[tasks.clean-test-components]
+description = "Cleans all test WASM components"
+script = '''
+cd test-components
+./build-components.sh clean
 '''
 
 ## Cleanup
