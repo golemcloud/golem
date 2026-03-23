@@ -3,7 +3,7 @@ settings:
   timeout_per_subprompt: 300
 steps:
   - id: "create-project"
-    prompt: "Create a new Golem application called test-app with TypeScript. Before running golem new, set the SDK override: export GOLEM_TS_PACKAGES_PATH=$GOLEM_PATH/sdks/ts/packages"
+    prompt: "Create a new Golem application called test-app with TypeScript. After creating the project, fix the SDK versions in package.json by replacing any local path references to golem-ts-sdk and golem-ts-typegen with version 1.0.0-dev.1, then run npm install"
     expectedSkills:
       - "golem-new-project"
     verify:
@@ -15,6 +15,3 @@ steps:
       args: ["test-app/golem.yaml"]
     expect:
       exit_code: 0
-
-  # Deploy requires components to be added to the project first;
-  # golem-new-project only scaffolds the app structure.
