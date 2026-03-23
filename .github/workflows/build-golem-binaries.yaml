@@ -63,12 +63,8 @@ jobs:
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
 
-      - name: Build golem-cli
-        run: cargo build -p golem-cli --release
-        timeout-minutes: 30
-
-      - name: Build golem server
-        run: cargo build -p golem --release
+      - name: Build golem-cli and golem server
+        run: cargo build -p golem-cli -p golem --release
         timeout-minutes: 30
 
       # --- Upload artifacts ---
