@@ -79,6 +79,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<Descriptor>,
     ) -> Result<Resource<OutputStream>, FsError> {
+        self.fail_if_read_only(&self_)?;
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
         let descriptor_rep = self_.rep();
         let stream =
