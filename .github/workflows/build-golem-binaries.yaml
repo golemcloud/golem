@@ -1,0 +1,87 @@
+name: Build Golem Binaries
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+
+concurrency:
+  group: build-golem-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  check-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Check trigger condition
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            MSG=$(git log -1 --pretty=%s)
+            if echo "$MSG" | grep -q "rebuild golem artifact"; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+  build:
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should_run == 'true'
+    env:
+      CARGO_BUILD_JOBS: 20
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      # --- Rust toolchain (matches ci.yaml build-and-store + publish-binaries) ---
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1 wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v4-rust
+          shared-key: release
+          cache-all-crates: true
+          save-if: true
+      - uses: davidB/rust-cargo-make@v1
+      # --- Build golem-cli and golem server (release, matches publish-binaries) ---
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
+
+      - name: Build golem-cli
+        run: cargo build -p golem-cli --release
+        timeout-minutes: 30
+
+      - name: Build golem server
+        run: cargo build -p golem --release
+        timeout-minutes: 30
+
+      # --- Upload artifacts ---
+      - name: Upload golem-cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-cli
+          path: target/release/golem-cli
+          retention-days: 30
+
+      - name: Upload golem server
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-server
+          path: target/release/golem
+          retention-days: 30
