@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::{golem_api_1_x, golem_durability};
 use crate::services::active_workers::ActiveWorkers;
@@ -38,7 +39,6 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_fork::DefaultWorkerFork;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::{rdbms, resource_limits, All, NoAdditionalDeps};
 use crate::wasi_host::create_linker;
 use crate::workerctx::default::Context;

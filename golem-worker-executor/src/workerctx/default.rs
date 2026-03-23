@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::LogEventEmitBehaviour;
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
@@ -42,7 +43,6 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, NoAdditionalDeps};
 use crate::worker::{RetryDecision, Worker};
-use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
     InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,

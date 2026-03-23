@@ -41,10 +41,10 @@ pub mod worker_proxy;
 
 use self::agent_webhooks::AgentWebhooksService;
 use self::environment_state::EnvironmentStateService;
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::worker_activator::WorkerActivator;
-use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
 use std::sync::Arc;

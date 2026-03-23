@@ -35,7 +35,6 @@ pub struct WebSocketConnectionEntry {
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
-
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
