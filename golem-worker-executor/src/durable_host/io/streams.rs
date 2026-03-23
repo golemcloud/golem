@@ -760,9 +760,7 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
 ) -> Result<(), StreamError> {
     let Some(stream_state) = ctx.state.open_filesystem_output_streams.get(&stream_rep) else {
         if write_len > 0 {
-            ctx.check_filesystem_storage_quota(write_len)
-                .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-            ctx.acquire_filesystem_storage_space(write_len)
+            ctx.reserve_filesystem_storage(write_len)
                 .await
                 .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
         }
@@ -782,9 +780,7 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
             Ok(stat) => stat.size,
             Err(_) => {
                 if write_len > 0 {
-                    ctx.check_filesystem_storage_quota(write_len)
-                        .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-                    ctx.acquire_filesystem_storage_space(write_len)
+                    ctx.reserve_filesystem_storage(write_len)
                         .await
                         .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
                 }
@@ -801,9 +797,7 @@ async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(
     let requested_growth = requested_end.saturating_sub(current_size);
 
     if requested_growth > 0 {
-        ctx.check_filesystem_storage_quota(requested_growth)
-            .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-        ctx.acquire_filesystem_storage_space(requested_growth)
+        ctx.reserve_filesystem_storage(requested_growth)
             .await
             .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
     }

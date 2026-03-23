@@ -530,6 +530,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.current_filesystem_storage_usage -= freed_bytes;
     }
 
+    /// Check the per-agent storage quota and acquire permits from the
+    /// executor-wide semaphore pool in a single step.
+    ///
+    /// This combines `check_filesystem_storage_quota` (per-plan limit) and
+    /// `acquire_filesystem_storage_space` (executor semaphore) — the two must
+    /// always be called together in this order.
+    pub async fn reserve_filesystem_storage(&mut self, new_bytes: u64) -> anyhow::Result<()> {
+        self.check_filesystem_storage_quota(new_bytes)?;
+        self.acquire_filesystem_storage_space(new_bytes).await
+    }
+
     pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             // The increased amount was already recorded in live mode, so our worker

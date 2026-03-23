@@ -149,9 +149,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         if size > current_size {
             let delta = size - current_size;
-            self.check_filesystem_storage_quota(delta)
-                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
-            self.acquire_filesystem_storage_space(delta)
+            self.reserve_filesystem_storage(delta)
                 .await
                 .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
         }
@@ -230,9 +228,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let requested_end = offset.saturating_add(buffer.len() as u64);
         let requested_growth = requested_end.saturating_sub(current_size);
         if requested_growth > 0 {
-            self.check_filesystem_storage_quota(requested_growth)
-                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
-            self.acquire_filesystem_storage_space(requested_growth)
+            self.reserve_filesystem_storage(requested_growth)
                 .await
                 .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
         }
