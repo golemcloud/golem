@@ -31,7 +31,6 @@ use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff;
 use golem_common::model::environment::Environment;
-use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
@@ -40,7 +39,6 @@ use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -109,11 +107,11 @@ pub struct DeploymentWriteService {
     mcp_deployment_service: Arc<McpDeploymentService>,
     agent_secrets_service: Arc<AgentSecretService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
-    security_scheme_service: Arc<SecuritySchemeService>,
     resource_definition_service: Arc<ResourceDefinitionService>,
 }
 
 impl DeploymentWriteService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         environment_service: Arc<EnvironmentService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
@@ -122,7 +120,7 @@ impl DeploymentWriteService {
         mcp_deployment_service: Arc<McpDeploymentService>,
         agent_secrets_service: Arc<AgentSecretService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
-        security_scheme_service: Arc<SecuritySchemeService>,
+        _security_scheme_service: Arc<SecuritySchemeService>,
         resource_definition_service: Arc<ResourceDefinitionService>,
     ) -> DeploymentWriteService {
         Self {
@@ -133,7 +131,6 @@ impl DeploymentWriteService {
             mcp_deployment_service,
             agent_secrets_service,
             registry_change_notifier,
-            security_scheme_service,
             resource_definition_service,
         }
     }
@@ -246,35 +243,9 @@ impl DeploymentWriteService {
 
         let compiled_routes = deployment_context.compile_http_api_routes(&mut errors);
 
-        let security_schemes_list = self
-            .security_scheme_service
-            .get_security_schemes_in_environment(environment_id, auth)
-            .await
-            .unwrap_or_default();
-
-        let security_schemes_map: HashMap<
-            SecuritySchemeName,
-            golem_service_base::custom_api::SecuritySchemeDetails,
-        > = security_schemes_list
-            .into_iter()
-            .map(|s| {
-                let details = golem_service_base::custom_api::SecuritySchemeDetails {
-                    id: s.id,
-                    name: s.name.clone(),
-                    provider_type: s.provider_type,
-                    client_id: s.client_id,
-                    client_secret: s.client_secret,
-                    redirect_url: s.redirect_url,
-                    scopes: s.scopes,
-                };
-                (s.name, details)
-            })
-            .collect();
-
         let compiled_mcps = deployment_context.compile_mcp_deployments(
             account_id,
             next_deployment_revision,
-            &security_schemes_map,
             &mut errors,
         );
 

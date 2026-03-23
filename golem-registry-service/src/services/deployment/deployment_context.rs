@@ -39,7 +39,6 @@ use golem_common::model::resource_definition::{
     ResourceDefinition, ResourceDefinitionCreation, ResourceName,
 };
 use golem_common::model::security_scheme::SecuritySchemeName;
-use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_wasm::ValueAndType;
@@ -239,7 +238,6 @@ impl DeploymentContext {
         &self,
         account_id: AccountId,
         deployment_revision: golem_common::model::deployment::DeploymentRevision,
-        security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
         errors: &mut Vec<DeployValidationError>,
     ) -> Vec<golem_service_base::mcp::CompiledMcp> {
         let mut all_compiled_mcps = Vec::new();
@@ -273,26 +271,15 @@ impl DeploymentContext {
                 }
             }
 
-            let security_scheme = if unique_scheme_names.len() > 1 {
+            let security_scheme_name = if unique_scheme_names.len() > 1 {
                 errors.push(
                     DeployValidationError::McpDeploymentConflictingSecuritySchemes {
                         mcp_deployment_domain: domain.clone(),
                     },
                 );
                 None
-            } else if let Some(scheme_name) = unique_scheme_names.into_iter().next() {
-                match security_schemes.get(scheme_name) {
-                    Some(details) => Some(details.clone()),
-                    None => {
-                        errors.push(DeployValidationError::McpDeploymentUnknownSecurityScheme {
-                            mcp_deployment_domain: domain.clone(),
-                            security_scheme: scheme_name.clone(),
-                        });
-                        None
-                    }
-                }
             } else {
-                None
+                unique_scheme_names.into_iter().next().cloned()
             };
 
             let compiled_mcp = golem_service_base::mcp::CompiledMcp {
@@ -301,7 +288,8 @@ impl DeploymentContext {
                 deployment_revision,
                 domain: domain.clone(),
                 agent_type_implementers,
-                security_scheme,
+                security_scheme: None,
+                security_scheme_name,
                 registered_agent_types: Vec::new(),
             };
             all_compiled_mcps.push(compiled_mcp);

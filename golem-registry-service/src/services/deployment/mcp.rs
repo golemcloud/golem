@@ -56,27 +56,35 @@ impl DeployedMcpService {
 
         match optional_deployment {
             Some(deployment) => {
-                let security_scheme_id = deployment.mcp_data.value().security_scheme_id;
+                let security_scheme_id = deployment.mcp_data.value().security_scheme_id.clone();
+                let security_scheme_name = deployment.mcp_data.value().security_scheme_name.clone();
                 let environment_id = deployment.environment_id;
                 let mut compiled_mcp = CompiledMcp::try_from(deployment)?;
 
-                if let Some(scheme_id) = security_scheme_id {
-                    let scheme = self
-                        .security_scheme_service
+                let scheme = if let Some(scheme_id) = security_scheme_id {
+                    self.security_scheme_service
                         .get(scheme_id, &AuthCtx::system())
                         .await
-                        .ok();
+                        .ok()
+                } else if let Some(scheme_name_str) = security_scheme_name {
+                    let scheme_name = golem_common::model::security_scheme::SecuritySchemeName(scheme_name_str);
+                    self.security_scheme_service
+                        .get_for_environment_id_and_name_system(golem_common::model::environment::EnvironmentId(environment_id), &scheme_name)
+                        .await
+                        .ok()
+                } else {
+                    None
+                };
 
-                    compiled_mcp.security_scheme = scheme.map(|s| SecuritySchemeDetails {
-                        id: s.id,
-                        name: s.name,
-                        provider_type: s.provider_type,
-                        client_id: s.client_id,
-                        client_secret: s.client_secret,
-                        redirect_url: s.redirect_url,
-                        scopes: s.scopes,
-                    });
-                }
+                compiled_mcp.security_scheme = scheme.map(|s| SecuritySchemeDetails {
+                    id: s.id,
+                    name: s.name,
+                    provider_type: s.provider_type,
+                    client_id: s.client_id,
+                    client_secret: s.client_secret,
+                    redirect_url: s.redirect_url,
+                    scopes: s.scopes,
+                });
 
                 let mut registered_agent_types = Vec::new();
                 for agent_type_name in compiled_mcp.agent_type_implementers.keys() {

@@ -83,6 +83,7 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
                 .map(|s| s.try_into())
                 .transpose()
                 .map_err(|e| format!("Invalid security_scheme: {}", e))?,
+            security_scheme_name: None,
             registered_agent_types,
         })
     }

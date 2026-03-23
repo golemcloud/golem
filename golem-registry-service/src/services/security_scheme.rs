@@ -333,6 +333,23 @@ impl SecuritySchemeService {
         Ok(result)
     }
 
+    pub async fn get_for_environment_id_and_name_system(
+        &self,
+        environment_id: EnvironmentId,
+        name: &SecuritySchemeName,
+    ) -> Result<SecurityScheme, SecuritySchemeError> {
+        let result = self
+            .security_scheme_repo
+            .get_for_environment_and_name(environment_id.0, &name.0)
+            .await?
+            .ok_or(SecuritySchemeError::SecuritySchemeForNameNotFound(
+                name.clone(),
+            ))?
+            .try_into()?;
+
+        Ok(result)
+    }
+
     async fn get_with_environment(
         &self,
         security_scheme_id: SecuritySchemeId,
