@@ -403,7 +403,6 @@ jobs:
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
           install-cargo-make: 'false'
-          purge-v8: 'false'
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}
