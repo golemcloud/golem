@@ -1881,7 +1881,7 @@ async fn websocket_echo_ts(
     let mut env_vars = HashMap::new();
     env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
 
-    let agent_id = agent_id!("WebsocketTest", "ws-echo-test");
+    let agent_id = agent_id!("WebSocketTest", "ws-echo-test");
 
     let _agent_id = user
         .start_agent_with(
