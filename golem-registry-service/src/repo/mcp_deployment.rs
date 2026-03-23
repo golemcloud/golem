@@ -463,7 +463,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
-                    WHERE m.mcp_deployment_id = $1 AND mr.revision_id = $2 AND mr.deleted = FALSE
+                    WHERE m.mcp_deployment_id = $1 AND mr.revision_id = $2 AND m.deleted_at IS NULL
                 "# })
                 .bind(mcp_deployment_id)
                 .bind(revision_id),

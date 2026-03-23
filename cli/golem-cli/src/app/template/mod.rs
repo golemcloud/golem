@@ -14,14 +14,20 @@
 
 mod generator;
 mod metadata;
+mod plan;
 mod repo;
 mod snippet;
 #[allow(clippy::module_inception)]
 mod template;
 
 pub use metadata::AppTemplateMetadata;
+pub use plan::{
+    MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
+    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TemplatePlanStep, UnsafeTemplatePlan,
+    UnsafeTemplatePlanStep,
+};
 pub use repo::AppTemplateRepo;
 pub use template::{
-    AppTemplate, AppTemplateCommon, AppTemplateCommonOnDemand, AppTemplateComponent,
-    AppTemplateName, AppTemplatesForLanguage,
+    AppTemplate, AppTemplateAgent, AppTemplateCommon, AppTemplateCommonOnDemand,
+    AppTemplateComponent, AppTemplateName, AppTemplatesForLanguage,
 };

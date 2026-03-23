@@ -39,6 +39,7 @@ pub mod plan;
 pub mod plugin_registration;
 pub mod regions;
 pub mod reports;
+pub mod resource_definition;
 pub mod security_scheme;
 pub mod worker;
 pub mod worker_filter;

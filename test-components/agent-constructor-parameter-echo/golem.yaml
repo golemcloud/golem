@@ -9,8 +9,12 @@
 app: agent-constructor-parameter-echo
 
 includes:
-- components-*/*/golem.yaml
 - ../golem-test-components-common.yaml
+
+components:
+  golem-it:constructor-parameter-echo:
+    dir: "."
+    templates: ts, ts-test-component
 
 environments:
   local:

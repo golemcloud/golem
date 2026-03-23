@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use self::api::agent_secret::AgentSecretSubcommand;
+use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
@@ -591,12 +592,24 @@ pub enum GolemCliCommandPartialMatch {
 #[derive(Debug, Subcommand)]
 pub enum GolemCliSubcommand {
     // App scoped root commands---------------------------------------------------------------------
-    /// Create a new application
+    /// Create a new application, component, or agent
     New {
-        /// Application folder name where the new application should be created
+        /// Application folder path where the new application should be created, use `.` for the current directory or for an existing application
+        application_path: Option<PathBuf>,
+        /// Optional application name, defaults to the folder name (if that is a valid application name)
+        #[arg(long)]
         application_name: Option<ApplicationName>,
-        /// Languages that the application should support
-        language: Vec<GuestLanguage>,
+        /// Optional existing or new component name, by default uses an existing component or name the component based on the application name and the used language
+        #[arg(long)]
+        component_name: Option<ComponentName>,
+        /// Optional template names to apply, in non-interactive mode at least one template must be specified
+        #[arg(long)]
+        template: Vec<AppTemplateName>,
+    },
+    /// List or search application templates
+    Templates {
+        /// Optional filter for language or template name
+        filter: Option<String>,
     },
     /// Build all or selected components in the application
     Build {
@@ -914,27 +927,13 @@ pub mod environment {
 }
 
 pub mod component {
-    use crate::command::shared_args::{
-        ComponentTemplateName, OptionalComponentName, OptionalComponentNames,
-    };
+    use crate::command::shared_args::{OptionalComponentName, OptionalComponentNames};
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
-    use golem_common::model::component::{ComponentName, ComponentRevision};
+    use golem_common::model::component::ComponentRevision;
 
     #[derive(Debug, Subcommand)]
     pub enum ComponentSubcommand {
-        /// Create new component in the current application
-        New {
-            /// Template to be used for the new component
-            component_template: Option<ComponentTemplateName>,
-            /// Name of the new component in 'namespace:name' form
-            component_name: Option<ComponentName>,
-        },
-        /// List or search component templates
-        Templates {
-            /// Optional filter for language or template name
-            filter: Option<String>,
-        },
         /// List deployed component versions' metadata
         List,
         /// Get the latest or selected revision of deployed component metadata
@@ -1645,12 +1644,7 @@ pub fn builtin_exec_subcommands() -> BTreeSet<String> {
 
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
-        ShowClapHelpTarget::AppNew => {
-            vec!["new"]
-        }
-        ShowClapHelpTarget::ComponentNew => {
-            vec!["component", "new"]
-        }
+        ShowClapHelpTarget::AppNew => vec!["new"],
     }
 }
 

@@ -17,6 +17,7 @@ use super::agent_secrets::{
     AgentSecretRevisionRecord,
 };
 use super::audit::DeletableRevisionAuditFields;
+use super::resource_definition::{ResourceDefinitionCreationArgs, ResourceDefinitionRepoError};
 use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
 use crate::model::api_definition::{BoundCompiledRoute, UnboundCompiledRoute};
 use crate::repo::model::audit::RevisionAuditFields;
@@ -40,6 +41,7 @@ use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
+use golem_common::model::resource_definition::{ResourceDefinitionCreation, ResourceDefinitionId};
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
@@ -59,11 +61,18 @@ pub enum DeployRepoError {
     VersionAlreadyExists { version: String },
     #[error("Secret for path {rendered_path} already exsists", rendered_path = path.join("."))]
     AgentSecretConflict { path: Vec<String> },
+    #[error("Resource for name {name} already exists")]
+    ResourceConflict { name: String },
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
-error_forwarding!(DeployRepoError, RepoError, AgentSecretRepoError);
+error_forwarding!(
+    DeployRepoError,
+    RepoError,
+    AgentSecretRepoError,
+    ResourceDefinitionRepoError
+);
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct CurrentDeploymentRevisionRecord {
@@ -444,6 +453,8 @@ pub struct DeploymentRevisionCreationRecord {
     pub created_agent_secrets: Vec<AgentSecretCreationRecord>,
     pub updated_agent_secrets: Vec<AgentSecretRevisionRecord>,
 
+    pub created_resource_definitions: Vec<ResourceDefinitionCreationArgs>,
+
     pub user_account_id: Uuid,
 }
 
@@ -461,6 +472,7 @@ impl DeploymentRevisionCreationRecord {
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
         created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
         updated_agent_secrets: Vec<DeploymentAgentSecretUpdate>,
+        created_resource_definitions: Vec<ResourceDefinitionCreation>,
         actor: AccountId,
     ) -> anyhow::Result<Self> {
         Ok(Self {
@@ -549,6 +561,21 @@ impl DeploymentRevisionCreationRecord {
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
+            created_resource_definitions: created_resource_definitions
+                .into_iter()
+                .map(|r| {
+                    ResourceDefinitionCreationArgs::new(
+                        ResourceDefinitionId::new(),
+                        environment_id,
+                        &r.limit,
+                        r.name,
+                        r.enforcement_action,
+                        r.unit,
+                        r.units,
+                        actor,
+                    )
+                })
+                .collect(),
             user_account_id: actor.0,
         })
     }

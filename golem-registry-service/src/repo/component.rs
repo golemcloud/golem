@@ -653,7 +653,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
-                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR cr.deleted = FALSE)
+                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR c.deleted_at IS NULL)
                 "#})
                 .bind(component_id)
                 .bind(revision_id)
