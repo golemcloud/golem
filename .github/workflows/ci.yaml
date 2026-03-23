@@ -444,7 +444,7 @@ jobs:
 
       - name: Install wasm-rquickjs
         if: matrix.chunk.needs-node
-        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
+        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
       - name: Remove any pre-existing WASMs
         run: find test-components -maxdepth 1 -name '*.wasm' -delete
