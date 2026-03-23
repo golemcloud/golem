@@ -163,8 +163,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             HostDescriptor::set_size(&mut view.filesystem(), fd, size).await
         };
 
-        // Release permits if the truncation succeeded and actually shrank the file.
-        if result.is_ok() && size < current_size {
+        if size > current_size {
+            // Growth path: release permits if the operation failed.
+            let delta = size - current_size;
+            if result.is_err() {
+                self.release_filesystem_storage_space(delta).await;
+            }
+        } else if result.is_ok() && size < current_size {
+            // Shrink path: release permits for the freed space on success.
             self.release_filesystem_storage_space(current_size - size)
                 .await;
         }
