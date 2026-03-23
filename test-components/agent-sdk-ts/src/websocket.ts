@@ -15,3 +15,24 @@ class WebSocketTest extends BaseAgent {
         });
     }
 }
+
+@agent()
+class WebSocketStreamTest extends BaseAgent {
+    constructor(name: string) {
+        super();
+    }
+
+    async echo(url: string, msg: string): Promise<string> {
+        const wss = new WebSocketStream(url);
+        const { readable, writable } = await wss.opened;
+
+        const writer = writable.getWriter();
+        await writer.write(msg);
+
+        const reader = readable.getReader();
+        const { value } = await reader.read();
+
+        wss.close();
+        return String(value);
+    }
+}
