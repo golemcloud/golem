@@ -24,19 +24,25 @@
                 "inner": {
                   "cases": [
                     {
-                      "name": "case3",
-                      "typ": {
-                        "type": "Str"
-                      }
-                    },
-                    {
-                      "name": "case4",
+                      "name": "UnionType1",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "case5",
+                      "name": "UnionType2",
+                      "typ": {
+                        "type": "Str"
+                      }
+                    },
+                    {
+                      "name": "UnionType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionType4",
                       "typ": {
                         "fields": [
                           {
@@ -61,14 +67,10 @@
                         "name": "ObjectType",
                         "type": "Record"
                       }
-                    },
-                    {
-                      "name": "case6",
-                      "typ": {
-                        "type": "Bool"
-                      }
                     }
                   ],
+                  "name": "UnionType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "Option"
@@ -148,17 +150,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -182,12 +190,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -341,17 +343,23 @@
                     {
                       "name": "UnionType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionType4",
                       "typ": {
                         "fields": [
                           {
@@ -376,12 +384,6 @@
                         "name": "ObjectType",
                         "type": "Record"
                       }
-                    },
-                    {
-                      "name": "UnionType4",
-                      "typ": {
-                        "type": "Bool"
-                      }
                     }
                   ],
                   "name": "UnionType",
@@ -398,17 +400,23 @@
                     {
                       "name": "UnionComplexType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionComplexType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionComplexType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -463,17 +471,23 @@
                                 {
                                   "name": "UnionType1",
                                   "typ": {
-                                    "type": "Str"
+                                    "type": "F64"
                                   }
                                 },
                                 {
                                   "name": "UnionType2",
                                   "typ": {
-                                    "type": "F64"
+                                    "type": "Str"
                                   }
                                 },
                                 {
                                   "name": "UnionType3",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                },
+                                {
+                                  "name": "UnionType4",
                                   "typ": {
                                     "fields": [
                                       {
@@ -497,12 +511,6 @@
                                     ],
                                     "name": "ObjectType",
                                     "type": "Record"
-                                  }
-                                },
-                                {
-                                  "name": "UnionType4",
-                                  "typ": {
-                                    "type": "Bool"
                                   }
                                 }
                               ],
@@ -647,75 +655,61 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType4",
+                      "name": "UnionComplexType5",
                       "typ": {
-                        "fields": [
+                        "cases": [
                           {
-                            "name": "a",
-                            "typ": {
-                              "type": "Str"
-                            }
-                          },
-                          {
-                            "name": "b",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "c",
+                            "name": "UnionType2",
+                            "typ": {
+                              "type": "Str"
+                            }
+                          },
+                          {
+                            "name": "UnionType3",
                             "typ": {
                               "type": "Bool"
                             }
+                          },
+                          {
+                            "name": "UnionType4",
+                            "typ": {
+                              "fields": [
+                                {
+                                  "name": "a",
+                                  "typ": {
+                                    "type": "Str"
+                                  }
+                                },
+                                {
+                                  "name": "b",
+                                  "typ": {
+                                    "type": "F64"
+                                  }
+                                },
+                                {
+                                  "name": "c",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                }
+                              ],
+                              "name": "ObjectType",
+                              "type": "Record"
+                            }
                           }
                         ],
-                        "name": "ObjectType",
-                        "type": "Record"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType5",
-                      "typ": {
-                        "inner": {
-                          "type": "Str"
-                        },
-                        "name": "ListType",
-                        "type": "List"
+                        "name": "UnionType",
+                        "type": "Variant"
                       }
                     },
                     {
                       "name": "UnionComplexType6",
-                      "typ": {
-                        "inner": {
-                          "fields": [
-                            {
-                              "name": "a",
-                              "typ": {
-                                "type": "Str"
-                              }
-                            },
-                            {
-                              "name": "b",
-                              "typ": {
-                                "type": "F64"
-                              }
-                            },
-                            {
-                              "name": "c",
-                              "typ": {
-                                "type": "Bool"
-                              }
-                            }
-                          ],
-                          "name": "ObjectType",
-                          "type": "Record"
-                        },
-                        "name": "ListComplexType",
-                        "type": "List"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -733,7 +727,7 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType8",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -772,6 +766,21 @@
                       }
                     },
                     {
+                      "name": "UnionComplexType8",
+                      "typ": {
+                        "fields": [
+                          {
+                            "name": "n",
+                            "typ": {
+                              "type": "F64"
+                            }
+                          }
+                        ],
+                        "name": "SimpleInterfaceType",
+                        "type": "Record"
+                      }
+                    },
+                    {
                       "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
@@ -792,22 +801,42 @@
                     {
                       "name": "UnionComplexType10",
                       "typ": {
-                        "fields": [
-                          {
-                            "name": "n",
-                            "typ": {
-                              "type": "F64"
-                            }
-                          }
-                        ],
-                        "name": "SimpleInterfaceType",
-                        "type": "Record"
+                        "inner": {
+                          "type": "Str"
+                        },
+                        "name": "ListType",
+                        "type": "List"
                       }
                     },
                     {
                       "name": "UnionComplexType11",
                       "typ": {
-                        "type": "Bool"
+                        "inner": {
+                          "fields": [
+                            {
+                              "name": "a",
+                              "typ": {
+                                "type": "Str"
+                              }
+                            },
+                            {
+                              "name": "b",
+                              "typ": {
+                                "type": "F64"
+                              }
+                            },
+                            {
+                              "name": "c",
+                              "typ": {
+                                "type": "Bool"
+                              }
+                            }
+                          ],
+                          "name": "ObjectType",
+                          "type": "Record"
+                        },
+                        "name": "ListComplexType",
+                        "type": "List"
                       }
                     }
                   ],
@@ -1014,6 +1043,7 @@
                     }
                   ],
                   "name": "ResultLike",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -1044,6 +1074,7 @@
                     }
                   ],
                   "name": "ResultLikeWithNoTag",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1091,6 +1122,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined1",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1126,6 +1158,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined2",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1161,6 +1194,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined3",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1182,6 +1216,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined4",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -1206,19 +1241,25 @@
                   "inner": {
                     "cases": [
                       {
-                        "name": "case3",
-                        "typ": {
-                          "type": "Str"
-                        }
-                      },
-                      {
-                        "name": "case4",
+                        "name": "UnionType1",
                         "typ": {
                           "type": "F64"
                         }
                       },
                       {
-                        "name": "case5",
+                        "name": "UnionType2",
+                        "typ": {
+                          "type": "Str"
+                        }
+                      },
+                      {
+                        "name": "UnionType3",
+                        "typ": {
+                          "type": "Bool"
+                        }
+                      },
+                      {
+                        "name": "UnionType4",
                         "typ": {
                           "fields": [
                             {
@@ -1243,14 +1284,10 @@
                           "name": "ObjectType",
                           "type": "Record"
                         }
-                      },
-                      {
-                        "name": "case6",
-                        "typ": {
-                          "type": "Bool"
-                        }
                       }
                     ],
+                    "name": "UnionType",
+                    "owner": "./model",
                     "type": "Variant"
                   },
                   "type": "Option"
@@ -1288,17 +1325,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -1322,12 +1365,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -1415,6 +1452,7 @@
                     }
                   ],
                   "name": "TaggedUnion",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -1513,6 +1551,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -1534,6 +1573,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -1557,6 +1597,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -1599,6 +1640,7 @@
                     "type": "Str"
                   },
                   "ok": null,
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -1662,6 +1704,7 @@
                     "type": "Record"
                   },
                   "name": "ListComplexType",
+                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -1762,15 +1805,6 @@
         "inputSchema": {
           "elements": [
             {
-              "name": "text",
-              "schema": {
-                "elementType": {
-                  "type": "Str"
-                },
-                "type": "ComponentModel"
-              }
-            },
-            {
               "name": "image",
               "schema": {
                 "elementType": {
@@ -1778,6 +1812,15 @@
                     "type": "U8"
                   },
                   "type": "List"
+                },
+                "type": "ComponentModel"
+              }
+            },
+            {
+              "name": "text",
+              "schema": {
+                "elementType": {
+                  "type": "Str"
                 },
                 "type": "ComponentModel"
               }
@@ -1789,15 +1832,6 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "text",
-              "schema": {
-                "elementType": {
-                  "type": "Str"
-                },
-                "type": "ComponentModel"
-              }
-            },
-            {
               "name": "image",
               "schema": {
                 "elementType": {
@@ -1805,6 +1839,15 @@
                     "type": "U8"
                   },
                   "type": "List"
+                },
+                "type": "ComponentModel"
+              }
+            },
+            {
+              "name": "text",
+              "schema": {
+                "elementType": {
+                  "type": "Str"
                 },
                 "type": "ComponentModel"
               }
@@ -1958,17 +2001,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -1992,12 +2041,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -2138,6 +2181,7 @@
                     }
                   ],
                   "name": "ObjectComplexType",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2206,17 +2250,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -2240,12 +2290,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -2426,6 +2470,7 @@
                     }
                   ],
                   "name": "ObjectType",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2519,6 +2564,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined1",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2554,6 +2600,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined2",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2589,6 +2636,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined3",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2610,6 +2658,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined4",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -2634,19 +2683,25 @@
                   "inner": {
                     "cases": [
                       {
-                        "name": "case3",
-                        "typ": {
-                          "type": "Str"
-                        }
-                      },
-                      {
-                        "name": "case4",
+                        "name": "UnionType1",
                         "typ": {
                           "type": "F64"
                         }
                       },
                       {
-                        "name": "case5",
+                        "name": "UnionType2",
+                        "typ": {
+                          "type": "Str"
+                        }
+                      },
+                      {
+                        "name": "UnionType3",
+                        "typ": {
+                          "type": "Bool"
+                        }
+                      },
+                      {
+                        "name": "UnionType4",
                         "typ": {
                           "fields": [
                             {
@@ -2671,14 +2726,10 @@
                           "name": "ObjectType",
                           "type": "Record"
                         }
-                      },
-                      {
-                        "name": "case6",
-                        "typ": {
-                          "type": "Bool"
-                        }
                       }
                     ],
+                    "name": "UnionType",
+                    "owner": "./model",
                     "type": "Variant"
                   },
                   "type": "Option"
@@ -2799,19 +2850,25 @@
                         "inner": {
                           "cases": [
                             {
-                              "name": "case3",
+                              "name": "case1",
                               "typ": {
                                 "type": "Str"
                               }
                             },
                             {
-                              "name": "case4",
+                              "name": "case2",
                               "typ": {
                                 "type": "F64"
                               }
                             },
                             {
-                              "name": "case5",
+                              "name": "case3",
+                              "typ": {
+                                "type": "Bool"
+                              }
+                            },
+                            {
+                              "name": "case4",
                               "typ": {
                                 "fields": [
                                   {
@@ -2835,12 +2892,6 @@
                                 ],
                                 "name": "ObjectType",
                                 "type": "Record"
-                              }
-                            },
-                            {
-                              "name": "case6",
-                              "typ": {
-                                "type": "Bool"
                               }
                             }
                           ],
@@ -2960,6 +3011,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "./model",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -3019,6 +3071,7 @@
                     }
                   ],
                   "name": "ResultLike",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -3074,6 +3127,7 @@
                   "err": null,
                   "name": "ResultLikeWithVoid",
                   "ok": null,
+                  "owner": "./model",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -3132,6 +3186,7 @@
                     }
                   ],
                   "name": "ResultLikeWithNoTag",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -3247,17 +3302,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -3281,12 +3342,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -3374,6 +3429,7 @@
                     }
                   ],
                   "name": "TaggedUnion",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -3415,17 +3471,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -3449,12 +3511,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -3573,6 +3629,7 @@
                     "type": "Tuple"
                   },
                   "name": "MapType",
+                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -3652,6 +3709,7 @@
                     }
                   ],
                   "name": "TupleComplexType",
+                  "owner": "./model",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -3731,6 +3789,7 @@
                     }
                   ],
                   "name": "TupleType",
+                  "owner": "./model",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -3805,17 +3864,23 @@
                     {
                       "name": "UnionComplexType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionComplexType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionComplexType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -3870,17 +3935,23 @@
                                 {
                                   "name": "UnionType1",
                                   "typ": {
-                                    "type": "Str"
+                                    "type": "F64"
                                   }
                                 },
                                 {
                                   "name": "UnionType2",
                                   "typ": {
-                                    "type": "F64"
+                                    "type": "Str"
                                   }
                                 },
                                 {
                                   "name": "UnionType3",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                },
+                                {
+                                  "name": "UnionType4",
                                   "typ": {
                                     "fields": [
                                       {
@@ -3904,12 +3975,6 @@
                                     ],
                                     "name": "ObjectType",
                                     "type": "Record"
-                                  }
-                                },
-                                {
-                                  "name": "UnionType4",
-                                  "typ": {
-                                    "type": "Bool"
                                   }
                                 }
                               ],
@@ -4054,75 +4119,61 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType4",
+                      "name": "UnionComplexType5",
                       "typ": {
-                        "fields": [
+                        "cases": [
                           {
-                            "name": "a",
-                            "typ": {
-                              "type": "Str"
-                            }
-                          },
-                          {
-                            "name": "b",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "c",
+                            "name": "UnionType2",
+                            "typ": {
+                              "type": "Str"
+                            }
+                          },
+                          {
+                            "name": "UnionType3",
                             "typ": {
                               "type": "Bool"
                             }
+                          },
+                          {
+                            "name": "UnionType4",
+                            "typ": {
+                              "fields": [
+                                {
+                                  "name": "a",
+                                  "typ": {
+                                    "type": "Str"
+                                  }
+                                },
+                                {
+                                  "name": "b",
+                                  "typ": {
+                                    "type": "F64"
+                                  }
+                                },
+                                {
+                                  "name": "c",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                }
+                              ],
+                              "name": "ObjectType",
+                              "type": "Record"
+                            }
                           }
                         ],
-                        "name": "ObjectType",
-                        "type": "Record"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType5",
-                      "typ": {
-                        "inner": {
-                          "type": "Str"
-                        },
-                        "name": "ListType",
-                        "type": "List"
+                        "name": "UnionType",
+                        "type": "Variant"
                       }
                     },
                     {
                       "name": "UnionComplexType6",
-                      "typ": {
-                        "inner": {
-                          "fields": [
-                            {
-                              "name": "a",
-                              "typ": {
-                                "type": "Str"
-                              }
-                            },
-                            {
-                              "name": "b",
-                              "typ": {
-                                "type": "F64"
-                              }
-                            },
-                            {
-                              "name": "c",
-                              "typ": {
-                                "type": "Bool"
-                              }
-                            }
-                          ],
-                          "name": "ObjectType",
-                          "type": "Record"
-                        },
-                        "name": "ListComplexType",
-                        "type": "List"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -4140,7 +4191,7 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType8",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -4179,6 +4230,21 @@
                       }
                     },
                     {
+                      "name": "UnionComplexType8",
+                      "typ": {
+                        "fields": [
+                          {
+                            "name": "n",
+                            "typ": {
+                              "type": "F64"
+                            }
+                          }
+                        ],
+                        "name": "SimpleInterfaceType",
+                        "type": "Record"
+                      }
+                    },
+                    {
                       "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
@@ -4199,26 +4265,47 @@
                     {
                       "name": "UnionComplexType10",
                       "typ": {
-                        "fields": [
-                          {
-                            "name": "n",
-                            "typ": {
-                              "type": "F64"
-                            }
-                          }
-                        ],
-                        "name": "SimpleInterfaceType",
-                        "type": "Record"
+                        "inner": {
+                          "type": "Str"
+                        },
+                        "name": "ListType",
+                        "type": "List"
                       }
                     },
                     {
                       "name": "UnionComplexType11",
                       "typ": {
-                        "type": "Bool"
+                        "inner": {
+                          "fields": [
+                            {
+                              "name": "a",
+                              "typ": {
+                                "type": "Str"
+                              }
+                            },
+                            {
+                              "name": "b",
+                              "typ": {
+                                "type": "F64"
+                              }
+                            },
+                            {
+                              "name": "c",
+                              "typ": {
+                                "type": "Bool"
+                              }
+                            }
+                          ],
+                          "name": "ObjectType",
+                          "type": "Record"
+                        },
+                        "name": "ListComplexType",
+                        "type": "List"
                       }
                     }
                   ],
                   "name": "UnionComplexType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4238,17 +4325,23 @@
                     {
                       "name": "UnionComplexType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionComplexType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionComplexType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -4303,17 +4396,23 @@
                                 {
                                   "name": "UnionType1",
                                   "typ": {
-                                    "type": "Str"
+                                    "type": "F64"
                                   }
                                 },
                                 {
                                   "name": "UnionType2",
                                   "typ": {
-                                    "type": "F64"
+                                    "type": "Str"
                                   }
                                 },
                                 {
                                   "name": "UnionType3",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                },
+                                {
+                                  "name": "UnionType4",
                                   "typ": {
                                     "fields": [
                                       {
@@ -4337,12 +4436,6 @@
                                     ],
                                     "name": "ObjectType",
                                     "type": "Record"
-                                  }
-                                },
-                                {
-                                  "name": "UnionType4",
-                                  "typ": {
-                                    "type": "Bool"
                                   }
                                 }
                               ],
@@ -4487,75 +4580,61 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType4",
+                      "name": "UnionComplexType5",
                       "typ": {
-                        "fields": [
+                        "cases": [
                           {
-                            "name": "a",
-                            "typ": {
-                              "type": "Str"
-                            }
-                          },
-                          {
-                            "name": "b",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "c",
+                            "name": "UnionType2",
+                            "typ": {
+                              "type": "Str"
+                            }
+                          },
+                          {
+                            "name": "UnionType3",
                             "typ": {
                               "type": "Bool"
                             }
+                          },
+                          {
+                            "name": "UnionType4",
+                            "typ": {
+                              "fields": [
+                                {
+                                  "name": "a",
+                                  "typ": {
+                                    "type": "Str"
+                                  }
+                                },
+                                {
+                                  "name": "b",
+                                  "typ": {
+                                    "type": "F64"
+                                  }
+                                },
+                                {
+                                  "name": "c",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                }
+                              ],
+                              "name": "ObjectType",
+                              "type": "Record"
+                            }
                           }
                         ],
-                        "name": "ObjectType",
-                        "type": "Record"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType5",
-                      "typ": {
-                        "inner": {
-                          "type": "Str"
-                        },
-                        "name": "ListType",
-                        "type": "List"
+                        "name": "UnionType",
+                        "type": "Variant"
                       }
                     },
                     {
                       "name": "UnionComplexType6",
-                      "typ": {
-                        "inner": {
-                          "fields": [
-                            {
-                              "name": "a",
-                              "typ": {
-                                "type": "Str"
-                              }
-                            },
-                            {
-                              "name": "b",
-                              "typ": {
-                                "type": "F64"
-                              }
-                            },
-                            {
-                              "name": "c",
-                              "typ": {
-                                "type": "Bool"
-                              }
-                            }
-                          ],
-                          "name": "ObjectType",
-                          "type": "Record"
-                        },
-                        "name": "ListComplexType",
-                        "type": "List"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -4573,7 +4652,7 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType8",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -4612,6 +4691,21 @@
                       }
                     },
                     {
+                      "name": "UnionComplexType8",
+                      "typ": {
+                        "fields": [
+                          {
+                            "name": "n",
+                            "typ": {
+                              "type": "F64"
+                            }
+                          }
+                        ],
+                        "name": "SimpleInterfaceType",
+                        "type": "Record"
+                      }
+                    },
+                    {
                       "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
@@ -4632,22 +4726,42 @@
                     {
                       "name": "UnionComplexType10",
                       "typ": {
-                        "fields": [
-                          {
-                            "name": "n",
-                            "typ": {
-                              "type": "F64"
-                            }
-                          }
-                        ],
-                        "name": "SimpleInterfaceType",
-                        "type": "Record"
+                        "inner": {
+                          "type": "Str"
+                        },
+                        "name": "ListType",
+                        "type": "List"
                       }
                     },
                     {
                       "name": "UnionComplexType11",
                       "typ": {
-                        "type": "Bool"
+                        "inner": {
+                          "fields": [
+                            {
+                              "name": "a",
+                              "typ": {
+                                "type": "Str"
+                              }
+                            },
+                            {
+                              "name": "b",
+                              "typ": {
+                                "type": "F64"
+                              }
+                            },
+                            {
+                              "name": "c",
+                              "typ": {
+                                "type": "Bool"
+                              }
+                            }
+                          ],
+                          "name": "ObjectType",
+                          "type": "Record"
+                        },
+                        "name": "ListComplexType",
+                        "type": "List"
                       }
                     }
                   ],
@@ -4675,17 +4789,23 @@
                     {
                       "name": "UnionType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionType4",
                       "typ": {
                         "fields": [
                           {
@@ -4710,15 +4830,10 @@
                         "name": "ObjectType",
                         "type": "Record"
                       }
-                    },
-                    {
-                      "name": "UnionType4",
-                      "typ": {
-                        "type": "Bool"
-                      }
                     }
                   ],
                   "name": "UnionType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4738,17 +4853,23 @@
                     {
                       "name": "UnionType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionType4",
                       "typ": {
                         "fields": [
                           {
@@ -4772,12 +4893,6 @@
                         ],
                         "name": "ObjectType",
                         "type": "Record"
-                      }
-                    },
-                    {
-                      "name": "UnionType4",
-                      "typ": {
-                        "type": "Bool"
                       }
                     }
                   ],
@@ -4822,6 +4937,7 @@
                     }
                   ],
                   "name": "UnionWithLiterals",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -4883,6 +4999,7 @@
                     "baz"
                   ],
                   "name": "UnionWithOnlyLiterals",
+                  "owner": "./model",
                   "type": "Enum"
                 },
                 "type": "ComponentModel"
@@ -5101,17 +5218,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -5135,12 +5258,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -5294,17 +5411,23 @@
                     {
                       "name": "UnionType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionType4",
                       "typ": {
                         "fields": [
                           {
@@ -5329,12 +5452,6 @@
                         "name": "ObjectType",
                         "type": "Record"
                       }
-                    },
-                    {
-                      "name": "UnionType4",
-                      "typ": {
-                        "type": "Bool"
-                      }
                     }
                   ],
                   "name": "UnionType",
@@ -5351,17 +5468,23 @@
                     {
                       "name": "UnionComplexType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionComplexType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionComplexType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -5416,17 +5539,23 @@
                                 {
                                   "name": "UnionType1",
                                   "typ": {
-                                    "type": "Str"
+                                    "type": "F64"
                                   }
                                 },
                                 {
                                   "name": "UnionType2",
                                   "typ": {
-                                    "type": "F64"
+                                    "type": "Str"
                                   }
                                 },
                                 {
                                   "name": "UnionType3",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                },
+                                {
+                                  "name": "UnionType4",
                                   "typ": {
                                     "fields": [
                                       {
@@ -5450,12 +5579,6 @@
                                     ],
                                     "name": "ObjectType",
                                     "type": "Record"
-                                  }
-                                },
-                                {
-                                  "name": "UnionType4",
-                                  "typ": {
-                                    "type": "Bool"
                                   }
                                 }
                               ],
@@ -5600,75 +5723,61 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType4",
+                      "name": "UnionComplexType5",
                       "typ": {
-                        "fields": [
+                        "cases": [
                           {
-                            "name": "a",
-                            "typ": {
-                              "type": "Str"
-                            }
-                          },
-                          {
-                            "name": "b",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "c",
+                            "name": "UnionType2",
+                            "typ": {
+                              "type": "Str"
+                            }
+                          },
+                          {
+                            "name": "UnionType3",
                             "typ": {
                               "type": "Bool"
                             }
+                          },
+                          {
+                            "name": "UnionType4",
+                            "typ": {
+                              "fields": [
+                                {
+                                  "name": "a",
+                                  "typ": {
+                                    "type": "Str"
+                                  }
+                                },
+                                {
+                                  "name": "b",
+                                  "typ": {
+                                    "type": "F64"
+                                  }
+                                },
+                                {
+                                  "name": "c",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                }
+                              ],
+                              "name": "ObjectType",
+                              "type": "Record"
+                            }
                           }
                         ],
-                        "name": "ObjectType",
-                        "type": "Record"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType5",
-                      "typ": {
-                        "inner": {
-                          "type": "Str"
-                        },
-                        "name": "ListType",
-                        "type": "List"
+                        "name": "UnionType",
+                        "type": "Variant"
                       }
                     },
                     {
                       "name": "UnionComplexType6",
-                      "typ": {
-                        "inner": {
-                          "fields": [
-                            {
-                              "name": "a",
-                              "typ": {
-                                "type": "Str"
-                              }
-                            },
-                            {
-                              "name": "b",
-                              "typ": {
-                                "type": "F64"
-                              }
-                            },
-                            {
-                              "name": "c",
-                              "typ": {
-                                "type": "Bool"
-                              }
-                            }
-                          ],
-                          "name": "ObjectType",
-                          "type": "Record"
-                        },
-                        "name": "ListComplexType",
-                        "type": "List"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -5686,7 +5795,7 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType8",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -5725,6 +5834,21 @@
                       }
                     },
                     {
+                      "name": "UnionComplexType8",
+                      "typ": {
+                        "fields": [
+                          {
+                            "name": "n",
+                            "typ": {
+                              "type": "F64"
+                            }
+                          }
+                        ],
+                        "name": "SimpleInterfaceType",
+                        "type": "Record"
+                      }
+                    },
+                    {
                       "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
@@ -5745,22 +5869,42 @@
                     {
                       "name": "UnionComplexType10",
                       "typ": {
-                        "fields": [
-                          {
-                            "name": "n",
-                            "typ": {
-                              "type": "F64"
-                            }
-                          }
-                        ],
-                        "name": "SimpleInterfaceType",
-                        "type": "Record"
+                        "inner": {
+                          "type": "Str"
+                        },
+                        "name": "ListType",
+                        "type": "List"
                       }
                     },
                     {
                       "name": "UnionComplexType11",
                       "typ": {
-                        "type": "Bool"
+                        "inner": {
+                          "fields": [
+                            {
+                              "name": "a",
+                              "typ": {
+                                "type": "Str"
+                              }
+                            },
+                            {
+                              "name": "b",
+                              "typ": {
+                                "type": "F64"
+                              }
+                            },
+                            {
+                              "name": "c",
+                              "typ": {
+                                "type": "Bool"
+                              }
+                            }
+                          ],
+                          "name": "ObjectType",
+                          "type": "Record"
+                        },
+                        "name": "ListComplexType",
+                        "type": "List"
                       }
                     }
                   ],
@@ -5967,6 +6111,7 @@
                     }
                   ],
                   "name": "ResultLike",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -5997,6 +6142,7 @@
                     }
                   ],
                   "name": "ResultLikeWithNoTag",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6044,6 +6190,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined1",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6079,6 +6226,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined2",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6114,6 +6262,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined3",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6135,6 +6284,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined4",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6159,19 +6309,25 @@
                   "inner": {
                     "cases": [
                       {
-                        "name": "case3",
-                        "typ": {
-                          "type": "Str"
-                        }
-                      },
-                      {
-                        "name": "case4",
+                        "name": "UnionType1",
                         "typ": {
                           "type": "F64"
                         }
                       },
                       {
-                        "name": "case5",
+                        "name": "UnionType2",
+                        "typ": {
+                          "type": "Str"
+                        }
+                      },
+                      {
+                        "name": "UnionType3",
+                        "typ": {
+                          "type": "Bool"
+                        }
+                      },
+                      {
+                        "name": "UnionType4",
                         "typ": {
                           "fields": [
                             {
@@ -6196,14 +6352,10 @@
                           "name": "ObjectType",
                           "type": "Record"
                         }
-                      },
-                      {
-                        "name": "case6",
-                        "typ": {
-                          "type": "Bool"
-                        }
                       }
                     ],
+                    "name": "UnionType",
+                    "owner": "./model",
                     "type": "Variant"
                   },
                   "type": "Option"
@@ -6241,17 +6393,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -6275,12 +6433,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -6368,6 +6520,7 @@
                     }
                   ],
                   "name": "TaggedUnion",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -6466,6 +6619,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -6510,6 +6664,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -6552,6 +6707,7 @@
                     "type": "Str"
                   },
                   "ok": null,
+                  "owner": "@golemcloud/golem-ts-sdk",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -6611,6 +6767,7 @@
                     }
                   ],
                   "name": "ResultLikeWithNoTag",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -6691,6 +6848,7 @@
                     "type": "Record"
                   },
                   "name": "ListComplexType",
+                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -6762,6 +6920,7 @@
                     "type": "Tuple"
                   },
                   "name": "MapType",
+                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -6849,15 +7008,6 @@
         "inputSchema": {
           "elements": [
             {
-              "name": "text",
-              "schema": {
-                "elementType": {
-                  "type": "Str"
-                },
-                "type": "ComponentModel"
-              }
-            },
-            {
               "name": "image",
               "schema": {
                 "elementType": {
@@ -6865,6 +7015,15 @@
                     "type": "U8"
                   },
                   "type": "List"
+                },
+                "type": "ComponentModel"
+              }
+            },
+            {
+              "name": "text",
+              "schema": {
+                "elementType": {
+                  "type": "Str"
                 },
                 "type": "ComponentModel"
               }
@@ -6876,15 +7035,6 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "text",
-              "schema": {
-                "elementType": {
-                  "type": "Str"
-                },
-                "type": "ComponentModel"
-              }
-            },
-            {
               "name": "image",
               "schema": {
                 "elementType": {
@@ -6892,6 +7042,15 @@
                     "type": "U8"
                   },
                   "type": "List"
+                },
+                "type": "ComponentModel"
+              }
+            },
+            {
+              "name": "text",
+              "schema": {
+                "elementType": {
+                  "type": "Str"
                 },
                 "type": "ComponentModel"
               }
@@ -7045,17 +7204,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -7079,12 +7244,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -7225,6 +7384,7 @@
                     }
                   ],
                   "name": "ObjectComplexType",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7293,17 +7453,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -7327,12 +7493,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -7513,6 +7673,7 @@
                     }
                   ],
                   "name": "ObjectType",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7606,6 +7767,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined1",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7641,6 +7803,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined2",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7676,6 +7839,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined3",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7697,6 +7861,7 @@
                     }
                   ],
                   "name": "ObjectWithUnionWithUndefined4",
+                  "owner": "./model",
                   "type": "Record"
                 },
                 "type": "ComponentModel"
@@ -7721,19 +7886,25 @@
                   "inner": {
                     "cases": [
                       {
-                        "name": "case3",
-                        "typ": {
-                          "type": "Str"
-                        }
-                      },
-                      {
-                        "name": "case4",
+                        "name": "UnionType1",
                         "typ": {
                           "type": "F64"
                         }
                       },
                       {
-                        "name": "case5",
+                        "name": "UnionType2",
+                        "typ": {
+                          "type": "Str"
+                        }
+                      },
+                      {
+                        "name": "UnionType3",
+                        "typ": {
+                          "type": "Bool"
+                        }
+                      },
+                      {
+                        "name": "UnionType4",
                         "typ": {
                           "fields": [
                             {
@@ -7758,14 +7929,10 @@
                           "name": "ObjectType",
                           "type": "Record"
                         }
-                      },
-                      {
-                        "name": "case6",
-                        "typ": {
-                          "type": "Bool"
-                        }
                       }
                     ],
+                    "name": "UnionType",
+                    "owner": "./model",
                     "type": "Variant"
                   },
                   "type": "Option"
@@ -7886,19 +8053,25 @@
                         "inner": {
                           "cases": [
                             {
-                              "name": "case3",
+                              "name": "case1",
                               "typ": {
                                 "type": "Str"
                               }
                             },
                             {
-                              "name": "case4",
+                              "name": "case2",
                               "typ": {
                                 "type": "F64"
                               }
                             },
                             {
-                              "name": "case5",
+                              "name": "case3",
+                              "typ": {
+                                "type": "Bool"
+                              }
+                            },
+                            {
+                              "name": "case4",
                               "typ": {
                                 "fields": [
                                   {
@@ -7922,12 +8095,6 @@
                                 ],
                                 "name": "ObjectType",
                                 "type": "Record"
-                              }
-                            },
-                            {
-                              "name": "case6",
-                              "typ": {
-                                "type": "Bool"
                               }
                             }
                           ],
@@ -8047,6 +8214,7 @@
                   "ok": {
                     "type": "Str"
                   },
+                  "owner": "./model",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -8106,6 +8274,7 @@
                     }
                   ],
                   "name": "ResultLike",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -8161,6 +8330,7 @@
                   "err": null,
                   "name": "ResultLikeWithVoid",
                   "ok": null,
+                  "owner": "./model",
                   "type": "Result"
                 },
                 "type": "ComponentModel"
@@ -8258,17 +8428,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -8292,12 +8468,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -8385,6 +8555,7 @@
                     }
                   ],
                   "name": "TaggedUnion",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -8426,17 +8597,23 @@
                           {
                             "name": "UnionType1",
                             "typ": {
-                              "type": "Str"
+                              "type": "F64"
                             }
                           },
                           {
                             "name": "UnionType2",
                             "typ": {
-                              "type": "F64"
+                              "type": "Str"
                             }
                           },
                           {
                             "name": "UnionType3",
+                            "typ": {
+                              "type": "Bool"
+                            }
+                          },
+                          {
+                            "name": "UnionType4",
                             "typ": {
                               "fields": [
                                 {
@@ -8460,12 +8637,6 @@
                               ],
                               "name": "ObjectType",
                               "type": "Record"
-                            }
-                          },
-                          {
-                            "name": "UnionType4",
-                            "typ": {
-                              "type": "Bool"
                             }
                           }
                         ],
@@ -8605,6 +8776,7 @@
                     }
                   ],
                   "name": "TupleComplexType",
+                  "owner": "./model",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -8684,6 +8856,7 @@
                     }
                   ],
                   "name": "TupleType",
+                  "owner": "./model",
                   "type": "Tuple"
                 },
                 "type": "ComponentModel"
@@ -8758,17 +8931,23 @@
                     {
                       "name": "UnionComplexType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionComplexType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionComplexType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -8823,17 +9002,23 @@
                                 {
                                   "name": "UnionType1",
                                   "typ": {
-                                    "type": "Str"
+                                    "type": "F64"
                                   }
                                 },
                                 {
                                   "name": "UnionType2",
                                   "typ": {
-                                    "type": "F64"
+                                    "type": "Str"
                                   }
                                 },
                                 {
                                   "name": "UnionType3",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                },
+                                {
+                                  "name": "UnionType4",
                                   "typ": {
                                     "fields": [
                                       {
@@ -8857,12 +9042,6 @@
                                     ],
                                     "name": "ObjectType",
                                     "type": "Record"
-                                  }
-                                },
-                                {
-                                  "name": "UnionType4",
-                                  "typ": {
-                                    "type": "Bool"
                                   }
                                 }
                               ],
@@ -9007,75 +9186,61 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType4",
+                      "name": "UnionComplexType5",
                       "typ": {
-                        "fields": [
+                        "cases": [
                           {
-                            "name": "a",
-                            "typ": {
-                              "type": "Str"
-                            }
-                          },
-                          {
-                            "name": "b",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "c",
+                            "name": "UnionType2",
+                            "typ": {
+                              "type": "Str"
+                            }
+                          },
+                          {
+                            "name": "UnionType3",
                             "typ": {
                               "type": "Bool"
                             }
+                          },
+                          {
+                            "name": "UnionType4",
+                            "typ": {
+                              "fields": [
+                                {
+                                  "name": "a",
+                                  "typ": {
+                                    "type": "Str"
+                                  }
+                                },
+                                {
+                                  "name": "b",
+                                  "typ": {
+                                    "type": "F64"
+                                  }
+                                },
+                                {
+                                  "name": "c",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                }
+                              ],
+                              "name": "ObjectType",
+                              "type": "Record"
+                            }
                           }
                         ],
-                        "name": "ObjectType",
-                        "type": "Record"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType5",
-                      "typ": {
-                        "inner": {
-                          "type": "Str"
-                        },
-                        "name": "ListType",
-                        "type": "List"
+                        "name": "UnionType",
+                        "type": "Variant"
                       }
                     },
                     {
                       "name": "UnionComplexType6",
-                      "typ": {
-                        "inner": {
-                          "fields": [
-                            {
-                              "name": "a",
-                              "typ": {
-                                "type": "Str"
-                              }
-                            },
-                            {
-                              "name": "b",
-                              "typ": {
-                                "type": "F64"
-                              }
-                            },
-                            {
-                              "name": "c",
-                              "typ": {
-                                "type": "Bool"
-                              }
-                            }
-                          ],
-                          "name": "ObjectType",
-                          "type": "Record"
-                        },
-                        "name": "ListComplexType",
-                        "type": "List"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -9093,7 +9258,7 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType8",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -9132,6 +9297,21 @@
                       }
                     },
                     {
+                      "name": "UnionComplexType8",
+                      "typ": {
+                        "fields": [
+                          {
+                            "name": "n",
+                            "typ": {
+                              "type": "F64"
+                            }
+                          }
+                        ],
+                        "name": "SimpleInterfaceType",
+                        "type": "Record"
+                      }
+                    },
+                    {
                       "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
@@ -9152,26 +9332,47 @@
                     {
                       "name": "UnionComplexType10",
                       "typ": {
-                        "fields": [
-                          {
-                            "name": "n",
-                            "typ": {
-                              "type": "F64"
-                            }
-                          }
-                        ],
-                        "name": "SimpleInterfaceType",
-                        "type": "Record"
+                        "inner": {
+                          "type": "Str"
+                        },
+                        "name": "ListType",
+                        "type": "List"
                       }
                     },
                     {
                       "name": "UnionComplexType11",
                       "typ": {
-                        "type": "Bool"
+                        "inner": {
+                          "fields": [
+                            {
+                              "name": "a",
+                              "typ": {
+                                "type": "Str"
+                              }
+                            },
+                            {
+                              "name": "b",
+                              "typ": {
+                                "type": "F64"
+                              }
+                            },
+                            {
+                              "name": "c",
+                              "typ": {
+                                "type": "Bool"
+                              }
+                            }
+                          ],
+                          "name": "ObjectType",
+                          "type": "Record"
+                        },
+                        "name": "ListComplexType",
+                        "type": "List"
                       }
                     }
                   ],
                   "name": "UnionComplexType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9191,17 +9392,23 @@
                     {
                       "name": "UnionComplexType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionComplexType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionComplexType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionComplexType4",
                       "typ": {
                         "fields": [
                           {
@@ -9256,17 +9463,23 @@
                                 {
                                   "name": "UnionType1",
                                   "typ": {
-                                    "type": "Str"
+                                    "type": "F64"
                                   }
                                 },
                                 {
                                   "name": "UnionType2",
                                   "typ": {
-                                    "type": "F64"
+                                    "type": "Str"
                                   }
                                 },
                                 {
                                   "name": "UnionType3",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                },
+                                {
+                                  "name": "UnionType4",
                                   "typ": {
                                     "fields": [
                                       {
@@ -9290,12 +9503,6 @@
                                     ],
                                     "name": "ObjectType",
                                     "type": "Record"
-                                  }
-                                },
-                                {
-                                  "name": "UnionType4",
-                                  "typ": {
-                                    "type": "Bool"
                                   }
                                 }
                               ],
@@ -9440,75 +9647,61 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType4",
+                      "name": "UnionComplexType5",
                       "typ": {
-                        "fields": [
+                        "cases": [
                           {
-                            "name": "a",
-                            "typ": {
-                              "type": "Str"
-                            }
-                          },
-                          {
-                            "name": "b",
+                            "name": "UnionType1",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "c",
+                            "name": "UnionType2",
+                            "typ": {
+                              "type": "Str"
+                            }
+                          },
+                          {
+                            "name": "UnionType3",
                             "typ": {
                               "type": "Bool"
                             }
+                          },
+                          {
+                            "name": "UnionType4",
+                            "typ": {
+                              "fields": [
+                                {
+                                  "name": "a",
+                                  "typ": {
+                                    "type": "Str"
+                                  }
+                                },
+                                {
+                                  "name": "b",
+                                  "typ": {
+                                    "type": "F64"
+                                  }
+                                },
+                                {
+                                  "name": "c",
+                                  "typ": {
+                                    "type": "Bool"
+                                  }
+                                }
+                              ],
+                              "name": "ObjectType",
+                              "type": "Record"
+                            }
                           }
                         ],
-                        "name": "ObjectType",
-                        "type": "Record"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType5",
-                      "typ": {
-                        "inner": {
-                          "type": "Str"
-                        },
-                        "name": "ListType",
-                        "type": "List"
+                        "name": "UnionType",
+                        "type": "Variant"
                       }
                     },
                     {
                       "name": "UnionComplexType6",
-                      "typ": {
-                        "inner": {
-                          "fields": [
-                            {
-                              "name": "a",
-                              "typ": {
-                                "type": "Str"
-                              }
-                            },
-                            {
-                              "name": "b",
-                              "typ": {
-                                "type": "F64"
-                              }
-                            },
-                            {
-                              "name": "c",
-                              "typ": {
-                                "type": "Bool"
-                              }
-                            }
-                          ],
-                          "name": "ObjectType",
-                          "type": "Record"
-                        },
-                        "name": "ListComplexType",
-                        "type": "List"
-                      }
-                    },
-                    {
-                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -9526,7 +9719,7 @@
                       }
                     },
                     {
-                      "name": "UnionComplexType8",
+                      "name": "UnionComplexType7",
                       "typ": {
                         "items": [
                           {
@@ -9565,6 +9758,21 @@
                       }
                     },
                     {
+                      "name": "UnionComplexType8",
+                      "typ": {
+                        "fields": [
+                          {
+                            "name": "n",
+                            "typ": {
+                              "type": "F64"
+                            }
+                          }
+                        ],
+                        "name": "SimpleInterfaceType",
+                        "type": "Record"
+                      }
+                    },
+                    {
                       "name": "UnionComplexType9",
                       "typ": {
                         "inner": {
@@ -9585,22 +9793,42 @@
                     {
                       "name": "UnionComplexType10",
                       "typ": {
-                        "fields": [
-                          {
-                            "name": "n",
-                            "typ": {
-                              "type": "F64"
-                            }
-                          }
-                        ],
-                        "name": "SimpleInterfaceType",
-                        "type": "Record"
+                        "inner": {
+                          "type": "Str"
+                        },
+                        "name": "ListType",
+                        "type": "List"
                       }
                     },
                     {
                       "name": "UnionComplexType11",
                       "typ": {
-                        "type": "Bool"
+                        "inner": {
+                          "fields": [
+                            {
+                              "name": "a",
+                              "typ": {
+                                "type": "Str"
+                              }
+                            },
+                            {
+                              "name": "b",
+                              "typ": {
+                                "type": "F64"
+                              }
+                            },
+                            {
+                              "name": "c",
+                              "typ": {
+                                "type": "Bool"
+                              }
+                            }
+                          ],
+                          "name": "ObjectType",
+                          "type": "Record"
+                        },
+                        "name": "ListComplexType",
+                        "type": "List"
                       }
                     }
                   ],
@@ -9628,17 +9856,23 @@
                     {
                       "name": "UnionType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionType4",
                       "typ": {
                         "fields": [
                           {
@@ -9663,15 +9897,10 @@
                         "name": "ObjectType",
                         "type": "Record"
                       }
-                    },
-                    {
-                      "name": "UnionType4",
-                      "typ": {
-                        "type": "Bool"
-                      }
                     }
                   ],
                   "name": "UnionType",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9691,17 +9920,23 @@
                     {
                       "name": "UnionType1",
                       "typ": {
-                        "type": "Str"
+                        "type": "F64"
                       }
                     },
                     {
                       "name": "UnionType2",
                       "typ": {
-                        "type": "F64"
+                        "type": "Str"
                       }
                     },
                     {
                       "name": "UnionType3",
+                      "typ": {
+                        "type": "Bool"
+                      }
+                    },
+                    {
+                      "name": "UnionType4",
                       "typ": {
                         "fields": [
                           {
@@ -9725,12 +9960,6 @@
                         ],
                         "name": "ObjectType",
                         "type": "Record"
-                      }
-                    },
-                    {
-                      "name": "UnionType4",
-                      "typ": {
-                        "type": "Bool"
                       }
                     }
                   ],
@@ -9775,6 +10004,7 @@
                     }
                   ],
                   "name": "UnionWithLiterals",
+                  "owner": "./model",
                   "type": "Variant"
                 },
                 "type": "ComponentModel"
@@ -9836,6 +10066,7 @@
                     "baz"
                   ],
                   "name": "UnionWithOnlyLiterals",
+                  "owner": "./model",
                   "type": "Enum"
                 },
                 "type": "ComponentModel"

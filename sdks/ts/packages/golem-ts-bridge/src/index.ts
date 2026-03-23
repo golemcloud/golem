@@ -15,7 +15,7 @@
 export type PhantomId = string;
 
 export type GolemServer =
-  | { type: 'local'; tokenOverride?: string }
+  | { type: 'local' }
   | { type: 'cloud'; token: string }
   | { type: 'custom'; url: string; token: string };
 
@@ -153,7 +153,7 @@ export async function invokeAgent(
   switch (server.type) {
     case 'local':
       baseUrl = 'http://localhost:9881';
-      token = server.tokenOverride ?? LOCAL_WELL_KNOWN_TOKEN;
+      token = LOCAL_WELL_KNOWN_TOKEN;
       break;
     case 'cloud':
       baseUrl = 'https://api.golem.cloud';

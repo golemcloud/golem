@@ -2,7 +2,7 @@ name: Daily Windows Build
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 permissions:
@@ -14,22 +14,15 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 1
-
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust
         with:
-          prefix-key: v3-rust
-          shared-key: windows-daily
-          cache-all-crates: true
-          save-if: true
-
-      - uses: davidB/rust-cargo-make@v1
+          cache-prefix-key: 'v3-rust'
+          cache-shared-key: 'windows-daily'
+          cache-save-if: 'true'
+          purge-v8: 'false'
 
       - name: Building all executables
         env:

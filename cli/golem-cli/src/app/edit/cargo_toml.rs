@@ -156,23 +156,23 @@ fn merge_items(base: &mut Item, update: &Item) {
         for (key, update_item) in update_table.iter() {
             if key == "features" {
                 if let (Some(base_features), Some(update_features)) = (
-                    base_table
-                        .get_mut("features")
-                        .and_then(|it| it.as_array_mut()),
+                    base_table.get("features").and_then(|it| it.as_array()),
                     update_item.as_array(),
                 ) {
-                    let existing: Vec<String> = base_features
+                    let existing = base_features
                         .iter()
                         .filter_map(|v| v.as_str())
                         .map(str::to_string)
-                        .collect();
-                    let new_features: Vec<String> = update_features
+                        .collect::<Vec<_>>();
+                    let update = update_features
                         .iter()
                         .filter_map(|v| v.as_str())
                         .map(str::to_string)
-                        .collect();
-                    let merged = merge_features(existing, &new_features);
-                    *base_features = features_to_array(merged);
+                        .collect::<Vec<_>>();
+                    base_table.insert(
+                        "features",
+                        value(features_to_array(merge_features(existing, &update))),
+                    );
                     continue;
                 }
             }
@@ -243,10 +243,10 @@ impl VersionSpec {
 }
 
 fn merge_features(existing: Vec<String>, new_features: &[String]) -> Vec<String> {
-    let mut merged = existing;
-    for feature in new_features {
-        if !merged.iter().any(|item| item == feature) {
-            merged.push(feature.clone());
+    let mut merged = Vec::new();
+    for feature in existing.into_iter().chain(new_features.iter().cloned()) {
+        if !merged.iter().any(|item| item == &feature) {
+            merged.push(feature);
         }
     }
     merged

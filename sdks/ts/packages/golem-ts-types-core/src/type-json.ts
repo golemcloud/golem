@@ -13,32 +13,35 @@
 // limitations under the License.
 
 export type LiteTypeJSON =
-  | { kind: 'boolean'; name?: string; optional: boolean }
-  | { kind: 'number'; name?: string; optional: boolean }
-  | { kind: 'string'; name?: string; optional: boolean }
-  | { kind: 'bigint'; name?: string; optional: boolean }
-  | { kind: 'null'; name?: string; optional: boolean }
-  | { kind: 'undefined'; name?: string; optional: boolean }
-  | { kind: 'void'; name?: string; optional: boolean }
-  | { kind: 'array'; name?: string; element: LiteTypeJSON; optional: boolean }
+  | { kind: 'boolean'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'number'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'string'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'bigint'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'null'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'undefined'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'void'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'array'; name?: string; owner?: string; element: LiteTypeJSON; optional: boolean }
   | {
       kind: 'tuple';
       name?: string;
+      owner?: string;
       elements: LiteTypeJSON[];
       optional: boolean;
     }
   | {
       kind: 'union';
       name?: string;
+      owner?: string;
       types: LiteTypeJSON[];
       typeParams: LiteTypeJSON[];
       optional: boolean;
       originalTypeName: string | undefined;
     }
-  | { kind: 'literal'; name?: string; literalValue?: string; optional: boolean }
+  | { kind: 'literal'; name?: string; owner?: string; literalValue?: string; optional: boolean }
   | {
       kind: 'object';
       name?: string;
+      owner?: string;
       properties: Array<{
         name: string;
         type: LiteTypeJSON;
@@ -50,6 +53,7 @@ export type LiteTypeJSON =
   | {
       kind: 'class';
       name?: string;
+      owner?: string;
       properties: Array<{
         name: string;
         type: LiteTypeJSON;
@@ -60,6 +64,7 @@ export type LiteTypeJSON =
   | {
       kind: 'interface';
       name?: string;
+      owner?: string;
       properties: Array<{
         name: string;
         type: LiteTypeJSON;
@@ -71,31 +76,36 @@ export type LiteTypeJSON =
   | {
       kind: 'promise';
       name?: string;
+      owner?: string;
       element: LiteTypeJSON;
       optional: boolean;
     }
   | {
       kind: 'alias';
       name: string;
+      owner?: string;
       target: LiteTypeJSON;
       optional: boolean;
     }
   | {
       kind: 'map';
       name?: string;
+      owner?: string;
       typeArgs?: LiteTypeJSON[];
       optional: boolean;
     }
-  | { kind: 'others'; name?: string; optional: boolean; recursive: boolean }
+  | { kind: 'others'; name?: string; owner?: string; optional: boolean; recursive: boolean }
   | {
       kind: 'config';
       name?: string;
+      owner?: string;
       optional: boolean;
       properties: { path: string[]; secret: boolean; type: LiteTypeJSON }[];
     }
   | {
       kind: 'unresolved-type';
       name?: string;
+      owner?: string;
       optional: boolean;
       text: string;
       error: string;
