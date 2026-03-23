@@ -211,7 +211,7 @@ async fn http_call_limit_exceeded_traps_invocation(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpClient", "http-limit-0");
+    let agent_id = agent_id!("HttpClient");
     executor
         .start_agent_with(
             &component.id,
@@ -269,7 +269,7 @@ async fn rpc_call_limit_exceeded_traps_invocation(
         .store()
         .await?;
 
-    let caller_id = agent_id!("RustParent", "rpc-limit-0");
+    let caller_id = agent_id!("RustParent", "rpc_limit_test");
     executor
         .start_agent(&rpc_component.id, caller_id.clone())
         .await?;
