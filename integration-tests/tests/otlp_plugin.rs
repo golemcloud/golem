@@ -91,7 +91,7 @@ async fn otlp_basic_trace_export(
     plugin_params.insert("endpoint".to_string(), jaeger.otlp_http_endpoint());
 
     let _component = user
-        .component(&env.id, "golem_it_agent_invocation_context")
+        .component(&env.id, "golem_it_agent_invocation_context_release")
         .name("golem-it:agent-invocation-context")
         .with_parametrized_plugin(&otlp_grant_id, 0, plugin_params)
         .store()
@@ -194,7 +194,7 @@ async fn otlp_all_signals_export(
     plugin_params.insert("signals".to_string(), "traces,logs,metrics".to_string());
 
     let _component = user
-        .component(&env.id, "golem_it_agent_invocation_context")
+        .component(&env.id, "golem_it_agent_invocation_context_release")
         .name("golem-it:agent-invocation-context")
         .with_parametrized_plugin(&otlp_grant_id, 0, plugin_params)
         .store()

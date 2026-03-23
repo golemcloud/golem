@@ -65,6 +65,17 @@ export function handleUnionInternal(
   cacheKey: string | undefined,
 ): Either.Either<AnalysedType, string> {
   const { type } = ctx;
+  const normalizedUnionTypes = normalizeBooleanUnion(type.unionTypes);
+  const normalizedCtx: UnionCtx =
+    normalizedUnionTypes === type.unionTypes
+      ? ctx
+      : {
+          ...ctx,
+          type: {
+            ...type,
+            unionTypes: normalizedUnionTypes,
+          },
+        };
 
   // Reuse cached anonymous unions
   const cached = reuseAnonymousUnionCache(cacheKey);
@@ -84,14 +95,11 @@ export function handleUnionInternal(
   if (taggedResult) return taggedResult;
 
   // Try Optional union (null | undefined | void) and convert to `option` WIT
-  const optionalResult = tryOptionalUnion(ctx, mapper);
+  const optionalResult = tryOptionalUnion(normalizedCtx, mapper);
   if (optionalResult) return optionalResult;
 
-  // Normalize union types if it consist of `true`, `false` literals
-  const normalizedUnionTypes = normalizeBooleanUnion(type.unionTypes);
-
   // Otherwise plain variant
-  return buildPlainVariant(type, normalizedUnionTypes, mapper);
+  return buildPlainVariant(normalizedCtx.type, normalizedUnionTypes, mapper);
 }
 
 export function hashUnion(type: TsType): string {
@@ -116,10 +124,10 @@ function cacheAnonymousUnionType(
 // ```ts
 //   function foo(x: string | number);
 // ```
-// Union handler ensures to convert `string | number` is converted to `variant { case0(string), case1(number) }` in WIT.
+// Union handler ensures to convert `string | number` is converted to `variant { case1(string), case2(number) }` in WIT.
 // But `union` handler also updates a cache of this `AnalysedType`
 // which ensures with reusing the same WIT variant whenever `string | number` appears in the code
-// instead of unlimited generation of case indices
+// instead of repeated generation of equivalent case indices
 function reuseAnonymousUnionCache(
   cacheKey: string | undefined,
 ): Either.Either<AnalysedType, string> | undefined {
@@ -146,7 +154,7 @@ function tryEnumUnion(ctx: UnionCtx): Either.Either<AnalysedType, string> | unde
   if (!literals.val) return;
 
   // Union of only literals are converted to WIT enum
-  const result = enum_(type.name, literals.val.literals);
+  const result = enum_(type.name, literals.val.literals, type.owner);
 
   return Either.right(result);
 }
@@ -160,15 +168,12 @@ export function tryInbuiltResultType(
   const originalTypeName = type.originalTypeName;
   const unionTypes = type.unionTypes;
   const typeParams = type.typeParams;
+  const hasOkCase = unionTypes.some((ut) => ut.name === 'Ok');
+  const hasErrCase = unionTypes.some((ut) => ut.name === 'Err');
 
   const isInbuiltResult = typeName === 'Result' || originalTypeName === 'Result';
 
-  if (
-    isInbuiltResult &&
-    unionTypes.length === 2 &&
-    unionTypes[0].name === 'Ok' &&
-    unionTypes[1].name === 'Err'
-  ) {
+  if (isInbuiltResult && unionTypes.length === 2 && hasOkCase && hasErrCase) {
     const okType = typeParams[0];
     const errType = typeParams[1];
 
@@ -182,6 +187,7 @@ export function tryInbuiltResultType(
           { tag: 'inbuilt', okEmptyType: 'void', errEmptyType: 'void' },
           undefined,
           undefined,
+          type.owner,
         ),
       );
     }
@@ -193,6 +199,7 @@ export function tryInbuiltResultType(
           { tag: 'inbuilt', okEmptyType: 'void', errEmptyType: undefined },
           undefined,
           err,
+          type.owner,
         ),
       );
     }
@@ -204,6 +211,7 @@ export function tryInbuiltResultType(
           { tag: 'inbuilt', okEmptyType: undefined, errEmptyType: 'void' },
           ok,
           undefined,
+          type.owner,
         ),
       );
     }
@@ -217,6 +225,7 @@ export function tryInbuiltResultType(
         { tag: 'inbuilt', okEmptyType: undefined, errEmptyType: undefined },
         ok,
         err,
+        type.owner,
       );
     });
   }
@@ -238,8 +247,8 @@ function tryTaggedUnionAndProcess(
   // else convert to simple `variant` WIT with each variant name corresponds to tag name.
   const result =
     tagged.val.tag === 'result'
-      ? convertUserDefinedResultToWitResult(type.name, tagged.val.val, mapper)
-      : convertToVariantAnalysedType(type.name, tagged.val.val, mapper);
+      ? convertUserDefinedResultToWitResult(type.name, type.owner, tagged.val.val, mapper)
+      : convertToVariantAnalysedType(type.name, type.owner, tagged.val.val, mapper);
 
   return result;
 }
@@ -263,7 +272,7 @@ function tryOptionalUnion(
 
   if (Either.isLeft(innerAnalysedType)) return innerAnalysedType;
 
-  return Either.right(option(undefined, emptyType, innerAnalysedType.val));
+  return Either.right(option(undefined, emptyType, innerAnalysedType.val, ctx.type.owner));
 }
 
 // In typescript type-system, and hence in ts-morph
@@ -290,13 +299,28 @@ function normalizeBooleanUnion(types: TsType[]): TsType[] {
 
   if (!hasTrue || !hasFalse) return types;
 
+  const firstBooleanLiteralIdx = types.findIndex(
+    (t) => t.kind === 'literal' && (t.literalValue === 'true' || t.literalValue === 'false'),
+  );
+
+  const optional = types.some(
+    (t) =>
+      t.kind === 'literal' &&
+      (t.literalValue === 'true' || t.literalValue === 'false') &&
+      t.optional,
+  );
+
   const withoutBoolLiterals = types.filter(
     (t) => !(t.kind === 'literal' && (t.literalValue === 'true' || t.literalValue === 'false')),
   );
 
-  const optional = withoutBoolLiterals.find((t) => t.kind === 'literal')?.optional ?? false;
+  const insertAt = Math.min(firstBooleanLiteralIdx, withoutBoolLiterals.length);
 
-  return [...withoutBoolLiterals, { kind: 'boolean', optional }];
+  return [
+    ...withoutBoolLiterals.slice(0, insertAt),
+    { kind: 'boolean', optional },
+    ...withoutBoolLiterals.slice(insertAt),
+  ];
 }
 
 function getFirstEmptyType(unionTypes: TsType[]): EmptyType | undefined {
@@ -339,6 +363,7 @@ function filterEmptyTypesFromUnion(ctx: UnionCtx): Either.Either<TsType, string>
   return Either.right({
     kind: 'union',
     name: type.name,
+    owner: type.owner,
     unionTypes: alternateTypes,
     optional: type.optional,
     typeParams: type.typeParams,
@@ -379,13 +404,14 @@ function buildPlainVariant(
     });
   }
 
-  const result = variant(type.name, [], cases);
+  const result = variant(type.name, [], cases, type.owner);
 
   return Either.right(result);
 }
 
 function convertUserDefinedResultToWitResult(
   typeName: string | undefined,
+  typeOwner: string | undefined,
   resultType: UserDefinedResultType,
   mapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
@@ -418,12 +444,14 @@ function convertUserDefinedResultToWitResult(
       { tag: 'custom', okValueName, errValueName },
       okTypeResult ? okTypeResult.val : undefined,
       errTypeResult ? errTypeResult.val : undefined,
+      typeOwner,
     ),
   );
 }
 
 function convertToVariantAnalysedType(
   typeName: string | undefined,
+  typeOwner: string | undefined,
   taggedTypes: TaggedTypeMetadata[],
   mapper: TypeMapper,
 ): Either.Either<AnalysedType, string> {
@@ -452,5 +480,5 @@ function convertToVariantAnalysedType(
     }
   }
 
-  return Either.right(variant(typeName, taggedTypes, possibleTypes));
+  return Either.right(variant(typeName, taggedTypes, possibleTypes, typeOwner));
 }

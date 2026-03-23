@@ -1,3 +1,4 @@
+import alias from "@rollup/plugin-alias";
 import commonjs from "@rollup/plugin-commonjs";
 import json from "@rollup/plugin-json";
 import nodeResolve from "@rollup/plugin-node-resolve";
@@ -5,6 +6,41 @@ import typescript from "@rollup/plugin-typescript";
 import url from "node:url";
 import path from "node:path";
 import process from "node:process";
+import fs from "node:fs";
+
+function readTsConfigPaths(componentDir) {
+    const tsconfigPath = path.join(componentDir, "tsconfig.json");
+    if (!fs.existsSync(tsconfigPath)) {
+        return { aliasEntries: [], tsIncludes: [] };
+    }
+
+    try {
+        const tsconfig = JSON.parse(fs.readFileSync(tsconfigPath, "utf-8"));
+        const paths = tsconfig?.compilerOptions?.paths;
+        if (!paths) {
+            return { aliasEntries: [], tsIncludes: [] };
+        }
+
+        const aliasEntries = [];
+        const tsIncludes = [];
+
+        for (const [key, values] of Object.entries(paths)) {
+            if (!values || values.length === 0) continue;
+
+            // Convert tsconfig path pattern like "common/*" -> find: "common"
+            const find = key.replace(/\/\*$/, "");
+            // Convert target like "../common-ts/src/*" -> replacement directory
+            const replacement = path.resolve(componentDir, values[0].replace(/\/\*$/, ""));
+
+            aliasEntries.push({ find, replacement });
+            tsIncludes.push(path.resolve(componentDir, values[0].replace(/\*$/, "**/*.ts")));
+        }
+
+        return { aliasEntries, tsIncludes };
+    } catch {
+        return { aliasEntries: [], tsIncludes: [] };
+    }
+}
 
 function componentRollupConfig() {
     const componentName = process.env.GOLEM_COMPONENT_NAME;
@@ -22,8 +58,9 @@ function componentRollupConfig() {
         throw new Error("GOLEM_APP_ROOT is not set");
     }
 
+    const componentDir = process.cwd();
 
-    const dir = path.dirname(url.fileURLToPath(import.meta.url));
+    const { aliasEntries, tsIncludes } = readTsConfigPaths(componentDir);
 
     const externalPackages = (id) => {
         return (
@@ -59,6 +96,30 @@ export default (async () => { return await import("./src/main");})();
         };
     }
 
+    const plugins = [
+        virtualAgentMainPlugin(),
+    ];
+
+    if (aliasEntries.length > 0) {
+        plugins.push(alias({ entries: aliasEntries }));
+    }
+
+    plugins.push(
+        nodeResolve({
+            extensions: [".mjs", ".js", ".node", ".ts"],
+        }),
+        commonjs({
+            include: [`${appRootDir}/node_modules/**`],
+        }),
+        json(),
+        typescript({
+            noEmitOnError: true,
+            ...(tsIncludes.length > 0
+                ? { include: ["./src/**/*.ts", ...tsIncludes] }
+                : {}),
+        }),
+    );
+
     return {
         input: virtualAgentMainId,
         output: {
@@ -68,19 +129,7 @@ export default (async () => { return await import("./src/main");})();
             sourcemap: false,
         },
         external: externalPackages,
-        plugins: [
-            virtualAgentMainPlugin(),
-            nodeResolve({
-                extensions: [".mjs", ".js", ".node", ".ts"],
-            }),
-            commonjs({
-                include: [`${appRootDir}/node_modules/**`],
-            }),
-            json(),
-            typescript({
-                noEmitOnError: true,
-            }),
-        ],
+        plugins,
     };
 }
 

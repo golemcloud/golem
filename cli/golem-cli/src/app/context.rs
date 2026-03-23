@@ -87,6 +87,10 @@ impl<'a> BuildContext<'a> {
         self.build_config.skip_up_to_date_checks
     }
 
+    pub fn should_colorize(&self) -> bool {
+        self.application_config().should_colorize
+    }
+
     pub fn tools_with_ensured_common_deps(&self) -> &ToolsWithEnsuredCommonDeps {
         &self.application_context.tools_with_ensured_common_deps
     }
