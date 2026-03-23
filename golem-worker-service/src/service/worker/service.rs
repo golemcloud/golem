@@ -23,6 +23,7 @@ use bytes::Bytes;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::InvocationContext;
 use golem_common::model::AgentInvocationOutput;
+use golem_common::model::agent::AgentInvocationMode as CommonAgentInvocationMode;
 use golem_common::model::agent::{
     DataValue, GolemUserPrincipal, ParsedAgentId, Principal, UntypedDataValue,
 };
@@ -36,7 +37,6 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
-use golem_common::model::agent::AgentInvocationMode as CommonAgentInvocationMode;
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::component::Component;
@@ -729,15 +729,16 @@ impl WorkerService {
 
         // Lookup-mode calls only poll invocation status and do not mutate worker state,
         // so they only require ViewWorker rather than UpdateWorker.
-        let required_action = if golem_api_grpc::proto::golem::worker::AgentInvocationMode::try_from(mode)
-            .ok()
-            .map(CommonAgentInvocationMode::from)
-            == Some(CommonAgentInvocationMode::Lookup)
-        {
-            EnvironmentAction::ViewWorker
-        } else {
-            EnvironmentAction::UpdateWorker
-        };
+        let required_action =
+            if golem_api_grpc::proto::golem::worker::AgentInvocationMode::try_from(mode)
+                .ok()
+                .map(CommonAgentInvocationMode::from)
+                == Some(CommonAgentInvocationMode::Lookup)
+            {
+                EnvironmentAction::ViewWorker
+            } else {
+                EnvironmentAction::UpdateWorker
+            };
 
         let environment_auth_details = self
             .auth_service
