@@ -86,12 +86,26 @@ jobs:
         with:
           targets: wasm32-wasip2
 
+      - name: Download golem-cli artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: build-golem-binaries.yaml
+          name: golem-cli
+          path: /tmp/golem-bin
+
+      - name: Download golem-server artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: build-golem-binaries.yaml
+          name: golem-server
+          path: /tmp/golem-bin
+
       - name: Install Golem
         run: |
-          curl -Lo golem https://github.com/golemcloud/golem/releases/download/v1.4.2/golem-x86_64-unknown-linux-gnu
-          chmod +x golem
-          sudo mv golem /usr/local/bin/golem
-          golem --version
+          chmod +x /tmp/golem-bin/golem-cli /tmp/golem-bin/golem
+          sudo mv /tmp/golem-bin/golem-cli /usr/local/bin/golem-cli
+          sudo mv /tmp/golem-bin/golem /usr/local/bin/golem
+          golem-cli --version || golem --version
 
       - name: Start Golem Server
         run: |
