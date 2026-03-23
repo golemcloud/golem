@@ -1115,6 +1115,36 @@ fn proto_registry_event_to_model(
                 },
             )
         }
+        Some(Payload::ResourceDefinitionChanged(rdc)) => {
+            let environment_id = rdc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in ResourceDefinitionChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let resource_definition_id = rdc
+                .resource_definition_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing resource_definition_id in ResourceDefinitionChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::ResourceDefinitionChanged {
+                    event_id,
+                    environment_id,
+                    resource_definition_id,
+                    resource_name: golem_common::model::resource_definition::ResourceName(
+                        rdc.resource_name,
+                    ),
+                },
+            )
+        }
         None => Err(RegistryServiceError::internal_client_error(
             "Missing payload in RegistryInvalidationEvent",
         )),

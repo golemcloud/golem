@@ -4391,6 +4391,7 @@ dependencies = [
  "kube",
  "prometheus",
  "rustls 0.23.37",
+ "scc",
  "serde",
  "sqlx",
  "test-r",
