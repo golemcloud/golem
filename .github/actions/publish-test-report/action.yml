@@ -1,0 +1,29 @@
+name: 'Publish Test Report'
+description: 'Publish CTRF test reports as GitHub artifacts and PR comments'
+inputs:
+  artifact-name:
+    description: 'Name for the uploaded test report artifact'
+    required: true
+  github-token:
+    description: 'GitHub token for publishing reports'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Publish Test Report
+      uses: ctrf-io/github-test-reporter@v1
+      if: always()
+      with:
+        report-path: "**/target/ctrf-*.json"
+        upload-artifact: 'true'
+        artifact-name: ${{ inputs.artifact-name }}
+        summary: true
+        summary-report: true
+        failed-report: true
+        slowest-report: true
+        github-report: true
+        flaky-report: true
+        collapse-large-reports: true
+        exit-on-no-files: true
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
