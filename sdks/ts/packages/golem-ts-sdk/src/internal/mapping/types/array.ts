@@ -52,5 +52,5 @@ export function handleArray(
   // For an array type, we don't care about the scope of this element type, hence undefined
   const elemType = mapper(arrayElementType, undefined);
 
-  return Either.map(elemType, (inner) => list(type.name, undefined, undefined, inner));
+  return Either.map(elemType, (inner) => list(type.name, undefined, undefined, inner, type.owner));
 }

@@ -28,147 +28,169 @@ describe('agent config handling', () => {
     expect(arg.type.kind).toBe('config');
     assert(arg.type.kind === 'config');
     expect(arg.type.properties).toHaveLength(7);
-    expect(arg.type.properties).toEqual(
-      expect.arrayContaining([
-        { path: ['foo'], secret: false, type: { kind: 'number', optional: false } },
-        { path: ['bar'], secret: false, type: { kind: 'string', optional: false } },
-        { path: ['secret'], secret: true, type: { kind: 'boolean', optional: false } },
-        {
-          path: ['nested', 'nestedSecret'],
-          secret: true,
-          type: { kind: 'number', optional: false },
+    expect(arg.type.properties).toEqual([
+      {
+        path: ['foo'],
+        secret: false,
+        type: { kind: 'number', name: undefined, owner: undefined, optional: false },
+      },
+      {
+        path: ['bar'],
+        secret: false,
+        type: { kind: 'string', name: undefined, owner: undefined, optional: false },
+      },
+      {
+        path: ['secret'],
+        secret: true,
+        type: { kind: 'boolean', name: undefined, owner: '../src', optional: false },
+      },
+      {
+        path: ['nested', 'nestedSecret'],
+        secret: true,
+        type: { kind: 'number', name: undefined, owner: '../src', optional: false },
+      },
+      {
+        path: ['nested', 'a'],
+        secret: false,
+        type: { kind: 'boolean', name: undefined, owner: undefined, optional: false },
+      },
+      {
+        path: ['nested', 'b'],
+        secret: false,
+        type: {
+          kind: 'array',
+          name: undefined,
+          owner: undefined,
+          element: { kind: 'number', name: undefined, owner: undefined, optional: false },
+          optional: false,
         },
-        { path: ['nested', 'a'], secret: false, type: { kind: 'boolean', optional: false } },
-        {
-          path: ['nested', 'b'],
-          secret: false,
-          type: { kind: 'array', element: { kind: 'number', optional: false }, optional: false },
-        },
-        { path: ['aliasedNested', 'c'], secret: false, type: { kind: 'number', optional: false } },
-      ]),
-    );
+      },
+      {
+        path: ['aliasedNested', 'c'],
+        secret: false,
+        type: { kind: 'number', name: undefined, owner: undefined, optional: false },
+      },
+    ]);
   });
 
   it('correctly describes expected config entries to the host', () => {
     const configAgent = AgentTypeRegistry.get(new AgentClassName('ConfigAgent'))!;
     expect(configAgent.config).toHaveLength(7);
-    expect(configAgent.config).toEqual(
-      expect.arrayContaining([
-        {
-          source: 'local',
-          path: ['foo'],
-          valueType: {
-            nodes: [
-              {
-                name: undefined,
-                owner: undefined,
-                type: {
-                  tag: 'prim-f64-type',
-                },
+    expect(configAgent.config).toEqual([
+      {
+        source: 'local',
+        path: ['foo'],
+        valueType: {
+          nodes: [
+            {
+              name: undefined,
+              owner: undefined,
+              type: {
+                tag: 'prim-f64-type',
               },
-            ],
-          },
+            },
+          ],
         },
-        {
-          source: 'local',
-          path: ['bar'],
-          valueType: {
-            nodes: [
-              {
-                name: undefined,
-                owner: undefined,
-                type: {
-                  tag: 'prim-string-type',
-                },
+      },
+      {
+        source: 'local',
+        path: ['bar'],
+        valueType: {
+          nodes: [
+            {
+              name: undefined,
+              owner: undefined,
+              type: {
+                tag: 'prim-string-type',
               },
-            ],
-          },
+            },
+          ],
         },
-        {
-          source: 'secret',
-          path: ['secret'],
-          valueType: {
-            nodes: [
-              {
-                name: undefined,
-                owner: undefined,
-                type: {
-                  tag: 'prim-bool-type',
-                },
+      },
+      {
+        source: 'secret',
+        path: ['secret'],
+        valueType: {
+          nodes: [
+            {
+              name: undefined,
+              owner: undefined,
+              type: {
+                tag: 'prim-bool-type',
               },
-            ],
-          },
+            },
+          ],
         },
-        {
-          source: 'secret',
-          path: ['nested', 'nestedSecret'],
-          valueType: {
-            nodes: [
-              {
-                name: undefined,
-                owner: undefined,
-                type: {
-                  tag: 'prim-f64-type',
-                },
+      },
+      {
+        source: 'secret',
+        path: ['nested', 'nestedSecret'],
+        valueType: {
+          nodes: [
+            {
+              name: undefined,
+              owner: undefined,
+              type: {
+                tag: 'prim-f64-type',
               },
-            ],
-          },
+            },
+          ],
         },
-        {
-          source: 'local',
-          path: ['nested', 'a'],
-          valueType: {
-            nodes: [
-              {
-                name: undefined,
-                owner: undefined,
-                type: {
-                  tag: 'prim-bool-type',
-                },
+      },
+      {
+        source: 'local',
+        path: ['nested', 'a'],
+        valueType: {
+          nodes: [
+            {
+              name: undefined,
+              owner: undefined,
+              type: {
+                tag: 'prim-bool-type',
               },
-            ],
-          },
+            },
+          ],
         },
-        {
-          source: 'local',
-          path: ['nested', 'b'],
-          valueType: {
-            nodes: [
-              {
-                name: undefined,
-                owner: undefined,
-                type: {
-                  tag: 'list-type',
-                  val: 1,
-                },
+      },
+      {
+        source: 'local',
+        path: ['nested', 'b'],
+        valueType: {
+          nodes: [
+            {
+              name: undefined,
+              owner: undefined,
+              type: {
+                tag: 'list-type',
+                val: 1,
               },
-              {
-                name: undefined,
-                owner: undefined,
-                type: {
-                  tag: 'prim-f64-type',
-                },
+            },
+            {
+              name: undefined,
+              owner: undefined,
+              type: {
+                tag: 'prim-f64-type',
               },
-            ],
-          },
+            },
+          ],
         },
-        {
-          source: 'local',
-          path: ['aliasedNested', 'c'],
-          valueType: {
-            nodes: [
-              {
-                name: undefined,
-                owner: undefined,
-                type: {
-                  tag: 'prim-f64-type',
-                },
+      },
+      {
+        source: 'local',
+        path: ['aliasedNested', 'c'],
+        valueType: {
+          nodes: [
+            {
+              name: undefined,
+              owner: undefined,
+              type: {
+                tag: 'prim-f64-type',
               },
-            ],
-          },
+            },
+          ],
         },
-      ]),
-    );
+      },
+    ]);
   });
 
   it('config parameters should not show up in declared constructor', () => {
