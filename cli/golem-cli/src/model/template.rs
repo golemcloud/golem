@@ -135,7 +135,6 @@ impl<C: Serialize> Template<C> for app_raw::InjectToPrebuiltQuickJs {
         Ok(app_raw::InjectToPrebuiltQuickJs {
             inject_to_prebuilt_quickjs: self.inject_to_prebuilt_quickjs.render(env, ctx)?,
             module: self.module.render(env, ctx)?,
-            module_wasm: self.module_wasm.render(env, ctx)?,
             into: self.into.render(env, ctx)?,
         })
     }

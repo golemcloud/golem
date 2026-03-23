@@ -562,12 +562,10 @@ pub struct GenerateQuickJSDTS {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InjectToPrebuiltQuickJs {
-    /// The path to the prebuilt QuickJS WASM file that loads a JS module through a get-script import
+    /// The path to the prebuilt QuickJS WASM file with a binary slot for JS injection
     pub inject_to_prebuilt_quickjs: String,
     /// The path to the JS module
     pub module: String,
-    /// The path to the intermediate WASM containing the JS module
-    pub module_wasm: String,
     /// The path to the output WASM component containing the injected JS module
     pub into: String,
 }
