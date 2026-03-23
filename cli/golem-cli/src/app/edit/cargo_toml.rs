@@ -161,11 +161,18 @@ fn merge_items(base: &mut Item, update: &Item) {
                         .and_then(|it| it.as_array_mut()),
                     update_item.as_array(),
                 ) {
-                    for feature in update_features.iter().filter_map(|v| v.as_str()) {
-                        if !base_features.iter().any(|v| v.as_str() == Some(feature)) {
-                            base_features.push(feature);
-                        }
-                    }
+                    let existing: Vec<String> = base_features
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect();
+                    let new_features: Vec<String> = update_features
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect();
+                    let merged = merge_features(existing, &new_features);
+                    *base_features = features_to_array(merged);
                     continue;
                 }
             }
