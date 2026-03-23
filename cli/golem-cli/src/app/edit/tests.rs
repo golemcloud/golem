@@ -1625,8 +1625,8 @@ fn arb_cargo_merge_case() -> impl Strategy<Value = (String, String, String, Vec<
         "[a-z][a-z0-9_-]{0,8}",
         "0\\.[0-9]{1,2}\\.[0-9]{1,2}",
         "0\\.[0-9]{1,2}\\.[0-9]{1,2}",
-        prop::collection::vec("[a-z][a-z0-9_]{0,8}", 0..3),
-        prop::collection::vec("[a-z][a-z0-9_]{0,8}", 0..3),
+        prop::collection::hash_set("[a-z][a-z0-9_]{0,8}", 0..3),
+        prop::collection::hash_set("[a-z][a-z0-9_]{0,8}", 0..3),
         any::<bool>(),
     )
         .prop_map(
@@ -1635,10 +1635,13 @@ fn arb_cargo_merge_case() -> impl Strategy<Value = (String, String, String, Vec<
                 mut base_only_dep,
                 base_version,
                 update_version,
-                base_features,
-                update_features,
+                base_features_set,
+                update_features_set,
                 use_spaces,
             )| {
+                let base_features: Vec<String> = base_features_set.into_iter().collect();
+                let update_features: Vec<String> = update_features_set.into_iter().collect();
+
                 if shared_dep == base_only_dep {
                     base_only_dep.push_str("_base");
                 }
