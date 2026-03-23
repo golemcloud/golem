@@ -3,29 +3,6 @@ http_port = 8081
 number_of_shards = 1024
 rebalance_threshold = 0.1
 
-[quota]
-definition_cache_max_capacity = 1024
-definition_cache_ttl = "5m"
-definition_cache_eviction_period = "1m"
-
-[registry_service]
-connect_timeout = "10s"
-host = "localhost"
-max_message_size = 52428800
-port = 8080
-
-[registry_service.retries_on_unavailable]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
-[registry_service.tls]
-type = "Disabled"
-
-[registry_service.tls.config]
-
 [grpc]
 port = 9092
 
@@ -61,6 +38,29 @@ max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[quota]
+definition_cache_eviction_period = "1m"
+definition_cache_max_capacity = 1024
+definition_cache_ttl = "5m"
+
+[registry_service]
+connect_timeout = "10s"
+host = "localhost"
+max_message_size = 52428800
+port = 8080
+
+[registry_service.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[registry_service.tls]
+type = "Disabled"
+
+[registry_service.tls.config]
 
 [tracing]
 console = false
@@ -180,6 +180,29 @@ type = "Disabled"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [quota]
+# definition_cache_eviction_period = "1m"
+# definition_cache_max_capacity = 1024
+# definition_cache_ttl = "5m"
+# 
+# [registry_service]
+# connect_timeout = "10s"
+# host = "localhost"
+# max_message_size = 52428800
+# port = 8080
+# 
+# [registry_service.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [registry_service.tls]
+# type = "Disabled"
+# 
+# [registry_service.tls.config]
 # 
 # [tracing]
 # console = false
