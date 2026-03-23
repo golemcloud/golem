@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::{golem_api_1_x, golem_durability};
 use crate::services::active_workers::ActiveWorkers;
@@ -108,6 +109,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits = resource_limits::configured(
@@ -151,6 +153,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -188,6 +191,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -222,6 +226,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             environment_state_service.clone(),
             additional_deps,
             leak_sentinel,

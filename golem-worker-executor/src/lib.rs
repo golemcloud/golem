@@ -256,6 +256,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: crate::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>>;
 
@@ -570,6 +571,9 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         )),
         HttpClientConfig::Disabled(_) => None,
     };
+    let websocket_connection_pool = crate::durable_host::websocket::WebSocketConnectionPool::new(
+        golem_config.max_websocket_connections,
+    );
     let golem_config = Arc::new(golem_config);
 
     let shard_service = Arc::new(ShardServiceDefault::new());
@@ -734,6 +738,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             registry_service.clone(),
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             leak_sentinel,
         )
         .await?;

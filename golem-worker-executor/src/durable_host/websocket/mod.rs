@@ -13,3 +13,35 @@
 // limitations under the License.
 
 pub mod client;
+
+use std::sync::Arc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+/// A per-executor connection pool that limits the number of concurrent
+/// WebSocket connections, preventing socket exhaustion under load.
+///
+/// Modeled after `wasmtime_wasi_http::HttpConnectionPool` — callers acquire
+/// a permit before establishing a connection. The permit is held for the
+/// lifetime of the connection and released when the connection is dropped.
+#[derive(Clone)]
+pub struct WebSocketConnectionPool {
+    semaphore: Arc<Semaphore>,
+}
+
+impl WebSocketConnectionPool {
+    pub fn new(max_connections: usize) -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(max_connections)),
+        }
+    }
+
+    /// Acquires a permit, blocking if the pool is at capacity.
+    /// The returned permit must be held for the lifetime of the connection.
+    pub async fn acquire(&self) -> anyhow::Result<OwnedSemaphorePermit> {
+        self.semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| anyhow::anyhow!("WebSocket connection pool closed unexpectedly"))
+    }
+}

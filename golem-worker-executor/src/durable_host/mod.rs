@@ -152,6 +152,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     state: PrivateDurableWorkerState,
     temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
+    pub websocket_connection_pool: websocket::WebSocketConnectionPool,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -183,6 +184,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<HttpConnectionPool>,
+        websocket_connection_pool: websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -256,6 +258,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             io_ctx: Arc::new(Mutex::new(io_ctx)),
             wasi_http,
             owned_agent_id: owned_agent_id.clone(),
+            websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
                 event_service,
