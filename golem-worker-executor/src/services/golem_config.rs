@@ -134,6 +134,12 @@ impl SafeDisplay for GolemConfig {
         );
         let _ = writeln!(&mut result, "memory:");
         let _ = writeln!(&mut result, "{}", self.memory.to_safe_string_indented());
+        let _ = writeln!(&mut result, "filesystem storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.filesystem_storage.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "rdbms:");
         let _ = writeln!(&mut result, "{}", self.rdbms.to_safe_string_indented());
         let _ = writeln!(&mut result, "resource limits:");
