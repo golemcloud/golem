@@ -106,6 +106,7 @@ impl BuildConfig {
 pub struct ApplicationConfig {
     pub offline: bool,
     pub dev_mode: bool,
+    pub should_colorize: bool,
     pub enable_wasmtime_fs_cache: bool,
 }
 

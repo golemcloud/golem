@@ -648,7 +648,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             r#"{a: {tag: "case1", value: "foo"}}"#,
             r#"{a: "foo"}"#,
             r#""foo""#,
-            r#"{tag: "case3", value: "foo"}"#,
+            r#"{tag: "UnionType2", value: "foo"}"#,
         ],
     )
     .await;
@@ -660,7 +660,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     // function with a very complex object
     let argument = r#"
-      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}
+      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}
     "#;
 
     run_and_assert(&ctx, "funObjectComplexType", &[argument]).await;
@@ -669,7 +669,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(
         &ctx,
         "funUnionType",
-        &[r#"{tag: "UnionType1", value: "foo"}"#],
+        &[r#"{tag: "UnionType2", value: "foo"}"#],
     )
     .await;
 
@@ -677,7 +677,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(
         &ctx,
         "funUnionComplexType",
-        &[r#"{tag: "UnionComplexType1", value: "foo"}"#],
+        &[r#"{tag: "UnionComplexType2", value: "foo"}"#],
     )
     .await;
 
@@ -794,9 +794,9 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         &ctx,
         "funAll",
         &[
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}"#,
-            r#"{tag: "UnionType1", value: "foo"}"#,
-            r#"{tag: "UnionComplexType1", value: "foo"}"#,
+            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}"#,
+            r#"{tag: "UnionType2", value: "foo"}"#,
+            r#"{tag: "UnionComplexType2", value: "foo"}"#,
             r#"42"#,
             r#""foo""#,
             r#"true"#,
@@ -813,7 +813,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             r#"{a: {tag: "case1", value: "foo"}}"#,
             r#"{a: "foo"}"#,
             r#""foo""#,
-            r#"{tag: "case3", value: "foo"}"#,
+            r#"{tag: "UnionType2", value: "foo"}"#,
             r#"{tag: "a", value: "foo"}"#
         ],
     )

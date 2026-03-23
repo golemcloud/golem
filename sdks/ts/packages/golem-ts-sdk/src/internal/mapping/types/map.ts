@@ -30,6 +30,12 @@ export function handleMap(
   const value = mapper(type.value, undefined);
 
   return Either.zipWith(key, value, (k, v) =>
-    list(type.name, undefined, { keyType: k, valueType: v }, tuple(undefined, undefined, [k, v])),
+    list(
+      type.name,
+      undefined,
+      { keyType: k, valueType: v },
+      tuple(undefined, undefined, [k, v]),
+      type.owner,
+    ),
   );
 }

@@ -37,7 +37,7 @@ export function handleLiteral(
     if (isNumberString(literalName)) {
       return Either.left('Literals of number type are not supported');
     }
-    return Either.right(enum_(type.name, [trimQuotes(literalName)]));
+    return Either.right(enum_(type.name, [trimQuotes(literalName)], type.owner));
   } else {
     return Either.left(
       `internal error: failed to retrieve the literal value from type of kind ${type.kind}`,

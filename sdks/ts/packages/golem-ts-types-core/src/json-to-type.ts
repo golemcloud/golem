@@ -23,6 +23,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'others',
         name: json.name,
+        owner: json.owner,
         optional: json.optional,
         recursive: json.recursive,
       };
@@ -31,37 +32,39 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'unresolved-type',
         name: json.name,
+        owner: json.owner,
         optional: json.optional,
         text: json.text,
         error: json.error,
       };
 
     case 'boolean':
-      return { kind: 'boolean', name: json.name, optional: json.optional };
+      return { kind: 'boolean', name: json.name, owner: json.owner, optional: json.optional };
 
     case 'number':
-      return { kind: 'number', name: json.name, optional: json.optional };
+      return { kind: 'number', name: json.name, owner: json.owner, optional: json.optional };
 
     case 'string':
-      return { kind: 'string', name: json.name, optional: json.optional };
+      return { kind: 'string', name: json.name, owner: json.owner, optional: json.optional };
 
     case 'bigint':
-      return { kind: 'bigint', name: json.name, optional: json.optional };
+      return { kind: 'bigint', name: json.name, owner: json.owner, optional: json.optional };
 
     case 'null':
-      return { kind: 'null', name: json.name, optional: json.optional };
+      return { kind: 'null', name: json.name, owner: json.owner, optional: json.optional };
 
     case 'undefined':
-      return { kind: 'undefined', name: json.name, optional: json.optional };
+      return { kind: 'undefined', name: json.name, owner: json.owner, optional: json.optional };
 
     case 'void':
-      return { kind: 'void', name: json.name, optional: json.optional };
+      return { kind: 'void', name: json.name, owner: json.owner, optional: json.optional };
 
     case 'array': {
       const elem = buildTypeFromJSON(json.element);
       return {
         kind: 'array',
         name: json.name,
+        owner: json.owner,
         element: elem,
         optional: json.optional,
       };
@@ -72,6 +75,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'tuple',
         name: json.name,
+        owner: json.owner,
         elements: elems,
         optional: json.optional,
       };
@@ -83,6 +87,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'union',
         name: json.name,
+        owner: json.owner,
         unionTypes: unionElems,
         optional: json.optional,
         typeParams: unionTypeParams,
@@ -102,6 +107,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'class',
         name: json.name,
+        owner: json.owner,
         properties: props,
         optional: json.optional,
       };
@@ -119,6 +125,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'object',
         name: json.name,
+        owner: json.owner,
         properties: props,
         optional: json.optional,
         typeParams: json.typeParams.map((arg) => buildTypeFromJSON(arg)),
@@ -137,6 +144,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'interface',
         name: json.name,
+        owner: json.owner,
         properties: props,
         optional: json.optional,
         typeParams: json.typeParams.map((arg) => buildTypeFromJSON(arg)),
@@ -147,6 +155,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'literal',
         name: json.name,
+        owner: json.owner,
         literalValue: json.literalValue,
         optional: json.optional,
       };
@@ -162,6 +171,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'alias',
         name: json.name,
+        owner: json.owner,
         aliasSymbol: aliasSym,
         optional: json.optional,
       };
@@ -172,6 +182,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'promise',
         name: json.name ?? 'Promise',
+        owner: json.owner,
         element: elemType,
         optional: json.optional,
       };
@@ -186,6 +197,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'map',
         name: json.name,
+        owner: json.owner,
         key: typeArgs[0],
         value: typeArgs[1],
         optional: json.optional,
@@ -200,6 +212,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       return {
         kind: 'config',
         name: json.name,
+        owner: json.owner,
         properties,
         optional: json.optional,
       };

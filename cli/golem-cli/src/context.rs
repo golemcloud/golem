@@ -325,6 +325,7 @@ impl Context {
             selected_context_logging: std::sync::OnceLock::new(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
+                SHOULD_COLORIZE.should_colorize(),
                 app_source_mode,
             )),
             caches: Caches::new(),
@@ -698,6 +699,7 @@ impl ApplicationContextConfig {
 #[derive()]
 pub struct ApplicationContextState {
     yes: bool,
+    should_colorize: bool,
     app_source_mode: Option<ApplicationSourceMode>,
     pub silent_init: bool,
 
@@ -705,9 +707,10 @@ pub struct ApplicationContextState {
 }
 
 impl ApplicationContextState {
-    pub fn new(yes: bool, source_mode: ApplicationSourceMode) -> Self {
+    pub fn new(yes: bool, should_colorize: bool, source_mode: ApplicationSourceMode) -> Self {
         Self {
             yes,
+            should_colorize,
             app_source_mode: Some(source_mode),
             silent_init: false,
             app_context: None,
@@ -735,6 +738,7 @@ impl ApplicationContextState {
         let app_config = ApplicationConfig {
             offline: config.wasm_rpc_client_build_offline,
             dev_mode: config.dev_mode,
+            should_colorize: self.should_colorize,
             enable_wasmtime_fs_cache: config.enable_wasmtime_fs_cache,
         };
 

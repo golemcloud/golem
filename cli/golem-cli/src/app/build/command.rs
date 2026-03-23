@@ -372,12 +372,16 @@ pub async fn execute_external_command(
                 )
                 .await?;
 
-                let mut cmd = Command::new(command_tokens[0].clone());
-                cmd.args(command_tokens.iter().skip(1))
+                let mut process = Command::new(command_tokens[0].clone());
+
+                process
+                    .args(command_tokens.iter().skip(1))
                     .current_dir(&build_dir)
-                    .envs(&command.env)
-                    .stream_and_run(&command_tokens[0])
-                    .await
+                    .envs(&command.env);
+
+                configure_external_command_env(&mut process, command_tokens[0].as_str(), ctx);
+
+                process.stream_and_run(&command_tokens[0]).await
             },
             || {
                 log_skipping_up_to_date(format!(
@@ -419,4 +423,23 @@ pub async fn ensure_common_deps_for_tool(
         }
         _ => Ok(()),
     }
+}
+
+fn configure_external_command_env(command: &mut Command, executable: &str, ctx: &BuildContext<'_>) {
+    let executable_name = Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str());
+
+    if let Some("cargo") = executable_name {
+        apply_cargo_term_color_env(command, ctx.should_colorize())
+    }
+}
+
+fn apply_cargo_term_color_env(command: &mut Command, should_colorize: bool) {
+    if std::env::var_os("CARGO_TERM_COLOR").is_some() {
+        return;
+    }
+
+    let color = if should_colorize { "always" } else { "never" };
+    command.env("CARGO_TERM_COLOR", color);
 }
