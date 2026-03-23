@@ -3,7 +3,7 @@ settings:
   timeout_per_subprompt: 300
 steps:
   - id: "create-project"
-    prompt: "Create a new Golem application called test-app with TypeScript"
+    prompt: "Create a new Golem application called test-app with TypeScript. Before running golem new, set the SDK override: export GOLEM_TS_PACKAGES_PATH=$GOLEM_PATH/sdks/ts/packages"
     expectedSkills:
       - "golem-new-project"
     verify:
