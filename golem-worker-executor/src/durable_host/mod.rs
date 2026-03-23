@@ -3137,6 +3137,17 @@ struct HttpRequestState {
     /// When true, transient errors that reach `get()` are the final result and
     /// should not trigger trap+replay.
     pub has_background_retry: bool,
+    /// Set to true when splice()/blocking_splice() is called on the outgoing body stream.
+    /// When true, body bytes cannot be fully reconstructed from the oplog.
+    pub has_unreconstructable_body: bool,
+    /// Set to true when subscribe() is called on the outgoing body output stream.
+    /// When true, output stream inline retry is disabled because the pollable
+    /// would become stale after resource replacement.
+    pub output_stream_subscribed: bool,
+    /// Set to true when skip()/blocking_skip() is called on the response body.
+    /// When true, Zone 2 inline retry is disabled because we cannot verify
+    /// the skipped bytes against the retry response.
+    pub had_body_skip: bool,
 }
 
 impl HttpRequestState {

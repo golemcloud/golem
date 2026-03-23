@@ -35,7 +35,8 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::SerializableStreamError;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponseStreamCheckWrite,
-    HostResponseStreamChunk, HostResponseStreamSkip, HostResponseStreamWriteResult, OplogIndex,
+    HostResponseStreamChunk, HostResponseStreamSkip, HostResponseStreamWriteResult,
+    HostResponseStreamWriteWithBytes, OplogIndex,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime_wasi::filesystem::WasiFilesystemView as _;
@@ -65,10 +66,34 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
-                let result = HostInputStream::read(self.table(), self_, len).await;
+                let first_try = HostInputStream::read(self.table(), self_, len).await;
+
+                // Attempt Zone 2 inline retry if the read failed with a transient error
+                let read_result = if is_transient_stream_error(&first_try) {
+                    match crate::durable_host::http::inline_retry::try_zone2_inline_retry(
+                        self, handle,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            // Stream swapped — retry the read on the new stream
+                            let self2 = Resource::<InputStream>::new_borrow(handle);
+                            HostInputStream::read(self.table(), self2, len).await
+                        }
+                        Ok(false) => first_try,
+                        Err(e) => {
+                            // Zone 2 hard failure (content mismatch, 416, etc.)
+                            return Err(StreamError::LastOperationFailed(
+                                wasmtime::Error::from_anyhow(e),
+                            ));
+                        }
+                    }
+                } else {
+                    first_try
+                };
 
                 durability
-                    .try_trigger_retry(self, &ignore_closed_error(&result), |_| {
+                    .try_trigger_retry(self, &ignore_closed_error(&read_result), |_| {
                         HostFailureKind::Transient
                     })
                     .await
@@ -79,7 +104,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         self,
                         request,
                         HostResponseStreamChunk {
-                            result: result.map_err(SerializableStreamError::from),
+                            result: read_result.map_err(SerializableStreamError::from),
                         },
                     )
                     .await
@@ -111,10 +136,34 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             .await?;
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
-                let result = HostInputStream::blocking_read(self.table(), self_, len).await;
+                let first_try = HostInputStream::blocking_read(self.table(), self_, len).await;
+
+                // Attempt Zone 2 inline retry if the read failed with a transient error
+                let read_result = if is_transient_stream_error(&first_try) {
+                    match crate::durable_host::http::inline_retry::try_zone2_inline_retry(
+                        self, handle,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            // Stream swapped — retry the read on the new stream
+                            let self2 = Resource::<InputStream>::new_borrow(handle);
+                            HostInputStream::blocking_read(self.table(), self2, len).await
+                        }
+                        Ok(false) => first_try,
+                        Err(e) => {
+                            // Zone 2 hard failure (content mismatch, 416, etc.)
+                            return Err(StreamError::LastOperationFailed(
+                                wasmtime::Error::from_anyhow(e),
+                            ));
+                        }
+                    }
+                } else {
+                    first_try
+                };
 
                 durability
-                    .try_trigger_retry(self, &ignore_closed_error(&result), |_| {
+                    .try_trigger_retry(self, &ignore_closed_error(&read_result), |_| {
                         HostFailureKind::Transient
                     })
                     .await
@@ -124,7 +173,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         self,
                         request,
                         HostResponseStreamChunk {
-                            result: result.map_err(SerializableStreamError::from),
+                            result: read_result.map_err(SerializableStreamError::from),
                         },
                     )
                     .await
@@ -143,6 +192,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn skip(&mut self, self_: Resource<InputStream>, len: u64) -> Result<u64, StreamError> {
         if is_incoming_http_body_stream(self, &self_) {
             let handle = self_.rep();
+
+            if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
+                state.had_body_skip = true;
+            }
+
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
             let durability = Durability::<HttpTypesIncomingBodyStreamSkip>::new(
@@ -187,6 +241,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<u64, StreamError> {
         if is_incoming_http_body_stream(self, &self_) {
             let handle = self_.rep();
+
+            if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
+                state.had_body_skip = true;
+            }
+
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
             let durability = Durability::<HttpTypesIncomingBodyStreamBlockingSkip>::new(
@@ -306,14 +365,18 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let is_live = durability.is_live();
+            let result = if is_live {
+                let contents_copy = contents.clone();
                 let result = HostOutputStream::write(self.table(), self_, contents).await;
                 durability
                     .persist(
                         self,
                         state.request,
-                        HostResponseStreamWriteResult {
-                            result: result.map_err(SerializableStreamError::from),
+                        HostResponseStreamWriteWithBytes {
+                            result: result
+                                .map(|()| contents_copy)
+                                .map_err(SerializableStreamError::from),
                         },
                     )
                     .await
@@ -322,7 +385,13 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             }
             .map_err(StreamError::from)?;
 
-            result.result.map_err(StreamError::from)
+            let final_result = result.result.map(|_bytes| ()).map_err(StreamError::from);
+            if final_result.is_err() && is_live {
+                if let Err(e) = crate::durable_host::http::inline_retry::try_output_stream_inline_retry(self, rep).await {
+                    tracing::warn!("Output stream inline retry failed: {e}");
+                }
+            }
+            final_result
         } else {
             self.observe_function_call("io::streams::output_stream", "write");
 
@@ -382,7 +451,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let is_live = durability.is_live();
+            let result = if is_live {
                 let result = HostOutputStream::flush(self.table(), self_).await;
                 durability
                     .persist(
@@ -398,7 +468,13 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             }
             .map_err(StreamError::from)?;
 
-            result.result.map_err(StreamError::from)
+            let final_result = result.result.map_err(StreamError::from);
+            if final_result.is_err() && is_live {
+                if let Err(e) = crate::durable_host::http::inline_retry::try_output_stream_inline_retry(self, rep).await {
+                    tracing::warn!("Output stream inline retry failed: {e}");
+                }
+            }
+            final_result
         } else {
             self.observe_function_call("io::streams::output_stream", "flush");
             HostOutputStream::flush(self.table(), self_).await
@@ -416,7 +492,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let is_live = durability.is_live();
+            let result = if is_live {
                 let result = HostOutputStream::blocking_flush(self.table(), self_).await;
                 durability
                     .persist(
@@ -432,7 +509,13 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             }
             .map_err(StreamError::from)?;
 
-            result.result.map_err(StreamError::from)
+            let final_result = result.result.map_err(StreamError::from);
+            if final_result.is_err() && is_live {
+                if let Err(e) = crate::durable_host::http::inline_retry::try_output_stream_inline_retry(self, rep).await {
+                    tracing::warn!("Output stream inline retry failed: {e}");
+                }
+            }
+            final_result
         } else {
             self.observe_function_call("io::streams::output_stream", "blocking_flush");
             HostOutputStream::blocking_flush(self.table(), self_).await
@@ -441,6 +524,14 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
 
     fn subscribe(&mut self, self_: Resource<OutputStream>) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("io::streams::output_stream", "subscribe");
+        let rep = self_.rep();
+        // Track that subscribe was called so output stream inline retry
+        // can be disabled (the pollable would go stale after resource swap).
+        if let Some(request_handle) = self.state.find_request_handle_by_output_stream(rep) {
+            if let Some(state) = self.state.open_http_requests.get_mut(&request_handle) {
+                state.output_stream_subscribed = true;
+            }
+        }
         HostOutputStream::subscribe(self.table(), self_)
     }
 
@@ -459,14 +550,20 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             .await
             .map_err(StreamError::from)?;
 
-            let result = if durability.is_live() {
+            let is_live = durability.is_live();
+            let result = if is_live {
                 let result = HostOutputStream::write_zeroes(self.table(), self_, len).await;
                 durability
                     .persist(
                         self,
                         state.request,
-                        HostResponseStreamWriteResult {
-                            result: result.map_err(SerializableStreamError::from),
+                        HostResponseStreamWriteWithBytes {
+                            result: result
+                                .map(|()| {
+                            let len = usize::try_from(len).unwrap_or(usize::MAX);
+                            vec![0u8; len]
+                        })
+                                .map_err(SerializableStreamError::from),
                         },
                     )
                     .await
@@ -475,7 +572,13 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             }
             .map_err(StreamError::from)?;
 
-            result.result.map_err(StreamError::from)
+            let final_result = result.result.map(|_bytes| ()).map_err(StreamError::from);
+            if final_result.is_err() && is_live {
+                if let Err(e) = crate::durable_host::http::inline_retry::try_output_stream_inline_retry(self, rep).await {
+                    tracing::warn!("Output stream inline retry failed: {e}");
+                }
+            }
+            final_result
         } else {
             self.observe_function_call("io::streams::output_stream", "write_zeroes");
 
@@ -528,6 +631,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<u64, StreamError> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
+            // Mark body as unreconstructable since splice doesn't capture actual bytes
+            if let Some(request_handle) = self.state.find_request_handle_by_output_stream(rep) {
+                if let Some(req_state) = self.state.open_http_requests.get_mut(&request_handle) {
+                    req_state.has_unreconstructable_body = true;
+                }
+            }
             let state = get_http_output_stream_state(self, rep)?;
             let durability = Durability::<HttpTypesOutgoingBodyStreamSplice>::new(
                 self,
@@ -581,6 +690,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<u64, StreamError> {
         let rep = self_.rep();
         if is_outgoing_http_body_stream(self, rep) {
+            // Mark body as unreconstructable since blocking_splice doesn't capture actual bytes
+            if let Some(request_handle) = self.state.find_request_handle_by_output_stream(rep) {
+                if let Some(req_state) = self.state.open_http_requests.get_mut(&request_handle) {
+                    req_state.has_unreconstructable_body = true;
+                }
+            }
             let state = get_http_output_stream_state(self, rep)?;
             let durability = Durability::<HttpTypesOutgoingBodyStreamBlockingSplice>::new(
                 self,
@@ -759,6 +874,10 @@ fn ignore_closed_error<T>(result: &Result<T, StreamError>) -> Result<(), &Stream
     } else {
         Ok(())
     }
+}
+
+fn is_transient_stream_error<T>(result: &Result<T, StreamError>) -> bool {
+    matches!(result, Err(err) if !matches!(err, StreamError::Closed))
 }
 
 async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(

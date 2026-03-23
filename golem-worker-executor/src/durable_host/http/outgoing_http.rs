@@ -227,6 +227,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         first_byte_timeout,
                         between_bytes_timeout,
                         has_background_retry: enable_background_retry,
+                        has_unreconstructable_body: false,
+                        output_stream_subscribed: false,
+                        had_body_skip: false,
                     },
                 );
             }

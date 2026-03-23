@@ -44,9 +44,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
-use wasmtime_wasi::OutputStream;
+use wasmtime_wasi::{InputStream, OutputStream};
 use wasmtime_wasi_http::bindings::http::types as wasi_http_types;
-use wasmtime_wasi_http::body::{HostOutgoingBody, HyperOutgoingBody, StreamContext};
+use wasmtime_wasi_http::body::{HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext};
 use wasmtime_wasi_http::types::{
     default_send_request_with_pool, FutureIncomingResponseHandle, HostFutureIncomingResponse,
     OutgoingRequestConfig,
@@ -83,8 +83,6 @@ pub enum RetryZone {
     Zone1,
     /// Retry during response body reading — partial body already consumed.
     Zone2,
-    /// Retry during outgoing body stream writes — before any response data.
-    OutgoingBodyStream,
 }
 
 /// Checks whether the given HTTP request is eligible for transparent inline retry.
@@ -93,7 +91,7 @@ pub enum RetryZone {
 pub fn is_http_inline_retry_eligible(
     exec_state: &DurableExecutionState,
     request_state: &HttpRequestState,
-    _zone: RetryZone,
+    zone: RetryZone,
 ) -> Result<(), InlineRetryIneligible> {
     if !exec_state.is_live {
         return Err(InlineRetryIneligible::NotLive);
@@ -107,11 +105,17 @@ pub fn is_http_inline_retry_eligible(
         return Err(InlineRetryIneligible::PersistNothing);
     }
 
-    // NOTE: Zone-specific eligibility fields (has_unreconstructable_body,
-    // has_outgoing_trailers, body_finished, had_body_skip, output_stream_subscribed)
-    // are not yet tracked on HttpRequestState. These checks will be added when
-    // Zone 2 and OutgoingBodyStream retry are implemented. For now, the background
-    // retry task (Zone 1) handles all requests where the initial send failed.
+    if request_state.has_unreconstructable_body {
+        return Err(InlineRetryIneligible::UnreconstructableBody);
+    }
+
+    if request_state.output_stream_subscribed {
+        return Err(InlineRetryIneligible::OutputStreamSubscribed);
+    }
+
+    if zone == RetryZone::Zone2 && request_state.had_body_skip {
+        return Err(InlineRetryIneligible::HadBodySkip);
+    }
 
     // Idempotency check
     if !exec_state.assume_idempotence && !is_method_idempotent(&request_state.request.method) {
@@ -138,23 +142,55 @@ fn is_method_idempotent(method: &SerializableHttpMethod) -> bool {
 /// `[begin_index..current_oplog_index]` for body write entries belonging
 /// to this request's batch.
 ///
-/// NOTE: The current oplog format for outgoing body stream writes
-/// (`StreamWriteResult`) only records success/failure, not the actual
-/// bytes written. Therefore this function currently returns an empty body.
-/// This is correct for GET/HEAD/DELETE/OPTIONS requests that have no body.
-/// For POST/PUT/PATCH with a body, the retry will send an empty body —
-/// which may still succeed for idempotent retries where the server already
-/// processed the original request.
-///
-/// Future work: store outgoing body bytes in the oplog to enable full
-/// body reconstruction for retries.
+/// Reads `StreamWriteWithBytes` responses from the oplog and concatenates
+/// all successfully written byte chunks to reconstruct the full body.
 pub async fn reconstruct_outgoing_body(
-    _oplog: &Arc<dyn Oplog>,
-    _begin_index: OplogIndex,
+    oplog: &Arc<dyn Oplog>,
+    begin_index: OplogIndex,
 ) -> Result<Bytes, anyhow::Error> {
-    // Outgoing body bytes are not currently stored in the oplog.
-    // The StreamWriteResult response only records Ok(()) / Err(...).
-    Ok(Bytes::new())
+    let current_idx = oplog.current_oplog_index().await;
+
+    if current_idx <= begin_index {
+        return Ok(Bytes::new());
+    }
+
+    let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index);
+    let entries = oplog.read_many(begin_index, n).await;
+    let mut body = BytesMut::new();
+
+    let write_fn_name =
+        golem_common::model::oplog::host_functions::HttpTypesOutgoingBodyStreamWrite::HOST_FUNCTION_NAME;
+    let write_zeroes_fn_name =
+        golem_common::model::oplog::host_functions::HttpTypesOutgoingBodyStreamWriteZeroes::HOST_FUNCTION_NAME;
+
+    for (_idx, entry) in &entries {
+        if let OplogEntry::HostCall {
+            function_name,
+            response,
+            durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(batch_begin)),
+            ..
+        } = entry
+        {
+            if batch_begin != &begin_index {
+                continue;
+            }
+
+            if *function_name == write_fn_name || *function_name == write_zeroes_fn_name {
+                let response_value =
+                    oplog.download_payload(response.clone()).await.map_err(|err| {
+                        anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
+                    })?;
+
+                if let HostResponse::StreamWriteWithBytes(payload) = response_value {
+                    if let Ok(data) = &payload.result {
+                        body.put_slice(data);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(body.freeze())
 }
 
 /// Reads all successfully received incoming body chunks from the oplog for
@@ -224,7 +260,7 @@ pub fn reconstruct_http_request(
     body: HyperOutgoingBody,
     extra_headers: &[(String, String)],
 ) -> Result<hyper::Request<HyperOutgoingBody>, anyhow::Error> {
-    let method = serializable_method_to_http(&request.method)?;
+    let method = http::Method::try_from(&request.method)?;
     let uri: hyper::Uri = request.uri.parse().map_err(|e| {
         anyhow::anyhow!("failed to parse stored URI '{}': {e}", request.uri)
     })?;
@@ -295,25 +331,6 @@ pub fn verify_body_prefix(expected_prefix: &[u8], actual_data: &[u8]) -> bool {
         return false;
     }
     actual_data[..expected_prefix.len()] == *expected_prefix
-}
-
-/// Converts a `SerializableHttpMethod` to an `http::Method`.
-fn serializable_method_to_http(
-    method: &SerializableHttpMethod,
-) -> Result<http::Method, anyhow::Error> {
-    match method {
-        SerializableHttpMethod::Get => Ok(http::Method::GET),
-        SerializableHttpMethod::Post => Ok(http::Method::POST),
-        SerializableHttpMethod::Put => Ok(http::Method::PUT),
-        SerializableHttpMethod::Delete => Ok(http::Method::DELETE),
-        SerializableHttpMethod::Head => Ok(http::Method::HEAD),
-        SerializableHttpMethod::Connect => Ok(http::Method::CONNECT),
-        SerializableHttpMethod::Options => Ok(http::Method::OPTIONS),
-        SerializableHttpMethod::Trace => Ok(http::Method::TRACE),
-        SerializableHttpMethod::Patch => Ok(http::Method::PATCH),
-        SerializableHttpMethod::Other(m) => http::Method::from_bytes(m.as_bytes())
-            .map_err(|e| anyhow::anyhow!("invalid HTTP method '{m}': {e}")),
-    }
 }
 
 /// Result of rebuilding a streaming HTTP request for output stream retry.
@@ -517,6 +534,355 @@ pub fn spawn_http_request_with_retry(
     )
 }
 
+/// Attempts a single inline retry cycle for an outgoing body stream write failure.
+///
+/// This is called when write/flush/write_zeroes fails with a transient error.
+/// It reconstructs the request from the oplog, replays all prior body bytes into
+/// a new streaming body, sends the request, and swaps the resources in-place.
+///
+/// Returns `Ok(true)` if retry succeeded (resources swapped, caller should re-attempt the write),
+/// `Ok(false)` if retry is not eligible,
+/// `Err` if retry failed fatally.
+pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+) -> Result<bool, anyhow::Error> {
+    use crate::durable_host::DurabilityHost;
+    use crate::services::HasOplog;
+    use wasmtime::component::Resource;
+    use wasmtime_wasi_http::bindings::http::types::FutureIncomingResponse;
+    use wasmtime_wasi_http::bindings::http::types::OutgoingBody;
+    use wasmtime_wasi_http::body::HostOutgoingBody as HostOutgoingBodyType;
+    use wasmtime_wasi_http::types::HostFutureIncomingResponse;
+
+    // 1. Find the request handle and state
+    let request_handle = match ctx.state.find_request_handle_by_output_stream(stream_rep) {
+        Some(h) => h,
+        None => return Ok(false),
+    };
+
+    let request_state = match ctx.state.open_http_requests.get(&request_handle) {
+        Some(s) => s.clone(),
+        None => return Ok(false),
+    };
+
+    // 2. Check eligibility
+    let exec_state = ctx.durable_execution_state();
+    if is_http_inline_retry_eligible(&exec_state, &request_state, RetryZone::Zone1).is_err() {
+        return Ok(false);
+    }
+
+    // 3. Get connection pool and oplog
+    let oplog = ctx.public_state.oplog();
+    let connection_pool = ctx.wasi_http.connection_pool.clone();
+    let config = request_state.outgoing_request_config();
+
+    // 4. Rebuild the streaming request
+    let rebuilt = rebuild_streaming_request(&oplog, &request_state, config, connection_pool).await?;
+
+    // 5. Swap resources in the resource table
+    // Swap the FutureIncomingResponse — re-wrap with background retry if the
+    // original request had it, so that transient errors at get() are still handled.
+    let new_future = if request_state.has_background_retry {
+        if let HostFutureIncomingResponse::Pending(handle) = rebuilt.future {
+            let retry_handle = spawn_http_request_with_retry(
+                handle,
+                request_state.request.clone(),
+                request_state.outgoing_request_config(),
+                ctx.wasi_http.connection_pool.clone(),
+                oplog.clone(),
+                ctx.retry_config(),
+                exec_state.max_in_function_retry_delay,
+                request_state.begin_index,
+            );
+            HostFutureIncomingResponse::pending(retry_handle)
+        } else {
+            rebuilt.future
+        }
+    } else {
+        rebuilt.future
+    };
+    let future_res: &mut HostFutureIncomingResponse = ctx
+        .table()
+        .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(request_handle))?;
+    *future_res = new_future;
+
+    // Swap the OutgoingBody if we have a rep
+    if let Some(body_rep) = request_state.outgoing_body_rep {
+        let body_entry: &mut HostOutgoingBodyType = ctx
+            .table()
+            .get_mut(&Resource::<OutgoingBody>::new_borrow(body_rep))?;
+        *body_entry = rebuilt.outgoing_body;
+    }
+
+    // Swap the OutputStream
+    use wasmtime_wasi::p2::bindings::io::streams::OutputStream as WasiOutputStream;
+
+    let stream_entry: &mut wasmtime_wasi::DynOutputStream = ctx
+        .table()
+        .get_mut(&Resource::<WasiOutputStream>::new_borrow(stream_rep))?;
+    *stream_entry = rebuilt.output_stream;
+
+    tracing::debug!(
+        request_handle = request_handle,
+        stream_rep = stream_rep,
+        "Output stream inline retry: successfully rebuilt and swapped resources"
+    );
+
+    Ok(true)
+}
+
+/// Attempts Zone 2 inline retry for a response body stream read failure.
+///
+/// When reading response body bytes fails with a transient error, this function:
+/// 1. Checks Zone 2 eligibility (no prior skip, etc.)
+/// 2. Calculates bytes already delivered to the guest from oplog
+/// 3. Reconstructs the outgoing request with a Range header
+/// 4. Sends the request and handles 206/200/416 responses
+/// 5. Swaps the InputStream to the new response's body stream
+///
+/// Returns `Ok(true)` if retry succeeded (stream swapped, caller should re-attempt read),
+/// `Ok(false)` if retry is not eligible or conditions not met,
+/// `Err` with a StreamError if content mismatch detected.
+pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    stream_handle: u32,
+) -> Result<bool, anyhow::Error> {
+    use crate::durable_host::DurabilityHost;
+    use crate::services::HasOplog;
+    use wasmtime::component::Resource;
+    use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
+    use wasmtime_wasi_http::bindings::http::types::IncomingBody as WasiIncomingBody;
+
+    // 1. Find the request state via the stream handle.
+    //    The stream rep IS the request tracking handle for incoming body streams.
+    let request_state = match ctx.state.open_http_requests.get(&stream_handle) {
+        Some(s) => s.clone(),
+        None => return Ok(false),
+    };
+
+    // Zone 2 requires a tracked IncomingBody handle to properly swap body+stream
+    let body_handle = match request_state.body_handle {
+        Some(h) => h,
+        None => return Ok(false),
+    };
+
+    // 2. Check Zone 2 eligibility
+    let exec_state = ctx.durable_execution_state();
+    if is_http_inline_retry_eligible(&exec_state, &request_state, RetryZone::Zone2).is_err() {
+        return Ok(false);
+    }
+
+    // 3. Calculate bytes already delivered to the guest from the oplog
+    let oplog = ctx.public_state.oplog();
+    let already_consumed = read_incoming_body_chunks(&oplog, request_state.begin_index).await?;
+    let consumed_len = already_consumed.len();
+
+    // 4. Reconstruct the outgoing request body from the oplog
+    let body_bytes = reconstruct_outgoing_body(&oplog, request_state.begin_index).await?;
+
+    // 5. Build the request, adding a Range header if bytes were already consumed.
+    //    If the original request already has a Range header, Zone 2 is not supported
+    //    because composing Range headers correctly is complex.
+    let has_range = request_state
+        .request
+        .headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("range"));
+    if has_range {
+        return Ok(false);
+    }
+    let extra_headers = if consumed_len > 0 {
+        vec![("range".to_string(), format!("bytes={consumed_len}-"))]
+    } else {
+        vec![]
+    };
+    let http_request =
+        reconstruct_http_request_full(&request_state.request, body_bytes, &extra_headers)?;
+
+    // 6. Send the reconstructed request
+    let config = request_state.outgoing_request_config();
+    let connection_pool = ctx.wasi_http.connection_pool.clone();
+    let mut future_resp = default_send_request_with_pool(http_request, config, None, connection_pool);
+
+    use wasmtime_wasi::Pollable;
+    future_resp.ready().await;
+
+    let response = match future_resp.unwrap_ready() {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(_error_code)) => return Ok(false),
+        Err(_trap) => return Ok(false),
+    };
+
+    let status = response.resp.status().as_u16();
+    let between_bytes_timeout = response.between_bytes_timeout;
+
+    // 7. Handle response status
+    match status {
+        206 => {
+            // Partial Content — verify Content-Range header matches consumed_len
+            let content_range = response
+                .resp
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_owned());
+
+            let range_start = content_range.as_deref().and_then(parse_content_range_start);
+
+            match range_start {
+                Some(start) if start == consumed_len as u64 => {
+                    // Range matches — swap body+stream
+                    let (_parts, body) = response.resp.into_parts();
+                    let new_body =
+                        HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
+
+                    // Swap IncomingBody at body_handle, then take stream from it
+                    let body_entry: &mut HostIncomingBody = ctx
+                        .table()
+                        .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
+                    *body_entry = new_body;
+                    let new_stream = body_entry.take_stream().ok_or_else(|| {
+                        anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
+                    })?;
+
+                    // Swap the InputStream in the resource table
+                    let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
+                        .table()
+                        .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
+                    *stream_entry = new_stream;
+
+                    tracing::debug!(
+                        stream_handle = stream_handle,
+                        consumed_len = consumed_len,
+                        "Zone 2 inline retry: 206 Partial Content, body+stream swapped"
+                    );
+                    Ok(true)
+                }
+                _ => {
+                    // Content-Range doesn't match or missing — fall back
+                    tracing::debug!(
+                        stream_handle = stream_handle,
+                        content_range = ?content_range,
+                        consumed_len = consumed_len,
+                        "Zone 2 inline retry: 206 Content-Range mismatch, falling back"
+                    );
+                    Ok(false)
+                }
+            }
+        }
+        200 if consumed_len == 0 => {
+            // Full response with nothing consumed yet — swap body+stream directly
+            let (_parts, body) = response.resp.into_parts();
+            let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
+
+            let body_entry: &mut HostIncomingBody = ctx
+                .table()
+                .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
+            *body_entry = new_body;
+            let new_stream = body_entry.take_stream().ok_or_else(|| {
+                anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
+            })?;
+
+            let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
+                .table()
+                .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
+            *stream_entry = new_stream;
+
+            tracing::debug!(
+                stream_handle = stream_handle,
+                "Zone 2 inline retry: 200 OK (no bytes consumed), body+stream swapped"
+            );
+            Ok(true)
+        }
+        200 => {
+            // Full response — need to verify consumed prefix then swap
+            let (_parts, body) = response.resp.into_parts();
+            let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
+
+            // Swap IncomingBody at body_handle first
+            let body_entry: &mut HostIncomingBody = ctx
+                .table()
+                .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
+            *body_entry = new_body;
+            let mut new_stream = body_entry.take_stream().ok_or_else(|| {
+                anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
+            })?;
+
+            // Read and verify consumed_len bytes from the new stream
+            let mut verified = 0usize;
+            while verified < consumed_len {
+                // Wait for data to be available
+                new_stream.ready().await;
+
+                let remaining = consumed_len - verified;
+                let chunk = new_stream.read(remaining).map_err(|e| match e {
+                    wasmtime_wasi::StreamError::Closed => anyhow::anyhow!(
+                        "HTTP retry failed: response shorter than previously consumed bytes"
+                    ),
+                    wasmtime_wasi::StreamError::LastOperationFailed(e) => anyhow::anyhow!(
+                        "HTTP retry failed: error reading prefix for verification: {e}"
+                    ),
+                    wasmtime_wasi::StreamError::Trap(e) => anyhow::anyhow!(
+                        "HTTP retry failed: trap reading prefix for verification: {e}"
+                    ),
+                })?;
+
+                if chunk.is_empty() {
+                    // No data yet, will retry after ready()
+                    continue;
+                }
+
+                let to_check = chunk.len().min(remaining);
+                if chunk[..to_check] != already_consumed[verified..verified + to_check] {
+                    return Err(anyhow::anyhow!(
+                        "HTTP retry failed: response content changed between attempts"
+                    ));
+                }
+                verified += to_check;
+            }
+
+            // Prefix verified — swap the stream (which now has the remaining body)
+            let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
+                .table()
+                .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
+            *stream_entry = new_stream;
+
+            tracing::debug!(
+                stream_handle = stream_handle,
+                consumed_len = consumed_len,
+                "Zone 2 inline retry: 200 OK with prefix verification, body+stream swapped"
+            );
+            Ok(true)
+        }
+        416 => {
+            // Range Not Satisfiable — content changed
+            Err(anyhow::anyhow!(
+                "HTTP retry failed: server returned 416 Range Not Satisfiable"
+            ))
+        }
+        _ => {
+            // Unexpected status — don't retry
+            tracing::debug!(
+                stream_handle = stream_handle,
+                status = status,
+                "Zone 2 inline retry: unexpected status code, falling back"
+            );
+            Ok(false)
+        }
+    }
+}
+
+/// Parses the start byte position from a Content-Range header value.
+///
+/// Expected format: `bytes <start>-<end>/<total>` or `bytes <start>-<end>/*`
+/// Returns the start position if successfully parsed.
+fn parse_content_range_start(value: &str) -> Option<u64> {
+    let rest = value.strip_prefix("bytes ")?;
+    let dash_pos = rest.find('-')?;
+    rest[..dash_pos].parse::<u64>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,19 +932,30 @@ mod tests {
     }
 
     #[test]
-    fn test_serializable_method_to_http() {
+    fn test_parse_content_range_start_standard() {
         assert_eq!(
-            serializable_method_to_http(&SerializableHttpMethod::Get).unwrap(),
-            http::Method::GET
+            parse_content_range_start("bytes 1024-2047/4096"),
+            Some(1024)
         );
+    }
+
+    #[test]
+    fn test_parse_content_range_start_unknown_total() {
+        assert_eq!(parse_content_range_start("bytes 512-1023/*"), Some(512));
+    }
+
+    #[test]
+    fn test_parse_content_range_start_zero() {
         assert_eq!(
-            serializable_method_to_http(&SerializableHttpMethod::Post).unwrap(),
-            http::Method::POST
+            parse_content_range_start("bytes 0-999/1000"),
+            Some(0)
         );
-        assert_eq!(
-            serializable_method_to_http(&SerializableHttpMethod::Other("PURGE".to_string()))
-                .unwrap(),
-            http::Method::from_bytes(b"PURGE").unwrap()
-        );
+    }
+
+    #[test]
+    fn test_parse_content_range_start_invalid() {
+        assert_eq!(parse_content_range_start("invalid"), None);
+        assert_eq!(parse_content_range_start("bytes abc-def/ghi"), None);
+        assert_eq!(parse_content_range_start(""), None);
     }
 }

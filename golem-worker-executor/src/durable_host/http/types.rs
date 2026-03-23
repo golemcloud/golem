@@ -260,6 +260,8 @@ impl<Ctx: WorkerCtx> HostOutgoingRequest for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<OutgoingRequest>) -> wasmtime::Result<()> {
         self.observe_function_call("http::types::outgoing_request", "drop");
+        let request_rep = rep.rep();
+        self.state.pending_http_outgoing_request_body.remove(&request_rep);
         HostOutgoingRequest::drop(&mut self.as_wasi_http_view(), rep)
     }
 }
