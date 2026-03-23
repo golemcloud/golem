@@ -92,6 +92,8 @@ jobs:
           workflow: build-golem-binaries.yaml
           name: golem-cli
           path: /tmp/golem-bin
+          search_artifacts: true
+          check_artifacts: true
 
       - name: Download golem-server artifact
         uses: dawidd6/action-download-artifact@v6
@@ -99,6 +101,8 @@ jobs:
           workflow: build-golem-binaries.yaml
           name: golem-server
           path: /tmp/golem-bin
+          search_artifacts: true
+          check_artifacts: true
 
       - name: Install Golem
         run: |
