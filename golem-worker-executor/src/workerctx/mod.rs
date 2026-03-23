@@ -212,6 +212,12 @@ pub trait FuelManagement {
 
     /// Returns the amount of fuel consumed since the last call to return_fuel.
     fn return_fuel(&mut self, current_level: u64) -> u64;
+
+    /// Resets the per-invocation HTTP and RPC call counters to zero.
+    ///
+    /// Called at the start of each exported function invocation, at the same
+    /// boundary where fuel accounting begins.
+    fn reset_invocation_call_counts(&mut self);
 }
 
 /// The invocation management interface of a worker context is responsible for connecting

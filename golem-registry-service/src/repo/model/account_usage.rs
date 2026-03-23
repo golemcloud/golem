@@ -139,6 +139,8 @@ impl AccountUsage {
             available_fuel,
             max_memory_per_worker: self.plan.max_memory_per_worker.get(),
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
+            per_invocation_http_limit: self.plan.per_invocation_http_limit.get(),
+            per_invocation_rpc_limit: self.plan.per_invocation_rpc_limit.get(),
         }
     }
 }

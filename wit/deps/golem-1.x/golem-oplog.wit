@@ -363,6 +363,8 @@ interface oplog {
         exceeded-memory-limit,
         internal-error(string),
         exceeded-table-limit,
+        exceeded-http-call-limit,
+        exceeded-rpc-call-limit,
     }
 
     record raw-create-parameters {

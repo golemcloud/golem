@@ -580,6 +580,10 @@ impl FuelManagement for TestWorkerCtx {
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
     }
+
+    fn reset_invocation_call_counts(&mut self) {
+        self.durable_ctx.reset_invocation_call_counts();
+    }
 }
 
 #[async_trait]
@@ -837,6 +841,8 @@ impl WorkerCtx for TestWorkerCtx {
             http_connection_pool,
             pending_update,
             original_phantom_id,
+            u64::MAX,
+            u64::MAX,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -1709,6 +1715,55 @@ pub async fn start_with_table_limit(
         context,
         Arc::new(FixedTableLimitResourceLimits { max_table_elements }),
         "Timeout waiting for table-limit server to start",
+    )
+    .await
+}
+
+/// A `ResourceLimits` implementation that enforces fixed per-invocation HTTP and RPC
+/// call limits while keeping fuel, memory, and table elements unlimited.
+/// Used by per-invocation call-limit tests.
+struct FixedInvocationLimitResourceLimits {
+    per_invocation_http_limit: u64,
+    per_invocation_rpc_limit: u64,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedInvocationLimitResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new_with_invocation_limits(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            self.per_invocation_http_limit,
+            self.per_invocation_rpc_limit,
+        )))
+    }
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// with specific per-invocation HTTP and RPC call limits enforced.
+///
+/// Fuel, memory, and table elements remain unlimited.
+pub async fn start_with_invocation_limits(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    per_invocation_http_limit: u64,
+    per_invocation_rpc_limit: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedInvocationLimitResourceLimits {
+            per_invocation_http_limit,
+            per_invocation_rpc_limit,
+        }),
+        "Timeout waiting for invocation-limit server to start",
     )
     .await
 }

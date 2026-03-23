@@ -45,6 +45,11 @@ pub struct AtomicResourceEntry {
     // the server. Used by the background loop to detect idle accounts whose
     // cached limits have grown stale (e.g. after a plan change or monthly reset).
     last_refresh_secs: AtomicI64,
+    // Plan-level per-invocation HTTP call limit. Uses AtomicU64 so that it can
+    // be updated when the account's plan changes (propagated via batch responses).
+    per_invocation_http_limit: AtomicU64,
+    // Plan-level per-invocation RPC call limit.
+    per_invocation_rpc_limit: AtomicU64,
 }
 
 impl AtomicResourceEntry {
@@ -56,7 +61,36 @@ impl AtomicResourceEntry {
             max_memory: AtomicUsize::new(max_memory),
             max_table_elements: AtomicUsize::new(max_table_elements),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
+            per_invocation_http_limit: AtomicU64::new(u64::MAX),
+            per_invocation_rpc_limit: AtomicU64::new(u64::MAX),
         }
+    }
+
+    pub fn new_with_invocation_limits(
+        fuel: u64,
+        max_memory: usize,
+        max_table_elements: usize,
+        per_invocation_http_limit: u64,
+        per_invocation_rpc_limit: u64,
+    ) -> Self {
+        Self {
+            fuel: AtomicU64::new(fuel),
+            delta: AtomicI64::new(0),
+            in_flight_delta: AtomicI64::new(0),
+            max_memory: AtomicUsize::new(max_memory),
+            max_table_elements: AtomicUsize::new(max_table_elements),
+            last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
+            per_invocation_http_limit: AtomicU64::new(per_invocation_http_limit),
+            per_invocation_rpc_limit: AtomicU64::new(per_invocation_rpc_limit),
+        }
+    }
+
+    pub fn per_invocation_http_limit(&self) -> u64 {
+        self.per_invocation_http_limit.load(Ordering::Acquire)
+    }
+
+    pub fn per_invocation_rpc_limit(&self) -> u64 {
+        self.per_invocation_rpc_limit.load(Ordering::Acquire)
     }
 
     fn secs_since_last_refresh(&self) -> i64 {
@@ -300,6 +334,14 @@ impl ResourceLimitsGrpc {
                     updated_limits.max_table_elements_per_worker as usize,
                     Ordering::Release,
                 );
+                entry.per_invocation_http_limit.store(
+                    updated_limits.per_invocation_http_limit,
+                    Ordering::Release,
+                );
+                entry.per_invocation_rpc_limit.store(
+                    updated_limits.per_invocation_rpc_limit,
+                    Ordering::Release,
+                );
                 entry
                     .last_refresh_secs
                     .store(Utc::now().timestamp(), Ordering::Release);
@@ -332,10 +374,12 @@ impl ResourceLimits for ResourceLimitsGrpc {
             .get_or_try_init(|| async {
                 let fetched = self.fetch_resource_limits(account_id).await?;
                 Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
-                    AtomicResourceEntry::new(
+                    AtomicResourceEntry::new_with_invocation_limits(
                         fetched.available_fuel,
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
+                        fetched.per_invocation_http_limit,
+                        fetched.per_invocation_rpc_limit,
                     ),
                 ))
             })
@@ -543,6 +587,46 @@ mod tests {
         assert_eq!(entry.max_table_elements_limit(), 0);
     }
 
+    // -------------------------------------------------------------------------
+    // AtomicResourceEntry — per-invocation limits
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn new_with_invocation_limits_stores_http_limit() {
+        let entry =
+            AtomicResourceEntry::new_with_invocation_limits(1000, 512, usize::MAX, 42, u64::MAX);
+        assert_eq!(entry.per_invocation_http_limit(), 42);
+    }
+
+    #[test]
+    fn new_with_invocation_limits_stores_rpc_limit() {
+        let entry =
+            AtomicResourceEntry::new_with_invocation_limits(1000, 512, usize::MAX, u64::MAX, 99);
+        assert_eq!(entry.per_invocation_rpc_limit(), 99);
+    }
+
+    #[test]
+    fn new_defaults_invocation_limits_to_max() {
+        // AtomicResourceEntry::new (without invocation limits) must default to u64::MAX
+        // so that workers using the old constructor are unaffected.
+        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX);
+        assert_eq!(entry.per_invocation_http_limit(), u64::MAX);
+        assert_eq!(entry.per_invocation_rpc_limit(), u64::MAX);
+    }
+
+    #[test]
+    fn invocation_limits_can_be_updated_via_store() {
+        let entry =
+            AtomicResourceEntry::new_with_invocation_limits(500, 256, usize::MAX, 10, 20);
+        // Simulate a plan change: update limits via the atomic store
+        entry
+            .per_invocation_http_limit
+            .store(50, Ordering::Release);
+        entry.per_invocation_rpc_limit.store(100, Ordering::Release);
+        assert_eq!(entry.per_invocation_http_limit(), 50);
+        assert_eq!(entry.per_invocation_rpc_limit(), 100);
+    }
+
     #[test]
     async fn resource_limits_disabled_returns_max_table_elements() {
         let disabled = ResourceLimitsDisabled;
@@ -569,6 +653,8 @@ mod tests {
                     available_fuel,
                     max_memory_per_worker: max_memory,
                     max_table_elements_per_worker: u64::MAX,
+                    per_invocation_http_limit: u64::MAX,
+                    per_invocation_rpc_limit: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
             }
@@ -884,6 +970,8 @@ mod tests {
                 available_fuel: 700,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                per_invocation_http_limit: u64::MAX,
+                per_invocation_rpc_limit: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -910,6 +998,8 @@ mod tests {
                 available_fuel: 600,
                 max_memory_per_worker: 1024,
                 max_table_elements_per_worker: u64::MAX,
+                per_invocation_http_limit: u64::MAX,
+                per_invocation_rpc_limit: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -937,6 +1027,8 @@ mod tests {
                 available_fuel: 700,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                per_invocation_http_limit: u64::MAX,
+                per_invocation_rpc_limit: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1015,6 +1107,8 @@ mod tests {
                 available_fuel: 700,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                per_invocation_http_limit: u64::MAX,
+                per_invocation_rpc_limit: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1040,6 +1134,8 @@ mod tests {
                 available_fuel: 800,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                per_invocation_http_limit: u64::MAX,
+                per_invocation_rpc_limit: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1092,6 +1188,8 @@ mod tests {
                 available_fuel: 900,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                per_invocation_http_limit: u64::MAX,
+                per_invocation_rpc_limit: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1124,6 +1222,8 @@ mod tests {
                 available_fuel: 5000,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                per_invocation_http_limit: u64::MAX,
+                per_invocation_rpc_limit: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1190,6 +1290,8 @@ mod tests {
                 available_fuel: 5000,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                per_invocation_http_limit: u64::MAX,
+                per_invocation_rpc_limit: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));

@@ -227,6 +227,10 @@ impl FuelManagement for Context {
         debug!("reset fuel mark to {}", current_level);
         consumed
     }
+
+    fn reset_invocation_call_counts(&mut self) {
+        self.durable_ctx.reset_invocation_call_counts();
+    }
 }
 
 #[async_trait]
@@ -750,6 +754,7 @@ impl WorkerCtx for Context {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
+        let account_resource_limits = resource_limits.initialize_account(account_id).await?;
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id.clone(),
             agent_id,
@@ -779,9 +784,10 @@ impl WorkerCtx for Context {
             http_connection_pool,
             pending_update,
             original_phantom_id,
+            account_resource_limits.per_invocation_http_limit(),
+            account_resource_limits.per_invocation_rpc_limit(),
         )
         .await?;
-        let account_resource_limits = resource_limits.initialize_account(account_id).await?;
         Ok(Self::new(golem_ctx, config, account_resource_limits))
     }
 

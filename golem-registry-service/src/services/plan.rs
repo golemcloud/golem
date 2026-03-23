@@ -104,6 +104,8 @@ impl PlanService {
                         monthly_upload_limit: plan.monthly_upload_limit,
                         max_memory_per_worker: plan.max_memory_per_worker,
                         max_table_elements_per_worker: plan.max_table_elements_per_worker,
+                        per_invocation_http_limit: plan.per_invocation_http_limit,
+                        per_invocation_rpc_limit: plan.per_invocation_rpc_limit,
                     },
                     &AuthCtx::System,
                 )
@@ -145,6 +147,8 @@ impl PlanService {
             total_worker_connection_count: plan.worker_connection_limit.into(),
             monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
             monthly_gas_limit: plan.monthly_gas_limit.into(),
+            per_invocation_http_limit: plan.per_invocation_http_limit.into(),
+            per_invocation_rpc_limit: plan.per_invocation_rpc_limit.into(),
         };
 
         self.plan_repo.create_or_update(record).await?;

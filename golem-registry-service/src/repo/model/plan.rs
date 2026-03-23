@@ -33,6 +33,8 @@ pub struct PlanRecord {
     pub total_component_storage_bytes: NumericU64,
     pub monthly_gas_limit: NumericU64,
     pub monthly_component_upload_limit_bytes: NumericU64,
+    pub per_invocation_http_limit: NumericU64,
+    pub per_invocation_rpc_limit: NumericU64,
 }
 
 impl PlanRecord {
@@ -65,6 +67,8 @@ impl From<PlanRecord> for Plan {
             monthly_upload_limit: value.monthly_component_upload_limit_bytes.get(),
             max_memory_per_worker: value.max_memory_per_worker.get(),
             max_table_elements_per_worker: value.max_table_elements_per_worker.get(),
+            per_invocation_http_limit: value.per_invocation_http_limit.get(),
+            per_invocation_rpc_limit: value.per_invocation_rpc_limit.get(),
             plan_id: PlanId(value.plan_id),
             name: PlanName(value.name),
         }

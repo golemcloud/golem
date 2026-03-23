@@ -149,6 +149,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ));
         }
 
+        // Check the per-invocation RPC call limit before initiating the call.
+        // Only counted in live mode; replay is a no-op.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(|trap| wasmtime::Error::from(trap))?;
+
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
@@ -267,6 +273,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ));
         }
 
+        // Check the per-invocation RPC call limit before initiating the call.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(|trap| wasmtime::Error::from(trap))?;
+
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
@@ -360,6 +371,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 "RPC calls to the same agent are not supported"
             ));
         }
+
+        // Check the per-invocation RPC call limit before initiating the call.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(|trap| wasmtime::Error::from(trap))?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()

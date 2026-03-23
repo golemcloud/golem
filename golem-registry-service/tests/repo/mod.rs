@@ -82,6 +82,8 @@ impl Deps {
                 monthly_component_upload_limit_bytes: 3000.into(),
                 max_memory_per_worker: 4000.into(),
                 max_table_elements_per_worker: 16384.into(),
+                per_invocation_http_limit: u64::MAX.into(),
+                per_invocation_rpc_limit: u64::MAX.into(),
             })
             .await
             .unwrap();

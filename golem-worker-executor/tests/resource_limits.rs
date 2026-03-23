@@ -16,9 +16,10 @@ use crate::Tracing;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start_with_table_limit, LastUniqueId, PrecompiledComponent, TestContext,
-    WorkerExecutorTestDependencies,
+    start_with_invocation_limits, start_with_table_limit, LastUniqueId, PrecompiledComponent,
+    TestContext, WorkerExecutorTestDependencies,
 };
+use std::collections::HashMap;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -26,6 +27,14 @@ inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 inherit_test_dep!(
     #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
     PrecompiledComponent
 );
 
@@ -152,6 +161,138 @@ async fn table_exceeding_limit_not_retried(
             || err_str.contains("already exists")
             || err_str.contains("AlreadyExists"),
         "expected a relevant error on second attempt, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// Sets the per-invocation HTTP call limit to 0 so that any outgoing HTTP
+/// request from the component immediately traps with
+/// `WorkerExceededHttpCallLimit`. The `http_tests` component's `run` function
+/// makes exactly one HTTP call; with limit 0 it should fail before the call
+/// reaches the network.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn http_call_limit_exceeded_traps_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use axum::routing::post;
+    use axum::Router;
+    use tokio::spawn;
+    use tracing::Instrument;
+
+    let context = TestContext::new(last_unique_id);
+    // Limit is 0: the very first HTTP call in any invocation must trap.
+    let executor = start_with_invocation_limits(deps, &context, 0, u64::MAX).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    // Spin up a minimal HTTP server. The worker should trap before it reaches
+    // the server, but we still bind one so the PORT env var resolves correctly.
+    spawn(
+        async move {
+            axum::serve(listener, Router::new().route("/", post(|| async { "ok" })))
+                .await
+                .unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient", "http-limit-0");
+    executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // The invocation must fail because the HTTP limit is 0.
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await;
+
+    assert!(
+        result.is_err(),
+        "expected invocation to fail due to HTTP call limit, but it succeeded"
+    );
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("HTTP call limit") || err_str.contains("ExceededHttpCallLimit"),
+        "expected ExceededHttpCallLimit error, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// Sets the per-invocation RPC call limit to 0 so that any outgoing RPC call
+/// from the component immediately traps with `WorkerExceededRpcCallLimit`.
+/// The `agent_rpc_rust` component's `add_and_get` function makes an RPC call
+/// to a counter worker; with limit 0 it should trap before the call is made.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn rpc_call_limit_exceeded_traps_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // Limit is 0: the very first RPC call in any invocation must trap.
+    let executor = start_with_invocation_limits(deps, &context, u64::MAX, 0).await?;
+
+    // Store the counter component that will be the RPC target.
+    executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let rpc_component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let caller_id = agent_id!("RustParent", "rpc-limit-0");
+    executor
+        .start_agent(&rpc_component.id, caller_id.clone())
+        .await?;
+
+    // The invocation must fail because the RPC limit is 0.
+    // `spawn_child` is a function that makes an RPC call to create a child worker.
+    let result = executor
+        .invoke_and_await_agent(
+            &rpc_component,
+            &caller_id,
+            "spawn_child",
+            data_value!("payload"),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "expected invocation to fail due to RPC call limit, but it succeeded"
+    );
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("RPC call limit") || err_str.contains("ExceededRpcCallLimit"),
+        "expected ExceededRpcCallLimit error, got: {err_str}"
     );
 
     Ok(())

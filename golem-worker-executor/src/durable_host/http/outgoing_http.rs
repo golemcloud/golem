@@ -38,6 +38,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
 
+        // Check the per-invocation HTTP call limit before initiating the call.
+        // Only counted in live mode; replay is a no-op.
+        self.state
+            .check_and_increment_http_call_count()
+            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self
             .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))

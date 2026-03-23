@@ -356,6 +356,10 @@ pub enum AgentError {
     InternalError(String),
     // The worker tried to grow its function table beyond the limits of the plan
     ExceededTableLimit,
+    // The worker exceeded the per-invocation HTTP call limit from the plan
+    ExceededHttpCallLimit,
+    // The worker exceeded the per-invocation RPC call limit from the plan
+    ExceededRpcCallLimit,
 }
 
 impl AgentError {
@@ -368,6 +372,8 @@ impl AgentError {
             Self::ExceededMemoryLimit => "Exceeded plan memory limit",
             Self::InternalError(message) => message,
             Self::ExceededTableLimit => "Exceeded plan function table limit",
+            Self::ExceededHttpCallLimit => "Exceeded per-invocation HTTP call limit",
+            Self::ExceededRpcCallLimit => "Exceeded per-invocation RPC call limit",
         }
     }
 

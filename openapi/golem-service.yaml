@@ -15127,6 +15127,12 @@ components:
         maxTableElementsPerWorker:
           type: integer
           format: uint64
+        perInvocationHttpLimit:
+          type: integer
+          format: uint64
+        perInvocationRpcLimit:
+          type: integer
+          format: uint64
       required:
       - planId
       - name
@@ -15140,6 +15146,8 @@ components:
       - monthlyUploadLimit
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
+      - perInvocationHttpLimit
+      - perInvocationRpcLimit
     PluginInstallation:
       title: PluginInstallation
       type: object

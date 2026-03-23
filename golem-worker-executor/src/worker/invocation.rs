@@ -414,6 +414,11 @@ async fn call_exported_function<Ctx: WorkerCtx>(
 ) -> Result<(wasmtime::Result<Vec<Val>>, u64), WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
+    // TODO maybe this should happen when and where we return the fuel
+    // Reset the per-invocation HTTP/RPC call counters at the start of each
+    // exported function call, matching the same boundary as fuel accounting.
+    store.data_mut().reset_invocation_call_counts();
+
     let idempotency_key = store.data().get_current_idempotency_key().await;
     if let Some(idempotency_key) = &idempotency_key {
         store

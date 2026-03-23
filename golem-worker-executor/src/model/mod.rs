@@ -274,6 +274,18 @@ impl TrapType {
                             error: AgentError::ExceededTableLimit,
                             retry_from,
                         },
+                        Some(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit) => {
+                            TrapType::Error {
+                                error: AgentError::ExceededHttpCallLimit,
+                                retry_from,
+                            }
+                        }
+                        Some(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit) => {
+                            TrapType::Error {
+                                error: AgentError::ExceededRpcCallLimit,
+                                retry_from,
+                            }
+                        }
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {

@@ -14,11 +14,11 @@
 
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
-use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::AgentError;
 use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
+use golem_common::SafeDisplay;
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
@@ -899,6 +899,8 @@ pub enum GolemSpecificWasmTrap {
     WorkerOutOfMemory,
     WorkerExceededMemoryLimit,
     WorkerExceededTableLimit,
+    WorkerExceededHttpCallLimit,
+    WorkerExceededRpcCallLimit,
 }
 
 impl Display for GolemSpecificWasmTrap {
@@ -908,6 +910,12 @@ impl Display for GolemSpecificWasmTrap {
             Self::WorkerExceededMemoryLimit => write!(f, "Worker exceeded plan memory limits"),
             Self::WorkerExceededTableLimit => {
                 write!(f, "Worker exceeded plan function table limits")
+            }
+            Self::WorkerExceededHttpCallLimit => {
+                write!(f, "Worker exceeded per-invocation HTTP call limit")
+            }
+            Self::WorkerExceededRpcCallLimit => {
+                write!(f, "Worker exceeded per-invocation RPC call limit")
             }
         }
     }

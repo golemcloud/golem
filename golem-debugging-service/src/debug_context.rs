@@ -103,6 +103,10 @@ impl FuelManagement for DebugContext {
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
     }
+
+    fn reset_invocation_call_counts(&mut self) {
+        self.durable_ctx.reset_invocation_call_counts();
+    }
 }
 
 #[async_trait]
@@ -580,6 +584,8 @@ impl WorkerCtx for DebugContext {
             http_connection_pool,
             pending_update,
             original_phantom_id,
+            u64::MAX,
+            u64::MAX,
         )
         .await?;
         Ok(Self {
