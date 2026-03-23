@@ -40,6 +40,7 @@ macro_rules! newtype_uuid {
             }
 
             $(
+                #[cfg(feature = "full")]
                 pub fn render_proto(proto: Option<$proto_type>) -> Option<String> {
                     proto
                         .and_then(|v| TryInto::<$name>::try_into(v).ok())
