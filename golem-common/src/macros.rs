@@ -38,6 +38,14 @@ macro_rules! newtype_uuid {
             pub fn new() -> $name {
                 Self(uuid::Uuid::now_v7())
             }
+
+            $(
+                pub fn render_proto(proto: Option<$proto_type>) -> Option<String> {
+                    proto
+                        .and_then(|v| TryInto::<$name>::try_into(v).ok())
+                        .map(|v| v.to_string())
+                }
+            )?
         }
 
         impl From<$name> for uuid::Uuid {

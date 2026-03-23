@@ -19,7 +19,10 @@ use crate::{
 };
 use derive_more::Display;
 
-newtype_uuid!(ResourceDefinitionId);
+newtype_uuid!(
+    ResourceDefinitionId,
+    golem_api_grpc::proto::golem::registry::ResourceDefinitionId
+);
 
 declare_revision!(ResourceDefinitionRevision);
 
@@ -31,6 +34,8 @@ declare_transparent_newtypes! {
 }
 
 declare_structs! {
+    // name and limit type are immutable after creation.
+    // environment_id+name form the logical primary key for non deleted resources.
     pub struct ResourceDefinition {
         pub id: ResourceDefinitionId,
         pub revision: ResourceDefinitionRevision,
