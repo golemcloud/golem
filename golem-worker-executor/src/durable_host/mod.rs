@@ -3108,6 +3108,35 @@ pub(crate) enum HttpRequestCloseOwner {
     FutureTrailersDrop,
 }
 
+/// Tracks conditions that affect whether an HTTP request is eligible for
+/// transparent inline retry. Each flag records an event during the request
+/// lifecycle that disqualifies one or more retry zones.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HttpRetryEligibility {
+    /// Whether this request has an in-task retry loop running in the background.
+    /// When true, transient errors that reach `get()` are the final result and
+    /// should not trigger trap+replay.
+    pub has_background_retry: bool,
+    /// Set to true when splice()/blocking_splice() is called on the outgoing body stream.
+    /// When true, body bytes cannot be fully reconstructed from the oplog.
+    pub has_unreconstructable_body: bool,
+    /// Set to true when subscribe() is called on the outgoing body output stream.
+    /// When true, output stream inline retry is disabled because the pollable
+    /// would become stale after resource replacement.
+    pub output_stream_subscribed: bool,
+    /// Set to true when skip()/blocking_skip() is called on the response body.
+    /// When true, Zone 2 inline retry is disabled because we cannot verify
+    /// the skipped bytes against the retry response.
+    pub had_body_skip: bool,
+    /// Set to true when OutgoingBody::finish() is called with Some(trailers).
+    /// When true, inline retry is disabled because trailers are not persisted
+    /// in the oplog and cannot be reconstructed.
+    pub has_outgoing_trailers: bool,
+    /// Set to true when OutgoingBody::finish() is called.
+    /// Zone 1 retry requires the body to be fully finished before retrying.
+    pub body_finished: bool,
+}
+
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
 #[derive(Debug, Clone)]
 struct HttpRequestState {
@@ -3133,21 +3162,8 @@ struct HttpRequestState {
     pub connect_timeout: std::time::Duration,
     pub first_byte_timeout: std::time::Duration,
     pub between_bytes_timeout: std::time::Duration,
-    /// Whether this request has an in-task retry loop running in the background.
-    /// When true, transient errors that reach `get()` are the final result and
-    /// should not trigger trap+replay.
-    pub has_background_retry: bool,
-    /// Set to true when splice()/blocking_splice() is called on the outgoing body stream.
-    /// When true, body bytes cannot be fully reconstructed from the oplog.
-    pub has_unreconstructable_body: bool,
-    /// Set to true when subscribe() is called on the outgoing body output stream.
-    /// When true, output stream inline retry is disabled because the pollable
-    /// would become stale after resource replacement.
-    pub output_stream_subscribed: bool,
-    /// Set to true when skip()/blocking_skip() is called on the response body.
-    /// When true, Zone 2 inline retry is disabled because we cannot verify
-    /// the skipped bytes against the retry response.
-    pub had_body_skip: bool,
+    /// Retry eligibility flags tracked during the request lifecycle.
+    pub retry: HttpRetryEligibility,
 }
 
 impl HttpRequestState {

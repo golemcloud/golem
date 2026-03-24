@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::InFunctionRetryHost;
 use crate::durable_host::http::inline_retry::spawn_http_request_with_retry;
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
+    HttpRetryEligibility,
 };
-use crate::services::HasOplog;
+use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_context::AttributeValue;
@@ -199,10 +201,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                 between_bytes_timeout,
                             },
                             self.wasi_http.connection_pool.clone(),
-                            self.public_state.oplog().clone(),
+                            self.public_state.worker(),
                             self.retry_config(),
                             durable_state.max_in_function_retry_delay,
                             begin_index,
+                            self.execution_status.clone(),
                         );
                         HostFutureIncomingResponse::pending(retry_handle)
                     } else {
@@ -226,10 +229,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         connect_timeout,
                         first_byte_timeout,
                         between_bytes_timeout,
-                        has_background_retry: enable_background_retry,
-                        has_unreconstructable_body: false,
-                        output_stream_subscribed: false,
-                        had_body_skip: false,
+                        retry: HttpRetryEligibility {
+                            has_background_retry: enable_background_retry,
+                            ..Default::default()
+                        },
                     },
                 );
             }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
+use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::get_oplog_entry;
 use crate::preview2::golem::agent::host::{
@@ -22,7 +22,7 @@ use crate::preview2::golem::agent::host::{
 use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
-use crate::services::HasWorker;
+use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
@@ -453,18 +453,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .clone_as_inherited_stack(span.span_id());
 
             let retry_config = if self.in_atomic_region() {
-                RetryConfig {
-                    max_attempts: 0,
-                    min_delay: Duration::from_millis(0),
-                    max_delay: Duration::from_millis(0),
-                    multiplier: 1.0,
-                    max_jitter_factor: None,
-                }
+                None
             } else {
-                self.retry_config()
+                Some(self.retry_config())
             };
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
-            let oplog = self.state.oplog.clone();
+            let worker = self.public_state.worker();
 
             let handle = spawn_rpc_task_with_retry(
                 rpc,
@@ -479,8 +473,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 stack,
                 retry_config,
                 max_delay,
-                oplog,
+                worker,
                 begin_index,
+                self.execution_status.clone(),
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -673,18 +668,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 .clone_as_inherited_stack(&span_id);
 
             let retry_config = if self.in_atomic_region() {
-                RetryConfig {
-                    max_attempts: 0,
-                    min_delay: Duration::from_millis(0),
-                    max_delay: Duration::from_millis(0),
-                    multiplier: 1.0,
-                    max_jitter_factor: None,
-                }
+                None
             } else {
-                self.retry_config()
+                Some(self.retry_config())
             };
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
-            let oplog = self.state.oplog.clone();
+            let worker = self.public_state.worker();
+            let execution_status = self.execution_status.clone();
 
             let entry = self.table().get_mut(&this)?;
             let entry = entry
@@ -735,7 +725,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     handle_completed_rpc_result(entry, &span_id)
                 }
                 FutureInvokeResultState::Deferred { .. } => {
-                    handle_deferred_rpc_dispatch(entry, rpc, stack, retry_config, max_delay, oplog)?
+                    handle_deferred_rpc_dispatch(entry, rpc, stack, retry_config, max_delay, worker, execution_status)?
                 }
             };
 
@@ -972,7 +962,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     Ok(entry)
 }
 
-fn spawn_rpc_task_with_retry(
+fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     rpc: Arc<dyn Rpc>,
     remote_agent_id: OwnedAgentId,
     idempotency_key: IdempotencyKey,
@@ -983,48 +973,71 @@ fn spawn_rpc_task_with_retry(
     env: Vec<(String, String)>,
     config_vars: BTreeMap<String, String>,
     stack: InvocationContextStack,
-    retry_config: RetryConfig,
+    retry_config: Option<RetryConfig>,
     max_in_function_retry_delay: Duration,
-    oplog: Arc<dyn crate::services::oplog::Oplog>,
+    worker: Arc<crate::worker::Worker<Ctx>>,
     retry_point: OplogIndex,
+    execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 ) -> AbortOnDropJoinHandle<Result<Result<UntypedDataValue, InternalRpcError>, Error>> {
+    let invoke = move || {
+        let rpc = rpc.clone();
+        let remote_agent_id = remote_agent_id.clone();
+        let idempotency_key = idempotency_key.clone();
+        let method_name = method_name.clone();
+        let input = input.clone();
+        let created_by = created_by.clone();
+        let agent_id = agent_id.clone();
+        let env = env.clone();
+        let config_vars = config_vars.clone();
+        let stack = stack.clone();
+        async move {
+            rpc.invoke_and_await(
+                &remote_agent_id,
+                Some(idempotency_key),
+                method_name,
+                input,
+                created_by,
+                &agent_id,
+                &env,
+                config_vars,
+                stack,
+            )
+            .await
+        }
+    };
+
     wasmtime_wasi::runtime::spawn(
         async move {
-            let result = crate::durable_host::durability::in_task_retry_loop(
-                retry_config,
-                max_in_function_retry_delay,
-                oplog,
-                retry_point,
-                0,
-                classify_rpc_error,
-                || {
-                    let rpc = rpc.clone();
-                    let remote_agent_id = remote_agent_id.clone();
-                    let idempotency_key = idempotency_key.clone();
-                    let method_name = method_name.clone();
-                    let input = input.clone();
-                    let created_by = created_by.clone();
-                    let agent_id = agent_id.clone();
-                    let env = env.clone();
-                    let config_vars = config_vars.clone();
-                    let stack = stack.clone();
-                    async move {
-                        rpc.invoke_and_await(
-                            &remote_agent_id,
-                            Some(idempotency_key),
-                            method_name,
-                            input,
-                            created_by,
-                            &agent_id,
-                            &env,
-                            config_vars,
-                            stack,
+            let result = match retry_config {
+                Some(retry_config) => {
+                    let base_retry_count =
+                        crate::durable_host::durability::count_oplog_errors_for(
+                            &worker.oplog(),
+                            retry_point,
                         )
-                        .await
-                    }
-                },
-            )
-            .await;
+                        .await;
+                    let task_ctx = crate::durable_host::durability::TaskRetryContext {
+                        retry_point,
+                        retry_config,
+                        max_in_function_retry_delay,
+                        base_retry_count,
+                        worker,
+                    };
+                    crate::durable_host::durability::in_task_retry_loop(
+                        task_ctx,
+                        classify_rpc_error,
+                        invoke,
+                        || {
+                            execution_status
+                                .read()
+                                .unwrap()
+                                .create_await_interrupt_signal()
+                        },
+                    )
+                    .await
+                }
+                None => invoke().await,
+            };
             Ok(result)
         }
         .in_current_span(),
@@ -1086,13 +1099,14 @@ fn handle_completed_rpc_result(
     }
 }
 
-fn handle_deferred_rpc_dispatch(
+fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     entry: &mut FutureInvokeResultState,
     rpc: Arc<dyn Rpc>,
     stack: InvocationContextStack,
-    retry_config: RetryConfig,
+    retry_config: Option<RetryConfig>,
     max_in_function_retry_delay: Duration,
-    oplog: Arc<dyn crate::services::oplog::Oplog>,
+    worker: Arc<crate::worker::Worker<Ctx>>,
+    execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 ) -> anyhow::Result<(
     Result<Option<Result<UntypedDataValue, RpcError>>, anyhow::Error>,
     HostRequestGolemRpcInvoke,
@@ -1139,8 +1153,9 @@ fn handle_deferred_rpc_dispatch(
         stack,
         retry_config,
         max_in_function_retry_delay,
-        oplog,
+        worker,
         begin_index,
+        execution_status,
     );
 
     let span_id = span_id.clone();

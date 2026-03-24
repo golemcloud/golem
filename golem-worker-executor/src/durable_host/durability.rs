@@ -104,6 +104,33 @@ pub struct DurableExecutionState {
     pub max_in_function_retry_delay: Duration,
 }
 
+/// Subset of `DurabilityHost` needed by `InFunctionRetryState::decide_retry`.
+///
+/// This trait is implemented both for `DurableWorkerCtx` (in-context host calls) and
+/// for `TaskRetryContext` (spawned background tasks like async RPC/HTTP), allowing
+/// the retry decision logic to be shared without duplicating delay calculation,
+/// metric emission, and oplog error writing.
+#[async_trait]
+pub trait InFunctionRetryHost {
+    /// Returns true if the worker is currently inside a user-defined atomic region.
+    fn in_atomic_region(&self) -> bool;
+
+    /// Returns the oplog index that `OplogEntry::Error` entries should reference as `retry_from`.
+    fn current_retry_point(&self) -> OplogIndex;
+
+    /// Returns the current retry configuration (overridden or default).
+    fn retry_config(&self) -> RetryConfig;
+
+    /// Returns the number of prior retry attempts for the given retry point.
+    async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32;
+
+    /// Returns the current durable execution state.
+    fn durable_execution_state(&self) -> DurableExecutionState;
+
+    /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
+    async fn append_retry_error_entry(&mut self, retry_from: OplogIndex);
+}
+
 /// Encapsulates in-function retry state for a single durable function invocation.
 ///
 /// Tracks the retry count accumulated within the current host function call
@@ -137,7 +164,7 @@ impl InFunctionRetryState {
     /// emits a debug log, and records the metric.
     pub async fn decide_retry(
         &mut self,
-        ctx: &mut impl DurabilityHost,
+        ctx: &mut impl InFunctionRetryHost,
         function_label: &str,
     ) -> AsyncRetryDecision {
         if ctx.in_atomic_region() {
@@ -188,7 +215,7 @@ pub struct PersistedDurableFunctionInvocation {
 }
 
 #[async_trait]
-pub trait DurabilityHost {
+pub trait DurabilityHost: InFunctionRetryHost {
     /// Observes a function call (produces logs and metrics)
     fn observe_function_call(&self, interface: &str, function: &str);
 
@@ -213,9 +240,6 @@ pub trait DurabilityHost {
         begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError>;
-
-    /// Gets the current durable execution state
-    fn durable_execution_state(&self) -> DurableExecutionState;
 
     /// Writes a record to the worker's oplog representing a durable function invocation
     async fn persist_durable_function_invocation(
@@ -243,25 +267,8 @@ pub trait DurabilityHost {
     /// This is called when a non-hint oplog entry is persisted during live execution.
     fn mark_atomic_region_side_effect(&mut self);
 
-    /// Returns true if the worker is currently inside a user-defined atomic region.
-    fn in_atomic_region(&self) -> bool;
-
     /// Creates an interrupt signal future that resolves when the worker is interrupted/suspended/etc.
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>>;
-
-    /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
-    async fn append_retry_error_entry(&mut self, retry_from: OplogIndex);
-
-    /// Returns the current retry count for a given oplog index from the worker's status record.
-    async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32;
-
-    /// Returns the current retry point — the oplog index that Error entries should reference
-    /// as `retry_from`. This is stable across trap+replay cycles for the same host function
-    /// invocation, unlike `begin_index` which may advance past Error entries after replay.
-    fn current_retry_point(&self) -> OplogIndex;
-
-    /// Returns the current retry configuration (overridden or default).
-    fn retry_config(&self) -> RetryConfig;
 }
 
 impl From<durability::DurableFunctionType> for DurableFunctionType {
@@ -407,7 +414,7 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn current_durable_execution_state(
         &mut self,
     ) -> anyhow::Result<durability::DurableExecutionState> {
-        let state = DurabilityHost::durable_execution_state(self);
+        let state = InFunctionRetryHost::durable_execution_state(self);
         Ok(durability::DurableExecutionState {
             is_live: state.is_live,
             persistence_level: match state.persistence_level {
@@ -447,6 +454,59 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
 }
 
 #[async_trait]
+impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
+    fn in_atomic_region(&self) -> bool {
+        !self.state.active_atomic_regions.is_empty()
+    }
+
+    fn current_retry_point(&self) -> OplogIndex {
+        self.state.current_retry_point
+    }
+
+    fn retry_config(&self) -> RetryConfig {
+        self.state
+            .overridden_retry_policy
+            .as_ref()
+            .unwrap_or(&self.state.config.retry)
+            .clone()
+    }
+
+    async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32 {
+        let latest_status = self
+            .public_state
+            .worker()
+            .get_non_detached_last_known_status()
+            .await;
+        latest_status
+            .current_retry_count
+            .get(&retry_from)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn durable_execution_state(&self) -> DurableExecutionState {
+        DurableExecutionState {
+            is_live: self.state.is_live(),
+            persistence_level: self.state.persistence_level,
+            snapshotting_mode: self.state.snapshotting_mode,
+            assume_idempotence: self.state.assume_idempotence,
+            max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
+        }
+    }
+
+    async fn append_retry_error_entry(&mut self, retry_from: OplogIndex) {
+        use golem_common::model::oplog::AgentError;
+        let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
+        let entry = OplogEntry::error(
+            AgentError::TransientError("in-function retry".to_string()),
+            retry_from,
+            inside_atomic_region,
+        );
+        self.public_state.worker().add_and_commit_oplog(entry).await;
+    }
+}
+
+#[async_trait]
 impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     fn observe_function_call(&self, interface: &str, function: &str) {
         record_host_function_call(interface, function);
@@ -482,16 +542,6 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 .await;
         }
         Ok(())
-    }
-
-    fn durable_execution_state(&self) -> DurableExecutionState {
-        DurableExecutionState {
-            is_live: self.state.is_live(),
-            persistence_level: self.state.persistence_level,
-            snapshotting_mode: self.state.snapshotting_mode,
-            assume_idempotence: self.state.assume_idempotence,
-            max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
-        }
     }
 
     async fn persist_durable_function_invocation(
@@ -596,51 +646,11 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         self.state.mark_atomic_region_has_side_effects();
     }
 
-    fn in_atomic_region(&self) -> bool {
-        !self.state.active_atomic_regions.is_empty()
-    }
-
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
         self.execution_status
             .read()
             .unwrap()
             .create_await_interrupt_signal()
-    }
-
-    async fn append_retry_error_entry(&mut self, retry_from: OplogIndex) {
-        use golem_common::model::oplog::AgentError;
-        let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
-        let entry = OplogEntry::error(
-            AgentError::TransientError("in-function retry".to_string()),
-            retry_from,
-            inside_atomic_region,
-        );
-        self.public_state.worker().add_and_commit_oplog(entry).await;
-    }
-
-    async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32 {
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
-        latest_status
-            .current_retry_count
-            .get(&retry_from)
-            .copied()
-            .unwrap_or(0)
-    }
-
-    fn current_retry_point(&self) -> OplogIndex {
-        self.state.current_retry_point
-    }
-
-    fn retry_config(&self) -> RetryConfig {
-        self.state
-            .overridden_retry_policy
-            .as_ref()
-            .unwrap_or(&self.state.config.retry)
-            .clone()
     }
 }
 
@@ -865,38 +875,116 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
     }
 }
 
+/// Counts the number of `OplogEntry::Error` entries in the oplog whose `retry_from`
+/// matches the given `retry_point`. This is used to initialize `base_retry_count`
+/// when spawning background retry tasks, so that the retry budget accounts for
+/// errors already recorded before the task was spawned.
+pub async fn count_oplog_errors_for(
+    oplog: &Arc<dyn crate::services::oplog::Oplog>,
+    retry_point: OplogIndex,
+) -> u32 {
+    let len = oplog.length().await;
+    if len == 0 {
+        return 0;
+    }
+    let entries = oplog.read_many(OplogIndex::INITIAL, len).await;
+    let mut count: u32 = 0;
+    for (_idx, entry) in &entries {
+        if let OplogEntry::Error { retry_from, .. } = entry {
+            if *retry_from == retry_point {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Implementation of `InFunctionRetryHost` for spawned background tasks (async RPC, HTTP).
+///
+/// Unlike `DurableWorkerCtx`, this does NOT read retry counts from worker status
+/// (which is invocation-scoped and can panic if detached). Instead it uses an
+/// oplog-based `base_retry_count` snapshot taken at spawn time via `count_oplog_errors_for`.
+///
+/// Error entries are written through `Worker::add_and_commit_oplog` so that the
+/// worker status tracker is properly updated (unlike raw `oplog.add_and_commit`).
+pub struct TaskRetryContext<Ctx: WorkerCtx> {
+    pub retry_point: OplogIndex,
+    pub retry_config: RetryConfig,
+    pub max_in_function_retry_delay: Duration,
+    pub base_retry_count: u32,
+    pub worker: Arc<crate::worker::Worker<Ctx>>,
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
+    fn in_atomic_region(&self) -> bool {
+        // Spawned tasks are never inside atomic regions
+        false
+    }
+
+    fn current_retry_point(&self) -> OplogIndex {
+        self.retry_point
+    }
+
+    fn retry_config(&self) -> RetryConfig {
+        self.retry_config.clone()
+    }
+
+    async fn current_retry_count_for(&self, _retry_from: OplogIndex) -> u32 {
+        self.base_retry_count
+    }
+
+    fn durable_execution_state(&self) -> DurableExecutionState {
+        DurableExecutionState {
+            is_live: true,
+            persistence_level: PersistenceLevel::Smart,
+            snapshotting_mode: None,
+            assume_idempotence: true,
+            max_in_function_retry_delay: self.max_in_function_retry_delay,
+        }
+    }
+
+    async fn append_retry_error_entry(&mut self, retry_from: OplogIndex) {
+        use golem_common::model::oplog::AgentError;
+        let entry = OplogEntry::error(
+            AgentError::TransientError("in-function retry".to_string()),
+            retry_from,
+            false, // spawned tasks are never inside atomic regions
+        );
+        self.worker.add_and_commit_oplog(entry).await;
+    }
+}
+
 /// Shared retry loop for spawned background tasks (async RPC, HTTP).
 ///
 /// Runs `operation` in a loop, retrying on transient failures according to the
-/// retry budget. On each retry it writes an `OplogEntry::Error` entry to the
-/// oplog so the attempt is visible to the worker status tracker.
+/// retry budget. Delegates retry decisions to `InFunctionRetryState::decide_retry`
+/// via a `TaskRetryContext`, ensuring delay calculation, metric emission, and oplog
+/// error writing are shared with the in-context host function retry path.
 ///
 /// Returns:
 /// - `Ok(value)` on success
 /// - `Err(err)` when the error is permanent, retries are exhausted, or the
-///   computed delay exceeds `max_delay` (caller handles trap+replay fallback)
+///   computed delay exceeds `max_delay`
 ///
-/// This helper is designed for tasks that run **outside** a `DurableWorkerCtx`
-/// (e.g. inside a `tokio::spawn`). It must NOT be used inside atomic regions —
-/// `inside_atomic_region` is always `false`.
-pub async fn in_task_retry_loop<T, E, C, Op, Fut>(
-    retry_config: RetryConfig,
-    max_delay: Duration,
-    oplog: Arc<dyn crate::services::oplog::Oplog>,
-    retry_point: OplogIndex,
-    base_retry_count: u32,
+/// For spawned tasks, `FallBackToTrap` from `decide_retry` means "stop inline
+/// retry and return the error" — there is no WASM stack to trap.
+pub async fn in_task_retry_loop<Ctx, T, E, C, Op, Fut, ISF, ISFut>(
+    mut task_ctx: TaskRetryContext<Ctx>,
     classify: C,
     mut operation: Op,
+    interrupt_signal_factory: ISF,
 ) -> Result<T, E>
 where
+    Ctx: WorkerCtx,
     E: Display,
     C: Fn(&E) -> HostFailureKind,
     Op: FnMut() -> Fut,
     Fut: Future<Output = Result<T, E>>,
+    ISF: Fn() -> ISFut,
+    ISFut: Future<Output = InterruptKind>,
 {
-    use golem_common::model::oplog::AgentError;
-
-    let mut local_retry_count: u32 = 0;
+    let mut retry_state = InFunctionRetryState::new();
 
     loop {
         match operation().await {
@@ -905,36 +993,29 @@ where
                 return Err(err);
             }
             Err(err) => {
-                let total_attempts = base_retry_count + local_retry_count;
+                let decision = retry_state.decide_retry(&mut task_ctx, "in-task").await;
 
-                let delay = match get_delay(&retry_config, total_attempts) {
-                    Some(d) => d,
-                    None => return Err(err),
-                };
+                match decision {
+                    AsyncRetryDecision::RetryAfterDelay(delay) => {
+                        let sleep = tokio::time::sleep(delay);
+                        let interrupt = interrupt_signal_factory();
+                        tokio::pin!(sleep);
+                        tokio::pin!(interrupt);
 
-                if delay > max_delay {
-                    return Err(err);
+                        match futures::future::select(sleep, interrupt).await {
+                            futures::future::Either::Left((_done, _)) => {
+                                // Sleep completed, continue retry loop
+                            }
+                            futures::future::Either::Right((_interrupt_kind, _)) => {
+                                // Interrupted during backoff — return the last transient error
+                                return Err(err);
+                            }
+                        }
+                    }
+                    AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
+                        return Err(err);
+                    }
                 }
-
-                oplog
-                    .add_and_commit(OplogEntry::error(
-                        AgentError::TransientError("in-function retry".into()),
-                        retry_point,
-                        false,
-                    ))
-                    .await;
-
-                local_retry_count += 1;
-
-                debug!(
-                    retry_count = local_retry_count,
-                    total_attempt = total_attempts + 1,
-                    ?delay,
-                    "In-task retry",
-                );
-                record_in_function_retry();
-
-                tokio::time::sleep(delay).await;
             }
         }
     }
@@ -1029,6 +1110,33 @@ mod tests {
     }
 
     #[async_trait]
+    impl InFunctionRetryHost for MockDurabilityHost {
+        fn in_atomic_region(&self) -> bool {
+            self.in_atomic_region
+        }
+
+        fn current_retry_point(&self) -> OplogIndex {
+            OplogIndex::INITIAL
+        }
+
+        fn retry_config(&self) -> RetryConfig {
+            self.retry_config.clone()
+        }
+
+        async fn current_retry_count_for(&self, _retry_from: OplogIndex) -> u32 {
+            self.oplog_retry_count
+        }
+
+        fn durable_execution_state(&self) -> DurableExecutionState {
+            MockDurabilityHost::durable_execution_state(self)
+        }
+
+        async fn append_retry_error_entry(&mut self, _retry_from: OplogIndex) {
+            self.retry_entries_appended += 1;
+        }
+    }
+
+    #[async_trait]
     impl DurabilityHost for MockDurabilityHost {
         fn observe_function_call(&self, _interface: &str, _function: &str) {}
 
@@ -1046,10 +1154,6 @@ mod tests {
             _forced_commit: bool,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
-        }
-
-        fn durable_execution_state(&self) -> DurableExecutionState {
-            MockDurabilityHost::durable_execution_state(self)
         }
 
         async fn persist_durable_function_invocation(
@@ -1075,10 +1179,6 @@ mod tests {
 
         fn mark_atomic_region_side_effect(&mut self) {}
 
-        fn in_atomic_region(&self) -> bool {
-            self.in_atomic_region
-        }
-
         fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
             if let Some(kind) = self.interrupt_signal {
                 // Resolve immediately
@@ -1094,22 +1194,6 @@ mod tests {
                     }
                 })
             }
-        }
-
-        async fn append_retry_error_entry(&mut self, _retry_from: OplogIndex) {
-            self.retry_entries_appended += 1;
-        }
-
-        async fn current_retry_count_for(&self, _retry_from: OplogIndex) -> u32 {
-            self.oplog_retry_count
-        }
-
-        fn current_retry_point(&self) -> OplogIndex {
-            OplogIndex::INITIAL
-        }
-
-        fn retry_config(&self) -> RetryConfig {
-            self.retry_config.clone()
         }
     }
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
+use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
@@ -683,9 +683,12 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
     ) -> HttpResult<()> {
         self.observe_function_call("http::types::outgoing_body", "finish");
         let body_rep = this.rep();
+        let has_trailers = trailers.is_some();
         if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep)
             && let Some(state) = self.state.open_http_requests.get_mut(&handle)
         {
+                state.retry.body_finished = true;
+                state.retry.has_outgoing_trailers = has_trailers;
             state.outgoing_body_rep = None;
         }
         HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers)
@@ -759,7 +762,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .state
                     .open_http_requests
                     .get(&handle)
-                    .map_or(false, |s| s.has_background_retry);
+                    .map_or(false, |s| s.retry.has_background_retry);
                 if kind == HostFailureKind::Transient && !has_background_retry {
                     self.state.current_retry_point = begin_index;
                     let failure = anyhow::Error::new(ClassifiedHostError {

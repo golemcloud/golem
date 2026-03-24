@@ -1162,3 +1162,637 @@ async fn http_get_retried_inline_even_when_idempotence_disabled(
 
     Ok(())
 }
+
+/// Starts a TCP server that sends partial responses, then supports Range-based resume.
+/// First `fail_count` connections: sends HTTP 200 headers + `prefix_len` bytes then drops.
+/// Subsequent connections: if Range header present, responds 206 with remaining bytes;
+/// otherwise responds 200 with the full body.
+/// The body is `body_size` bytes of sequential values (i % 256).
+/// Returns `(port, connection_counter)`.
+async fn start_partial_response_http_server(
+    fail_count: usize,
+    prefix_len: usize,
+    body_size: usize,
+) -> (u16, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    // Generate the full body (deterministic pattern)
+    let full_body: Vec<u8> = (0..body_size).map(|i| (i % 256) as u8).collect();
+
+    spawn(
+        async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                let n = counter_clone.fetch_add(1, Ordering::SeqCst);
+                let full_body = full_body.clone();
+
+                if n < fail_count {
+                    // Send headers + partial body, then drop
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body_size,
+                    );
+                    let _ = stream.write_all(headers.as_bytes()).await;
+                    let _ = stream.write_all(&full_body[..prefix_len]).await;
+                    let _ = stream.flush().await;
+                    // Wait for the client to receive the partial data before dropping
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    drop(stream);
+                } else {
+                    // Read request headers to check for Range
+                    let mut buf = [0u8; 4096];
+                    let mut header_data = Vec::new();
+                    loop {
+                        match stream.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                header_data.extend_from_slice(&buf[..n]);
+                                if header_data.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let header_str = String::from_utf8_lossy(&header_data);
+
+                    // Parse Range header
+                    let range_start = header_str.lines().find_map(|line| {
+                        if line.to_lowercase().starts_with("range:") {
+                            // Parse "Range: bytes=N-"
+                            let val = line.split(':').nth(1)?.trim();
+                            let rest = val.strip_prefix("bytes=")?;
+                            let dash_pos = rest.find('-')?;
+                            rest[..dash_pos].parse::<usize>().ok()
+                        } else {
+                            None
+                        }
+                    });
+
+                    if let Some(start) = range_start {
+                        if start <= body_size {
+                            // 206 Partial Content
+                            let remaining = &full_body[start..];
+                            let content_range =
+                                format!("bytes {}-{}/{}", start, body_size - 1, body_size);
+                            let response = format!(
+                                "HTTP/1.1 206 Partial Content\r\nContent-Range: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                content_range,
+                                remaining.len(),
+                            );
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.write_all(remaining).await;
+                        } else {
+                            // Invalid range
+                            let response = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            let _ = stream.write_all(response.as_bytes()).await;
+                        }
+                    } else {
+                        // 200 OK with full body (for Zone 2 200+skip path)
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body_size,
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                        let _ = stream.write_all(&full_body).await;
+                    }
+                    let _ = stream.shutdown().await;
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    (port, counter)
+}
+
+/// Starts a TCP server for testing write_zeroes body reconstruction.
+/// First `fail_count` connections: reads some data then drops (simulates body write failure).
+/// Subsequent connections: reads full request body and responds with a validation summary.
+/// Returns `(port, connection_counter)`.
+async fn start_write_zeroes_validation_server(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+
+    spawn(
+        async move {
+            loop {
+                let (mut stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                let n = counter_clone.fetch_add(1, Ordering::SeqCst);
+
+                if n < fail_count {
+                    // Read a small amount then drop
+                    let mut buf = [0u8; 512];
+                    let _ = stream.read(&mut buf).await;
+                    drop(stream);
+                } else {
+                    // Read the full request
+                    let mut data = Vec::new();
+                    let mut buf = [0u8; 8192];
+                    loop {
+                        match stream.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => data.extend_from_slice(&buf[..n]),
+                            Err(_) => break,
+                        }
+                        let data_str = String::from_utf8_lossy(&data);
+                        if let Some(header_end) = data_str.find("\r\n\r\n") {
+                            let headers = &data_str[..header_end];
+                            if let Some(cl_line) = headers
+                                .lines()
+                                .find(|l| l.to_lowercase().starts_with("content-length:"))
+                            {
+                                let cl: usize = cl_line
+                                    .split(':')
+                                    .nth(1)
+                                    .unwrap()
+                                    .trim()
+                                    .parse()
+                                    .unwrap_or(0);
+                                let body_start = header_end + 4;
+                                if data.len() >= body_start + cl {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Extract body
+                    let body_start = String::from_utf8_lossy(&data)
+                        .find("\r\n\r\n")
+                        .map(|p| p + 4)
+                        .unwrap_or(data.len());
+                    let request_body = &data[body_start..];
+
+                    // Validate: "HEAD" + 1024 zeroes + 1024 * 0xAB
+                    let expected_len = 4 + 1024 + 1024;
+                    let valid = request_body.len() == expected_len
+                        && &request_body[..4] == b"HEAD"
+                        && request_body[4..4 + 1024].iter().all(|&b| b == 0)
+                        && request_body[4 + 1024..].iter().all(|&b| b == 0xAB);
+
+                    let body = if valid {
+                        format!("body-ok len={}", request_body.len())
+                    } else {
+                        format!("body-bad len={}", request_body.len())
+                    };
+
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body,
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    (port, counter)
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_zone2_inline_retry_on_body_read_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    // Server sends 1024-byte body. First connection sends 256 bytes then drops.
+    // Second connection checks for Range header and responds with 206 + remaining bytes.
+    let (port, connection_counter) = start_partial_response_http_server(1, 256, 1024).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // get_and_read_body_chunked reads in 256-byte chunks, triggering Zone 2 on the
+    // partial response drop.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_read_body_chunked",
+            data_value!(),
+        )
+        .await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a return value");
+
+    // Verify the response contains the full body (1024 bytes of sequential pattern)
+    assert!(
+        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        "Expected a successful 200 response, got: {result_value:?}"
+    );
+
+    // Server received 1 partial + 1 successful = 2 total connections
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert_eq!(
+        total_connections, 2,
+        "Expected 2 total connections (1 partial + 1 resumed)"
+    );
+
+    // Verify oplog contains in-function retry error entries for Zone 2
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert!(
+        retry_count > 0,
+        "Expected at least 1 in-function retry error entry in oplog for Zone 2, got {retry_count}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_write_zeroes_body_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    // Server validates the body contains HEAD + zeroes + 0xAB bytes.
+    // First connection drops after reading partial data.
+    let (port, connection_counter) = start_write_zeroes_validation_server(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_write_zeroes",
+            data_value!(),
+        )
+        .await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a return value");
+
+    // Server should validate the body and return "200 body-ok len=2052"
+    assert_eq!(
+        result_value,
+        Value::String("200 body-ok len=2052".to_string()),
+        "Expected server to validate reconstructed body (HEAD + 1024 zeroes + 1024 * 0xAB)"
+    );
+
+    // Server received 1 failed + 1 successful = 2 total connections
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert_eq!(
+        total_connections, 2,
+        "Expected 2 total connections (1 dropped + 1 successful)"
+    );
+
+    // Verify oplog contains in-function retry error entries
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert!(
+        retry_count > 0,
+        "Expected at least 1 in-function retry error entry in oplog, got {retry_count}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_no_output_stream_retry_when_subscribe_used(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    // Server drops first connection (triggers body write failure)
+    let (port, connection_counter) = start_body_dropping_http_server(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // post_with_subscribe calls subscribe() on the output stream before writing,
+    // which sets output_stream_subscribed=true and disqualifies inline retry.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_subscribe",
+            data_value!(),
+        )
+        .await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a return value");
+
+    assert!(
+        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        "Expected eventual success via trap+replay, got: {result_value:?}"
+    );
+
+    // Verify the server saw at least 2 connections (1 failed + 1 replay success)
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert!(
+        total_connections >= 2,
+        "Expected at least 2 connections (1 dropped + 1 replay), got {total_connections}"
+    );
+
+    // Verify NO in-function retry error entries in oplog
+    // (inline retry should have been disqualified by output_stream_subscribed)
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert_eq!(
+        retry_count, 0,
+        "Expected 0 in-function retry error entries (subscribe disqualifies inline retry)"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_no_retry_when_trailers_present(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    // Drop first connection — POST with trailers should NOT trigger inline retry
+    let (port, connection_counter) = start_failing_http_server_any_method(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // post_with_trailers finishes the outgoing body with trailers,
+    // which sets has_outgoing_trailers=true and disqualifies inline retry.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_with_trailers",
+            data_value!(),
+        )
+        .await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a return value");
+
+    assert!(
+        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        "Expected eventual success via trap+replay, got: {result_value:?}"
+    );
+
+    // Verify the server saw at least 2 connections (1 failed + 1 replay success)
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert!(
+        total_connections >= 2,
+        "Expected at least 2 connections (1 dropped + 1 replay), got {total_connections}"
+    );
+
+    // Verify NO in-function retry error entries in oplog
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert_eq!(
+        retry_count, 0,
+        "Expected 0 in-function retry error entries (trailers disqualify inline retry)"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_no_zone2_retry_when_body_skip_used(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    // Server sends 2048-byte body. First connection sends 1024 bytes then drops.
+    // The guest reads first 256, skips 256, then tries to read more — which will fail.
+    // Zone 2 should be disqualified because blocking_skip was used.
+    let (port, connection_counter) = start_partial_response_http_server(1, 1024, 2048).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // get_with_body_skip reads 256 bytes, skips 256, then reads remaining.
+    // The skip sets had_body_skip=true, disqualifying Zone 2 retry.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_with_body_skip",
+            data_value!(),
+        )
+        .await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a return value");
+
+    // Should eventually succeed (via trap+replay, not Zone 2 inline retry)
+    assert!(
+        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
+        "Expected eventual success, got: {result_value:?}"
+    );
+
+    // Verify the server saw at least 2 connections (1 partial + 1 replay success)
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert!(
+        total_connections >= 2,
+        "Expected at least 2 connections (1 partial + 1 replay), got {total_connections}"
+    );
+
+    // Verify NO in-function retry error entries in oplog
+    // Zone 2 retry should have been disqualified by had_body_skip
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert_eq!(
+        retry_count, 0,
+        "Expected 0 in-function retry error entries (body skip disqualifies Zone 2 retry)"
+    );
+
+    Ok(())
+}

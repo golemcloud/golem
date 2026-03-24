@@ -26,11 +26,13 @@
 //! - **Zone 2**: Retry during response body reading — the response was partially consumed.
 //!   Requires re-sending the request and verifying the response prefix matches.
 
-use crate::durable_host::durability::{DurableExecutionState, HostFailureKind};
+use crate::durable_host::durability::{DurableExecutionState, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::http::types::classify_http_error_code;
 use crate::durable_host::HttpRequestState;
+use crate::metrics::wasm::record_in_function_retry;
 use crate::services::oplog::{Oplog, OplogOps};
-use bytes::{BufMut, Bytes, BytesMut};
+use crate::services::{HasOplog, HasWorker};
+use bytes::Bytes;
 use golem_common::model::oplog::payload::HostPayloadPair;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{
@@ -38,18 +40,19 @@ use golem_common::model::oplog::{
     PersistenceLevel,
 };
 use golem_common::model::RetryConfig;
+use golem_common::retries::get_delay;
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
-use wasmtime_wasi::{InputStream, OutputStream};
+use wasmtime_wasi::OutputStream;
 use wasmtime_wasi_http::bindings::http::types as wasi_http_types;
 use wasmtime_wasi_http::body::{HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext};
 use wasmtime_wasi_http::types::{
     default_send_request_with_pool, FutureIncomingResponseHandle, HostFutureIncomingResponse,
-    OutgoingRequestConfig,
+    IncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::HttpConnectionPool;
 
@@ -105,15 +108,23 @@ pub fn is_http_inline_retry_eligible(
         return Err(InlineRetryIneligible::PersistNothing);
     }
 
-    if request_state.has_unreconstructable_body {
+    if request_state.retry.has_unreconstructable_body {
         return Err(InlineRetryIneligible::UnreconstructableBody);
     }
 
-    if request_state.output_stream_subscribed {
+    if request_state.retry.output_stream_subscribed {
         return Err(InlineRetryIneligible::OutputStreamSubscribed);
     }
 
-    if zone == RetryZone::Zone2 && request_state.had_body_skip {
+    if request_state.retry.has_outgoing_trailers {
+        return Err(InlineRetryIneligible::HasOutgoingTrailers);
+    }
+
+    if zone == RetryZone::Zone1 && !request_state.retry.body_finished {
+        return Err(InlineRetryIneligible::BodyNotFinished);
+    }
+
+    if zone == RetryZone::Zone2 && request_state.retry.had_body_skip {
         return Err(InlineRetryIneligible::HadBodySkip);
     }
 
@@ -138,25 +149,38 @@ fn is_method_idempotent(method: &SerializableHttpMethod) -> bool {
     )
 }
 
+/// A chunk of outgoing body data reconstructed from the oplog.
+///
+/// This avoids materializing the entire body in memory — callers can
+/// stream chunks into a hyper body pipe incrementally.
+#[derive(Debug, Clone)]
+pub enum BodyChunk {
+    /// Actual data bytes written via `write`.
+    Data(Bytes),
+    /// A run of zeroes written via `write_zeroes`.
+    Zeroes(u64),
+}
+
 /// Reconstructs the outgoing request body by scanning oplog entries in
 /// `[begin_index..current_oplog_index]` for body write entries belonging
 /// to this request's batch.
 ///
-/// Reads `StreamWriteWithBytes` responses from the oplog and concatenates
-/// all successfully written byte chunks to reconstruct the full body.
-pub async fn reconstruct_outgoing_body(
+/// Returns a `Vec<BodyChunk>` instead of a contiguous `Bytes` buffer so
+/// that callers can stream the chunks into a hyper body pipe without
+/// allocating the full body in memory at once.
+pub async fn reconstruct_outgoing_body_chunks(
     oplog: &Arc<dyn Oplog>,
     begin_index: OplogIndex,
-) -> Result<Bytes, anyhow::Error> {
+) -> Result<Vec<BodyChunk>, anyhow::Error> {
     let current_idx = oplog.current_oplog_index().await;
 
     if current_idx <= begin_index {
-        return Ok(Bytes::new());
+        return Ok(Vec::new());
     }
 
     let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index);
     let entries = oplog.read_many(begin_index, n).await;
-    let mut body = BytesMut::new();
+    let mut chunks = Vec::new();
 
     let write_fn_name =
         golem_common::model::oplog::host_functions::HttpTypesOutgoingBodyStreamWrite::HOST_FUNCTION_NAME;
@@ -175,7 +199,7 @@ pub async fn reconstruct_outgoing_body(
                 continue;
             }
 
-            if *function_name == write_fn_name || *function_name == write_zeroes_fn_name {
+            if *function_name == write_fn_name {
                 let response_value =
                     oplog.download_payload(response.clone()).await.map_err(|err| {
                         anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
@@ -183,34 +207,47 @@ pub async fn reconstruct_outgoing_body(
 
                 if let HostResponse::StreamWriteWithBytes(payload) = response_value {
                     if let Ok(data) = &payload.result {
-                        body.put_slice(data);
+                        if !data.is_empty() {
+                            chunks.push(BodyChunk::Data(Bytes::from(data.clone())));
+                        }
+                    }
+                }
+            } else if *function_name == write_zeroes_fn_name {
+                let response_value =
+                    oplog.download_payload(response.clone()).await.map_err(|err| {
+                        anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
+                    })?;
+
+                if let HostResponse::StreamWriteZeroes(payload) = response_value {
+                    if let Ok(len) = &payload.result {
+                        if *len > 0 {
+                            chunks.push(BodyChunk::Zeroes(*len));
+                        }
                     }
                 }
             }
         }
     }
 
-    Ok(body.freeze())
+    Ok(chunks)
 }
 
-/// Reads all successfully received incoming body chunks from the oplog for
-/// a given request batch. Used by Zone 2 to determine how many bytes the guest
-/// has already consumed.
-///
-/// Returns the flattened bytes of all successful chunks.
-pub async fn read_incoming_body_chunks(
+/// Counts the total number of incoming body bytes successfully delivered to
+/// the guest, as recorded in the oplog. Used by Zone 2 to determine how many
+/// bytes to skip or verify without materializing the full body.
+pub async fn count_incoming_body_bytes(
     oplog: &Arc<dyn Oplog>,
     begin_index: OplogIndex,
-) -> Result<Bytes, anyhow::Error> {
+) -> Result<u64, anyhow::Error> {
     let current_idx = oplog.current_oplog_index().await;
 
     if current_idx <= begin_index {
-        return Ok(Bytes::new());
+        return Ok(0);
     }
 
     let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index);
     let entries = oplog.read_many(begin_index, n).await;
-    let mut chunks = BytesMut::new();
+    let mut total: u64 = 0;
 
     let read_fn_name =
         golem_common::model::oplog::host_functions::HttpTypesIncomingBodyStreamRead::HOST_FUNCTION_NAME;
@@ -237,14 +274,14 @@ pub async fn read_incoming_body_chunks(
 
                 if let HostResponse::StreamChunk(payload) = response_value {
                     if let Ok(data) = &payload.result {
-                        chunks.put_slice(data);
+                        total += data.len() as u64;
                     }
                 }
             }
         }
     }
 
-    Ok(chunks.freeze())
+    Ok(total)
 }
 
 /// Builds a `hyper::Request` from the stored HTTP request metadata and
@@ -290,17 +327,39 @@ pub fn reconstruct_http_request(
         .map_err(|e| anyhow::anyhow!("failed to build reconstructed HTTP request: {e}"))
 }
 
-/// Convenience wrapper for `reconstruct_http_request` that takes raw body
-/// bytes and wraps them in a `Full<Bytes>` body.
-pub fn reconstruct_http_request_full(
-    request: &HostRequestHttpRequest,
-    body_bytes: Bytes,
-    extra_headers: &[(String, String)],
-) -> Result<hyper::Request<HyperOutgoingBody>, anyhow::Error> {
-    let body: HyperOutgoingBody = http_body_util::Full::new(body_bytes)
-        .map_err(|_| unreachable!("Infallible error"))
-        .boxed_unsync();
-    reconstruct_http_request(request, body, extra_headers)
+/// Converts a `Vec<BodyChunk>` into a `HyperOutgoingBody` for use with hyper.
+///
+/// Each chunk is emitted as a separate `Frame::data` item in a stream,
+/// so the full body is never materialized as a single contiguous buffer.
+/// Zeroes chunks are emitted in 64 KiB slices to cap per-frame allocation.
+pub fn body_chunks_to_hyper_body(chunks: Vec<BodyChunk>) -> HyperOutgoingBody {
+    use futures::stream;
+    use http_body_util::StreamBody;
+
+    const ZERO_BUF_SIZE: usize = 64 * 1024;
+
+    let frames = chunks.into_iter().flat_map(move |chunk| {
+        match chunk {
+            BodyChunk::Data(data) => {
+                vec![hyper::body::Frame::data(data)]
+            }
+            BodyChunk::Zeroes(total) => {
+                let mut frames = Vec::new();
+                let mut remaining = total as usize;
+                while remaining > 0 {
+                    let len = remaining.min(ZERO_BUF_SIZE);
+                    frames.push(hyper::body::Frame::data(Bytes::from(vec![0u8; len])));
+                    remaining -= len;
+                }
+                frames
+            }
+        }
+    });
+
+    let body_stream =
+        stream::iter(frames.map(Ok::<_, wasi_http_types::ErrorCode>));
+    let stream_body: StreamBody<_> = StreamBody::new(body_stream);
+    stream_body.boxed_unsync()
 }
 
 /// Sends a reconstructed HTTP request using the connection pool.
@@ -316,21 +375,95 @@ pub fn send_reconstructed_request(
     default_send_request_with_pool(request, config, None, connection_pool)
 }
 
-/// Verifies that the first `expected_prefix.len()` bytes from `actual_data`
-/// match the previously consumed body bytes.
+/// Sends an HTTP request with interrupt-aware retry on transient errors.
 ///
-/// This is used by Zone 2 to confirm that the re-sent request produced the
-/// same response body prefix before resuming streaming to the guest.
+/// On transient `ErrorCode`, computes backoff delay via `get_delay`, sleeps with
+/// interrupt awareness, and retries. Returns `Ok(Some(response))` on success,
+/// `Ok(None)` when retries are exhausted or the delay exceeds `max_delay` (caller
+/// should fall back), or `Err` if an interrupt occurs during sleep.
 ///
-/// The comparison is flattened — chunk boundaries do not need to match,
-/// only the byte content.
-///
-/// Returns `true` if the prefix matches exactly, `false` otherwise.
-pub fn verify_body_prefix(expected_prefix: &[u8], actual_data: &[u8]) -> bool {
-    if actual_data.len() < expected_prefix.len() {
-        return false;
+/// This is the in-context counterpart of `in_task_retry_loop` (which runs in
+/// spawned background tasks without interrupt awareness).
+async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    request_state: &HttpRequestState,
+    body_chunks: &[BodyChunk],
+    extra_headers: &[(String, String)],
+) -> Result<Option<IncomingResponse>, anyhow::Error> {
+    use crate::durable_host::DurabilityHost;
+
+    let retry_config = ctx.retry_config();
+    let max_delay = ctx.durable_execution_state().max_in_function_retry_delay;
+    let connection_pool = ctx.wasi_http.connection_pool.clone();
+    let mut retry_count: u32 = 0;
+
+    loop {
+        let hyper_body = body_chunks_to_hyper_body(body_chunks.to_vec());
+        let http_request =
+            reconstruct_http_request(&request_state.request, hyper_body, extra_headers)?;
+        let config = request_state.outgoing_request_config();
+
+        let mut future_resp =
+            default_send_request_with_pool(http_request, config, None, connection_pool.clone());
+
+        use wasmtime_wasi::Pollable;
+        future_resp.ready().await;
+
+        match future_resp.unwrap_ready() {
+            Ok(Ok(resp)) => return Ok(Some(resp)),
+            Err(_trap) => return Ok(None),
+            Ok(Err(ref error_code))
+                if classify_http_error_code(error_code) == HostFailureKind::Permanent =>
+            {
+                return Ok(None);
+            }
+            Ok(Err(error_code)) => {
+                // Transient error — check retry budget
+                let delay = match get_delay(&retry_config, retry_count) {
+                    Some(d) => d,
+                    None => {
+                        tracing::debug!(
+                            retry_count,
+                            ?error_code,
+                            "Zone 2 send retries exhausted, falling back"
+                        );
+                        return Ok(None);
+                    }
+                };
+
+                if delay > max_delay {
+                    tracing::debug!(
+                        retry_count,
+                        ?delay,
+                        ?max_delay,
+                        "Zone 2 send retry delay exceeds max, falling back"
+                    );
+                    return Ok(None);
+                }
+
+                // Interrupt-aware sleep
+                let interrupt = ctx.create_interrupt_signal();
+                let sleep = tokio::time::sleep(delay);
+                tokio::pin!(sleep);
+
+                match futures::future::select(sleep, interrupt).await {
+                    futures::future::Either::Left(_) => {
+                        retry_count += 1;
+                        tracing::debug!(
+                            retry_count,
+                            ?delay,
+                            ?error_code,
+                            "Zone 2 inline retry: transient send error, retrying"
+                        );
+                        record_in_function_retry();
+                    }
+                    futures::future::Either::Right((interrupt_kind, _)) => {
+                        return Err(anyhow::Error::from(interrupt_kind));
+                    }
+                }
+            }
+        }
     }
-    actual_data[..expected_prefix.len()] == *expected_prefix
 }
 
 /// Result of rebuilding a streaming HTTP request for output stream retry.
@@ -346,24 +479,83 @@ pub struct RebuiltStreamingRequest {
     pub output_stream: Box<dyn OutputStream>,
 }
 
+/// Writes a sequence of `BodyChunk`s into an `OutputStream`, respecting
+/// backpressure via `check_write` / `ready`.
+///
+/// Data chunks are written in budget-sized slices. Zeroes chunks are written
+/// using small temporary buffers (up to 64 KiB at a time) to avoid
+/// materializing huge allocations.
+async fn replay_body_chunks(
+    stream: &mut Box<dyn OutputStream>,
+    chunks: &[BodyChunk],
+) -> Result<(), anyhow::Error> {
+    for chunk in chunks {
+        match chunk {
+            BodyChunk::Data(data) => {
+                let mut offset = 0;
+                while offset < data.len() {
+                    let budget = stream
+                        .check_write()
+                        .map_err(|e| anyhow::anyhow!("check_write failed during body replay: {e}"))?;
+
+                    if budget == 0 {
+                        stream.ready().await;
+                        continue;
+                    }
+
+                    let end = std::cmp::min(offset + budget, data.len());
+                    let slice = Bytes::copy_from_slice(&data[offset..end]);
+                    stream
+                        .write(slice)
+                        .map_err(|e| anyhow::anyhow!("write failed during body replay: {e}"))?;
+                    offset = end;
+                }
+            }
+            BodyChunk::Zeroes(total) => {
+                const ZERO_BUF_SIZE: usize = 64 * 1024;
+                let mut remaining = *total as usize;
+                while remaining > 0 {
+                    let budget = stream
+                        .check_write()
+                        .map_err(|e| anyhow::anyhow!("check_write failed during zeroes replay: {e}"))?;
+
+                    if budget == 0 {
+                        stream.ready().await;
+                        continue;
+                    }
+
+                    let write_len = remaining.min(budget).min(ZERO_BUF_SIZE);
+                    let zeros = Bytes::from(vec![0u8; write_len]);
+                    stream
+                        .write(zeros)
+                        .map_err(|e| anyhow::anyhow!("write failed during zeroes replay: {e}"))?;
+                    remaining -= write_len;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Rebuilds an HTTP request as a streaming request for output stream retry.
 ///
-/// This reconstructs all prior body bytes from the oplog, creates a fresh
-/// outgoing body+stream pair, writes the prior bytes into the new stream,
+/// This reconstructs all prior body chunks from the oplog, creates a fresh
+/// outgoing body+stream pair, streams the prior chunks into the new stream,
 /// and sends the request. The caller receives a `RebuiltStreamingRequest`
 /// whose fields can replace the guest's existing resource table entries.
 ///
 /// Unlike `send_reconstructed_request()` (which sends the body as a complete
 /// `Full<Bytes>`), this creates a streaming body so the guest can continue
-/// writing additional data after the retry.
+/// writing additional data after the retry. Chunks are replayed lazily to
+/// avoid materializing the full body in memory.
 pub async fn rebuild_streaming_request(
     oplog: &Arc<dyn Oplog>,
     request_state: &HttpRequestState,
     config: OutgoingRequestConfig,
     connection_pool: Option<HttpConnectionPool>,
 ) -> Result<RebuiltStreamingRequest, anyhow::Error> {
-    // 1. Reconstruct all prior successful body bytes from oplog
-    let prior_bytes = reconstruct_outgoing_body(oplog, request_state.begin_index).await?;
+    // 1. Reconstruct body chunks from oplog (lazy representation)
+    let body_chunks = reconstruct_outgoing_body_chunks(oplog, request_state.begin_index).await?;
 
     // 2. Create a fresh outgoing body with a streaming body pair
     let (mut new_outgoing_body, hyper_body) =
@@ -374,43 +566,22 @@ pub async fn rebuild_streaming_request(
         .take_output_stream()
         .ok_or_else(|| anyhow::anyhow!("failed to take output stream from new outgoing body"))?;
 
-    // 4. Write all prior body bytes into the new stream using raw OutputStream
-    if !prior_bytes.is_empty() {
-        // Write in chunks respecting the stream's write budget
-        let mut offset = 0;
-        while offset < prior_bytes.len() {
-            let budget = new_stream
-                .check_write()
-                .map_err(|e| anyhow::anyhow!("check_write failed during body replay: {e}"))?;
-
-            if budget == 0 {
-                // Stream is full, need to flush/wait — use ready() to wait for capacity
-                new_stream
-                    .ready()
-                    .await;
-                continue;
-            }
-
-            let end = std::cmp::min(offset + budget, prior_bytes.len());
-            let chunk = Bytes::copy_from_slice(&prior_bytes[offset..end]);
-            new_stream
-                .write(chunk)
-                .map_err(|e| anyhow::anyhow!("write failed during body replay: {e}"))?;
-            offset = end;
-        }
-    }
-
-    // 5. Build the HTTP request with the streaming body
+    // 4. Build the HTTP request with the streaming body
     let reconstructed = reconstruct_http_request(&request_state.request, hyper_body, &[])?;
 
-    // 6. Send the request (the body is streaming — hyper will read from the channel
-    //    as the guest continues writing)
+    // 5. Send the request BEFORE writing prior bytes. Hyper starts consuming
+    //    the pipe in the background once dispatched, preventing deadlock when
+    //    prior bytes exceed hyper's internal pipe capacity (~1MB).
     let new_future = default_send_request_with_pool(
         reconstructed,
         config,
         None,
         connection_pool,
     );
+
+    // 6. Stream all prior body chunks into the new stream using raw OutputStream.
+    //    Now that hyper is actively consuming, the pipe won't fill up permanently.
+    replay_body_chunks(&mut new_stream, &body_chunks).await?;
 
     Ok(RebuiltStreamingRequest {
         future: new_future,
@@ -428,15 +599,16 @@ pub async fn rebuild_streaming_request(
 ///
 /// This function is the HTTP equivalent of `spawn_rpc_task_with_retry` in
 /// `wasm_rpc/mod.rs`.
-pub fn spawn_http_request_with_retry(
+pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     original_handle: FutureIncomingResponseHandle,
     request: HostRequestHttpRequest,
     config: OutgoingRequestConfig,
     connection_pool: Option<HttpConnectionPool>,
-    oplog: Arc<dyn crate::services::oplog::Oplog>,
+    worker: Arc<crate::worker::Worker<Ctx>>,
     retry_config: RetryConfig,
     max_delay: Duration,
     begin_index: OplogIndex,
+    execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 ) -> FutureIncomingResponseHandle {
     // Capture config fields individually since OutgoingRequestConfig is not Clone
     let use_tls = config.use_tls;
@@ -465,20 +637,27 @@ pub fn spawn_http_request_with_retry(
 
                 // Transient HTTP error: enter retry loop
                 Ok(Err(_initial_error)) => {
-                    let result = crate::durable_host::durability::in_task_retry_loop(
+                    let oplog = worker.oplog();
+                    let base_retry_count =
+                        crate::durable_host::durability::count_oplog_errors_for(&oplog, begin_index)
+                            .await;
+                    let task_ctx = crate::durable_host::durability::TaskRetryContext {
+                        retry_point: begin_index,
                         retry_config,
-                        max_delay,
-                        oplog.clone(),
-                        begin_index,
-                        0,
+                        max_in_function_retry_delay: max_delay,
+                        base_retry_count,
+                        worker,
+                    };
+                    let result = crate::durable_host::durability::in_task_retry_loop(
+                        task_ctx,
                         classify_http_error_code,
                         || {
                             let oplog = oplog.clone();
                             let request = request.clone();
                             let connection_pool = connection_pool.clone();
                             async move {
-                                // Reconstruct body from oplog
-                                let body_bytes = reconstruct_outgoing_body(&oplog, begin_index)
+                                // Reconstruct body chunks from oplog
+                                let body_chunks = reconstruct_outgoing_body_chunks(&oplog, begin_index)
                                     .await
                                     .map_err(|e| {
                                         wasi_http_types::ErrorCode::InternalError(Some(format!(
@@ -486,9 +665,10 @@ pub fn spawn_http_request_with_retry(
                                         )))
                                     })?;
 
-                                // Build the request
+                                // Build the request with a streaming body
+                                let hyper_body = body_chunks_to_hyper_body(body_chunks);
                                 let http_request =
-                                    reconstruct_http_request_full(&request, body_bytes, &[])
+                                    reconstruct_http_request(&request, hyper_body, &[])
                                         .map_err(|e| {
                                             wasi_http_types::ErrorCode::InternalError(Some(
                                                 format!("request reconstruction failed: {e}"),
@@ -523,6 +703,7 @@ pub fn spawn_http_request_with_retry(
                                 }
                             }
                         },
+                        || execution_status.read().unwrap().create_await_interrupt_signal(),
                     )
                     .await;
 
@@ -547,8 +728,6 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_rep: u32,
 ) -> Result<bool, anyhow::Error> {
-    use crate::durable_host::DurabilityHost;
-    use crate::services::HasOplog;
     use wasmtime::component::Resource;
     use wasmtime_wasi_http::bindings::http::types::FutureIncomingResponse;
     use wasmtime_wasi_http::bindings::http::types::OutgoingBody;
@@ -583,17 +762,18 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     // 5. Swap resources in the resource table
     // Swap the FutureIncomingResponse — re-wrap with background retry if the
     // original request had it, so that transient errors at get() are still handled.
-    let new_future = if request_state.has_background_retry {
+    let new_future = if request_state.retry.has_background_retry {
         if let HostFutureIncomingResponse::Pending(handle) = rebuilt.future {
             let retry_handle = spawn_http_request_with_retry(
                 handle,
                 request_state.request.clone(),
                 request_state.outgoing_request_config(),
                 ctx.wasi_http.connection_pool.clone(),
-                oplog.clone(),
+                ctx.public_state.worker(),
                 ctx.retry_config(),
                 exec_state.max_in_function_retry_delay,
                 request_state.begin_index,
+                ctx.execution_status.clone(),
             );
             HostFutureIncomingResponse::pending(retry_handle)
         } else {
@@ -648,8 +828,6 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_handle: u32,
 ) -> Result<bool, anyhow::Error> {
-    use crate::durable_host::DurabilityHost;
-    use crate::services::HasOplog;
     use wasmtime::component::Resource;
     use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
     use wasmtime_wasi_http::bindings::http::types::IncomingBody as WasiIncomingBody;
@@ -673,13 +851,12 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         return Ok(false);
     }
 
-    // 3. Calculate bytes already delivered to the guest from the oplog
+    // 3. Count bytes already delivered to the guest from the oplog
     let oplog = ctx.public_state.oplog();
-    let already_consumed = read_incoming_body_chunks(&oplog, request_state.begin_index).await?;
-    let consumed_len = already_consumed.len();
+    let consumed_len = count_incoming_body_bytes(&oplog, request_state.begin_index).await?;
 
-    // 4. Reconstruct the outgoing request body from the oplog
-    let body_bytes = reconstruct_outgoing_body(&oplog, request_state.begin_index).await?;
+    // 4. Reconstruct the outgoing request body chunks from the oplog
+    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
 
     // 5. Build the request, adding a Range header if bytes were already consumed.
     //    If the original request already has a Range header, Zone 2 is not supported
@@ -697,21 +874,17 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     } else {
         vec![]
     };
-    let http_request =
-        reconstruct_http_request_full(&request_state.request, body_bytes, &extra_headers)?;
-
-    // 6. Send the reconstructed request
-    let config = request_state.outgoing_request_config();
-    let connection_pool = ctx.wasi_http.connection_pool.clone();
-    let mut future_resp = default_send_request_with_pool(http_request, config, None, connection_pool);
-
-    use wasmtime_wasi::Pollable;
-    future_resp.ready().await;
-
-    let response = match future_resp.unwrap_ready() {
-        Ok(Ok(resp)) => resp,
-        Ok(Err(_error_code)) => return Ok(false),
-        Err(_trap) => return Ok(false),
+    // 6. Send the reconstructed request (with interrupt-aware retries)
+    let response = match send_with_interrupt_aware_retries(
+        ctx,
+        &request_state,
+        &body_chunks,
+        &extra_headers,
+    )
+    .await?
+    {
+        Some(resp) => resp,
+        None => return Ok(false),
     };
 
     let status = response.resp.status().as_u16();
@@ -731,7 +904,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
             let range_start = content_range.as_deref().and_then(parse_content_range_start);
 
             match range_start {
-                Some(start) if start == consumed_len as u64 => {
+                Some(start) if start == consumed_len => {
                     // Range matches — swap body+stream
                     let (_parts, body) = response.resp.into_parts();
                     let new_body =
@@ -796,7 +969,10 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
             Ok(true)
         }
         200 => {
-            // Full response — need to verify consumed prefix then swap
+            // Full response — skip consumed_len bytes then swap.
+            // We only count bytes (no content verification) because materializing
+            // the previously consumed data would require the same OOM-prone
+            // allocation we are trying to avoid.
             let (_parts, body) = response.resp.into_parts();
             let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
 
@@ -809,22 +985,22 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
             })?;
 
-            // Read and verify consumed_len bytes from the new stream
-            let mut verified = 0usize;
-            while verified < consumed_len {
+            // Skip consumed_len bytes from the new stream (read and discard)
+            let mut skipped = 0u64;
+            while skipped < consumed_len {
                 // Wait for data to be available
                 new_stream.ready().await;
 
-                let remaining = consumed_len - verified;
+                let remaining = (consumed_len - skipped) as usize;
                 let chunk = new_stream.read(remaining).map_err(|e| match e {
                     wasmtime_wasi::StreamError::Closed => anyhow::anyhow!(
                         "HTTP retry failed: response shorter than previously consumed bytes"
                     ),
                     wasmtime_wasi::StreamError::LastOperationFailed(e) => anyhow::anyhow!(
-                        "HTTP retry failed: error reading prefix for verification: {e}"
+                        "HTTP retry failed: error reading prefix for skip: {e}"
                     ),
                     wasmtime_wasi::StreamError::Trap(e) => anyhow::anyhow!(
-                        "HTTP retry failed: trap reading prefix for verification: {e}"
+                        "HTTP retry failed: trap reading prefix for skip: {e}"
                     ),
                 })?;
 
@@ -833,16 +1009,10 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                     continue;
                 }
 
-                let to_check = chunk.len().min(remaining);
-                if chunk[..to_check] != already_consumed[verified..verified + to_check] {
-                    return Err(anyhow::anyhow!(
-                        "HTTP retry failed: response content changed between attempts"
-                    ));
-                }
-                verified += to_check;
+                skipped += chunk.len() as u64;
             }
 
-            // Prefix verified — swap the stream (which now has the remaining body)
+            // Prefix skipped — swap the stream (which now has the remaining body)
             let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
                 .table()
                 .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
@@ -851,7 +1021,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
             tracing::debug!(
                 stream_handle = stream_handle,
                 consumed_len = consumed_len,
-                "Zone 2 inline retry: 200 OK with prefix verification, body+stream swapped"
+                "Zone 2 inline retry: 200 OK with prefix skip, body+stream swapped"
             );
             Ok(true)
         }
@@ -905,33 +1075,6 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_body_prefix_exact_match() {
-        let expected = b"hello world";
-        let actual = b"hello world and more";
-        assert!(verify_body_prefix(expected, actual));
-    }
-
-    #[test]
-    fn test_verify_body_prefix_mismatch() {
-        let expected = b"hello world";
-        let actual = b"hello worlX and more";
-        assert!(!verify_body_prefix(expected, actual));
-    }
-
-    #[test]
-    fn test_verify_body_prefix_too_short() {
-        let expected = b"hello world";
-        let actual = b"hello";
-        assert!(!verify_body_prefix(expected, actual));
-    }
-
-    #[test]
-    fn test_verify_body_prefix_empty() {
-        assert!(verify_body_prefix(b"", b"anything"));
-        assert!(verify_body_prefix(b"", b""));
-    }
-
-    #[test]
     fn test_parse_content_range_start_standard() {
         assert_eq!(
             parse_content_range_start("bytes 1024-2047/4096"),
@@ -957,5 +1100,154 @@ mod tests {
         assert_eq!(parse_content_range_start("invalid"), None);
         assert_eq!(parse_content_range_start("bytes abc-def/ghi"), None);
         assert_eq!(parse_content_range_start(""), None);
+    }
+
+    fn make_exec_state() -> DurableExecutionState {
+        DurableExecutionState {
+            is_live: true,
+            persistence_level: PersistenceLevel::PersistRemoteSideEffects,
+            snapshotting_mode: None,
+            assume_idempotence: true,
+            max_in_function_retry_delay: Duration::from_secs(1),
+        }
+    }
+
+    fn make_request_state() -> HttpRequestState {
+        use crate::durable_host::HttpRequestCloseOwner;
+        use crate::durable_host::HttpRetryEligibility;
+        use golem_common::model::invocation_context::SpanId;
+
+        HttpRequestState {
+            close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
+            begin_index: OplogIndex::INITIAL,
+            request: HostRequestHttpRequest {
+                uri: "http://localhost:8080/".to_string(),
+                method: SerializableHttpMethod::Get,
+                headers: std::collections::HashMap::new(),
+            },
+            span_id: SpanId::generate(),
+            body_handle: None,
+            outgoing_body_rep: None,
+            output_stream_rep: None,
+            use_tls: false,
+            connect_timeout: Duration::from_secs(5),
+            first_byte_timeout: Duration::from_secs(5),
+            between_bytes_timeout: Duration::from_secs(5),
+            retry: HttpRetryEligibility {
+                body_finished: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn test_eligible_baseline() {
+        let exec = make_exec_state();
+        let req = make_request_state();
+        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1).is_ok());
+        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2).is_ok());
+    }
+
+    #[test]
+    fn test_unreconstructable_body_disqualifies() {
+        let exec = make_exec_state();
+        let mut req = make_request_state();
+        req.retry.has_unreconstructable_body = true;
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            Err(InlineRetryIneligible::UnreconstructableBody)
+        );
+    }
+
+    #[test]
+    fn test_output_stream_subscribed_disqualifies() {
+        let exec = make_exec_state();
+        let mut req = make_request_state();
+        req.retry.output_stream_subscribed = true;
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            Err(InlineRetryIneligible::OutputStreamSubscribed)
+        );
+    }
+
+    #[test]
+    fn test_has_outgoing_trailers_disqualifies() {
+        let exec = make_exec_state();
+        let mut req = make_request_state();
+        req.retry.has_outgoing_trailers = true;
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            Err(InlineRetryIneligible::HasOutgoingTrailers)
+        );
+    }
+
+    #[test]
+    fn test_had_body_skip_disqualifies_zone2_only() {
+        let exec = make_exec_state();
+        let mut req = make_request_state();
+        req.retry.had_body_skip = true;
+        // Zone 1 should still be eligible
+        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1).is_ok());
+        // Zone 2 should be disqualified
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2),
+            Err(InlineRetryIneligible::HadBodySkip)
+        );
+    }
+
+    #[test]
+    fn test_body_not_finished_disqualifies_zone1_only() {
+        let exec = make_exec_state();
+        let mut req = make_request_state();
+        req.retry.body_finished = false;
+        // Zone 1 should be disqualified
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            Err(InlineRetryIneligible::BodyNotFinished)
+        );
+        // Zone 2 should still be eligible
+        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2).is_ok());
+    }
+
+    #[test]
+    fn test_non_idempotent_without_assume_idempotence_disqualifies() {
+        let mut exec = make_exec_state();
+        exec.assume_idempotence = false;
+        let mut req = make_request_state();
+        req.request.method = SerializableHttpMethod::Post;
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            Err(InlineRetryIneligible::NotIdempotent)
+        );
+    }
+
+    #[test]
+    fn test_idempotent_method_eligible_without_assume_idempotence() {
+        let mut exec = make_exec_state();
+        exec.assume_idempotence = false;
+        let req = make_request_state(); // GET is idempotent
+        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1).is_ok());
+    }
+
+    #[test]
+    fn test_not_live_disqualifies() {
+        let mut exec = make_exec_state();
+        exec.is_live = false;
+        let req = make_request_state();
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            Err(InlineRetryIneligible::NotLive)
+        );
+    }
+
+    #[test]
+    fn test_persist_nothing_disqualifies() {
+        let mut exec = make_exec_state();
+        exec.persistence_level = PersistenceLevel::PersistNothing;
+        let req = make_request_state();
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            Err(InlineRetryIneligible::PersistNothing)
+        );
     }
 }
