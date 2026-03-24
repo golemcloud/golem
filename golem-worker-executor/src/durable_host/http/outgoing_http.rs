@@ -65,8 +65,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
 
         let host_request = self.table().get(&request)?;
+        let scheme = match host_request.scheme.as_ref().unwrap_or(&Scheme::Https) {
+            Scheme::Http => "http",
+            Scheme::Https | Scheme::Other(_) => "https",
+        };
         let uri = format!(
-            "{}{}",
+            "{}://{}{}",
+            scheme,
             host_request.authority.as_ref().unwrap_or(&String::new()),
             host_request
                 .path_with_query
