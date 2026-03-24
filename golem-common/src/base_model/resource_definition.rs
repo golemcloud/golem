@@ -21,7 +21,7 @@ use derive_more::Display;
 
 newtype_uuid!(
     ResourceDefinitionId,
-    golem_api_grpc::proto::golem::registry::ResourceDefinitionId
+    golem_api_grpc::proto::golem::common::ResourceDefinitionId
 );
 
 declare_revision!(ResourceDefinitionRevision);

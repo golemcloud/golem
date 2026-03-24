@@ -115,12 +115,14 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .await
         {
             Ok(lease) => {
-                let grpc_lease: golem_api_grpc::proto::golem::registry::QuotaLease = lease.into();
+                let grpc_lease: golem_api_grpc::proto::golem::common::QuotaLease = lease.into();
                 Ok(Response::new(
                     golem::shardmanager::v1::AcquireQuotaLeaseResponse {
                         result: Some(
                             golem::shardmanager::v1::acquire_quota_lease_response::Result::Success(
-                                grpc_lease,
+                                golem::shardmanager::v1::AcquireQuotaLeaseSuccessResponse {
+                                    lease: Some(grpc_lease),
+                                },
                             ),
                         ),
                     },
@@ -180,12 +182,14 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .await
         {
             Ok(lease) => {
-                let grpc_lease: golem_api_grpc::proto::golem::registry::QuotaLease = lease.into();
+                let grpc_lease: golem_api_grpc::proto::golem::common::QuotaLease = lease.into();
                 Ok(Response::new(
                     golem::shardmanager::v1::RenewQuotaLeaseResponse {
                         result: Some(
                             golem::shardmanager::v1::renew_quota_lease_response::Result::Success(
-                                grpc_lease,
+                                golem::shardmanager::v1::RenewQuotaLeaseSuccessResponse {
+                                    lease: Some(grpc_lease),
+                                },
                             ),
                         ),
                     },
@@ -248,7 +252,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 golem::shardmanager::v1::ReleaseQuotaLeaseResponse {
                     result: Some(
                         golem::shardmanager::v1::release_quota_lease_response::Result::Success(
-                            golem::shardmanager::v1::ReleaseQuotaLeaseSuccess {},
+                            golem::shardmanager::v1::ReleaseQuotaLeaseSuccessResponse {},
                         ),
                     ),
                 },

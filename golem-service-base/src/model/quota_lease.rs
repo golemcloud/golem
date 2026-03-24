@@ -44,7 +44,7 @@ impl fmt::Display for LeaseEpoch {
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuotaAllocation {
     /// A fixed budget of units the executor may consume before
-    /// requesting a new lease.
+    /// renewing the lease or requesting a new.
     Budget { amount: u64 },
     /// No capacity is currently available. The executor should
     /// wait for the suggested duration before requesting a new lease.
@@ -63,8 +63,6 @@ impl QuotaAllocation {
 }
 
 /// A lease granted by the shard manager to a worker executor.
-///
-/// This is the executor-facing type, deserialized from gRPC responses.
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuotaLease {
     /// The resource definition exists and the executor has a tracked lease.
@@ -85,7 +83,7 @@ pub enum QuotaLease {
 
 mod protobuf {
     use super::*;
-    use golem_api_grpc::proto::golem::registry::{
+    use golem_api_grpc::proto::golem::common::{
         QuotaAllocation as GrpcQuotaAllocation, QuotaLease as GrpcQuotaLease, quota_allocation,
         quota_lease,
     };
@@ -123,7 +121,7 @@ mod protobuf {
                         .ok_or("BoundedQuotaLease.resource_limit missing")?
                         .try_into()?;
                     let enforcement_action =
-                        golem_api_grpc::proto::golem::registry::EnforcementAction::try_from(
+                        golem_api_grpc::proto::golem::common::EnforcementAction::try_from(
                             b.enforcement_action,
                         )
                         .map_err(|_| "Unknown enforcement_action value")?

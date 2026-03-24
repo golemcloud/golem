@@ -36,11 +36,9 @@ pub enum QuotaLease {
     },
 }
 
-impl From<QuotaLease> for golem_api_grpc::proto::golem::registry::QuotaLease {
+impl From<QuotaLease> for golem_api_grpc::proto::golem::common::QuotaLease {
     fn from(value: QuotaLease) -> Self {
-        use golem_api_grpc::proto::golem::registry::{
-            quota_allocation, quota_lease, BoundedQuotaLease, UnlimitedQuotaLease,
-        };
+        use golem_api_grpc::proto::golem::common::{quota_allocation, quota_lease};
 
         match value {
             QuotaLease::Bounded {
@@ -54,14 +52,14 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::registry::QuotaLease {
             } => {
                 let grpc_allocation = match allocation {
                     QuotaAllocation::Budget { amount } => {
-                        golem_api_grpc::proto::golem::registry::QuotaAllocation {
+                        golem_api_grpc::proto::golem::common::QuotaAllocation {
                             kind: Some(quota_allocation::Kind::Budget(quota_allocation::Budget {
                                 amount,
                             })),
                         }
                     }
                     QuotaAllocation::Exhausted { retry_after } => {
-                        golem_api_grpc::proto::golem::registry::QuotaAllocation {
+                        golem_api_grpc::proto::golem::common::QuotaAllocation {
                             kind: Some(quota_allocation::Kind::Exhausted(
                                 quota_allocation::Exhausted {
                                     retry_after_nanos: retry_after.as_nanos() as u64,
@@ -71,7 +69,7 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::registry::QuotaLease {
                     }
                 };
                 Self {
-                    kind: Some(quota_lease::Kind::Bounded(BoundedQuotaLease {
+                    kind: Some(quota_lease::Kind::Bounded(quota_lease::Bounded {
                         resource_definition_id: Some(resource_definition_id.into()),
                         pod: Some(pod.into()),
                         epoch: epoch.0,
@@ -79,7 +77,7 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::registry::QuotaLease {
                         expires_after_nanos: expires_after.as_nanos() as u64,
                         resource_limit: Some(resource_limit.into()),
                         enforcement_action:
-                            golem_api_grpc::proto::golem::registry::EnforcementAction::from(
+                            golem_api_grpc::proto::golem::common::EnforcementAction::from(
                                 enforcement_action,
                             )
                             .into(),
@@ -87,7 +85,7 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::registry::QuotaLease {
                 }
             }
             QuotaLease::Unlimited { pod, expires_after } => Self {
-                kind: Some(quota_lease::Kind::Unlimited(UnlimitedQuotaLease {
+                kind: Some(quota_lease::Kind::Unlimited(quota_lease::Unlimited {
                     pod: Some(pod.into()),
                     expires_after_nanos: expires_after.as_nanos() as u64,
                 })),
