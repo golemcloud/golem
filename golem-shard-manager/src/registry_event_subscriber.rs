@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::quota::QuotaService;
+use crate::quota::{QuotaService, ResourceDefinitionFetcher};
 use golem_common::model::agent::RegistryInvalidationEvent;
 use golem_service_base::clients::registry::RegistryService;
 use std::sync::Arc;
@@ -22,14 +22,16 @@ use tracing::{debug, info, warn};
 
 pub fn start(
     registry_service: Arc<dyn RegistryService>,
+    fetcher: Arc<dyn ResourceDefinitionFetcher>,
     quota_service: Arc<QuotaService>,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) {
-    join_set.spawn(run_loop(registry_service, quota_service));
+    join_set.spawn(run_loop(registry_service, fetcher, quota_service));
 }
 
 async fn run_loop(
     registry_service: Arc<dyn RegistryService>,
+    fetcher: Arc<dyn ResourceDefinitionFetcher>,
     quota_service: Arc<QuotaService>,
 ) -> anyhow::Result<()> {
     use futures::StreamExt;
@@ -52,7 +54,7 @@ async fn run_loop(
                     match stream.next().await {
                         Some(Ok(event)) => {
                             last_seen_event_id = Some(event.event_id());
-                            dispatch_event(&quota_service, &event).await;
+                            dispatch_event(&fetcher, &quota_service, &event).await;
                         }
                         Some(Err(e)) => {
                             warn!("Error receiving registry event: {e}, reconnecting");
@@ -75,10 +77,15 @@ async fn run_loop(
     }
 }
 
-async fn dispatch_event(quota_service: &QuotaService, event: &RegistryInvalidationEvent) {
+async fn dispatch_event(
+    fetcher: &Arc<dyn ResourceDefinitionFetcher>,
+    quota_service: &QuotaService,
+    event: &RegistryInvalidationEvent,
+) {
     match event {
         RegistryInvalidationEvent::CursorExpired { .. } => {
             warn!("Registry invalidation cursor expired, refreshing all entries");
+            fetcher.invalidate_all().await;
             quota_service.on_cursor_expired().await;
         }
         RegistryInvalidationEvent::ResourceDefinitionChanged {
@@ -93,12 +100,11 @@ async fn dispatch_event(quota_service: &QuotaService, event: &RegistryInvalidati
                 %resource_name,
                 "resource definition changed, refreshing cached entry"
             );
+            fetcher
+                .invalidate(*environment_id, resource_name.clone())
+                .await;
             quota_service
-                .on_resource_definition_changed(
-                    *environment_id,
-                    *resource_definition_id,
-                    resource_name.clone(),
-                )
+                .on_resource_definition_changed(*resource_definition_id)
                 .await;
         }
         RegistryInvalidationEvent::DeploymentChanged { .. }

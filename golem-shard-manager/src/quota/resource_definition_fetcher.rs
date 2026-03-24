@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::error::SharedError;
 use golem_common::model::resource_definition::{
@@ -22,7 +23,6 @@ use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use std::sync::Arc;
 
-/// Clone is required because this is used as the error type in `golem_common::cache::Cache`.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum FetchError {
     #[error("Resource definition not found")]
@@ -57,42 +57,88 @@ impl From<RegistryServiceError> for FetchError {
 
 #[async_trait]
 pub trait ResourceDefinitionFetcher: Send + Sync {
-    async fn get_by_id(&self, id: ResourceDefinitionId) -> Result<ResourceDefinition, FetchError>;
+    /// Always fetches from the source. Never cached.
+    async fn fetch_by_id(&self, id: ResourceDefinitionId)
+        -> Result<ResourceDefinition, FetchError>;
 
-    async fn get_by_name(
+    /// Resolves a name to a definition. May return a cached result.
+    async fn resolve_by_name(
         &self,
         environment_id: EnvironmentId,
         name: ResourceName,
     ) -> Result<ResourceDefinition, FetchError>;
+
+    /// Invalidates any cached entry for this (environment_id, name).
+    async fn invalidate(&self, environment_id: EnvironmentId, name: ResourceName);
+
+    /// Invalidates all cached entries.
+    async fn invalidate_all(&self);
 }
+
+type DefinitionCache = Cache<(EnvironmentId, ResourceName), (), ResourceDefinition, FetchError>;
 
 pub struct GrpcResourceDefinitionFetcher {
     registry_service: Arc<dyn RegistryService>,
+    cache: DefinitionCache,
 }
 
 impl GrpcResourceDefinitionFetcher {
-    pub fn new(registry_service: Arc<dyn RegistryService>) -> Self {
-        Self { registry_service }
+    pub fn new(
+        registry_service: Arc<dyn RegistryService>,
+        config: &crate::shard_manager_config::ResourceDefinitionFetcherConfig,
+    ) -> Self {
+        let cache = Cache::new(
+            Some(config.cache_max_capacity),
+            FullCacheEvictionMode::LeastRecentlyUsed(1),
+            BackgroundEvictionMode::OlderThan {
+                ttl: config.cache_ttl,
+                period: config.cache_eviction_period,
+            },
+            "quota_resource_definitions",
+        );
+        Self {
+            registry_service,
+            cache,
+        }
     }
 }
 
 #[async_trait]
 impl ResourceDefinitionFetcher for GrpcResourceDefinitionFetcher {
-    async fn get_by_id(&self, id: ResourceDefinitionId) -> Result<ResourceDefinition, FetchError> {
+    async fn fetch_by_id(
+        &self,
+        id: ResourceDefinitionId,
+    ) -> Result<ResourceDefinition, FetchError> {
         self.registry_service
             .get_resource_definition_by_id(id)
             .await
             .map_err(FetchError::from)
     }
 
-    async fn get_by_name(
+    async fn resolve_by_name(
         &self,
         environment_id: EnvironmentId,
         name: ResourceName,
     ) -> Result<ResourceDefinition, FetchError> {
-        self.registry_service
-            .get_resource_definition_by_name(environment_id, name)
+        let key = (environment_id, name.clone());
+        let registry_service = self.registry_service.clone();
+        self.cache
+            .get_or_insert_simple(&key, async || {
+                registry_service
+                    .get_resource_definition_by_name(environment_id, name)
+                    .await
+                    .map_err(FetchError::from)
+            })
             .await
-            .map_err(FetchError::from)
+    }
+
+    async fn invalidate(&self, environment_id: EnvironmentId, name: ResourceName) {
+        self.cache.remove(&(environment_id, name)).await;
+    }
+
+    async fn invalidate_all(&self) {
+        for key in self.cache.keys().await {
+            self.cache.remove(&key).await;
+        }
     }
 }

@@ -65,14 +65,40 @@ impl Pod {
         format!("{}:{}", self.ip, self.port).to_socket_addrs()
     }
 
+    pub fn from_grpc_pod(
+        source_ip: IpAddr,
+        grpc_pod: golem::shardmanager::Pod,
+    ) -> Result<Self, ShardManagerError> {
+        Self::from_parts(
+            source_ip,
+            grpc_pod.host,
+            grpc_pod.port as u16,
+            grpc_pod.pod_name,
+        )
+    }
+
     pub fn from_register_request(
         source_ip: IpAddr,
         request: golem::shardmanager::v1::RegisterRequest,
     ) -> Result<Self, ShardManagerError> {
+        Self::from_parts(
+            source_ip,
+            request.host,
+            request.port as u16,
+            request.pod_name,
+        )
+    }
+
+    fn from_parts(
+        source_ip: IpAddr,
+        host: String,
+        port: u16,
+        pod_name: Option<String>,
+    ) -> Result<Self, ShardManagerError> {
         let pod = Pod {
-            host: request.host,
-            port: request.port as u16,
-            pod_name: request.pod_name,
+            host,
+            port,
+            pod_name,
             ip: source_ip,
         };
 

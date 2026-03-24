@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package golem.shardmanager.v1;
 
+import public "golem/common/environment.proto";
+import public "golem/registry/quota.proto";
 import public "golem/shardmanager/pod.proto";
 import public "golem/shardmanager/routing_table.proto";
 import public "golem/shardmanager/shard_id.proto";
@@ -10,6 +12,12 @@ import public "golem/shardmanager/v1/shard_manager_error.proto";
 service ShardManagerService {
   rpc GetRoutingTable(GetRoutingTableRequest) returns (GetRoutingTableResponse);
   rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Quota lease management.
+  // Executors call these RPCs to acquire, renew, and release quota leases.
+  rpc AcquireQuotaLease(AcquireQuotaLeaseRequest) returns (AcquireQuotaLeaseResponse);
+  rpc RenewQuotaLease(RenewQuotaLeaseRequest) returns (RenewQuotaLeaseResponse);
+  rpc ReleaseQuotaLease(ReleaseQuotaLeaseRequest) returns (ReleaseQuotaLeaseResponse);
 }
 
 message GetRoutingTableRequest {}
@@ -37,3 +45,61 @@ message RegisterResponse {
 message RegisterSuccess {
   uint32 number_of_shards = 1;
 }
+
+// --- Quota lease management ---
+
+// Declares interest in a quota and requests an initial lease.
+// The resource is identified by (environment_id, name) since the
+// executor does not know the resource_definition_id yet.
+message AcquireQuotaLeaseRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string resource_name = 2;
+  golem.shardmanager.Pod pod = 3;
+}
+
+message AcquireQuotaLeaseResponse {
+  oneof result {
+    golem.registry.QuotaLease success = 1;
+    golem.shardmanager.v1.ShardManagerError failure = 2;
+  }
+}
+
+// Renews an existing lease before it expires.
+// The executor reports how much of its previous allocation was unused
+// so the shard manager can reclaim and reallocate.
+message RenewQuotaLeaseRequest {
+  golem.registry.ResourceDefinitionId resource_definition_id = 1;
+  golem.shardmanager.Pod pod = 2;
+  // Epoch of the lease being renewed. Used for fencing — the shard
+  // manager rejects renewals for stale epochs.
+  uint64 epoch = 3;
+  // Units from the previous allocation that were not consumed.
+  // Ignored for Unlimited and Exhausted allocations.
+  uint64 unused = 4;
+}
+
+message RenewQuotaLeaseResponse {
+  oneof result {
+    golem.registry.QuotaLease success = 1;
+    golem.shardmanager.v1.ShardManagerError failure = 2;
+  }
+}
+
+// Releases a lease, returning any unused allocation.
+// Called when the executor loses interest in a quota (no more
+// agents using this resource on this executor).
+message ReleaseQuotaLeaseRequest {
+  golem.registry.ResourceDefinitionId resource_definition_id = 1;
+  golem.shardmanager.Pod pod = 2;
+  uint64 epoch = 3;
+  uint64 unused = 4;
+}
+
+message ReleaseQuotaLeaseResponse {
+  oneof result {
+    ReleaseQuotaLeaseSuccess success = 1;
+    golem.shardmanager.v1.ShardManagerError failure = 2;
+  }
+}
+
+message ReleaseQuotaLeaseSuccess {}

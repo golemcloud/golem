@@ -6,6 +6,7 @@ import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
 import "golem/common/environment.proto";
+import "golem/shardmanager/pod.proto";
 import "wasm/rpc/type.proto";
 import "wasm/rpc/val.proto";
 
@@ -40,6 +41,8 @@ message ResourceLimit {
   message Rate {
     uint64 value = 1;
     TimePeriod period = 2;
+    // Maximum burst capacity. Defaults to `value` if 0 or unset.
+    uint64 max = 3;
   }
 
   message Capacity {
@@ -62,4 +65,41 @@ message ResourceDefinition {
 
   string unit = 7;
   string units = 8;
+}
+
+message QuotaAllocation {
+  oneof kind {
+    Budget budget = 1;
+    Exhausted exhausted = 2;
+  }
+
+  message Budget {
+    uint64 amount = 1;
+  }
+
+  message Exhausted {
+    uint64 retry_after_nanos = 1;
+  }
+}
+
+message QuotaLease {
+  oneof kind {
+    BoundedQuotaLease bounded = 1;
+    UnlimitedQuotaLease unlimited = 2;
+  }
+}
+
+message BoundedQuotaLease {
+  ResourceDefinitionId resource_definition_id = 1;
+  golem.shardmanager.Pod pod = 2;
+  uint64 epoch = 3;
+  QuotaAllocation allocation = 4;
+  uint64 expires_after_nanos = 5;
+  ResourceLimit resource_limit = 6;
+  EnforcementAction enforcement_action = 7;
+}
+
+message UnlimitedQuotaLease {
+  golem.shardmanager.Pod pod = 1;
+  uint64 expires_after_nanos = 2;
 }

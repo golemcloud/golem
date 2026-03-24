@@ -77,6 +77,7 @@ mod protobuf {
                             inner.period,
                         )
                         .into(),
+                        max: inner.max,
                     })),
                 },
                 ResourceLimit::Capacity(inner) => Self {
@@ -101,9 +102,15 @@ mod protobuf {
 
             match value.kind.ok_or("ResourceLimit.kind missing")? {
                 grpc_resource_limit::Kind::Rate(inner) => {
+                    let max = if inner.max > 0 {
+                        inner.max
+                    } else {
+                        inner.value
+                    };
                     Ok(ResourceLimit::Rate(ResourceRateLimit {
                         value: inner.value,
                         period: inner.period().try_into()?,
+                        max,
                     }))
                 }
                 grpc_resource_limit::Kind::Capacity(inner) => {

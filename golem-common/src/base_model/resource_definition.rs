@@ -76,7 +76,9 @@ declare_structs! {
 
     pub struct ResourceRateLimit {
         pub value: u64,
-        pub period: TimePeriod
+        pub period: TimePeriod,
+        /// Maximum burst capacity. Defaults to `value` if not specified.
+        pub max: u64
     }
 
     pub struct ResourceCapacityLimit {
