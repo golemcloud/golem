@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
+use tracing::warn;
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
@@ -607,7 +608,19 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
 
         let handle = rep.rep();
         // Remove tracking if still present (guest dropped without calling get()).
-        self.state.open_http_requests.remove(&handle);
+        // Note: we cannot call async end_http_request here because the trait
+        // requires a sync drop. The durable function boundary and span will be
+        // cleaned up when the worker is suspended/interrupted. Log so the leak
+        // is observable.
+        if let Some(state) = self.state.open_http_requests.remove(&handle) {
+            if state.close_owner == HttpRequestCloseOwner::FutureTrailersDrop {
+                warn!(
+                    "FutureTrailers dropped without get() — HTTP request tracking for handle {} \
+                     removed but durable function boundary not closed",
+                    handle
+                );
+            }
+        }
 
         HostFutureTrailers::drop(&mut self.as_wasi_http_view(), rep)
     }
@@ -664,13 +677,19 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         let body_rep = self_.rep();
         let result = HostOutgoingBody::write(&mut self.as_wasi_http_view(), self_);
         if let Ok(Ok(ref stream)) = result {
+            let stream_rep = stream.rep();
             // Associate the output stream with the HttpRequestState that owns this body
             if let Some(request_handle) = self.state.find_request_handle_by_outgoing_body(body_rep)
             {
-                let stream_rep = stream.rep();
                 if let Some(state) = self.state.open_http_requests.get_mut(&request_handle) {
                     state.output_stream_rep = Some(stream_rep);
                 }
+            } else {
+                // handle() hasn't been called yet — store the pending mapping so
+                // handle() can populate output_stream_rep when it creates the state.
+                self.state
+                    .pending_http_outgoing_body_stream
+                    .insert(body_rep, stream_rep);
             }
         }
         result
@@ -702,6 +721,8 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         {
             state.outgoing_body_rep = None;
         }
+        // Clean up pending mapping if handle() was never called
+        self.state.pending_http_outgoing_body_stream.remove(&body_rep);
         HostOutgoingBody::drop(&mut self.as_wasi_http_view(), rep)
     }
 }
@@ -743,6 +764,15 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
             let request = request_state.request.clone();
             let begin_index = request_state.begin_index;
+
+            // When body writes were replayed from oplog (not written to the live
+            // body pipe), the request that handle() sent has an empty body. We must
+            // reconstruct the full request from oplog and swap the future before
+            // trying to get the response.
+            if request_state.retry.replayed_body_writes && request_state.retry.body_finished {
+                let request_state_clone = request_state.clone();
+                self.rebuild_request_after_replay(handle, &request_state_clone).await?;
+            }
 
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
@@ -889,6 +919,93 @@ impl SerializableScheduleId {
 
     pub fn as_domain(&self) -> Result<ScheduleId, String> {
         golem_common::serialization::deserialize(&self.data)
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Rebuilds an HTTP request from oplog when body writes were replayed
+    /// (not written to the live body pipe). This happens after a worker restart
+    /// when the oplog contains successful body write entries that were replayed
+    /// but not actually sent to the server.
+    async fn rebuild_request_after_replay(
+        &mut self,
+        handle: u32,
+        request_state: &crate::durable_host::HttpRequestState,
+    ) -> wasmtime::Result<()> {
+        use crate::durable_host::http::inline_retry::{
+            body_chunks_to_hyper_body, reconstruct_http_request,
+            reconstruct_outgoing_body_chunks, send_reconstructed_request,
+            spawn_http_request_with_retry,
+        };
+        use crate::services::HasOplog;
+
+        tracing::debug!(
+            handle = handle,
+            "Rebuilding HTTP request from oplog after replayed body writes"
+        );
+
+        let oplog = self.public_state.oplog();
+        let body_chunks =
+            reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index)
+                .await
+                .map_err(|e| {
+                    wasmtime::Error::msg(format!(
+                        "Failed to reconstruct body from oplog: {e}"
+                    ))
+                })?;
+
+        let hyper_body = body_chunks_to_hyper_body(body_chunks);
+        let http_request =
+            reconstruct_http_request(&request_state.request, hyper_body, &[])
+                .map_err(|e| {
+                    wasmtime::Error::msg(format!(
+                        "Failed to reconstruct HTTP request: {e}"
+                    ))
+                })?;
+
+        let config = request_state.outgoing_request_config();
+        let connection_pool = self.wasi_http.connection_pool.clone();
+        let new_future =
+            send_reconstructed_request(http_request, config, connection_pool.clone());
+
+        // Wrap with background retry if the original had it
+        let exec_state = self.durable_execution_state();
+        let final_future = if request_state.retry.has_background_retry {
+            if let wasmtime_wasi_http::types::HostFutureIncomingResponse::Pending(
+                pending_handle,
+            ) = new_future
+            {
+                let retry_handle = spawn_http_request_with_retry(
+                    pending_handle,
+                    request_state.request.clone(),
+                    request_state.outgoing_request_config(),
+                    connection_pool,
+                    self.public_state.worker(),
+                    self.retry_config(),
+                    exec_state.max_in_function_retry_delay,
+                    request_state.begin_index,
+                    self.execution_status.clone(),
+                );
+                wasmtime_wasi_http::types::HostFutureIncomingResponse::pending(retry_handle)
+            } else {
+                new_future
+            }
+        } else {
+            new_future
+        };
+
+        // Swap the FutureIncomingResponse in the resource table
+        let future_res: &mut wasmtime_wasi_http::types::HostFutureIncomingResponse = self
+            .table()
+            .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
+        *future_res = final_future;
+
+        // Clear the replayed flag so we don't rebuild again
+        if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
+            state.retry.replayed_body_writes = false;
+        }
+
+        Ok(())
     }
 }
 

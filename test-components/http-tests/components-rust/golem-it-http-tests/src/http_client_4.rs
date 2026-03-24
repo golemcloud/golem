@@ -183,6 +183,18 @@ fn do_post_large_body() -> String {
     let request_body = request.body().unwrap();
     let request_body_stream = request_body.write().unwrap();
 
+    let options = wasi::http::types::RequestOptions::new();
+    options.set_connect_timeout(Some(5_000_000_000)).unwrap();
+    options.set_first_byte_timeout(Some(5_000_000_000)).unwrap();
+    options
+        .set_between_bytes_timeout(Some(5_000_000_000))
+        .unwrap();
+
+    // Call handle() BEFORE writing body data so that hyper starts consuming
+    // the body pipe. This prevents deadlock from the pipe channel filling up.
+    let future_incoming_response =
+        wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
+
     // Write a large body in multiple chunks to force actual network I/O.
     // Each chunk is 64KB, total 256KB — large enough to overflow buffers
     // and force hyper to write to the TCP connection mid-stream.
@@ -192,16 +204,6 @@ fn do_post_large_body() -> String {
     }
     drop(request_body_stream);
     wasi::http::types::OutgoingBody::finish(request_body, None).unwrap();
-
-    let options = wasi::http::types::RequestOptions::new();
-    options.set_connect_timeout(Some(5_000_000_000)).unwrap();
-    options.set_first_byte_timeout(Some(5_000_000_000)).unwrap();
-    options
-        .set_between_bytes_timeout(Some(5_000_000_000))
-        .unwrap();
-
-    let future_incoming_response =
-        wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
 
     let incoming_response = get_incoming_response(&future_incoming_response);
     let body = read_body(&incoming_response);
@@ -284,6 +286,20 @@ fn do_post_with_write_zeroes() -> String {
     let request_body = request.body().unwrap();
     let request_body_stream = request_body.write().unwrap();
 
+    let options = wasi::http::types::RequestOptions::new();
+    options.set_connect_timeout(Some(5_000_000_000)).unwrap();
+    options.set_first_byte_timeout(Some(5_000_000_000)).unwrap();
+    options
+        .set_between_bytes_timeout(Some(5_000_000_000))
+        .unwrap();
+
+    // Call handle() BEFORE writing body data so that hyper starts consuming
+    // the body pipe. This prevents deadlock from the pipe channel filling up,
+    // and ensures the output stream is associated with an HttpRequestState
+    // for durable oplog persistence.
+    let future_incoming_response =
+        wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
+
     request_body_stream
         .blocking_write_and_flush(b"HEAD")
         .unwrap();
@@ -296,16 +312,6 @@ fn do_post_with_write_zeroes() -> String {
 
     drop(request_body_stream);
     wasi::http::types::OutgoingBody::finish(request_body, None).unwrap();
-
-    let options = wasi::http::types::RequestOptions::new();
-    options.set_connect_timeout(Some(5_000_000_000)).unwrap();
-    options.set_first_byte_timeout(Some(5_000_000_000)).unwrap();
-    options
-        .set_between_bytes_timeout(Some(5_000_000_000))
-        .unwrap();
-
-    let future_incoming_response =
-        wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
 
     let incoming_response = get_incoming_response(&future_incoming_response);
     let body = read_body(&incoming_response);
@@ -339,13 +345,6 @@ fn do_post_with_subscribe() -> String {
     let pollable = request_body_stream.subscribe();
     drop(pollable);
 
-    let chunk = vec![0xABu8; 64 * 1024];
-    for _ in 0..4 {
-        request_body_stream.blocking_write_and_flush(&chunk).unwrap();
-    }
-    drop(request_body_stream);
-    wasi::http::types::OutgoingBody::finish(request_body, None).unwrap();
-
     let options = wasi::http::types::RequestOptions::new();
     options.set_connect_timeout(Some(5_000_000_000)).unwrap();
     options.set_first_byte_timeout(Some(5_000_000_000)).unwrap();
@@ -353,8 +352,17 @@ fn do_post_with_subscribe() -> String {
         .set_between_bytes_timeout(Some(5_000_000_000))
         .unwrap();
 
+    // Call handle() BEFORE writing body data so that hyper starts consuming
+    // the body pipe. This prevents deadlock from the pipe channel filling up.
     let future_incoming_response =
         wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
+
+    let chunk = vec![0xABu8; 64 * 1024];
+    for _ in 0..4 {
+        request_body_stream.blocking_write_and_flush(&chunk).unwrap();
+    }
+    drop(request_body_stream);
+    wasi::http::types::OutgoingBody::finish(request_body, None).unwrap();
 
     let incoming_response = get_incoming_response(&future_incoming_response);
     let body = read_body(&incoming_response);

@@ -181,14 +181,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .pending_http_outgoing_request_body
                     .remove(&request_rep);
 
+                // Resolve any pending body → stream mapping from outgoing_body::write()
+                // that was called before handle().
+                let output_stream_rep = outgoing_body_rep.and_then(|body_rep| {
+                    self.state
+                        .pending_http_outgoing_body_stream
+                        .remove(&body_rep)
+                });
+
                 // Determine whether to enable in-task background retry for this request.
                 // Eligible when: live mode, not snapshotting, not in an atomic region,
-                // persistence level allows oplog reconstruction.
+                // persistence level allows oplog reconstruction, AND the body is not
+                // still being streamed. If the body has an output stream, the body
+                // is not yet finished and background retry would reconstruct an
+                // incomplete body from the oplog. In that case, output stream inline
+                // retry (try_output_stream_inline_retry) handles failures instead.
                 let durable_state = self.durable_execution_state();
+                let has_pending_body_stream = outgoing_body_rep.is_some();
                 let enable_background_retry = durable_state.is_live
                     && durable_state.snapshotting_mode.is_none()
                     && durable_state.persistence_level != PersistenceLevel::PersistNothing
-                    && !self.in_atomic_region();
+                    && !self.in_atomic_region()
+                    && !has_pending_body_stream;
 
                 if enable_background_retry {
                     // Replace the Pending handle in the resource table with a
@@ -229,7 +243,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         span_id: span.span_id().clone(),
                         body_handle: None,
                         outgoing_body_rep,
-                        output_stream_rep: None,
+                        output_stream_rep,
                         use_tls,
                         connect_timeout,
                         first_byte_timeout,

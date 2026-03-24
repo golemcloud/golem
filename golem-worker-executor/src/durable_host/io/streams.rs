@@ -397,7 +397,9 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     )
                     .await
             } else {
-                durability.replay(self).await
+                let replayed = durability.replay(self).await;
+                mark_replayed_body_write(self, rep);
+                replayed
             }
             .map_err(StreamError::from)?;
 
@@ -442,12 +444,84 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         contents: Vec<u8>,
     ) -> Result<(), StreamError> {
-        // This is already composed from write + blocking_flush, both of which
-        // are individually made durable, so no additional oplog entry needed.
-        let self2 = Resource::new_borrow(self_.rep());
-        HostOutputStream::write(self, self_, contents).await?;
-        self.blocking_flush(self2).await?;
-        Ok(())
+        let rep = self_.rep();
+        if is_outgoing_http_body_stream(self, rep) {
+            // For HTTP body streams, we must NOT decompose into separate write +
+            // blocking_flush because the underlying pipe channel has limited capacity.
+            // A non-blocking write can fill the channel, and then blocking_flush blocks
+            // forever waiting for capacity that never frees up (because the consumer may
+            // not have started yet — e.g. handle() hasn't been called).
+            //
+            // Instead, call the underlying blocking_write_and_flush which properly
+            // handles backpressure via write_ready() loops, and persist a single
+            // combined oplog entry.
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamWrite>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let first_try =
+                    HostOutputStream::blocking_write_and_flush(self.table(), self_, contents.clone())
+                        .await;
+
+                // For HTTP body streams, Closed is also retryable (hyper consumer
+                // died due to connection reset).
+                let write_result = if is_http_retryable_stream_error(&first_try) {
+                    match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
+                        self, rep,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            let self2 = Resource::<OutputStream>::new_borrow(rep);
+                            HostOutputStream::blocking_write_and_flush(
+                                self.table(),
+                                self2,
+                                contents.clone(),
+                            )
+                            .await
+                        }
+                        Ok(false) => first_try,
+                        Err(e) => {
+                            tracing::warn!("Output stream inline retry failed: {e}");
+                            first_try
+                        }
+                    }
+                } else {
+                    first_try
+                };
+
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamWriteWithBytes {
+                            result: write_result
+                                .map(|()| contents)
+                                .map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                let replayed = durability.replay(self).await;
+                mark_replayed_body_write(self, rep);
+                replayed
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map(|_bytes| ()).map_err(StreamError::from)
+        } else {
+            // This is already composed from write + blocking_flush, both of which
+            // are individually made durable, so no additional oplog entry needed.
+            let self2 = Resource::new_borrow(self_.rep());
+            self.write(self_, contents).await?;
+            self.blocking_flush(self2).await?;
+            Ok(())
+        }
     }
 
     async fn flush(&mut self, self_: Resource<OutputStream>) -> Result<(), StreamError> {
@@ -614,7 +688,9 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     )
                     .await
             } else {
-                durability.replay(self).await
+                let replayed = durability.replay(self).await;
+                mark_replayed_body_write(self, rep);
+                replayed
             }
             .map_err(StreamError::from)?;
 
@@ -655,12 +731,79 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         self_: Resource<OutputStream>,
         len: u64,
     ) -> Result<(), StreamError> {
-        // Composed from write_zeroes + blocking_flush, both of which handle
-        // quota enforcement individually — mirrors blocking_write_and_flush.
-        let self2 = Resource::new_borrow(self_.rep());
-        self.write_zeroes(self_, len).await?;
-        self.blocking_flush(self2).await?;
-        Ok(())
+        let rep = self_.rep();
+        if is_outgoing_http_body_stream(self, rep) {
+            // For HTTP body streams, we must NOT decompose into separate write_zeroes +
+            // blocking_flush because the underlying pipe channel has limited capacity.
+            // Instead, call the underlying blocking_write_zeroes_and_flush which properly
+            // handles backpressure, and persist a single combined oplog entry.
+            let state = get_http_output_stream_state(self, rep)?;
+            let durability = Durability::<HttpTypesOutgoingBodyStreamWriteZeroes>::new(
+                self,
+                DurableFunctionType::WriteRemoteBatched(Some(state.begin_index)),
+            )
+            .await
+            .map_err(StreamError::from)?;
+
+            let result = if durability.is_live() {
+                let first_try =
+                    HostOutputStream::blocking_write_zeroes_and_flush(self.table(), self_, len)
+                        .await;
+
+                // For HTTP body streams, Closed is also retryable (hyper consumer
+                // died due to connection reset).
+                let write_result = if is_http_retryable_stream_error(&first_try) {
+                    match crate::durable_host::http::inline_retry::try_output_stream_inline_retry(
+                        self, rep,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            let self2 = Resource::<OutputStream>::new_borrow(rep);
+                            HostOutputStream::blocking_write_zeroes_and_flush(
+                                self.table(),
+                                self2,
+                                len,
+                            )
+                            .await
+                        }
+                        Ok(false) => first_try,
+                        Err(e) => {
+                            tracing::warn!("Output stream inline retry failed: {e}");
+                            first_try
+                        }
+                    }
+                } else {
+                    first_try
+                };
+
+                durability
+                    .persist(
+                        self,
+                        state.request,
+                        HostResponseStreamWriteZeroes {
+                            result: write_result
+                                .map(|()| len)
+                                .map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
+            } else {
+                let replayed = durability.replay(self).await;
+                mark_replayed_body_write(self, rep);
+                replayed
+            }
+            .map_err(StreamError::from)?;
+
+            result.result.map(|_| ()).map_err(StreamError::from)
+        } else {
+            // Composed from write_zeroes + blocking_flush, both of which handle
+            // quota enforcement individually — mirrors blocking_write_and_flush.
+            let self2 = Resource::new_borrow(self_.rep());
+            self.write_zeroes(self_, len).await?;
+            self.blocking_flush(self2).await?;
+            Ok(())
+        }
     }
 
     async fn splice(
@@ -809,9 +952,16 @@ fn is_outgoing_http_body_stream<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     stream_rep: u32,
 ) -> bool {
+    // Check open requests (post-handle streams)
+    if ctx.state.find_request_handle_by_output_stream(stream_rep).is_some() {
+        return true;
+    }
+
+    // Check pending body→stream mappings (pre-handle streams, before handle() is called)
     ctx.state
-        .find_request_handle_by_output_stream(stream_rep)
-        .is_some()
+        .pending_http_outgoing_body_stream
+        .values()
+        .any(|&rep| rep == stream_rep)
 }
 
 fn get_http_output_stream_state<Ctx: WorkerCtx>(
@@ -916,8 +1066,28 @@ fn ignore_closed_error<T>(result: &Result<T, StreamError>) -> Result<(), &Stream
     }
 }
 
+fn mark_replayed_body_write<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    stream_rep: u32,
+) {
+    if let Some(request_handle) = ctx.state.find_request_handle_by_output_stream(stream_rep) {
+        if let Some(state) = ctx.state.open_http_requests.get_mut(&request_handle) {
+            state.retry.replayed_body_writes = true;
+        }
+    }
+}
+
 fn is_transient_stream_error<T>(result: &Result<T, StreamError>) -> bool {
     matches!(result, Err(err) if !matches!(err, StreamError::Closed))
+}
+
+/// For HTTP body streams, StreamError::Closed is also retryable because it
+/// occurs when the hyper consumer dies due to a TCP connection reset — a
+/// transient condition that inline retry can recover from. However,
+/// StreamError::Trap wraps host-level errors that may be permanent, so
+/// those are excluded.
+fn is_http_retryable_stream_error<T>(result: &Result<T, StreamError>) -> bool {
+    matches!(result, Err(e) if !matches!(e, StreamError::Trap(_)))
 }
 
 async fn reserve_filesystem_stream_growth<Ctx: WorkerCtx>(

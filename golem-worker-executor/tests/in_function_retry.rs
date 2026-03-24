@@ -1285,6 +1285,41 @@ async fn start_partial_response_http_server(
     (port, counter)
 }
 
+/// Decodes an HTTP chunked transfer-encoded body into raw bytes.
+fn decode_chunked_body(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::new();
+    let mut pos = 0;
+    while pos < data.len() {
+        // Find the end of the chunk size line
+        let crlf = data[pos..]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .map(|p| pos + p);
+        let crlf = match crlf {
+            Some(p) => p,
+            None => break,
+        };
+        let size_str = String::from_utf8_lossy(&data[pos..crlf]);
+        let chunk_size = match usize::from_str_radix(size_str.trim(), 16) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+        if chunk_size == 0 {
+            break; // Terminal chunk
+        }
+        let chunk_start = crlf + 2;
+        let chunk_end = chunk_start + chunk_size;
+        if chunk_end > data.len() {
+            // Incomplete chunk — take what we have
+            result.extend_from_slice(&data[chunk_start..]);
+            break;
+        }
+        result.extend_from_slice(&data[chunk_start..chunk_end]);
+        pos = chunk_end + 2; // Skip trailing \r\n after chunk data
+    }
+    result
+}
+
 /// Starts a TCP server for testing write_zeroes body reconstruction.
 /// First `fail_count` connections: reads some data then drops (simulates body write failure).
 /// Subsequent connections: reads full request body and responds with a validation summary.
@@ -1310,7 +1345,8 @@ async fn start_write_zeroes_validation_server(fail_count: usize) -> (u16, Arc<At
                     let _ = stream.read(&mut buf).await;
                     drop(stream);
                 } else {
-                    // Read the full request
+                    // Read the full request, handling both content-length and
+                    // chunked transfer encoding (used by streaming bodies).
                     let mut data = Vec::new();
                     let mut buf = [0u8; 8192];
                     loop {
@@ -1338,15 +1374,35 @@ async fn start_write_zeroes_validation_server(fail_count: usize) -> (u16, Arc<At
                                     break;
                                 }
                             }
+                            // Check for chunked transfer encoding terminator
+                            if headers
+                                .lines()
+                                .any(|l| l.to_lowercase().contains("transfer-encoding: chunked"))
+                            {
+                                // Chunked encoding ends with "0\r\n\r\n"
+                                if data.ends_with(b"0\r\n\r\n") {
+                                    break;
+                                }
+                            }
                         }
                     }
 
-                    // Extract body
-                    let body_start = String::from_utf8_lossy(&data)
+                    // Extract body — decode chunked encoding if needed
+                    let header_end_pos = String::from_utf8_lossy(&data)
                         .find("\r\n\r\n")
                         .map(|p| p + 4)
                         .unwrap_or(data.len());
-                    let request_body = &data[body_start..];
+                    let headers_str = String::from_utf8_lossy(&data[..header_end_pos]);
+                    let is_chunked = headers_str
+                        .to_lowercase()
+                        .contains("transfer-encoding: chunked");
+                    let raw_body = &data[header_end_pos..];
+                    let request_body: Vec<u8> = if is_chunked {
+                        decode_chunked_body(raw_body)
+                    } else {
+                        raw_body.to_vec()
+                    };
+                    let request_body = &request_body[..];
 
                     // Validate: "HEAD" + 1024 zeroes + 1024 * 0xAB
                     let expected_len = 4 + 1024 + 1024;

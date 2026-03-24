@@ -3135,6 +3135,11 @@ pub(crate) struct HttpRetryEligibility {
     /// Set to true when OutgoingBody::finish() is called.
     /// Zone 1 retry requires the body to be fully finished before retrying.
     pub body_finished: bool,
+    /// Set to true when outgoing body stream writes are replayed from oplog
+    /// (rather than executed live). When true, the actual body pipe does NOT
+    /// contain the replayed bytes, so the request must be rebuilt from oplog
+    /// before finishing the body.
+    pub replayed_body_writes: bool,
 }
 
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
@@ -3243,6 +3248,11 @@ struct PrivateDurableWorkerState {
     /// Tracks file-backed wasi output streams so quota charging can be based on
     /// actual file growth instead of requested write size.
     open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
+
+    /// Maps outgoing body rep → output stream rep, set during outgoing_body::write()
+    /// before outgoing_handler::handle() is called. Used by handle() to populate
+    /// output_stream_rep in HttpRequestState for streams created before dispatch.
+    pending_http_outgoing_body_stream: HashMap<u32, u32>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -3409,6 +3419,7 @@ impl PrivateDurableWorkerState {
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
+            pending_http_outgoing_body_stream: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,

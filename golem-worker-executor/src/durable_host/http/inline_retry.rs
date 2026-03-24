@@ -26,7 +26,7 @@
 //! - **Zone 2**: Retry during response body reading — the response was partially consumed.
 //!   Requires re-sending the request and verifying the response prefix matches.
 
-use crate::durable_host::durability::{DurableExecutionState, HostFailureKind, InFunctionRetryHost};
+use crate::durable_host::durability::{AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind, InFunctionRetryHost, InFunctionRetryState};
 use crate::durable_host::http::types::classify_http_error_code;
 use crate::durable_host::HttpRequestState;
 use crate::metrics::wasm::record_in_function_retry;
@@ -86,6 +86,8 @@ pub enum RetryZone {
     Zone1,
     /// Retry during response body reading — partial body already consumed.
     Zone2,
+    /// Retry during outgoing body stream writing — body is still being written.
+    OutputStreamWrite,
 }
 
 /// Checks whether the given HTTP request is eligible for transparent inline retry.
@@ -112,6 +114,14 @@ pub fn is_http_inline_retry_eligible(
         return Err(InlineRetryIneligible::UnreconstructableBody);
     }
 
+    // The output_stream_subscribed guard prevents stale pollables after resource
+    // swap. The flag is only set when the guest explicitly calls subscribe() on
+    // the output stream — wasmtime's internal blocking_write_and_flush goes
+    // directly to the underlying DynOutputStream and does NOT call our
+    // HostOutputStream::subscribe, so the flag won't be spuriously set by
+    // blocking write operations. If the guest did call subscribe(), the Pollable
+    // it holds would go stale after we swap the OutputStream resource, so we
+    // must reject retry in all zones including OutputStreamWrite.
     if request_state.retry.output_stream_subscribed {
         return Err(InlineRetryIneligible::OutputStreamSubscribed);
     }
@@ -123,6 +133,9 @@ pub fn is_http_inline_retry_eligible(
     if zone == RetryZone::Zone1 && !request_state.retry.body_finished {
         return Err(InlineRetryIneligible::BodyNotFinished);
     }
+
+    // OutputStreamWrite zone does not require body_finished — the body is still
+    // being written, which is the whole point of this retry path.
 
     if zone == RetryZone::Zone2 && request_state.retry.had_body_skip {
         return Err(InlineRetryIneligible::HadBodySkip);
@@ -174,11 +187,13 @@ pub async fn reconstruct_outgoing_body_chunks(
 ) -> Result<Vec<BodyChunk>, anyhow::Error> {
     let current_idx = oplog.current_oplog_index().await;
 
-    if current_idx <= begin_index {
+    if current_idx < begin_index {
         return Ok(Vec::new());
     }
 
-    let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index);
+    // current_oplog_index() returns the index OF the last written entry,
+    // so we need +1 to include it in the scan range.
+    let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index) + 1;
     let entries = oplog.read_many(begin_index, n).await;
     let mut chunks = Vec::new();
 
@@ -241,11 +256,13 @@ pub async fn count_incoming_body_bytes(
 ) -> Result<u64, anyhow::Error> {
     let current_idx = oplog.current_oplog_index().await;
 
-    if current_idx <= begin_index {
+    if current_idx < begin_index {
         return Ok(0);
     }
 
-    let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index);
+    // current_oplog_index() returns the index OF the last written entry,
+    // so we need +1 to include it in the scan range.
+    let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index) + 1;
     let entries = oplog.read_many(begin_index, n).await;
     let mut total: u64 = 0;
 
@@ -745,21 +762,48 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         None => return Ok(false),
     };
 
-    // 2. Check eligibility
+    // 2. Check eligibility — use OutputStreamWrite zone (body is still being written)
     let exec_state = ctx.durable_execution_state();
-    if is_http_inline_retry_eligible(&exec_state, &request_state, RetryZone::Zone1).is_err() {
+    if is_http_inline_retry_eligible(&exec_state, &request_state, RetryZone::OutputStreamWrite).is_err() {
         return Ok(false);
     }
 
-    // 3. Get connection pool and oplog
+    // 3. Check retry budget — decide_retry handles delay calculation, oplog error
+    //    entry writing, and metric recording. The oplog-based retry count provides
+    //    persistence across individual write calls within the same request.
+    let mut retry_state = InFunctionRetryState::new();
+    let decision = retry_state.decide_retry(ctx, "output-stream-write").await;
+
+    match decision {
+        AsyncRetryDecision::RetryAfterDelay(delay) => {
+            // Interrupt-aware sleep before rebuilding
+            let interrupt = ctx.create_interrupt_signal();
+            let sleep = tokio::time::sleep(delay);
+            tokio::pin!(sleep);
+
+            match futures::future::select(sleep, interrupt).await {
+                futures::future::Either::Left(_) => {
+                    // Sleep completed, proceed with rebuild below
+                }
+                futures::future::Either::Right((interrupt_kind, _)) => {
+                    return Err(anyhow::Error::from(interrupt_kind));
+                }
+            }
+        }
+        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
+            return Ok(false);
+        }
+    }
+
+    // 4. Get connection pool and oplog
     let oplog = ctx.public_state.oplog();
     let connection_pool = ctx.wasi_http.connection_pool.clone();
     let config = request_state.outgoing_request_config();
 
-    // 4. Rebuild the streaming request
+    // 5. Rebuild the streaming request
     let rebuilt = rebuild_streaming_request(&oplog, &request_state, config, connection_pool).await?;
 
-    // 5. Swap resources in the resource table
+    // 6. Swap resources in the resource table
     // Swap the FutureIncomingResponse — re-wrap with background retry if the
     // original request had it, so that transient errors at get() are still handled.
     let new_future = if request_state.retry.has_background_retry {
@@ -802,12 +846,6 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         .table()
         .get_mut(&Resource::<WasiOutputStream>::new_borrow(stream_rep))?;
     *stream_entry = rebuilt.output_stream;
-
-    tracing::debug!(
-        request_handle = request_handle,
-        stream_rep = stream_rep,
-        "Output stream inline retry: successfully rebuilt and swapped resources"
-    );
 
     Ok(true)
 }
@@ -1160,13 +1198,24 @@ mod tests {
     }
 
     #[test]
-    fn test_output_stream_subscribed_disqualifies() {
+    fn test_output_stream_subscribed_disqualifies_zone1_and_zone2() {
         let exec = make_exec_state();
         let mut req = make_request_state();
         req.retry.output_stream_subscribed = true;
         assert_eq!(
             is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
+        );
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2),
+            Err(InlineRetryIneligible::OutputStreamSubscribed)
+        );
+        // OutputStreamWrite should still be eligible — subscribe is called
+        // internally by wasmtime's component model for blocking operations,
+        // and the pollable is transient.
+        req.retry.body_finished = false; // OutputStreamWrite doesn't require body_finished
+        assert!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::OutputStreamWrite).is_ok()
         );
     }
 
