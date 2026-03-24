@@ -3140,9 +3140,7 @@ impl PrivateDurableWorkerState {
     /// The check and increment are performed only during live execution; replay
     /// mode is a no-op so that recovering workers are not penalised for calls
     /// already made in a prior execution.
-    pub fn check_and_increment_http_call_count(
-        &mut self,
-    ) -> Result<(), GolemSpecificWasmTrap> {
+    pub fn check_and_increment_http_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
         if !self.is_live() {
             return Ok(());
         }
@@ -3158,9 +3156,7 @@ impl PrivateDurableWorkerState {
     /// Increments the RPC call counter for the current invocation if in live mode.
     ///
     /// Returns `Err` if the per-invocation RPC call limit would be exceeded.
-    pub fn check_and_increment_rpc_call_count(
-        &mut self,
-    ) -> Result<(), GolemSpecificWasmTrap> {
+    pub fn check_and_increment_rpc_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
         if !self.is_live() {
             return Ok(());
         }

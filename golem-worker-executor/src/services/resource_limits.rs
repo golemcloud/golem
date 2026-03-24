@@ -334,14 +334,12 @@ impl ResourceLimitsGrpc {
                     updated_limits.max_table_elements_per_worker as usize,
                     Ordering::Release,
                 );
-                entry.per_invocation_http_limit.store(
-                    updated_limits.per_invocation_http_limit,
-                    Ordering::Release,
-                );
-                entry.per_invocation_rpc_limit.store(
-                    updated_limits.per_invocation_rpc_limit,
-                    Ordering::Release,
-                );
+                entry
+                    .per_invocation_http_limit
+                    .store(updated_limits.per_invocation_http_limit, Ordering::Release);
+                entry
+                    .per_invocation_rpc_limit
+                    .store(updated_limits.per_invocation_rpc_limit, Ordering::Release);
                 entry
                     .last_refresh_secs
                     .store(Utc::now().timestamp(), Ordering::Release);
@@ -616,12 +614,9 @@ mod tests {
 
     #[test]
     fn invocation_limits_can_be_updated_via_store() {
-        let entry =
-            AtomicResourceEntry::new_with_invocation_limits(500, 256, usize::MAX, 10, 20);
+        let entry = AtomicResourceEntry::new_with_invocation_limits(500, 256, usize::MAX, 10, 20);
         // Simulate a plan change: update limits via the atomic store
-        entry
-            .per_invocation_http_limit
-            .store(50, Ordering::Release);
+        entry.per_invocation_http_limit.store(50, Ordering::Release);
         entry.per_invocation_rpc_limit.store(100, Ordering::Release);
         assert_eq!(entry.per_invocation_http_limit(), 50);
         assert_eq!(entry.per_invocation_rpc_limit(), 100);
