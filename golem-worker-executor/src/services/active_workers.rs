@@ -151,18 +151,6 @@ impl FilesystemStorageSemaphore {
         }
     }
 
-    /// Release a number of bytes back to the pool without dropping the entire
-    /// permit. Used when a file is partially freed (e.g. truncation).
-    ///
-    /// Adds `storage_bytes` worth of permits back to the semaphore directly.
-    /// The caller is responsible for ensuring they don't release more than they
-    /// acquired (no underflow protection at this level).
-    pub(crate) fn release(&self, storage_bytes: u64) {
-        let permits = bytes_to_filesystem_storage_permits(storage_bytes);
-        if permits > 0 {
-            self.semaphore.add_permits(permits as usize);
-        }
-    }
 }
 
 /// Holds the metadata and wasmtime structures of currently active Golem workers
@@ -406,12 +394,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             .await
     }
 
-    /// Return `freed_bytes` to the storage pool without dropping the whole permit.
-    /// Used when a file is deleted or truncated
-    pub fn release_filesystem_storage(&self, freed_bytes: u64) {
-        self.worker_filesystem_storage.release(freed_bytes);
-    }
-
     pub fn filesystem_storage_semaphore(&self) -> Arc<FilesystemStorageSemaphore> {
         self.worker_filesystem_storage.clone()
     }
@@ -590,30 +572,6 @@ mod tests {
                                                                                    // 1 byte rounds up to 1 KB = 1 permit; should leave 1 KB
         let _p = filesystem_storage_semaphore.try_acquire(1).await.unwrap();
         assert_eq!(filesystem_storage_semaphore.available_bytes(), 1024);
-    }
-
-    #[test]
-    async fn release_returns_bytes_without_dropping_permit() {
-        let filesystem_storage_semaphore = filesystem_storage_semaphore(4 * 1024);
-        let _permit = filesystem_storage_semaphore
-            .try_acquire(4 * 1024)
-            .await
-            .unwrap(); // exhaust pool
-        assert_eq!(filesystem_storage_semaphore.available_bytes(), 0);
-        filesystem_storage_semaphore.release(2 * 1024); // release half back
-        assert_eq!(filesystem_storage_semaphore.available_bytes(), 2 * 1024);
-    }
-
-    #[test]
-    async fn release_zero_is_a_noop() {
-        let filesystem_storage_semaphore = filesystem_storage_semaphore(4 * 1024);
-        let _permit = filesystem_storage_semaphore
-            .try_acquire(2 * 1024)
-            .await
-            .unwrap();
-        let before = filesystem_storage_semaphore.available_bytes();
-        filesystem_storage_semaphore.release(0);
-        assert_eq!(filesystem_storage_semaphore.available_bytes(), before);
     }
 
     #[test]
