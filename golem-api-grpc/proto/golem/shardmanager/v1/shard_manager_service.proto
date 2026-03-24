@@ -58,7 +58,7 @@ message AcquireQuotaLeaseRequest {
 message AcquireQuotaLeaseResponse {
   oneof result {
     AcquireQuotaLeaseSuccessResponse success = 1;
-    golem.shardmanager.v1.ShardManagerError failure = 2;
+    golem.shardmanager.v1.QuotaError error = 2;
   }
 }
 
@@ -83,7 +83,7 @@ message RenewQuotaLeaseRequest {
 message RenewQuotaLeaseResponse {
   oneof result {
     RenewQuotaLeaseSuccessResponse success = 1;
-    golem.shardmanager.v1.ShardManagerError failure = 2;
+    golem.shardmanager.v1.QuotaError error = 2;
   }
 }
 
@@ -104,7 +104,7 @@ message ReleaseQuotaLeaseRequest {
 message ReleaseQuotaLeaseResponse {
   oneof result {
     ReleaseQuotaLeaseSuccessResponse success = 1;
-    golem.shardmanager.v1.ShardManagerError failure = 2;
+    golem.shardmanager.v1.QuotaError error = 2;
   }
 }
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::quota::QuotaError;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -114,6 +115,26 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
             ShardManagerError::IoError(err) => {
                 error(shard_manager_error::Error::Unknown, err.to_string())
             }
+        }
+    }
+}
+
+impl From<QuotaError> for golem::shardmanager::v1::QuotaError {
+    fn from(value: QuotaError) -> golem::shardmanager::v1::QuotaError {
+        use golem::shardmanager::v1::quota_error as grpc_quota_error;
+        match value {
+            QuotaError::LeaseNotFound { resource_definition_id } =>
+                golem::shardmanager::v1::QuotaError {
+                    error: Some(grpc_quota_error::Error::LeaseNotFound(golem::common::ErrorBody { error: format!("Did not find lease for {resource_definition_id}") })),
+                },
+            QuotaError::StaleEpoch { resource_definition_id, current, provided } =>
+                golem::shardmanager::v1::QuotaError {
+                    error: Some(grpc_quota_error::Error::LeaseNotFound(golem::common::ErrorBody { error: format!("Stale epoch provided for {resource_definition_id} (provided: {provided}, current: {current}) ") })),
+                },
+            QuotaError::InternalError(_) =>
+                golem::shardmanager::v1::QuotaError {
+                    error: Some(grpc_quota_error::Error::Internal(golem::common::ErrorBody { error: value.to_string() })),
+                },
         }
     }
 }

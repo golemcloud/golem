@@ -45,11 +45,6 @@ exhausted_retry_after = "30s"
 lease_duration = "1m"
 min_executors = 2
 
-[resource_definition_fetcher]
-cache_eviction_period = "1m"
-cache_max_capacity = 1024
-cache_ttl = "5m"
-
 [registry_service]
 connect_timeout = "10s"
 host = "localhost"
@@ -67,6 +62,11 @@ multiplier = 2.0
 type = "Disabled"
 
 [registry_service.tls.config]
+
+[resource_definition_fetcher]
+cache_eviction_period = "1m"
+cache_max_capacity = 1024
+cache_ttl = "5m"
 
 [tracing]
 console = false
@@ -188,9 +188,10 @@ type = "Disabled"
 # multiplier = 2.0
 # 
 # [quota]
-# definition_cache_eviction_period = "1m"
-# definition_cache_max_capacity = 1024
-# definition_cache_ttl = "5m"
+# definition_staleness_ttl = "5m"
+# exhausted_retry_after = "30s"
+# lease_duration = "1m"
+# min_executors = 2
 # 
 # [registry_service]
 # connect_timeout = "10s"
@@ -209,6 +210,11 @@ type = "Disabled"
 # type = "Disabled"
 # 
 # [registry_service.tls.config]
+# 
+# [resource_definition_fetcher]
+# cache_eviction_period = "1m"
+# cache_max_capacity = 1024
+# cache_ttl = "5m"
 # 
 # [tracing]
 # console = false

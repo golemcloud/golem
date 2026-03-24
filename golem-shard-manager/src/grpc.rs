@@ -18,7 +18,6 @@ use crate::ShardManagerServiceImpl;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
 use golem_common::recorded_grpc_api_request;
-use golem_common::SafeDisplay;
 use tonic::Response;
 use tracing::Instrument;
 
@@ -128,26 +127,15 @@ impl ShardManagerService for ShardManagerServiceImpl {
                     },
                 ))
             }
-            Err(err) => {
-                let error = golem::shardmanager::v1::ShardManagerError {
-                    error: Some(
-                        golem::shardmanager::v1::shard_manager_error::Error::Unknown(
-                            golem::common::ErrorBody {
-                                error: err.to_safe_string(),
-                            },
+            Err(err) => Ok(Response::new(
+                golem::shardmanager::v1::AcquireQuotaLeaseResponse {
+                    result: Some(
+                        golem::shardmanager::v1::acquire_quota_lease_response::Result::Error(
+                            err.into(),
                         ),
                     ),
-                };
-                Ok(Response::new(
-                    golem::shardmanager::v1::AcquireQuotaLeaseResponse {
-                        result: Some(
-                            golem::shardmanager::v1::acquire_quota_lease_response::Result::Failure(
-                                error,
-                            ),
-                        ),
-                    },
-                ))
-            }
+                },
+            )),
         }
     }
 
@@ -195,26 +183,15 @@ impl ShardManagerService for ShardManagerServiceImpl {
                     },
                 ))
             }
-            Err(err) => {
-                let error = golem::shardmanager::v1::ShardManagerError {
-                    error: Some(
-                        golem::shardmanager::v1::shard_manager_error::Error::Unknown(
-                            golem::common::ErrorBody {
-                                error: err.to_safe_string(),
-                            },
+            Err(err) => Ok(Response::new(
+                golem::shardmanager::v1::RenewQuotaLeaseResponse {
+                    result: Some(
+                        golem::shardmanager::v1::renew_quota_lease_response::Result::Error(
+                            err.into(),
                         ),
                     ),
-                };
-                Ok(Response::new(
-                    golem::shardmanager::v1::RenewQuotaLeaseResponse {
-                        result: Some(
-                            golem::shardmanager::v1::renew_quota_lease_response::Result::Failure(
-                                error,
-                            ),
-                        ),
-                    },
-                ))
-            }
+                },
+            )),
         }
     }
 
@@ -257,26 +234,15 @@ impl ShardManagerService for ShardManagerServiceImpl {
                     ),
                 },
             )),
-            Err(err) => {
-                let error = golem::shardmanager::v1::ShardManagerError {
-                    error: Some(
-                        golem::shardmanager::v1::shard_manager_error::Error::Unknown(
-                            golem::common::ErrorBody {
-                                error: err.to_safe_string(),
-                            },
+            Err(err) => Ok(Response::new(
+                golem::shardmanager::v1::ReleaseQuotaLeaseResponse {
+                    result: Some(
+                        golem::shardmanager::v1::release_quota_lease_response::Result::Error(
+                            err.into(),
                         ),
                     ),
-                };
-                Ok(Response::new(
-                    golem::shardmanager::v1::ReleaseQuotaLeaseResponse {
-                        result: Some(
-                            golem::shardmanager::v1::release_quota_lease_response::Result::Failure(
-                                error,
-                            ),
-                        ),
-                    },
-                ))
-            }
+                },
+            )),
         }
     }
 }
