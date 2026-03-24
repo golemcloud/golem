@@ -437,8 +437,12 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&failing_worker_id).await?;
-    executor.check_oplog_is_queryable(&succeeding_worker_id).await?;
+    executor
+        .check_oplog_is_queryable(&failing_worker_id)
+        .await?;
+    executor
+        .check_oplog_is_queryable(&succeeding_worker_id)
+        .await?;
 
     Ok(())
 }
