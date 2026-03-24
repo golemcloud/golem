@@ -1,0 +1,65 @@
+warning: golem-common@0.0.0: git describe result: 1.5.0-dev.1-236-gbd9734475
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.82s
+     Running tests/lib.rs (target/debug/deps/integration-4ef44daf39ff7ecf)
+[33mCannot run tests in parallel when tests have shared dependencies and output capturing is on. Using a single thread.[0m
+Running 28 tests
+
+[ 1/28] Running test: integration::storage_quota::agent_quota_freed_after_file_deletion
+[ 1/28] Finished test: integration::storage_quota::agent_quota_freed_after_file_deletion                                           [PASSED]
+[ 2/28] Running test: integration::storage_quota::agent_quota_pwrite_beyond_limit_fails
+[ 2/28] Finished test: integration::storage_quota::agent_quota_pwrite_beyond_limit_fails                                           [PASSED]
+[ 3/28] Running test: integration::storage_quota::agent_quota_write_exceeding_limit_fails
+[ 3/28] Finished test: integration::storage_quota::agent_quota_write_exceeding_limit_fails                                         [PASSED]
+[ 4/28] Running test: integration::storage_quota::agent_quota_write_within_limit_succeeds
+[ 4/28] Finished test: integration::storage_quota::agent_quota_write_within_limit_succeeds                                         [PASSED]
+[ 5/28] Running test: integration::storage_quota::executor_pool_freed_after_file_deletion
+[ 5/28] Finished test: integration::storage_quota::executor_pool_freed_after_file_deletion                                         [PASSED]
+[ 6/28] Running test: integration::storage_quota::agent_quota_pwrite_within_limit_succeeds
+[ 6/28] Finished test: integration::storage_quota::agent_quota_pwrite_within_limit_succeeds                                        [PASSED]
+[ 7/28] Running test: integration::storage_quota::agent_quota_splice_exceeding_limit_fails
+[ 7/28] Finished test: integration::storage_quota::agent_quota_splice_exceeding_limit_fails                                        [PASSED]
+[ 8/28] Running test: integration::storage_quota::agent_quota_cumulative_across_write_paths
+[ 8/28] Finished test: integration::storage_quota::agent_quota_cumulative_across_write_paths                                       [PASSED]
+[ 9/28] Running test: integration::storage_quota::agent_quota_exceeded_limit_is_not_retried
+[ 9/28] Finished test: integration::storage_quota::agent_quota_exceeded_limit_is_not_retried                                       [PASSED]
+[10/28] Running test: integration::storage_quota::agent_quota_set_size_shrink_releases_quota
+[10/28] Finished test: integration::storage_quota::agent_quota_set_size_shrink_releases_quota                                      [PASSED]
+[11/28] Running test: integration::storage_quota::agent_quota_storage_usage_survives_restart
+[11/28] Finished test: integration::storage_quota::agent_quota_storage_usage_survives_restart                                      [PASSED]
+[12/28] Running test: integration::storage_quota::agent_quota_set_size_grow_beyond_limit_fails
+[12/28] Finished test: integration::storage_quota::agent_quota_set_size_grow_beyond_limit_fails                                    [PASSED]
+[13/28] Running test: integration::storage_quota::executor_pool_storage_usage_survives_restart
+[13/28] Finished test: integration::storage_quota::executor_pool_storage_usage_survives_restart                                    [PASSED]
+[14/28] Running test: integration::storage_quota::executor_pool_write_within_capacity_succeeds
+[14/28] Finished test: integration::storage_quota::executor_pool_write_within_capacity_succeeds                                    [PASSED]
+[15/28] Running test: integration::storage_quota::agent_quota_stream_write_exceeding_limit_fails
+[15/28] Finished test: integration::storage_quota::agent_quota_stream_write_exceeding_limit_fails                                  [PASSED]
+[16/28] Running test: integration::storage_quota::agent_quota_stream_write_within_limit_succeeds
+[16/28] Finished test: integration::storage_quota::agent_quota_stream_write_within_limit_succeeds                                  [PASSED]
+[17/28] Running test: integration::storage_quota::executor_pool_only_gap_evicted_not_full_amount
+[17/28] Finished test: integration::storage_quota::executor_pool_only_gap_evicted_not_full_amount                                  [PASSED]
+[18/28] Running test: integration::storage_quota::executor_pool_idle_worker_evicted_when_pool_full
+[18/28] Finished test: integration::storage_quota::executor_pool_idle_worker_evicted_when_pool_full                                [PASSED]
+[19/28] Running test: integration::storage_quota::agent_quota_blocking_splice_exceeding_limit_fails
+[19/28] Finished test: integration::storage_quota::agent_quota_blocking_splice_exceeding_limit_fails                               [PASSED]
+[20/28] Running test: integration::storage_quota::agent_quota_stream_to_stdout_does_not_charge_quota
+[20/28] Finished test: integration::storage_quota::agent_quota_stream_to_stdout_does_not_charge_quota                              [PASSED]
+[21/28] Running test: integration::storage_quota::agent_quota_overwrite_same_file_should_not_double_charge
+[21/28] Finished test: integration::storage_quota::agent_quota_overwrite_same_file_should_not_double_charge                        [PASSED]
+[22/28] Running test: integration::storage_quota::executor_pool_failed_acquire_leaves_no_phantom_oplog_entry
+[22/28] Finished test: integration::storage_quota::executor_pool_failed_acquire_leaves_no_phantom_oplog_entry                      [PASSED]
+[23/28] Running test: integration::storage_quota::agent_quota_blocking_stream_and_flush_exceeding_limit_fails
+[23/28] Finished test: integration::storage_quota::agent_quota_blocking_stream_and_flush_exceeding_limit_fails                     [PASSED]
+[24/28] Running test: integration::storage_quota::agent_quota_blocking_stream_and_flush_within_limit_succeeds
+[24/28] Finished test: integration::storage_quota::agent_quota_blocking_stream_and_flush_within_limit_succeeds                     [PASSED]
+[25/28] Running test: integration::storage_quota::agent_quota_stream_overwrite_same_file_should_not_double_charge
+[25/28] Finished test: integration::storage_quota::agent_quota_stream_overwrite_same_file_should_not_double_charge                 [PASSED]
+[26/28] Running test: integration::storage_quota::agent_quota_pwrite_overwrite_same_range_should_not_double_charge
+[26/28] Finished test: integration::storage_quota::agent_quota_pwrite_overwrite_same_range_should_not_double_charge                [PASSED]
+[27/28] Running test: integration::storage_quota::executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits
+[27/28] Finished test: integration::storage_quota::executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits            [PASSED]
+[28/28] Running test: integration::storage_quota::executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem_storage
+[28/28] Finished test: integration::storage_quota::executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem_storage [PASSED]
+
+test result: ok; 28 passed; 0 failed; 0 ignored; 0 measured; 494 filtered out; finished in 15.824s
+
