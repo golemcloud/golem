@@ -18,6 +18,7 @@ import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/environment_state.proto";
+import "golem/registry/quota.proto";
 import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
@@ -52,6 +53,10 @@ service RegistryService {
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
   rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
   rpc GetCurrentEnvironmentState (GetCurrentEnvironmentStateRequest) returns (GetCurrentEnvironmentStateResponse);
+
+  // quotas api
+  rpc GetResourceDefinitionById (GetResourceDefinitionByIdRequest) returns (GetResourceDefinitionByIdResponse);
+  rpc GetResourceDefinitionByName (GetResourceDefinitionByNameRequest) returns (GetResourceDefinitionByNameResponse);
 
   // registry invalidation stream — multiplexed event types
   rpc SubscribeRegistryInvalidations(SubscribeRegistryInvalidationsRequest)
@@ -359,6 +364,37 @@ message GetCurrentEnvironmentStateResponse {
 
 message GetCurrentEnvironmentStateSuccessResponse {
   EnvironmentState environment_state = 1;
+}
+
+message GetResourceDefinitionByIdRequest {
+  ResourceDefinitionId resource_definition_id = 1;
+}
+
+message GetResourceDefinitionByIdResponse {
+  oneof result {
+    GetResourceDefinitionByIdSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetResourceDefinitionByIdSuccessResponse {
+  ResourceDefinition resource_definition = 1;
+}
+
+message GetResourceDefinitionByNameRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string name = 2;
+}
+
+message GetResourceDefinitionByNameResponse {
+  oneof result {
+    GetResourceDefinitionByNameSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetResourceDefinitionByNameSuccessResponse {
+  ResourceDefinition resource_definition = 1;
 }
 
 // ── Multiplexed registry invalidation stream ──

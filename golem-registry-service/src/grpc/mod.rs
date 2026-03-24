@@ -79,6 +79,7 @@ pub async fn start_grpc_server(
                     services.environment_state_service.clone(),
                     services.registry_change_notifier.clone(),
                     services.registry_change_repo.clone(),
+                    services.resource_definition_service.clone(),
                 ))
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),
