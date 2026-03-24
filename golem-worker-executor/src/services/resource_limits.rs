@@ -41,6 +41,8 @@ pub struct AtomicResourceEntry {
     max_memory: AtomicUsize,
     // Current (cached) value of the account level worker function table element limits
     max_table_elements: AtomicUsize,
+    // Current (cached) value of the account level per-worker disk space limit
+    max_disk_space: AtomicU64,
     // Unix timestamp (seconds) of the last time fuel/memory were refreshed from
     // the server. Used by the background loop to detect idle accounts whose
     // cached limits have grown stale (e.g. after a plan change or monthly reset).
@@ -48,13 +50,19 @@ pub struct AtomicResourceEntry {
 }
 
 impl AtomicResourceEntry {
-    pub fn new(fuel: u64, max_memory: usize, max_table_elements: usize) -> Self {
+    pub fn new(
+        fuel: u64,
+        max_memory: usize,
+        max_table_elements: usize,
+        max_disk_space: u64,
+    ) -> Self {
         Self {
             fuel: AtomicU64::new(fuel),
             delta: AtomicI64::new(0),
             in_flight_delta: AtomicI64::new(0),
             max_memory: AtomicUsize::new(max_memory),
             max_table_elements: AtomicUsize::new(max_table_elements),
+            max_disk_space: AtomicU64::new(max_disk_space),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
         }
     }
@@ -113,6 +121,10 @@ impl AtomicResourceEntry {
 
     pub fn max_table_elements_limit(&self) -> usize {
         self.max_table_elements.load(Ordering::Acquire)
+    }
+
+    pub fn max_disk_space_limit(&self) -> u64 {
+        self.max_disk_space.load(Ordering::Acquire)
     }
 }
 
@@ -301,6 +313,9 @@ impl ResourceLimitsGrpc {
                     Ordering::Release,
                 );
                 entry
+                    .max_disk_space
+                    .store(updated_limits.max_disk_space_per_worker, Ordering::Release);
+                entry
                     .last_refresh_secs
                     .store(Utc::now().timestamp(), Ordering::Release);
             }
@@ -336,6 +351,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.available_fuel,
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
+                        fetched.max_disk_space_per_worker,
                     ),
                 ))
             })
@@ -357,6 +373,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
             u64::MAX,
             usize::MAX,
             usize::MAX,
+            u64::MAX,
         )))
     }
 }
@@ -396,14 +413,14 @@ mod tests {
 
     #[test]
     fn effective_fuel_with_zero_delta() {
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
         assert_eq!(entry.effective_fuel(), 1000);
     }
 
     #[test]
     fn effective_fuel_sums_fuel_delta_and_in_flight() {
         // delta = +200 (fuel lent), in_flight = +50 (earlier batch in transit)
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
         entry.delta.store(200, Ordering::Release);
         entry.in_flight_delta.store(50, Ordering::Release);
         assert_eq!(entry.effective_fuel(), 1250);
@@ -412,7 +429,7 @@ mod tests {
     #[test]
     fn effective_fuel_clamps_to_zero_when_sum_is_negative() {
         // delta negative (more returned than borrowed): 100 + (-200) = -100 → 0
-        let entry = AtomicResourceEntry::new(100, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(100, 0, usize::MAX, u64::MAX);
         entry.delta.store(-200, Ordering::Release);
         assert_eq!(entry.effective_fuel(), 0);
     }
@@ -420,14 +437,14 @@ mod tests {
     #[test]
     fn effective_fuel_clamps_to_u64_max_when_sum_overflows() {
         // u64::MAX + i64::MAX overflows u64 in i128 arithmetic → clamped
-        let entry = AtomicResourceEntry::new(u64::MAX, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(u64::MAX, 0, usize::MAX, u64::MAX);
         entry.delta.store(i64::MAX, Ordering::Release);
         assert_eq!(entry.effective_fuel(), u64::MAX);
     }
 
     #[test]
     fn borrow_fuel_succeeds_and_increases_delta() {
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
         assert!(entry.borrow_fuel(300));
         // borrow_fuel records the loan by adding positively to delta
         assert_eq!(entry.delta.load(Ordering::Acquire), 300);
@@ -438,7 +455,7 @@ mod tests {
     #[test]
     fn borrow_fuel_fails_when_effective_fuel_is_zero() {
         // fuel=0, delta=0 → effective=0; any non-zero borrow fails
-        let entry = AtomicResourceEntry::new(0, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX);
         assert!(!entry.borrow_fuel(1));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
@@ -446,14 +463,14 @@ mod tests {
     #[test]
     fn borrow_fuel_fails_when_amount_exceeds_effective_fuel() {
         // fuel=100, effective=100; borrowing 101 must fail
-        let entry = AtomicResourceEntry::new(100, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(100, 0, usize::MAX, u64::MAX);
         assert!(!entry.borrow_fuel(101));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
 
     #[test]
     fn borrow_fuel_zero_amount_always_succeeds_without_touching_delta() {
-        let entry = AtomicResourceEntry::new(0, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX);
         assert!(entry.borrow_fuel(0));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
@@ -461,7 +478,7 @@ mod tests {
     #[test]
     fn borrow_fuel_exactly_at_effective_fuel_succeeds() {
         // Borrowing exactly effective_fuel must succeed
-        let entry = AtomicResourceEntry::new(500, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(500, 0, usize::MAX, u64::MAX);
         assert!(entry.borrow_fuel(500));
         assert_eq!(entry.delta.load(Ordering::Acquire), 500);
     }
@@ -469,7 +486,7 @@ mod tests {
     #[test]
     fn borrow_fuel_one_over_effective_fuel_fails() {
         // Borrowing effective_fuel + 1 must fail
-        let entry = AtomicResourceEntry::new(500, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(500, 0, usize::MAX, u64::MAX);
         assert!(!entry.borrow_fuel(501));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
@@ -477,7 +494,7 @@ mod tests {
     #[test]
     fn return_fuel_decreases_delta() {
         // borrow 400 → delta = +400; return 100 unused → delta = 300
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
         entry.borrow_fuel(400);
         entry.return_fuel(100);
         assert_eq!(entry.delta.load(Ordering::Acquire), 300);
@@ -486,7 +503,7 @@ mod tests {
     #[test]
     fn borrow_then_full_return_nets_delta_to_zero() {
         // borrow 500, return 500 (nothing consumed) → delta = 0
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
         entry.borrow_fuel(500);
         entry.return_fuel(500);
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
@@ -495,7 +512,7 @@ mod tests {
     #[test]
     fn return_fuel_does_not_panic_on_large_amount() {
         // delta at i64::MIN, return u64::MAX → saturates at i64::MIN, no panic
-        let entry = AtomicResourceEntry::new(0, 0, usize::MAX);
+        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX);
         entry.delta.store(i64::MIN, Ordering::Release);
         entry.return_fuel(u64::MAX);
         let _ = entry.delta.load(Ordering::Acquire);
@@ -503,14 +520,14 @@ mod tests {
 
     #[test]
     fn max_memory_limit_returns_stored_value() {
-        let entry = AtomicResourceEntry::new(0, 65536, usize::MAX);
+        let entry = AtomicResourceEntry::new(0, 65536, usize::MAX, u64::MAX);
         assert_eq!(entry.max_memory_limit(), 65536);
     }
 
     #[test]
     fn last_refresh_secs_is_set_on_initialize() {
         let before = Utc::now().timestamp();
-        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX);
+        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX);
         let after = Utc::now().timestamp();
         let stored = entry.last_refresh_secs.load(Ordering::Acquire);
         assert!(stored >= before, "last_refresh_secs should be >= before");
@@ -523,26 +540,26 @@ mod tests {
 
     #[test]
     fn atomic_resource_entry_returns_table_elements_limit() {
-        let entry = AtomicResourceEntry::new(1000, 65536, 500);
+        let entry = AtomicResourceEntry::new(1000, 65536, 500, u64::MAX);
         assert_eq!(entry.max_table_elements_limit(), 500);
     }
 
     #[test]
     fn atomic_resource_entry_table_elements_independent_of_memory() {
-        let entry = AtomicResourceEntry::new(0, 1024, 256);
+        let entry = AtomicResourceEntry::new(0, 1024, 256, u64::MAX);
         assert_eq!(entry.max_memory_limit(), 1024);
         assert_eq!(entry.max_table_elements_limit(), 256);
     }
 
     #[test]
     fn atomic_resource_entry_table_elements_usize_max_for_disabled() {
-        let entry = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX);
+        let entry = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX, u64::MAX);
         assert_eq!(entry.max_table_elements_limit(), usize::MAX);
     }
 
     #[test]
     fn atomic_resource_entry_table_elements_zero() {
-        let entry = AtomicResourceEntry::new(100, 4096, 0);
+        let entry = AtomicResourceEntry::new(100, 4096, 0, u64::MAX);
         assert_eq!(entry.max_table_elements_limit(), 0);
     }
 
@@ -572,6 +589,7 @@ mod tests {
                     available_fuel,
                     max_memory_per_worker: max_memory,
                     max_table_elements_per_worker: u64::MAX,
+                    max_disk_space_per_worker: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
             }
@@ -902,6 +920,7 @@ mod tests {
                 available_fuel: 700,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -928,6 +947,7 @@ mod tests {
                 available_fuel: 600,
                 max_memory_per_worker: 1024,
                 max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -955,6 +975,7 @@ mod tests {
                 available_fuel: 700,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1033,6 +1054,7 @@ mod tests {
                 available_fuel: 700,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1058,6 +1080,7 @@ mod tests {
                 available_fuel: 800,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1110,6 +1133,7 @@ mod tests {
                 available_fuel: 900,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1142,6 +1166,7 @@ mod tests {
                 available_fuel: 5000,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1208,6 +1233,7 @@ mod tests {
                 available_fuel: 5000,
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));

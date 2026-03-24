@@ -220,6 +220,7 @@ mod tests {
             ),
             path: ComponentFilePath::from_rel_str("hello").unwrap(),
             permissions: ComponentFilePermissions::ReadWrite,
+            size: 1234,
         };
         let serialized = file.to_json_string();
         let deserialized: InitialComponentFile = serde_json::from_str(&serialized).unwrap();
