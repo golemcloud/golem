@@ -881,7 +881,7 @@ async fn start_failing_http_server_any_method(fail_count: usize) -> (u16, Arc<At
                             if headers.starts_with("GET ") {
                                 break;
                             }
-                            // For POST, check Content-Length
+                            // For POST, check Content-Length or Transfer-Encoding
                             if let Some(cl_line) = headers
                                 .lines()
                                 .find(|l| l.to_lowercase().starts_with("content-length:"))
@@ -897,8 +897,21 @@ async fn start_failing_http_server_any_method(fail_count: usize) -> (u16, Arc<At
                                 if data.len() >= body_start + cl {
                                     break;
                                 }
+                            } else if headers
+                                .lines()
+                                .any(|l| l.to_lowercase().contains("transfer-encoding: chunked"))
+                            {
+                                // Chunked encoding: a chunked message always ends
+                                // with "0\r\n" (final chunk) + optional trailers
+                                // + "\r\n" (blank line). So the body is complete
+                                // when it ends with "\r\n\r\n" (either "0\r\n\r\n"
+                                // for no trailers, or "trailer: val\r\n\r\n").
+                                let body_data = &data_str[header_end + 4..];
+                                if body_data.ends_with("\r\n\r\n") {
+                                    break;
+                                }
                             } else {
-                                // No Content-Length, assume no body
+                                // No Content-Length or chunked encoding, assume no body
                                 break;
                             }
                         }

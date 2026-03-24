@@ -1008,8 +1008,12 @@ pub fn classify_http_error_code(code: &ErrorCode) -> HostFailureKind {
         | ErrorCode::HttpResponseTrailerSize(_)
         | ErrorCode::HttpResponseTransferCoding(_)
         | ErrorCode::HttpResponseContentCoding(_)
-        | ErrorCode::HttpProtocolError
         | ErrorCode::HttpUpgradeFailed => HostFailureKind::Permanent,
+
+        // HttpProtocolError is used by hyper as a catch-all for connection-level
+        // failures (e.g. connection reset mid-request). Treat as transient because
+        // the same request may succeed on retry to the same server.
+        ErrorCode::HttpProtocolError => HostFailureKind::Transient,
 
         // Timeout errors — transient (may succeed with more time)
         ErrorCode::LoopDetected
