@@ -7,9 +7,6 @@ steps:
   - id: "create-db-app"
     prompt: |
       Create a new Golem application called db-app with TypeScript.
-      After creating the project, fix SDK versions: replace any local path references
-      to golem-ts-sdk and golem-ts-typegen in package.json with version 1.0.0-dev.1,
-      then run npm install.
 
       Then modify the app to be a simple task tracker backed by PostgreSQL:
       1. Create a TaskAgent with mount path "/tasks/{name}" that:
