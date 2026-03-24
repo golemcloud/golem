@@ -48,7 +48,7 @@ async fn agent_quota_write_within_limit_succeeds(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "agent-quota-ok-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -60,6 +60,8 @@ async fn agent_quota_write_within_limit_succeeds(
             data_value!("/testfile.txt", "hello world"),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -83,7 +85,7 @@ async fn agent_quota_write_exceeding_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "agent-quota-exceeded-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -106,6 +108,8 @@ async fn agent_quota_write_exceeding_limit_fails(
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
     Ok(())
 }
 
@@ -127,7 +131,7 @@ async fn agent_quota_exceeded_limit_is_not_retried(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "agent-quota-no-retry-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -166,6 +170,8 @@ async fn agent_quota_exceeded_limit_is_not_retried(
         "expected a relevant error on second attempt, got: {err_str}"
     );
 
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
     Ok(())
 }
 
@@ -189,7 +195,7 @@ async fn agent_quota_freed_after_file_deletion(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "agent-quota-release-delete-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -237,6 +243,8 @@ async fn agent_quota_freed_after_file_deletion(
         Value::Result(Ok(Some(Box::new(Value::String("hi world!!".to_string())))))
     );
 
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
     Ok(())
 }
 
@@ -262,7 +270,7 @@ async fn agent_quota_overwrite_same_file_should_not_double_charge(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "agent-quota-overwrite-same-file-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -283,6 +291,8 @@ async fn agent_quota_overwrite_same_file_should_not_double_charge(
             data_value!("/same.txt", "hello world"),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -309,7 +319,7 @@ async fn agent_quota_stream_write_exceeding_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "stream-write-quota-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -331,6 +341,8 @@ async fn agent_quota_stream_write_exceeding_limit_fails(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -355,7 +367,7 @@ async fn agent_quota_stream_write_within_limit_succeeds(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "stream-write-quota-ok-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -367,6 +379,8 @@ async fn agent_quota_stream_write_within_limit_succeeds(
             data_value!("/stream.bin", 1024u64),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -393,7 +407,7 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
         .await?;
 
     let failing_agent_id = agent_id!("FileSystem", "stream-write-failed-no-leak-a-1");
-    executor
+    let failing_worker_id = executor
         .start_agent(&component.id, failing_agent_id.clone())
         .await?;
 
@@ -410,7 +424,7 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
     // A second worker should still be able to allocate and write if the first
     // worker's failed attempt released pool permits.
     let succeeding_agent_id = agent_id!("FileSystem", "stream-write-failed-no-leak-b-1");
-    executor
+    let succeeding_worker_id = executor
         .start_agent(&component.id, succeeding_agent_id.clone())
         .await?;
 
@@ -422,6 +436,9 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
             data_value!("/small.bin", 1024u64),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&failing_worker_id).await?;
+    executor.check_oplog_is_queryable(&succeeding_worker_id).await?;
 
     Ok(())
 }
@@ -446,7 +463,7 @@ async fn agent_quota_stream_overwrite_same_file_should_not_double_charge(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "stream-overwrite-same-file-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -467,6 +484,8 @@ async fn agent_quota_stream_overwrite_same_file_should_not_double_charge(
             data_value!("/same-stream.bin", 1024u64),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -494,7 +513,7 @@ async fn agent_quota_stream_to_stdout_does_not_charge_quota(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "stream-stdout-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -506,6 +525,8 @@ async fn agent_quota_stream_to_stdout_does_not_charge_quota(
             data_value!(1024u64),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -531,7 +552,7 @@ async fn agent_quota_blocking_stream_and_flush_exceeding_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "blocking-stream-write-quota-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -553,6 +574,8 @@ async fn agent_quota_blocking_stream_and_flush_exceeding_limit_fails(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -577,7 +600,7 @@ async fn agent_quota_blocking_stream_and_flush_within_limit_succeeds(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "blocking-stream-write-quota-ok-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -589,6 +612,8 @@ async fn agent_quota_blocking_stream_and_flush_within_limit_succeeds(
             data_value!("/stream.bin", 1024u64),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -617,7 +642,7 @@ async fn agent_quota_set_size_grow_beyond_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "set-size-grow-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -650,6 +675,8 @@ async fn agent_quota_set_size_grow_beyond_limit_fails(
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
     Ok(())
 }
 
@@ -675,7 +702,7 @@ async fn agent_quota_set_size_shrink_releases_quota(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "set-size-shrink-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -709,6 +736,8 @@ async fn agent_quota_set_size_shrink_releases_quota(
         )
         .await?;
 
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
     Ok(())
 }
 
@@ -733,7 +762,7 @@ async fn agent_quota_pwrite_beyond_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "pwrite-quota-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -751,6 +780,8 @@ async fn agent_quota_pwrite_beyond_limit_fails(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -774,7 +805,7 @@ async fn agent_quota_pwrite_within_limit_succeeds(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "pwrite-ok-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -797,6 +828,8 @@ async fn agent_quota_pwrite_within_limit_succeeds(
         content,
         Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -822,7 +855,7 @@ async fn agent_quota_pwrite_overwrite_same_range_should_not_double_charge(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "agent-quota-pwrite-overwrite-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -844,6 +877,8 @@ async fn agent_quota_pwrite_overwrite_same_range_should_not_double_charge(
             data_value!("/pwrite.txt", 0u64, "hello world"),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -871,7 +906,7 @@ async fn agent_quota_cumulative_across_write_paths(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "agent-quota-cumulative-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -904,6 +939,8 @@ async fn agent_quota_cumulative_across_write_paths(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -1016,6 +1053,8 @@ async fn agent_quota_storage_usage_survives_restart(
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
+    executor.check_oplog_is_queryable(&worker).await?;
+
     Ok(())
 }
 
@@ -1037,7 +1076,7 @@ async fn executor_pool_write_within_capacity_succeeds(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "exec-pool-ok-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -1049,6 +1088,8 @@ async fn executor_pool_write_within_capacity_succeeds(
             data_value!("/testfile.txt", "hello world"),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -1074,7 +1115,7 @@ async fn executor_pool_freed_after_file_deletion(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "exec-pool-release-delete-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -1104,6 +1145,8 @@ async fn executor_pool_freed_after_file_deletion(
             data_value!("/testfile2.txt", "hello world"),
         )
         .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -1229,6 +1272,8 @@ async fn executor_pool_failed_acquire_leaves_no_phantom_oplog_entry(
         Value::Result(Ok(Some(Box::new(Value::String(content_file3)))))
     );
 
+    executor.check_oplog_is_queryable(&worker).await?;
+
     Ok(())
 }
 
@@ -1334,6 +1379,9 @@ async fn executor_pool_idle_worker_evicted_when_pool_full(
         Value::Result(Ok(Some(Box::new(Value::String(content_b.clone())))))
     );
 
+    executor.check_oplog_is_queryable(&worker_a).await?;
+    executor.check_oplog_is_queryable(&worker_b).await?;
+
     Ok(())
 }
 
@@ -1376,7 +1424,7 @@ async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem
     let content_b = "B".repeat(2048);
 
     // Worker A writes 2 KB and goes idle — pool exhausted (2/2 permits held).
-    executor.start_agent(&component.id, agent_a.clone()).await?;
+    let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
     executor
         .invoke_and_await_agent(
             &component,
@@ -1390,7 +1438,7 @@ async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem
     // set to 2 KB → ReacquirePermits → blocking acquire_storage requests 2 KB
     // → try_free_up_storage evicts idle Worker A (freeing 2 permits)
     // → Worker B acquires 2 permits and its write succeeds.
-    executor.start_agent(&component.id, agent_b.clone()).await?;
+    let worker_b = executor.start_agent(&component.id, agent_b.clone()).await?;
     executor
         .invoke_and_await_agent(
             &component,
@@ -1415,6 +1463,9 @@ async fn executor_pool_idle_worker_evicted_on_first_write_node_out_of_filesystem
         content,
         Value::Result(Ok(Some(Box::new(Value::String(content_b)))))
     );
+
+    executor.check_oplog_is_queryable(&worker_a).await?;
+    executor.check_oplog_is_queryable(&worker_b).await?;
 
     Ok(())
 }
@@ -1469,7 +1520,7 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
     let content_c2 = "D".repeat(2 * 1024); // 2 KB → the extra write that fails
 
     // Worker A: write 2 KB → pool: 4 KB free.
-    executor.start_agent(&component.id, agent_a.clone()).await?;
+    let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
     executor
         .invoke_and_await_agent(
             &component,
@@ -1491,7 +1542,7 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
         .await?;
 
     // Worker C: write 3 KB → pool: 0 KB free. C goes idle.
-    executor.start_agent(&component.id, agent_c.clone()).await?;
+    let worker_c = executor.start_agent(&component.id, agent_c.clone()).await?;
     executor
         .invoke_and_await_agent(
             &component,
@@ -1575,6 +1626,10 @@ async fn executor_pool_only_gap_evicted_not_full_amount(
         read_c2,
         Value::Result(Ok(Some(Box::new(Value::String(content_c2)))))
     );
+
+    executor.check_oplog_is_queryable(&worker_a).await?;
+    executor.check_oplog_is_queryable(&worker_b).await?;
+    executor.check_oplog_is_queryable(&worker_c).await?;
 
     Ok(())
 }
@@ -1662,7 +1717,7 @@ async fn executor_pool_storage_usage_survives_restart(
     // If Worker A's current_filesystem_storage_usage was incorrectly reconstructed as 2 KB
     // (missing the delete delta), its restart would pre-acquire 2 KB leaving 0 KB
     // free, and Worker B's write would fail.
-    executor.start_agent(&component.id, agent_b.clone()).await?;
+    let worker_b = executor.start_agent(&component.id, agent_b.clone()).await?;
     executor
         .invoke_and_await_agent(
             &component,
@@ -1710,6 +1765,9 @@ async fn executor_pool_storage_usage_survives_restart(
         )))))
     );
 
+    executor.check_oplog_is_queryable(&worker_a).await?;
+    executor.check_oplog_is_queryable(&worker_b).await?;
+
     Ok(())
 }
 
@@ -1736,7 +1794,7 @@ async fn agent_quota_blocking_splice_exceeding_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "blocking-splice-quota-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -1771,6 +1829,8 @@ async fn agent_quota_blocking_splice_exceeding_limit_fails(
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
 
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
     Ok(())
 }
 
@@ -1794,7 +1854,7 @@ async fn agent_quota_splice_exceeding_limit_fails(
         .await?;
 
     let agent_id = agent_id!("FileSystem", "splice-quota-1");
-    executor
+    let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
@@ -1825,6 +1885,8 @@ async fn agent_quota_splice_exceeding_limit_fails(
         err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
         "expected AgentExceededFilesystemStorageLimit, got: {err_str}"
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
