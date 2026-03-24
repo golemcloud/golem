@@ -22,7 +22,7 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Mutex as StdMutex, Weak};
+use std::sync::Weak;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -52,18 +52,19 @@ pub struct FileLoader {
     // We need to ensure that no one else is using the file while we are deleting it.
     // To do that, give every file a unique number.
     item_counter: AtomicU64,
-    /// Executor-wide storage semaphore. When set, acquiring a new cache entry
-    /// (i.e. downloading the file for the first time) also acquires semaphore
-    /// permits proportional to the file size. The permit is embedded in the
-    /// cache entry and released automatically when the last `FileUseToken`
-    /// holding that entry is dropped. Subsequent workers that hardlink to the
-    /// same cache file do not acquire additional permits.
-    filesystem_storage_semaphore: StdMutex<Option<Arc<FilesystemStorageSemaphore>>>,
+    /// Executor-wide storage semaphore. When `Some`, acquiring a new cache
+    /// entry (i.e. downloading the file for the first time) also acquires
+    /// semaphore permits proportional to the file size. The permit is embedded
+    /// in the cache entry and released automatically when the last
+    /// `FileUseToken` holding that entry is dropped. Subsequent workers that
+    /// hardlink to the same cached file do not acquire additional permits.
+    filesystem_storage_semaphore: Option<Arc<FilesystemStorageSemaphore>>,
 }
 
 impl FileLoader {
     pub fn new(
         initial_component_files_service: Arc<InitialComponentFilesService>,
+        filesystem_storage_semaphore: Option<Arc<FilesystemStorageSemaphore>>,
     ) -> Result<Self, anyhow::Error> {
         let cache_dir = tempfile::Builder::new()
             .prefix("golem-initial-component-files")
@@ -74,14 +75,8 @@ impl FileLoader {
             cache: Mutex::new(HashMap::new()),
             cache_dir,
             item_counter: AtomicU64::new(0),
-            filesystem_storage_semaphore: StdMutex::new(None),
+            filesystem_storage_semaphore,
         })
-    }
-
-    /// Wire up the executor-wide storage semaphore. Must be called after both
-    /// `FileLoader` and `ActiveWorkers` have been constructed.
-    pub fn set_filesystem_storage_semaphore(&self, semaphore: Arc<FilesystemStorageSemaphore>) {
-        *self.filesystem_storage_semaphore.lock().unwrap() = Some(semaphore);
     }
 
     /// Read-only files can be safely shared between workers. Download once to cache and hardlink to target.
@@ -254,8 +249,7 @@ impl FileLoader {
                 // pool is exhausted we fail immediately; the worker will be
                 // retried once space is freed.
                 let filesystem_storage_permit = {
-                    let sem_opt = self.filesystem_storage_semaphore.lock().unwrap().clone();
-                    if let Some(sem) = sem_opt {
+                    if let Some(sem) = &self.filesystem_storage_semaphore {
                         match sem.try_acquire(file_size).await {
                             Some(permit) => Some(permit),
                             None => {
@@ -410,12 +404,11 @@ mod tests {
         let upload_svc = Arc::new(InitialComponentFilesService::new(blob.clone()));
         let loader_svc = Arc::new(InitialComponentFilesService::new(blob));
 
-        let loader = FileLoader::new(loader_svc).unwrap();
         let semaphore = Arc::new(FilesystemStorageSemaphore::new(
             pool_bytes,
             Duration::from_millis(1),
         ));
-        loader.set_filesystem_storage_semaphore(semaphore.clone());
+        let loader = FileLoader::new(loader_svc, Some(semaphore.clone())).unwrap();
 
         let env_id = EnvironmentId::new();
         let data: Vec<u8> = content.to_vec();
