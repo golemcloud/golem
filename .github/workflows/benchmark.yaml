@@ -23,8 +23,15 @@ jobs:
           redis-version: latest
           auto-start: false
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+
       - name: Building release executables
         run: cargo make --profile ci build-release
+
+      - name: Build benchmark test components
+        run: cargo make build-benchmark-components
 
       - name: Checkout benchmark results repository
         uses: actions/checkout@v5

@@ -1169,6 +1169,14 @@ cd test-components
 ./build-components.sh rebuild
 '''
 
+[tasks.build-benchmark-components]
+description = "Builds only the benchmark test WASM components"
+dependencies = ["build", "build-sdk-ts"]
+script = '''
+cd test-components
+./build-components.sh benchmarks
+'''
+
 [tasks.clean-test-components]
 description = "Cleans all test WASM components"
 script = '''
