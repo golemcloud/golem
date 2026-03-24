@@ -147,6 +147,13 @@ jobs:
           npm install -g @openai/codex
           printenv OPENAI_API_KEY | codex login --with-api-key
 
+      - name: Build TS SDK (for GOLEM_PATH local SDK references)
+        run: |
+          cd sdks/ts
+          npm install -g pnpm@10
+          pnpm install
+          pnpm run build
+
       - name: Install Harness Dependencies
         run: |
           cd golem-skills/tests/harness
