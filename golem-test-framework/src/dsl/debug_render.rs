@@ -277,6 +277,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}increase:          {}", &params.delta,);
         }
+        PublicOplogEntry::FilesystemStorageUsageUpdate(params) => {
+            let _ = writeln!(result, "STORAGE USAGE UPDATE");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}delta:             {}", &params.delta);
+        }
         PublicOplogEntry::CreateResource(params) => {
             let _ = writeln!(result, "CREATE RESOURCE");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);

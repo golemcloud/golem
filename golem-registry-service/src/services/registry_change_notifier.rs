@@ -16,10 +16,12 @@ use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent, RegistryC
 use golem_api_grpc::proto::golem::registry::v1::{
     AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
     DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent,
-    SecuritySchemeChangedEvent, registry_invalidation_event::Payload,
+    ResourceDefinitionChangedEvent, SecuritySchemeChangedEvent,
+    registry_invalidation_event::Payload,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::resource_definition::ResourceDefinitionId;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
 
@@ -310,6 +312,19 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
             *event_id,
             Payload::SecuritySchemeChanged(SecuritySchemeChangedEvent {
                 environment_id: Some(EnvironmentId(*environment_id).into()),
+            }),
+        ),
+        RegistryChangeEvent::ResourceDefinitionChanged {
+            event_id,
+            environment_id,
+            resource_definition_id,
+            resource_name,
+        } => (
+            *event_id,
+            Payload::ResourceDefinitionChanged(ResourceDefinitionChangedEvent {
+                environment_id: Some(EnvironmentId(*environment_id).into()),
+                resource_definition_id: Some(ResourceDefinitionId(*resource_definition_id).into()),
+                resource_name: resource_name.clone(),
             }),
         ),
     };

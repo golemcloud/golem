@@ -328,6 +328,8 @@ impl Services {
         let resource_definition_service = Arc::new(ResourceDefinitionService::new(
             environment_service.clone(),
             repos.resource_definition_repo.clone(),
+            repos.registry_change_repo.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let agent_secret_service = Arc::new(AgentSecretService::new(
