@@ -32,8 +32,8 @@ pub trait RegistryChangeNotifier: Send + Sync {
     /// Get a new broadcast receiver for subscribing to live events.
     fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent>;
 
-    /// Start any background tasks needed by this implementation (e.g., PgListener).
-    /// No-op for implementations that don't need background tasks.
+    /// Start any background tasks needed by this implementation (e.g., PgListener
+    /// or local signal processing worker).
     fn start_background_tasks(
         &self,
         _join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
@@ -43,6 +43,8 @@ pub trait RegistryChangeNotifier: Send + Sync {
 }
 
 /// Local in-process notifier for single-node deployments (e.g., SQLite).
+/// Signal calls enqueue local processing and a background worker fetches and broadcasts
+/// concrete registry change events.
 pub struct LocalRegistryChangeNotifier {
     sender: broadcast::Sender<RegistryChangeEvent>,
     repo: Arc<dyn RegistryChangeRepo>,
@@ -119,9 +121,8 @@ impl RegistryChangeNotifier for LocalRegistryChangeNotifier {
 }
 
 /// Postgres-backed notifier that uses LISTEN/NOTIFY for cross-node propagation.
-/// Immediate local delivery is also provided via notify() for low-latency
-/// same-node event propagation; the PgListener handles cross-node delivery.
-/// This means same-node subscribers may see duplicate events — dedup by event_id.
+/// Background listener tasks fetch outbox events and broadcast them internally.
+/// External signal calls are ignored for Postgres.
 pub struct PostgresRegistryChangeNotifier {
     sender: broadcast::Sender<RegistryChangeEvent>,
     repo: Arc<dyn RegistryChangeRepo>,
