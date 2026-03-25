@@ -27,12 +27,12 @@ use golem_api_grpc::proto::golem::worker::v1::{
     resume_worker_response, revert_worker_response, update_worker_response,
 };
 use golem_common::model::AgentId;
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::grpc::{proto_agent_id_string, proto_component_id_string};
+use golem_service_base::grpc::proto_agent_id_string;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -51,7 +51,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "launch_new_worker",
-            component_id = proto_component_id_string(&request.component_id),
+            component_id = ComponentId::render_proto(request.component_id),
             name = request.name
         );
 

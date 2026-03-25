@@ -1841,3 +1841,98 @@ async fn deployment_invalidates_agent_resolution_cache(
 
     Ok(())
 }
+
+/// Verifies that the per-agent disk space quota from the plan is enforced
+/// end-to-end through the full Golem stack. The user's plan is changed to one
+/// with a 5-byte disk quota; writing "hello world" (11 bytes) must then fail
+/// with `WorkerAgentExceededFilesystemStorageLimit`.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn agent_exceeds_per_plan_disk_space_quota(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+
+    let user = deps.user().await?;
+
+    // Switch the user to the low_disk_space plan (5-byte per-worker quota).
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_disk_space_plan(),
+            },
+        )
+        .await?;
+
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "disk-quota-exceeded-1");
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    // "hello world" is 11 bytes — exceeds the 5-byte per-agent plan limit.
+    let result = user
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/testfile.txt", "hello world"),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "expected write to fail when per-plan disk quota is exceeded"
+    );
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("AgentExceededFilesystemStorageLimit") || err_str.contains("storage"),
+        "expected WorkerAgentExceededFilesystemStorageLimit from plan quota enforcement, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// Verifies that writing within the per-plan disk quota succeeds end-to-end
+/// through the full Golem stack. Uses the default plan which has a generous
+/// disk quota.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn agent_write_within_per_plan_disk_space_quota_succeeds(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    // Default plan has a very large disk quota — any normal write succeeds.
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("FileSystem", "disk-quota-ok-1");
+    user.start_agent(&component.id, agent_id.clone()).await?;
+
+    user.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "write_file",
+        data_value!("/testfile.txt", "hello world"),
+    )
+    .await?;
+
+    Ok(())
+}

@@ -9623,6 +9623,7 @@ components:
       - contentHash
       - path
       - permissions
+      - size
       properties:
         contentHash:
           type: string
@@ -9635,6 +9636,9 @@ components:
           description: Path inside a component filesystem. Must be absolute.
         permissions:
           $ref: '#/components/schemas/ComponentFilePermissions'
+        size:
+          type: integer
+          format: uint64
     InstalledPlugin:
       type: object
       title: InstalledPlugin
@@ -10130,6 +10134,7 @@ components:
       - monthlyUploadLimit
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
+      - maxDiskSpacePerWorker
       properties:
         planId:
           type: string
@@ -10164,6 +10169,9 @@ components:
           type: integer
           format: uint64
         maxTableElementsPerWorker:
+          type: integer
+          format: uint64
+        maxDiskSpacePerWorker:
           type: integer
           format: uint64
     PluginInstallation:

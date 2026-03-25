@@ -22,6 +22,7 @@ use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, Dep
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
+use crate::services::resource_definition::ResourceDefinitionService;
 use applying::Apply;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -43,6 +44,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
     GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse,
+    GetResourceDefinitionByIdRequest, GetResourceDefinitionByIdResponse,
+    GetResourceDefinitionByIdSuccessResponse, GetResourceDefinitionByNameRequest,
+    GetResourceDefinitionByNameResponse, GetResourceDefinitionByNameSuccessResponse,
     GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
     RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeAtDeploymentRequest,
     ResolveAgentTypeAtDeploymentResponse, ResolveAgentTypeAtDeploymentSuccessResponse,
@@ -57,7 +61,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_current_environment_state_response,
-    get_deployed_component_metadata_response, get_resource_limits_response, registry_service_error,
+    get_deployed_component_metadata_response, get_resource_definition_by_id_response,
+    get_resource_definition_by_name_response, get_resource_limits_response, registry_service_error,
     resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
     resolve_component_response, resolve_latest_agent_type_by_names_response,
     update_worker_connection_limit_response, update_worker_limit_response,
@@ -70,11 +75,8 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::grpc::{
-    proto_account_id_string, proto_application_id_string, proto_component_id_string,
-    proto_environment_id_string,
-};
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -93,6 +95,7 @@ pub struct RegistryServiceGrpcApi {
     environment_state_service: Arc<EnvironmentStateService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     registry_change_repo: Arc<dyn RegistryChangeRepo>,
+    resource_definition_service: Arc<ResourceDefinitionService>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -108,6 +111,7 @@ impl RegistryServiceGrpcApi {
         environment_state_service: Arc<EnvironmentStateService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         registry_change_repo: Arc<dyn RegistryChangeRepo>,
+        resource_definition_service: Arc<ResourceDefinitionService>,
     ) -> Self {
         Self {
             auth_service,
@@ -121,6 +125,7 @@ impl RegistryServiceGrpcApi {
             environment_state_service,
             registry_change_notifier,
             registry_change_repo,
+            resource_definition_service,
         }
     }
 
@@ -456,6 +461,46 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn get_resource_definition_by_id_internal(
+        &self,
+        request: GetResourceDefinitionByIdRequest,
+    ) -> Result<GetResourceDefinitionByIdSuccessResponse, GrpcApiError> {
+        let resource_definition_id: ResourceDefinitionId = request
+            .resource_definition_id
+            .ok_or("missing resource_definition_id field")?
+            .try_into()?;
+
+        let resource_definition = self
+            .resource_definition_service
+            .get(resource_definition_id, &AuthCtx::system())
+            .await?;
+
+        Ok(GetResourceDefinitionByIdSuccessResponse {
+            resource_definition: Some(resource_definition.into()),
+        })
+    }
+
+    async fn get_resource_definition_by_name_internal(
+        &self,
+        request: GetResourceDefinitionByNameRequest,
+    ) -> Result<GetResourceDefinitionByNameSuccessResponse, GrpcApiError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+
+        let resource_name = ResourceName(request.name);
+
+        let resource_definition = self
+            .resource_definition_service
+            .get_in_environment(environment_id, &resource_name, &AuthCtx::system())
+            .await?;
+
+        Ok(GetResourceDefinitionByNameSuccessResponse {
+            resource_definition: Some(resource_definition.into()),
+        })
+    }
+
     async fn resolve_latest_agent_type_by_names_internal(
         &self,
         request: ResolveLatestAgentTypeByNamesRequest,
@@ -605,7 +650,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_resource_limits",
-            account_id = proto_account_id_string(&request.account_id)
+            account_id = AccountId::render_proto(request.account_id)
         );
 
         let response = match self
@@ -630,7 +675,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "update_worker_limit",
-            account_id = proto_account_id_string(&request.account_id)
+            account_id = AccountId::render_proto(request.account_id)
         );
 
         let response = match self
@@ -655,7 +700,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "update_worker_connection_limit",
-            account_id = proto_account_id_string(&request.account_id)
+            account_id = AccountId::render_proto(request.account_id)
         );
 
         let response = match self
@@ -705,7 +750,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "download_component",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = ComponentId::render_proto(request.component_id)
         );
         let stream: Self::DownloadComponentStream = match self
             .download_component_internal(request)
@@ -749,7 +794,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_component_metadata",
-            component_id = proto_component_id_string(&request.component_id),
+            component_id = ComponentId::render_proto(request.component_id),
             revision = request.revision
         );
 
@@ -775,7 +820,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_deployed_component_metadata",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = ComponentId::render_proto(request.component_id)
         );
 
         let response = match self
@@ -800,7 +845,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_all_deployed_component_revisions",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = ComponentId::render_proto(request.component_id)
         );
 
         let response = match self
@@ -828,9 +873,9 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let record = recorded_grpc_api_request!(
             "resolve_component",
             component_slug = &request.component_slug,
-            account_id = proto_account_id_string(&request.resolving_account_id),
-            application_id = proto_application_id_string(&request.resolving_application_id),
-            environment_id = proto_environment_id_string(&request.resolving_environment_id)
+            account_id = AccountId::render_proto(request.resolving_account_id),
+            application_id = ApplicationId::render_proto(request.resolving_application_id),
+            environment_id = EnvironmentId::render_proto(request.resolving_environment_id)
         );
 
         let response = match self
@@ -855,7 +900,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_all_agent_types",
-            environment_id = proto_environment_id_string(&request.environment_id)
+            environment_id = EnvironmentId::render_proto(request.environment_id)
         );
 
         let response = match self
@@ -880,7 +925,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_agent_type",
-            environment_id = proto_environment_id_string(&request.environment_id),
+            environment_id = EnvironmentId::render_proto(request.environment_id),
             agent_type = &request.agent_type
         );
 
@@ -906,7 +951,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "resolve_latest_agent_type_by_names",
-            account_id = proto_account_id_string(&request.account_id),
+            account_id = AccountId::render_proto(request.account_id),
             app_name = &request.app_name,
             environment_name = &request.environment_name,
             agent_type_name = &request.agent_type_name,
@@ -934,7 +979,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "resolve_agent_type_at_deployment",
-            account_id = proto_account_id_string(&request.account_id),
+            account_id = AccountId::render_proto(request.account_id),
             app_name = &request.app_name,
             environment_name = &request.environment_name,
             agent_type_name = &request.agent_type_name,
@@ -1040,7 +1085,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_current_environment_state",
-            environment_id = proto_environment_id_string(&request.environment_id),
+            environment_id = EnvironmentId::render_proto(request.environment_id),
         );
 
         let response = match self
@@ -1054,6 +1099,57 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetCurrentEnvironmentStateResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_resource_definition_by_id(
+        &self,
+        request: Request<GetResourceDefinitionByIdRequest>,
+    ) -> Result<Response<GetResourceDefinitionByIdResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_resource_definition_by_id",
+            resource_definition_id =
+                ResourceDefinitionId::render_proto(request.resource_definition_id),
+        );
+
+        let response = match self
+            .get_resource_definition_by_id_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_resource_definition_by_id_response::Result::Success(result),
+            Err(error) => get_resource_definition_by_id_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetResourceDefinitionByIdResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_resource_definition_by_name(
+        &self,
+        request: Request<GetResourceDefinitionByNameRequest>,
+    ) -> Result<Response<GetResourceDefinitionByNameResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_resource_definition_by_name",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+        );
+
+        let response = match self
+            .get_resource_definition_by_name_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_resource_definition_by_name_response::Result::Success(result),
+            Err(error) => get_resource_definition_by_name_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetResourceDefinitionByNameResponse {
             result: Some(response),
         }))
     }
