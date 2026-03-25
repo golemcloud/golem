@@ -46,12 +46,32 @@ pub trait RegistryChangeNotifier: Send + Sync {
     }
 }
 
+impl<T> RegistryChangeNotifier for Arc<T>
+where
+    T: RegistryChangeNotifier + ?Sized,
+{
+    fn signal_new_events_available(&self) {
+        (**self).signal_new_events_available();
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent> {
+        (**self).subscribe()
+    }
+
+    fn start_background_tasks(
+        &self,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) {
+        (**self).start_background_tasks(join_set);
+    }
+}
+
 pub trait RequiresNotificationSignalExt<T> {
-    fn signal_new_events_available(self, notifier: &Arc<dyn RegistryChangeNotifier>) -> T;
+    fn signal_new_events_available(self, notifier: &dyn RegistryChangeNotifier) -> T;
 }
 
 impl<T> RequiresNotificationSignalExt<T> for RequiresNotificationSignal<T> {
-    fn signal_new_events_available(self, notifier: &Arc<dyn RegistryChangeNotifier>) -> T {
+    fn signal_new_events_available(self, notifier: &dyn RegistryChangeNotifier) -> T {
         notifier.signal_new_events_available();
         self.into_inner_after_signal()
     }
