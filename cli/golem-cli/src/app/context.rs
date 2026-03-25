@@ -23,7 +23,7 @@ use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
     ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig,
     CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps,
-    WithSource, DEFAULT_CONFIG_FILE_NAME,
+    WithSource,
 };
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
@@ -37,6 +37,8 @@ use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+
+const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,

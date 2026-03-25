@@ -50,9 +50,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use url::Url;
 
-pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
-pub const TEMP_DIR: &str = "golem-temp";
-pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
+const TEMP_DIR: &str = "golem-temp";
+const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
 #[derive(Clone, Debug, Default)]
 pub struct BuildConfig {

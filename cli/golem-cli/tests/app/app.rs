@@ -153,6 +153,7 @@ async fn build_check(_tracing: &Tracing) {
 
     ctx.cd(app_name);
 
+    // Phase 1: baseline check on a freshly generated mixed TS+Rust app.
     let outputs = ctx.cli([cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
 
@@ -194,6 +195,7 @@ async fn build_check(_tracing: &Tracing) {
     cargo_toml["dependencies"]["golem-rust"] = value("999.0.0");
     fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
 
+    // Phase 2: intentionally break versions/settings and verify build check can auto-fix them.
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains("Planned required changes for dependencies and configurations"));
@@ -217,11 +219,13 @@ async fn build_check(_tracing: &Tracing) {
     cargo_toml["dependencies"] = toml_edit::Item::Table(toml_edit::Table::default());
     fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
 
+    // Phase 3: wipe dependencies completely and verify check restores everything needed.
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains("Planned required changes for dependencies and configurations"));
     assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
 
+    // Phase 4: full build should succeed after all auto-applied fixes.
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
 }

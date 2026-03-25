@@ -658,9 +658,7 @@ fn typescript_sdk_requirements(
         PackageJsonDependencyRequirement {
             name: "tslib",
             section: PackageJsonSection::DevDependencies,
-            expected: ExpectedDependencyKind::ExactLiteral(
-                sdk_versions::ts_dep::TSLIB.to_string(),
-            ),
+            expected: ExpectedDependencyKind::ExactLiteral(sdk_versions::ts_dep::TSLIB.to_string()),
             semantics: DependencyMatcherSemantics::TypeScript,
         },
         PackageJsonDependencyRequirement {
