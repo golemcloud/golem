@@ -7,7 +7,6 @@ steps:
   - id: "create-db-app"
     prompt: |
       Create a new Golem application called db-app with TypeScript.
-
       Then modify the app to be a simple task tracker backed by PostgreSQL:
       1. Create a TaskAgent with mount path "/tasks/{name}" that:
          - Has a POST endpoint at "/add" that takes a title (string) parameter, inserts it into a "tasks" table, and returns a confirmation message
@@ -16,14 +15,13 @@ steps:
       2. Check node_modules/@golemcloud/golem-ts-sdk/types/ for the rdbms version (e.g. golem_rdbms_X_Y_Z_postgres.d.ts) and use that version in the import: import { DbConnection, DbValue, DbResult } from 'golem:rdbms/postgres@X.Y.Z'
       3. Read the DB connection URL from process.env.DB_POSTGRES_URL
       4. Set DB_POSTGRES_URL environment variable in golem.yaml under the component's env section to "postgres://postgres:postgres@localhost:5432/golem_test"
-
-      Build the project with golem build, then deploy with golem deploy --yes.
     expectedSkills:
       - "golem-db-app"
     allowedExtraSkills:
       - "golem-new-project"
-    verify:
-      deploy: true
+
+  - id: "build-and-deploy"
+    prompt: "Build the project with golem build in the db-app directory. Fix any build errors. Then deploy with golem deploy --yes."
 
   - id: "check-project-files"
     shell:

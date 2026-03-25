@@ -3,7 +3,7 @@ settings:
   timeout_per_subprompt: 300
 steps:
   - id: "create-project"
-    prompt: "Create a new Golem application called test-app with TypeScript. After creating the project, fix the SDK versions in package.json by replacing any local path references to golem-ts-sdk and golem-ts-typegen with version 1.0.0-dev.1, then run npm install"
+    prompt: "Create a new Golem application called test-app with TypeScript."
     expectedSkills:
       - "golem-new-project"
     allowedExtraSkills:

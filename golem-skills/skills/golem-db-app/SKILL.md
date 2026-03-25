@@ -39,7 +39,7 @@ import {
     endpoint
 } from '@golemcloud/golem-ts-sdk';
 // Use the version from Step 2 (check node_modules/@golemcloud/golem-ts-sdk/types/)
-import { DbConnection, DbValue, DbResult } from 'golem:rdbms/postgres@1.5.0';
+import { DbConnection, DbValue, DbResult } from 'golem:rdbms/postgres@X.Y.Z';
 
 @agent({
     mount: "/items/{name}"
@@ -163,9 +163,8 @@ After deployment, HTTP endpoints are available at `http://<app-name>.localhost:9
 ## Checklist
 
 1. `golem new` executed successfully
-2. SDK versions fixed to `1.0.0-dev.1` in `package.json`
-3. Agent imports `DbConnection` from `'golem:rdbms/postgres@1.5.0'`
-4. Agent uses `@agent({ mount: "..." })` and `@endpoint({ get/post: "..." })`
-5. `DB_POSTGRES_URL` set in `golem.yaml` under component env
-6. `golem build` succeeds
-7. `golem deploy --yes` succeeds
+2. Agent imports `DbConnection` from `'golem:rdbms/postgres@X.Y.Z'` (version from Step 2)
+3. Agent uses `@agent({ mount: "..." })` and `@endpoint({ get/post: "..." })`
+4. `DB_POSTGRES_URL` set in `golem.yaml` under component env
+5. `golem build` succeeds
+6. `golem deploy --yes` succeeds

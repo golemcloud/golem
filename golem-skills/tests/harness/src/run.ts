@@ -352,6 +352,7 @@ Options:
   const scenarioReports: ScenarioReport[] = [];
   let hasFailures = false;
   let isFirstScenario = true;
+  let lastWorkspace: string | undefined;
 
   for (const currentAgent of agents) {
     for (const currentLanguage of languages) {
@@ -376,12 +377,12 @@ Options:
 
         if (scenarioFilter && spec.name !== scenarioFilter) continue;
 
-        // Cleanup Golem state between scenarios
-        if (!isFirstScenario && !skipCleanup) {
+        // Cleanup Golem state between scenarios (run in previous workspace where golem.yaml exists)
+        if (!isFirstScenario && !skipCleanup && lastWorkspace) {
           console.log(
             chalk.gray("Cleaning up Golem state between scenarios..."),
           );
-          await cleanupGolemState(process.cwd());
+          await cleanupGolemState(lastWorkspace);
         }
         isFirstScenario = false;
 
@@ -413,6 +414,7 @@ Options:
         );
 
         const scenarioResult = await executor.execute(spec);
+        lastWorkspace = workspace;
         const results = scenarioResult.stepResults;
 
         const allPassed = scenarioResult.status === "pass";
