@@ -96,7 +96,7 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(
             &mut result,
             "builtin plugins: enabled={}",
-            self.builtin_plugins.enabled,
+            self.builtin_plugins.enabled(),
         );
 
         let _ = writeln!(&mut result, "deployment events:");
@@ -394,9 +394,23 @@ impl ComponentCompilationEnabledConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct BuiltinPluginsConfig {
-    pub enabled: bool,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum BuiltinPluginsConfig {
+    Enabled(Empty),
+    Disabled(Empty),
+}
+
+impl Default for BuiltinPluginsConfig {
+    fn default() -> Self {
+        Self::Disabled(Empty {})
+    }
+}
+
+impl BuiltinPluginsConfig {
+    pub fn enabled(&self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
