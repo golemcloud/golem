@@ -187,14 +187,19 @@ async fn build_check(_tracing: &Tracing) {
     .unwrap();
 
     let cargo_toml_path = ctx.cwd_path_join(rust_component_dir.join("Cargo.toml"));
-    let mut cargo_toml: DocumentMut = fs::read_to_string(&cargo_toml_path).unwrap().parse().unwrap();
+    let mut cargo_toml: DocumentMut = fs::read_to_string(&cargo_toml_path)
+        .unwrap()
+        .parse()
+        .unwrap();
     cargo_toml["dependencies"]["golem-rust"] = value("999.0.0");
     fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
 
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Planned required changes for dependency checks"));
-    assert!(outputs.stdout_contains("Applying build check fixes"));
+    assert!(outputs.stdout_contains(
+        "Planned required changes for dependencies and configurations"
+    ));
+    assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
 }
 
 #[test]

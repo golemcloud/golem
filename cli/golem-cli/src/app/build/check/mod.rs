@@ -24,7 +24,7 @@ use crate::app::edit::cargo_toml::{DependencySpec, DependencyTable};
 use crate::app::edit::json::collect_object_entries;
 use crate::app::edit::tsconfig_json::RequiredSetting;
 use crate::fs;
-use crate::log::{log_action, LogColorize, LogIndent};
+use crate::log::LogColorize;
 use crate::model::GuestLanguage;
 use crate::sdk_overrides::{sdk_overrides, RustDependency};
 use crate::validation::ValidationBuilder;

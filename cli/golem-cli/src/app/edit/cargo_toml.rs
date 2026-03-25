@@ -300,21 +300,19 @@ fn has_dependency(doc: &DocumentMut, name: &str) -> bool {
 }
 
 fn collect_dependency_spec(doc: &DocumentMut, name: &str) -> Option<DependencySpec> {
-    let own = ["dependencies", "dev-dependencies", "build-dependencies"]
-        .iter()
-        .filter_map(|table_name| doc.get(table_name))
-        .filter_map(|table| table.get(name))
-        .find_map(|item| dependency_spec(item, doc, name));
+    for table_name in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(item) = doc.get(table_name).and_then(|table| table.get(name)) {
+            if is_workspace_ref(item) {
+                return workspace_dependency_item(doc, name).and_then(dependency_spec);
+            }
+            return dependency_spec(item);
+        }
+    }
 
-    own.or_else(|| {
-        doc.get("workspace")
-            .and_then(|workspace| workspace.get("dependencies"))
-            .and_then(|table| table.get(name))
-            .and_then(|item| dependency_spec(item, doc, name))
-    })
+    workspace_dependency_item(doc, name).and_then(dependency_spec)
 }
 
-fn dependency_spec(item: &Item, doc: &DocumentMut, dep_name: &str) -> Option<DependencySpec> {
+fn dependency_spec(item: &Item) -> Option<DependencySpec> {
     if item.is_str() {
         return item
             .as_str()
@@ -322,19 +320,6 @@ fn dependency_spec(item: &Item, doc: &DocumentMut, dep_name: &str) -> Option<Dep
     }
 
     let table = item.as_table_like()?;
-
-    if table
-        .get("workspace")
-        .and_then(|item| item.as_value())
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
-    {
-        return doc
-            .get("workspace")
-            .and_then(|workspace| workspace.get("dependencies"))
-            .and_then(|deps| deps.get(dep_name))
-            .and_then(|workspace_dep| dependency_spec(workspace_dep, doc, dep_name));
-    }
 
     if let Some(path) = table
         .get("path")
@@ -350,6 +335,20 @@ fn dependency_spec(item: &Item, doc: &DocumentMut, dep_name: &str) -> Option<Dep
         .and_then(|value| value.as_str())
         .map(|value| DependencySpec::Version(value.to_string()))
         .or_else(|| Some(DependencySpec::Unsupported(item.to_string())))
+}
+
+fn workspace_dependency_item<'a>(doc: &'a DocumentMut, name: &str) -> Option<&'a Item> {
+    doc.get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(|deps| deps.get(name))
+}
+
+fn is_workspace_ref(item: &Item) -> bool {
+    item.as_table_like()
+        .and_then(|table| table.get("workspace"))
+        .and_then(|item| item.as_value())
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
 }
 
 fn dependency_spec_to_item(spec: &DependencySpec) -> anyhow::Result<Item> {

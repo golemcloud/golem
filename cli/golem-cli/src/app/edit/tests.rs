@@ -316,6 +316,38 @@ golem-rust = "2.0.0-dev.2"
     assert_eq!(location, Some(DependencyLocation::WorkspaceDependencies));
 }
 
+#[test]
+fn cargo_toml_collect_dependency_specs_prefers_local_non_workspace_dependency() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = "2.3.0"
+
+[workspace.dependencies]
+golem-rust = "2.0.0-dev.2"
+"#;
+
+    let specs = cargo_toml::collect_dependency_specs(source, &["golem-rust"]).unwrap();
+    assert_eq!(
+        specs.get("golem-rust"),
+        Some(&Some(DependencySpec::Version("2.3.0".to_string())))
+    );
+}
+
+#[test]
+fn cargo_toml_collect_dependency_specs_workspace_ref_without_workspace_dep_is_none() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { workspace = true }
+"#;
+
+    let specs = cargo_toml::collect_dependency_specs(source, &["golem-rust"]).unwrap();
+    assert_eq!(specs.get("golem-rust"), Some(&None));
+}
+
 fn table_like(item: &toml_edit::Item) -> &dyn toml_edit::TableLike {
     if let Some(table) = item.as_table() {
         return table;
