@@ -46,8 +46,8 @@ use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecurityS
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
-use golem_service_base::repo::blob::Blob;
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::blob::Blob;
 use heck::ToKebabCase;
 use sqlx::FromRow;
 use std::str::FromStr;

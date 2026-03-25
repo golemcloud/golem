@@ -57,7 +57,7 @@ impl DeployedMcpService {
         match optional_deployment {
             Some(deployment) => {
                 let mut compiled_mcp = CompiledMcp::try_from(deployment)?;
-                
+
                 // Resolve security scheme by name at runtime
                 if let Some(scheme_name) = &compiled_mcp.security_scheme_name {
                     let scheme_record = self

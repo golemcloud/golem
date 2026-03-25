@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::DeployValidationError;
+use super::DeploymentWriteError;
 use super::http_parameter_conversion::build_http_agent_constructor_parameters;
 use super::ok_or_continue;
 use super::route_compilation::{
@@ -19,8 +21,6 @@ use super::route_compilation::{
     add_webhook_callback_routes, build_agent_http_api_deployment_details,
     make_invalid_agent_mount_error_maker,
 };
-use super::DeployValidationError;
-use super::DeploymentWriteError;
 use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
 use crate::model::api_definition::UnboundCompiledRoute;
 use golem_common::base_model::account::AccountId;
@@ -42,10 +42,10 @@ use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::ValueAndType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use heck::ToKebabCase;
-use std::collections::{hash_map, BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 
 #[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {
