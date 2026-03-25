@@ -51,6 +51,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
+use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
@@ -153,6 +154,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     state: PrivateDurableWorkerState,
     temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
+    resource_limits: Arc<AtomicResourceEntry>,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -174,6 +176,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         component_service: Arc<dyn ComponentService>,
+        resource_limits: Arc<AtomicResourceEntry>,
         config: Arc<GolemConfig>,
         worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -221,6 +224,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &component_metadata.files,
         )
         .await?;
+
+        // Acquire storage semaphore permits for read-write initial component files.
+        //
+        // Read-only files are hardlinked from the FileLoader shared cache, so
+        // they occupy disk space only once per unique content hash regardless of
+        // how many workers reference them. FileLoader acquires the semaphore
+        // permit on the first cache miss and releases it when the last
+        // FileUseToken for that entry is dropped — no per-worker charge here.
+        //
+        // Read-write files are copied per-worker (each worker gets its own
+        // private inode and data blocks), so they must be charged individually.
+        if let Some(worker) = invocation_queue.upgrade() {
+            let rw_bytes: u64 = component_metadata
+                .files
+                .iter()
+                .filter(|f| f.permissions == ComponentFilePermissions::ReadWrite)
+                .map(|f| f.size)
+                .sum();
+            if rw_bytes > 0 {
+                worker
+                    .acquire_initial_filesystem_storage(rw_bytes)
+                    .await
+                    .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
+            }
+        }
 
         let config_vars = effective_config_vars(
             worker_config.initial_config_vars.clone(),
@@ -287,6 +315,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.deleted_regions.clone(),
                 component_metadata,
                 worker_config.total_linear_memory_size,
+                worker_config.current_filesystem_storage_usage,
                 worker_fork,
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
@@ -306,6 +335,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await,
             temp_dir,
             execution_status,
+            resource_limits,
         })
     }
 
@@ -424,6 +454,104 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.total_linear_memory_size
     }
 
+    pub fn current_filesystem_storage_usage(&self) -> u64 {
+        self.state.current_filesystem_storage_usage
+    }
+
+    pub fn max_disk_space(&self) -> u64 {
+        self.resource_limits.max_disk_space_limit()
+    }
+
+    /// Check whether acquiring `new_bytes` would breach the per-plan storage
+    /// limit. Returns `WorkerAgentExceededFilesystemStorageLimit` (permanent) if so.
+    /// Does NOT check the executor semaphore pool — that is done by
+    /// `acquire_filesystem_space`.
+    ///
+    /// No-op during replay.
+    pub fn check_filesystem_storage_quota(&self, new_bytes: u64) -> anyhow::Result<()> {
+        if self.state.is_replay() {
+            return Ok(());
+        }
+        let after = self
+            .state
+            .current_filesystem_storage_usage
+            .saturating_add(new_bytes);
+        if after > self.resource_limits.max_disk_space_limit() {
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Acquire `new_bytes` of storage from the executor semaphore pool.
+    ///
+    /// - During replay: no-op (permits were pre-acquired at startup).
+    /// - During live execution: calls `Worker::acquire_filesystem_space`, which
+    ///   tries the semaphore non-blockingly. On failure returns
+    ///   `NodeOutOfFilesystemStorage` (retriable via `ReacquirePermits`).
+    ///
+    /// Call `check_filesystem_quota` before calling this to enforce the per-plan
+    /// limit (`WorkerAgentExceededFilesystemStorageLimit`). This method only checks the
+    /// executor-wide semaphore pool (`NodeOutOfFilesystemStorage`).
+    pub async fn acquire_filesystem_storage_space(&mut self, new_bytes: u64) -> anyhow::Result<()> {
+        if self.state.is_replay() {
+            return Ok(());
+        }
+        // Acquire the semaphore permit first (non-blocking try). Writing the
+        // oplog entry after a confirmed acquire ensures the oplog accurately
+        // reflects only committed storage changes — a failed acquire leaves no
+        // phantom delta that would inflate `current_filesystem_storage_usage` on restart.
+        self.public_state
+            .worker()
+            .acquire_filesystem_storage_space(new_bytes)
+            .await?;
+        self.public_state
+            .worker()
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                new_bytes as i64,
+            ))
+            .await;
+        self.state.current_filesystem_storage_usage += new_bytes;
+        Ok(())
+    }
+
+    /// Release `freed_bytes` back to the executor semaphore pool.
+    /// Called when files are deleted or truncated.
+    /// During replay this is a no-op.
+    pub async fn release_filesystem_storage_space(&mut self, freed_bytes: u64) {
+        if self.state.is_replay() {
+            return;
+        }
+        let freed_bytes = freed_bytes.min(self.state.current_filesystem_storage_usage);
+        if freed_bytes == 0 {
+            return;
+        }
+        self.public_state
+            .worker()
+            .add_to_oplog(OplogEntry::filesystem_storage_usage_update(
+                -(freed_bytes as i64),
+            ))
+            .await;
+        self.public_state
+            .worker()
+            .release_filesystem_storage_space(freed_bytes)
+            .await;
+        self.state.current_filesystem_storage_usage -= freed_bytes;
+    }
+
+    /// Check the per-agent storage quota and acquire permits from the
+    /// executor-wide semaphore pool in a single step.
+    ///
+    /// This combines `check_filesystem_storage_quota` (per-plan limit) and
+    /// `acquire_filesystem_storage_space` (executor semaphore) — the two must
+    /// always be called together in this order.
+    pub async fn reserve_filesystem_storage(&mut self, new_bytes: u64) -> anyhow::Result<()> {
+        self.check_filesystem_storage_quota(new_bytes)?;
+        self.acquire_filesystem_storage_space(new_bytes).await
+    }
+
     pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             // The increased amount was already recorded in live mode, so our worker
@@ -473,6 +601,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => RetryDecision::None,
             TrapType::Error {
                 error: AgentError::ExceededTableLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::NodeOutOfFilesystemStorage,
+                ..
+            } => RetryDecision::ReacquirePermits,
+            TrapType::Error {
+                error: AgentError::AgentExceededFilesystemStorageLimit,
                 ..
             } => RetryDecision::None,
             TrapType::Error {
@@ -2889,6 +3025,19 @@ pub(crate) struct HttpOutputStreamState {
     pub request: HostRequestHttpRequest,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FilesystemOutputStreamState {
+    pub descriptor_rep: u32,
+    pub position: Option<u64>,
+    pub pending_reservation: Option<PendingFilesystemReservation>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingFilesystemReservation {
+    pub base_size: u64,
+    pub reserved_growth: u64,
+}
+
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -2925,11 +3074,19 @@ struct PrivateDurableWorkerState {
     /// before outgoing_handler::handle() is called and the HttpRequestState is created.
     pending_http_outgoing_request_body: HashMap<u32, u32>,
 
+    /// Tracks file-backed wasi output streams so quota charging can be based on
+    /// actual file growth instead of requested write size.
+    open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
+
     snapshotting_mode: Option<PersistenceLevel>,
 
     component_metadata: Component,
 
     total_linear_memory_size: u64,
+    /// Running total of storage bytes acquired from the executor semaphore pool
+    /// by this worker since it last started. Incremented on every successful
+    /// write; decremented when files are deleted or truncated.
+    current_filesystem_storage_usage: u64,
 
     invocation_context: InvocationContext,
     current_span_id: SpanId,
@@ -3016,6 +3173,7 @@ impl PrivateDurableWorkerState {
         deleted_regions: DeletedRegions,
         component_metadata: Component,
         total_linear_memory_size: u64,
+        current_filesystem_storage_usage: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
@@ -3080,9 +3238,11 @@ impl PrivateDurableWorkerState {
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
+            open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,
             total_linear_memory_size,
+            current_filesystem_storage_usage,
             replay_state,
             invocation_context,
             current_span_id,
@@ -3498,7 +3658,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path)
+                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -3587,7 +3747,7 @@ async fn update_filesystem(
                     };
 
                     let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path)
+                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
@@ -3604,7 +3764,7 @@ async fn update_filesystem(
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(environment_id, file.content_hash, &path)
+                            .get_read_only_to(environment_id, file.content_hash, &path, file.size)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }

@@ -18,6 +18,7 @@ import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/environment_state.proto";
+import "golem/common/quota.proto";
 import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
@@ -52,6 +53,10 @@ service RegistryService {
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
   rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
   rpc GetCurrentEnvironmentState (GetCurrentEnvironmentStateRequest) returns (GetCurrentEnvironmentStateResponse);
+
+  // quotas api
+  rpc GetResourceDefinitionById (GetResourceDefinitionByIdRequest) returns (GetResourceDefinitionByIdResponse);
+  rpc GetResourceDefinitionByName (GetResourceDefinitionByNameRequest) returns (GetResourceDefinitionByNameResponse);
 
   // registry invalidation stream — multiplexed event types
   rpc SubscribeRegistryInvalidations(SubscribeRegistryInvalidationsRequest)
@@ -361,6 +366,37 @@ message GetCurrentEnvironmentStateSuccessResponse {
   EnvironmentState environment_state = 1;
 }
 
+message GetResourceDefinitionByIdRequest {
+  golem.common.ResourceDefinitionId resource_definition_id = 1;
+}
+
+message GetResourceDefinitionByIdResponse {
+  oneof result {
+    GetResourceDefinitionByIdSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetResourceDefinitionByIdSuccessResponse {
+  golem.common.ResourceDefinition resource_definition = 1;
+}
+
+message GetResourceDefinitionByNameRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string name = 2;
+}
+
+message GetResourceDefinitionByNameResponse {
+  oneof result {
+    GetResourceDefinitionByNameSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetResourceDefinitionByNameSuccessResponse {
+  golem.common.ResourceDefinition resource_definition = 1;
+}
+
 // ── Multiplexed registry invalidation stream ──
 
 message SubscribeRegistryInvalidationsRequest {
@@ -380,6 +416,7 @@ message RegistryInvalidationEvent {
     EnvironmentPermissionsChangedEvent permissions_changed = 5;
     DomainRegistrationChangedEvent domain_registration_changed = 6;
     SecuritySchemeChangedEvent security_scheme_changed = 7;
+    ResourceDefinitionChangedEvent resource_definition_changed = 8;
   }
 }
 
@@ -413,4 +450,11 @@ message EnvironmentPermissionsChangedEvent {
 // Sent when a security scheme is created, updated, or deleted.
 message SecuritySchemeChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
+}
+
+// Sent when a resource definition is created, updated, or deleted.
+message ResourceDefinitionChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.common.ResourceDefinitionId resource_definition_id = 2;
+  string resource_name = 3;
 }

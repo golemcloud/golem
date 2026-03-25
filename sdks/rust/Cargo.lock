@@ -637,6 +637,7 @@ dependencies = [
  "serde",
  "serde_json",
  "test-r",
+ "unicode-segmentation",
  "url",
  "uuid",
  "wasi-logger",

@@ -151,6 +151,13 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
     },
+    /// A resource definition was created, updated, or deleted.
+    ResourceDefinitionChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        resource_definition_id: crate::base_model::resource_definition::ResourceDefinitionId,
+        resource_name: crate::base_model::resource_definition::ResourceName,
+    },
 }
 
 impl RegistryInvalidationEvent {
@@ -162,6 +169,7 @@ impl RegistryInvalidationEvent {
             Self::AccountTokensInvalidated { event_id, .. } => *event_id,
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
+            Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
         }
     }
 }

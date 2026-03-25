@@ -11163,6 +11163,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          FilesystemStorageUsageUpdate: '#/components/schemas/PublicOplogEntry_r#FilesystemStorageUsageUpdateParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -11204,6 +11205,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#FilesystemStorageUsageUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -11463,6 +11465,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#FailedUpdateParams'
+    PublicOplogEntry_r#FilesystemStorageUsageUpdateParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FilesystemStorageUsageUpdate
+            type: string
+            enum:
+            - FilesystemStorageUsageUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/r#FilesystemStorageUsageUpdateParams'
     PublicOplogEntry_r#FinishSpanParams:
       allOf:
       - type: object
@@ -12793,6 +12807,19 @@ components:
       required:
       - timestamp
       - targetRevision
+    r#FilesystemStorageUsageUpdateParams:
+      title: r#FilesystemStorageUsageUpdateParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        delta:
+          type: integer
+          format: int64
+      required:
+      - timestamp
+      - delta
     r#FinishSpanParams:
       title: r#FinishSpanParams
       type: object
@@ -14626,10 +14653,14 @@ components:
           type: string
         permissions:
           $ref: '#/components/schemas/ComponentFilePermissions'
+        size:
+          type: integer
+          format: uint64
       required:
       - contentHash
       - path
       - permissions
+      - size
     InstalledPlugin:
       title: InstalledPlugin
       type: object
@@ -15127,6 +15158,9 @@ components:
         maxTableElementsPerWorker:
           type: integer
           format: uint64
+        maxDiskSpacePerWorker:
+          type: integer
+          format: uint64
         perInvocationHttpLimit:
           type: integer
           format: uint64
@@ -15146,6 +15180,7 @@ components:
       - monthlyUploadLimit
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
+      - maxDiskSpacePerWorker
       - perInvocationHttpLimit
       - perInvocationRpcLimit
     PluginInstallation:
@@ -15528,9 +15563,14 @@ components:
           format: uint64
         period:
           $ref: '#/components/schemas/TimePeriod'
+        max:
+          description: Maximum burst capacity. Defaults to `value` if not specified.
+          type: integer
+          format: uint64
       required:
       - value
       - period
+      - max
     SecuritySchemeAgentSecurity:
       title: SecuritySchemeAgentSecurity
       description: |-

@@ -30,6 +30,7 @@ pub struct ProvidedRegistryService {
     admin_account_token: TokenSecret,
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
+    low_disk_space_plan_id: PlanId,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
@@ -43,6 +44,7 @@ impl ProvidedRegistryService {
         admin_account_token: TokenSecret,
         default_plan_id: PlanId,
         low_fuel_plan_id: PlanId,
+        low_disk_space_plan_id: PlanId,
     ) -> Self {
         info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -54,6 +56,7 @@ impl ProvidedRegistryService {
             admin_account_token,
             default_plan_id,
             low_fuel_plan_id,
+            low_disk_space_plan_id,
             base_http_client: OnceCell::new(),
         }
     }
@@ -90,6 +93,10 @@ impl RegistryService for ProvidedRegistryService {
     }
     fn low_fuel_plan(&self) -> PlanId {
         self.low_fuel_plan_id
+    }
+
+    fn low_disk_space_plan(&self) -> PlanId {
+        self.low_disk_space_plan_id
     }
 
     async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {

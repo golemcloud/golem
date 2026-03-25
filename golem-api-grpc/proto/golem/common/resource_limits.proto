@@ -8,8 +8,9 @@ message ResourceLimits {
   uint64 available_fuel = 1;
   uint64 max_memory_per_worker = 2;
   uint64 max_table_elements_per_worker = 3;
-  uint64 per_invocation_http_limit = 4;
-  uint64 per_invocation_rpc_limit = 5;
+  uint64 max_disk_space_per_worker = 4;
+  uint64 per_invocation_http_limit = 5;
+  uint64 per_invocation_rpc_limit = 6;
 }
 
 message AccountResourceLimitsEntry {

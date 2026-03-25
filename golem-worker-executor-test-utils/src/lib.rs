@@ -88,10 +88,11 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
-    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig, ShardManagerServiceConfig,
-    ShardManagerServiceSingleShardConfig, SnapshotPolicy,
+    EnvironmentStateServiceConfig, FilesystemStorageConfig, GolemConfig, GrpcApiConfig,
+    HttpClientConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig,
+    KeyValueStorageConfig, MemoryConfig, OplogConfig, ResourceLimitsConfig,
+    ResourceLimitsDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -394,7 +395,7 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, None, None).await
+    start_customized(deps, context, None, None, None, None, None, None).await
 }
 
 pub async fn start_with_snapshot_policy(
@@ -402,7 +403,17 @@ pub async fn start_with_snapshot_policy(
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, Some(snapshot_policy), None, None).await
+    start_customized(
+        deps,
+        context,
+        None,
+        None,
+        None,
+        Some(snapshot_policy),
+        None,
+        None,
+    )
+    .await
 }
 
 pub async fn start_with_http_client_config(
@@ -410,7 +421,17 @@ pub async fn start_with_http_client_config(
     context: &TestContext,
     http_client: HttpClientConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, Some(http_client), None).await
+    start_customized(
+        deps,
+        context,
+        None,
+        None,
+        None,
+        None,
+        Some(http_client),
+        None,
+    )
+    .await
 }
 
 pub async fn start_with_oplog_config(
@@ -418,13 +439,24 @@ pub async fn start_with_oplog_config(
     context: &TestContext,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None, None, oplog_config_override).await
+    start_customized(
+        deps,
+        context,
+        None,
+        None,
+        None,
+        None,
+        None,
+        oplog_config_override,
+    )
+    .await
 }
 
 pub async fn start_customized(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     system_memory_override: Option<u64>,
+    system_storage_override: Option<u64>,
     retry_override: Option<RetryConfig>,
     snapshot_policy_override: Option<SnapshotPolicy>,
     http_client_override: Option<HttpClientConfig>,
@@ -461,6 +493,10 @@ pub async fn start_customized(
         ),
         memory: MemoryConfig {
             system_memory_override,
+            ..Default::default()
+        },
+        filesystem_storage: FilesystemStorageConfig {
+            total_worker_filesystem_storage_bytes: system_storage_override,
             ..Default::default()
         },
         agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
@@ -811,6 +847,12 @@ impl WorkerCtx for TestWorkerCtx {
             oplog.clone(),
             extra_deps,
         ));
+        let account_resource_limits = Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+        ));
 
         let durable_ctx = DurableWorkerCtx::create(
             owned_agent_id,
@@ -829,6 +871,7 @@ impl WorkerCtx for TestWorkerCtx {
             rpc,
             worker_proxy,
             component_service,
+            account_resource_limits,
             config,
             worker_config,
             execution_status,
@@ -906,6 +949,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
+    }
+
+    fn max_disk_space(&self) -> u64 {
+        u64::MAX // no plan limit enforcement in tests by default
     }
 }
 
@@ -1122,7 +1169,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         &self,
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
-        Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
+        Arc::new(ActiveWorkers::<TestWorkerCtx>::new(
+            &golem_config.memory,
+            &golem_config.filesystem_storage,
+        ))
     }
 
     fn create_environment_state_service(
@@ -1360,7 +1410,9 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     ) -> Arc<ActiveWorkers<golem_worker_executor::workerctx::default::Context>> {
         Arc::new(ActiveWorkers::<
             golem_worker_executor::workerctx::default::Context,
-        >::new(&golem_config.memory))
+        >::new(
+            &golem_config.memory, &golem_config.filesystem_storage
+        ))
     }
 
     fn create_environment_state_service(
@@ -1588,6 +1640,7 @@ impl ResourceLimits for FixedTableLimitResourceLimits {
             u64::MAX,
             usize::MAX,
             self.max_table_elements,
+            u64::MAX,
         )))
     }
 }
@@ -1719,6 +1772,53 @@ pub async fn start_with_table_limit(
     .await
 }
 
+/// A `ResourceLimits` implementation that provides a fixed per-worker disk
+/// space limit while keeping fuel, memory, and table elements unlimited.
+/// Used by storage quota tests.
+struct FixedFilesystemStorageQuotaResourceLimits {
+    max_disk_space_bytes: u64,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedFilesystemStorageQuotaResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            self.max_disk_space_bytes,
+        )))
+    }
+}
+
+/// Starts a worker executor with a per-agent plan-level storage limit.
+///
+/// Uses the production [`Context`] so that `check_filesystem_quota` enforces
+/// `max_disk_space_bytes` against each agent's `current_filesystem_storage_usage`.
+/// Exceeding it returns `WorkerAgentExceededFilesystemStorageLimit` (permanent, not retried).
+/// The executor-wide semaphore pool is left unlimited (10 GB default).
+pub async fn start_with_agent_storage_quota(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes,
+        }),
+        "Timeout waiting for agent-storage-quota server to start",
+    )
+    .await
+}
+
 /// A `ResourceLimits` implementation that enforces fixed per-invocation HTTP and RPC
 /// call limits while keeping fuel, memory, and table elements unlimited.
 /// Used by per-invocation call-limit tests.
@@ -1740,6 +1840,7 @@ impl ResourceLimits for FixedInvocationLimitResourceLimits {
             u64::MAX,
             usize::MAX,
             usize::MAX,
+            u64::MAX,
             self.per_invocation_http_limit,
             self.per_invocation_rpc_limit,
         )))
@@ -1764,6 +1865,29 @@ pub async fn start_with_invocation_limits(
             per_invocation_rpc_limit,
         }),
         "Timeout waiting for invocation-limit server to start",
+    )
+    .await
+}
+
+/// Starts a worker executor with a constrained executor-wide storage pool.
+///
+/// The pool is shared across all agents on the node. Uses `TestWorkerCtx`
+/// (no per-agent plan limit). Exhausting the pool returns `NodeOutOfFilesystemStorage`
+/// (retriable). Use this to test node-level storage pressure and eviction.
+pub async fn start_with_executor_storage_pool(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    pool_bytes: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_customized(
+        deps,
+        context,
+        None,
+        Some(pool_bytes),
+        None,
+        None,
+        None,
+        None,
     )
     .await
 }
