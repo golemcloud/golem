@@ -18,6 +18,9 @@ use super::model::account::{
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account::AccountRepoError;
+use crate::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -44,7 +47,7 @@ pub trait AccountRepo: Send + Sync {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
+    ) -> Result<(AccountExtRevisionRecord, ChangeEventId), AccountRepoError>;
 
     async fn get_by_id(
         &self,
@@ -103,7 +106,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+    ) -> Result<(AccountExtRevisionRecord, ChangeEventId), AccountRepoError> {
         let span = Self::span_account_id(revision.account_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -260,8 +263,10 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
+    ) -> Result<(AccountExtRevisionRecord, ChangeEventId), AccountRepoError> {
+        let result = self
+            .db_pool
+            .with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision.clone()).await?;
 
@@ -282,12 +287,26 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
                     .to_error_on_unique_violation(AccountRepoError::AccountViolatesUniqueness)?
                     .ok_or(AccountRepoError::ConcurrentModification)?;
 
-                Ok(AccountExtRevisionRecord {
-                    entity_created_at: account_record.audit.created_at,
-                    revision: revision_record
-                })
+                let change_event =
+                    NewRegistryChangeEvent::account_tokens_invalidated(revision.account_id);
+                let change_event_id =
+                    DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &change_event)
+                        .await?;
+
+                Ok::<_, AccountRepoError>((
+                    AccountExtRevisionRecord {
+                        entity_created_at: account_record.audit.created_at,
+                        revision: revision_record,
+                    },
+                    change_event_id,
+                ))
             }.boxed()
-        }).await
+        })
+        .await?;
+
+        self.db_pool.notify_change_event(result.1).await;
+
+        Ok(result)
     }
 
     async fn get_by_id(

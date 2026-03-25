@@ -259,12 +259,6 @@ impl NewRegistryChangeEvent {
 /// Database operations for the registry_change_events outbox table.
 #[async_trait]
 pub trait RegistryChangeRepo: Send + Sync {
-    /// Record a registry change event in the outbox table.
-    async fn record_change_event(
-        &self,
-        event: &NewRegistryChangeEvent,
-    ) -> RepoResult<ChangeEventId>;
-
     /// Fetch all events with event_id > last_seen, ordered by event_id ASC.
     async fn get_events_since(
         &self,
@@ -301,41 +295,6 @@ impl<DBP: Pool> DbRegistryChangeRepo<DBP> {
 // Postgres implementation — includes pg_notify for multi-node propagation.
 #[async_trait]
 impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
-    async fn record_change_event(
-        &self,
-        event: &NewRegistryChangeEvent,
-    ) -> RepoResult<ChangeEventId> {
-        let event_type: i16 = event.event_type.into();
-        let domains: &[String] = &event.domains;
-        let row = self
-            .with_rw("record_change_event")
-            .fetch_one(
-                sqlx::query(indoc! { r#"
-                    INSERT INTO registry_change_events
-                        (event_type, environment_id, deployment_revision_id,
-                         account_id, grantee_account_id, domains)
-                    VALUES ($1, $2, $3, $4, $5, $6::text[])
-                    RETURNING event_id
-                "#})
-                .bind(event_type)
-                .bind(event.environment_id)
-                .bind(event.deployment_revision_id)
-                .bind(event.account_id)
-                .bind(event.grantee_account_id)
-                .bind(domains),
-            )
-            .await?;
-
-        let event_id = ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?);
-
-        let _ = self
-            .with_rw("pg_notify")
-            .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
-            .await;
-
-        Ok(event_id)
-    }
-
     async fn get_events_since(
         &self,
         last_seen_event_id: ChangeEventId,
@@ -416,41 +375,6 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
 // SQLite implementation — no pg_notify; in-process notify() is sufficient for single-node.
 #[async_trait]
 impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
-    async fn record_change_event(
-        &self,
-        event: &NewRegistryChangeEvent,
-    ) -> RepoResult<ChangeEventId> {
-        let event_type: i16 = event.event_type.into();
-        let domains_json = if event.domains.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&event.domains).map_err(|e| {
-                RepoError::InternalError(anyhow::anyhow!("Failed to serialize domains: {e}"))
-            })?)
-        };
-        let row = self
-            .with_rw("record_change_event")
-            .fetch_one(
-                sqlx::query(indoc! { r#"
-                    INSERT INTO registry_change_events
-                        (event_type, environment_id, deployment_revision_id,
-                         account_id, grantee_account_id, domains)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING event_id
-                "#})
-                .bind(event_type)
-                .bind(event.environment_id)
-                .bind(event.deployment_revision_id)
-                .bind(event.account_id)
-                .bind(event.grantee_account_id)
-                .bind(&domains_json),
-            )
-            .await?;
-
-        let event_id = ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?);
-        Ok(event_id)
-    }
-
     async fn get_events_since(
         &self,
         last_seen_event_id: ChangeEventId,
@@ -544,10 +468,15 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
 /// `DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(...)`
 /// or `DbRegistryChangeRepo::<SqlitePool>::insert_change_event_in_tx(...)`.
 impl DbRegistryChangeRepo<PostgresPool> {
+    const ADVISORY_LOCK_KEY: i64 = 1459048342;
+
     pub async fn insert_change_event_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         event: &NewRegistryChangeEvent,
     ) -> RepoResult<ChangeEventId> {
+        tx.execute(sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(Self::ADVISORY_LOCK_KEY))
+            .await?;
+
         let event_type: i16 = event.event_type.into();
         let domains: &[String] = &event.domains;
         let row = tx

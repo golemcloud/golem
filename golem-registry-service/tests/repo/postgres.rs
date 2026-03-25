@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::repo::Deps;
+use crate::repo::{Deps, TestDb};
 use golem_common::config::DbPostgresConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
@@ -27,12 +27,14 @@ use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
-    DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
+    DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent, RegistryChangeEvent,
+    RegistryChangeRepo,
 };
 use golem_registry_service::services::registry_change_notifier::{
     PostgresRegistryChangeNotifier, RegistryChangeNotifier,
 };
 use golem_service_base::db;
+use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use sqlx::ConnectOptions;
@@ -219,6 +221,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(pool.clone())),
+        test_db: TestDb::Postgres(pool.clone()),
     };
     deps.setup().await;
     deps
@@ -408,10 +411,20 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
 
     // Record an event via the repo — this INSERT triggers pg_notify('registry_change', ...)
     let env_id = Uuid::new_v4();
-    let event_id = repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 42))
+    let event_id = db
+        .pool
+        .with_tx_err("registry_change", "record_change_event_test", |tx| {
+            Box::pin(async move {
+                DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                    tx,
+                    &NewRegistryChangeEvent::deployment_changed(env_id, 42),
+                )
+                .await
+            })
+        })
         .await
         .unwrap();
+    db.pool.notify_change_event(event_id).await;
 
     // The PgListener should pick up the NOTIFY, read the event from the DB,
     // and broadcast it through the sender.

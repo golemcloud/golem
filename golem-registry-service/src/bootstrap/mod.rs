@@ -180,7 +180,6 @@ impl Services {
             repos.account_repo.clone(),
             plan_service.clone(),
             default_plan_id,
-            repos.registry_change_repo.clone(),
             registry_change_notifier.clone(),
         ));
         account_service

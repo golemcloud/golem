@@ -36,7 +36,13 @@ use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::plan::PlanRepo;
 use golem_registry_service::repo::plugin::PluginRepo;
-use golem_registry_service::repo::registry_change::RegistryChangeRepo;
+use golem_registry_service::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
+};
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::Pool;
+use futures::FutureExt;
 use std::str::FromStr;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
@@ -64,9 +70,43 @@ pub struct Deps {
     pub environment_share_repo: Box<dyn EnvironmentShareRepo>,
     pub plugin_repo: Box<dyn PluginRepo>,
     pub registry_change_repo: Box<dyn RegistryChangeRepo>,
+    pub test_db: TestDb,
+}
+
+pub enum TestDb {
+    Postgres(PostgresPool),
+    Sqlite(SqlitePool),
 }
 
 impl Deps {
+    pub async fn record_registry_change_event(
+        &self,
+        event: NewRegistryChangeEvent,
+    ) -> ChangeEventId {
+        match &self.test_db {
+            TestDb::Postgres(pool) => pool
+                .with_tx_err("registry_change", "record_change_event_test", |tx| {
+                    async move {
+                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &event)
+                            .await
+                    }
+                    .boxed()
+                })
+                .await
+                .expect("failed to insert registry change event"),
+            TestDb::Sqlite(pool) => pool
+                .with_tx_err("registry_change", "record_change_event_test", |tx| {
+                    async move {
+                        DbRegistryChangeRepo::<SqlitePool>::insert_change_event_in_tx(tx, &event)
+                            .await
+                    }
+                    .boxed()
+                })
+                .await
+                .expect("failed to insert registry change event"),
+        }
+    }
+
     pub async fn setup(&self) {
         self.plan_repo
             .create_or_update(PlanRecord {

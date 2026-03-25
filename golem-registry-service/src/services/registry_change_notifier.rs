@@ -509,50 +509,6 @@ mod tests {
 
     #[async_trait::async_trait]
     impl RegistryChangeRepo for MockRegistryChangeRepo {
-        async fn record_change_event(
-            &self,
-            event: &crate::repo::registry_change::NewRegistryChangeEvent,
-        ) -> golem_service_base::repo::RepoResult<ChangeEventId> {
-            use crate::repo::registry_change::RegistryEventType;
-            let mut events = self.events.lock().unwrap();
-            let id = ChangeEventId(events.len() as i64 + 1);
-            let change_event = match event.event_type {
-                RegistryEventType::DeploymentChanged => RegistryChangeEvent::DeploymentChanged {
-                    event_id: id,
-                    environment_id: event.environment_id.unwrap_or_default(),
-                    deployment_revision_id: event.deployment_revision_id.unwrap_or_default(),
-                },
-                RegistryEventType::AccountTokensInvalidated => {
-                    RegistryChangeEvent::AccountTokensInvalidated {
-                        event_id: id,
-                        account_id: event.account_id.unwrap_or_default(),
-                    }
-                }
-                RegistryEventType::EnvironmentPermissionsChanged => {
-                    RegistryChangeEvent::EnvironmentPermissionsChanged {
-                        event_id: id,
-                        environment_id: event.environment_id.unwrap_or_default(),
-                        grantee_account_id: event.grantee_account_id.unwrap_or_default(),
-                    }
-                }
-                RegistryEventType::DomainRegistrationChanged => {
-                    RegistryChangeEvent::DomainRegistrationChanged {
-                        event_id: id,
-                        environment_id: event.environment_id.unwrap_or_default(),
-                        domains: event.domains.clone(),
-                    }
-                }
-                RegistryEventType::SecuritySchemeChanged => {
-                    RegistryChangeEvent::SecuritySchemeChanged {
-                        event_id: id,
-                        environment_id: event.environment_id.unwrap_or_default(),
-                    }
-                }
-            };
-            events.push(change_event);
-            Ok(id)
-        }
-
         async fn get_events_since(
             &self,
             last_seen_event_id: ChangeEventId,
