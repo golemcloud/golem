@@ -2035,7 +2035,10 @@ async fn websocket_stream_echo_ts(
             &component,
             &agent_id,
             "echo",
-            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket stream"),
+            data_value!(
+                format!("ws://localhost:{ws_port}"),
+                "hello websocket stream"
+            ),
         )
         .await?
         .into_return_value()
