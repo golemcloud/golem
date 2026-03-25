@@ -653,7 +653,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
-                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR cr.deleted = FALSE)
+                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR c.deleted_at IS NULL)
                 "#})
                 .bind(component_id)
                 .bind(revision_id)
@@ -941,7 +941,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT component_id, revision_id, file_path,
-                           created_at, created_by, file_content_hash, file_permissions
+                           created_at, created_by, file_content_hash, file_permissions, file_size
                     FROM component_files
                     WHERE component_id = $1 AND revision_id = $2
                     ORDER BY file_path
@@ -1019,9 +1019,9 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 INSERT INTO component_files
-                (component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions
+                (component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions, file_size)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions, file_size
             "#})
                 .bind(file.component_id)
                 .bind(file.revision_id)
@@ -1029,6 +1029,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind_revision_audit(file.audit)
                 .bind(file.file_content_hash)
                 .bind(file.file_permissions)
+                .bind(file.file_size)
         ).await
     }
 

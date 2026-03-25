@@ -25,7 +25,7 @@ use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
-use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::{PoolLabelledTransaction, ResultExt};
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -151,7 +151,7 @@ impl<DBP: Pool> DbAgentSecretRepo<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 impl DbAgentSecretRepo<PostgresPool> {
     async fn insert_revision(
-        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
         revision: AgentSecretRevisionRecord,
     ) -> Result<AgentSecretRevisionRecord, AgentSecretRepoError> {
         let revision: AgentSecretRevisionRecord = tx
@@ -174,7 +174,7 @@ impl DbAgentSecretRepo<PostgresPool> {
     }
 
     pub async fn create_within_transaction(
-        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        tx: &mut PoolLabelledTransaction<PostgresPool>,
         record: AgentSecretCreationRecord,
     ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
         let agent_secret_record: AgentSecretRecord = tx

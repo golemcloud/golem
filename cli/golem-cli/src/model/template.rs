@@ -80,6 +80,9 @@ impl<C: Serialize> Template<C> for app_raw::BuildCommand {
                     inject_to_prebuilt_quickjs.render(env, ctx)?,
                 ))
             }
+            app_raw::BuildCommand::PreinitializeJs(preinitialize_js) => Ok(
+                app_raw::BuildCommand::PreinitializeJs(preinitialize_js.render(env, ctx)?),
+            ),
         }
     }
 }
@@ -89,6 +92,7 @@ impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
         Ok(app_raw::ExternalCommand {
             command: self.command.render(env, ctx)?,
             dir: self.dir.render(env, ctx)?,
+            env: self.env.render(env, ctx)?,
             rmdirs: self.rmdirs.render(env, ctx)?,
             mkdirs: self.mkdirs.render(env, ctx)?,
             sources: self.sources.render(env, ctx)?,
@@ -131,7 +135,15 @@ impl<C: Serialize> Template<C> for app_raw::InjectToPrebuiltQuickJs {
         Ok(app_raw::InjectToPrebuiltQuickJs {
             inject_to_prebuilt_quickjs: self.inject_to_prebuilt_quickjs.render(env, ctx)?,
             module: self.module.render(env, ctx)?,
-            module_wasm: self.module_wasm.render(env, ctx)?,
+            into: self.into.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> Template<C> for app_raw::PreinitializeJs {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        Ok(app_raw::PreinitializeJs {
+            preinitialize_js: self.preinitialize_js.render(env, ctx)?,
             into: self.into.render(env, ctx)?,
         })
     }

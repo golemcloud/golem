@@ -629,6 +629,7 @@ pub async fn test_component_stage(deps: &Deps) {
             file_content_hash: blake3::hash("test-2".as_bytes()).into(),
             audit: RevisionAuditFields::new(user.revision.account_id),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
+            file_size: 512.into(),
         }],
     }
     .with_updated_hash();
@@ -1279,6 +1280,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         registered_agent_types: vec![agent_type_record],
         created_agent_secrets: vec![],
         updated_agent_secrets: vec![],
+        created_resource_definitions: vec![],
         user_account_id: owner_account_id,
     };
 

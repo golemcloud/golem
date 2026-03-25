@@ -54,6 +54,7 @@ pub struct GolemConfig {
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
+    pub filesystem_storage: FilesystemStorageConfig,
     pub rdbms: RdbmsConfig,
     pub resource_limits: ResourceLimitsConfig,
     pub component_cache: ComponentCacheConfig,
@@ -140,6 +141,12 @@ impl SafeDisplay for GolemConfig {
         );
         let _ = writeln!(&mut result, "memory:");
         let _ = writeln!(&mut result, "{}", self.memory.to_safe_string_indented());
+        let _ = writeln!(&mut result, "filesystem storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.filesystem_storage.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "rdbms:");
         let _ = writeln!(&mut result, "{}", self.rdbms.to_safe_string_indented());
         let _ = writeln!(&mut result, "resource limits:");
@@ -221,6 +228,7 @@ impl Default for GolemConfig {
             active_workers: ActiveWorkersConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
+            filesystem_storage: FilesystemStorageConfig::default(),
             rdbms: RdbmsConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
             component_cache: ComponentCacheConfig::default(),
@@ -1327,6 +1335,82 @@ impl Default for MemoryConfig {
                 multiplier: 2.0,
                 max_jitter_factor: None, // TODO: should we add jitter here?
             },
+        }
+    }
+}
+
+/// Configuration for the executor-wide worker storage semaphore.
+///
+/// The semaphore pool size is `total_worker_filesystem_storage_bytes`. Workers acquire
+/// permits proportional to their estimated storage usage; when the pool is
+/// exhausted, idle workers are evicted to free space. Use
+/// `total_worker_filesystem_storage_bytes` in tests to create a small,
+/// predictable pool.
+///
+/// # Permit release vs actual disk reclaim — configure with headroom
+///
+/// When a worker is evicted its storage semaphore permits are released at the
+/// moment `RunningWorker` drops, which is **slightly before** the worker's
+/// temp directory is deleted from disk. The directory is removed when the
+/// invocation task fully unwinds (dropping the wasmtime `Store` and its
+/// contained `TempDir`). In practice this gap is sub-millisecond, but it means
+/// the semaphore can briefly report available space that has not yet been
+/// reclaimed on disk.
+///
+/// This is the same race that exists for the memory semaphore
+/// (`MemoryConfig::total_memory`): memory permits are released when
+/// `RunningWorker` drops, before the wasmtime linear memory is actually freed.
+/// It has never caused problems in production because the semaphore is not
+/// configured to 100% of physical capacity.
+///
+/// **Recommended practice:** assuming the executor's temp directory has a
+/// dedicated volume (e.g. a pod-local tmpfs or block device mounted at `/tmp`),
+/// set `total_worker_filesystem_storage_bytes` to around 80–90% of that volume's
+/// capacity. The headroom absorbs the transient over-commitment window
+/// described above and any filesystem metadata overhead for the temp directory
+/// tree itself.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FilesystemStorageConfig {
+    /// Override the total storage pool size (bytes). When `None`, the default
+    /// of 10 GB is used. Set to a small value in tests to trigger eviction.
+    ///
+    /// Should be set to ~80–90% of the dedicated volume capacity, not 100% —
+    /// see the `FilesystemStorageConfig` doc comment for the rationale.
+    #[serde(alias = "total_worker_filesystem_storage_bytes_override")]
+    pub total_worker_filesystem_storage_bytes: Option<u64>,
+    #[serde(with = "humantime_serde")]
+    pub acquire_retry_delay: Duration,
+}
+
+impl FilesystemStorageConfig {
+    /// The total number of bytes available to the storage semaphore pool.
+    pub fn worker_filesystem_storage(&self) -> usize {
+        self.total_worker_filesystem_storage_bytes
+            .unwrap_or(10 * 1024 * 1024 * 1024) // 10 GB default
+            as usize
+    }
+}
+
+impl SafeDisplay for FilesystemStorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        if let Some(limit) = &self.total_worker_filesystem_storage_bytes {
+            let _ = writeln!(&mut result, "total worker storage bytes: {limit}");
+        }
+        let _ = writeln!(
+            &mut result,
+            "acquire retry delay: {:?}",
+            self.acquire_retry_delay
+        );
+        result
+    }
+}
+
+impl Default for FilesystemStorageConfig {
+    fn default() -> Self {
+        Self {
+            total_worker_filesystem_storage_bytes: None,
+            acquire_retry_delay: Duration::from_millis(500),
         }
     }
 }

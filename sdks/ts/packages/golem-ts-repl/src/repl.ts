@@ -30,8 +30,12 @@ import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
 import { flushStdIO, setOutput, writeln } from './process';
 import { formatAsTable, formatEvalError, logSnippetInfo } from './format';
-import * as base from './base';
-import { AgentInvocationRequest, AgentInvocationResult, JsonResult } from './base';
+import type * as base from '@golemcloud/golem-ts-bridge';
+import type {
+  AgentInvocationRequest,
+  AgentInvocationResult,
+  JsonResult,
+} from '@golemcloud/golem-ts-bridge';
 
 const MAX_COMPLETION_ENTRIES = 50;
 
@@ -261,7 +265,7 @@ export class Repl {
     });
 
     this.defineFlagCommand(replServer, {
-      name: 'streamLogs',
+      name: 'stream-logs',
       help: 'Show or set agent stream logging (on/off)',
       get: () => this.replCliFlags.streamLogs,
       set: (value) => {
@@ -270,7 +274,7 @@ export class Repl {
     });
 
     this.defineFlagCommand(replServer, {
-      name: 'showTypeInfo',
+      name: 'show-type-info',
       help: 'Show or set type info logging before execution (on/off)',
       get: () => this.replCliFlags.showTypeInfo,
       set: (value) => {
@@ -323,15 +327,16 @@ export class Repl {
     const languageService = this.getLanguageService();
     const lines: string[] = [];
     lines.push('');
-    lines.push(pc.bold('Available agents client types:'));
+    lines.push(pc.bold('Available agent client types:'));
 
     for (const agentTypeName of agentNames) {
       const methods = languageService.getClientMethodSignatures(agentTypeName);
+      const getSignature = languageService.getAgentTypeGetSignature(agentTypeName);
       if (!methods?.length) {
         lines.push('');
         continue;
       }
-      lines.push(`  ${pc.bold(agentTypeName)}`);
+      lines.push(`  ${pc.bold(getSignature ?? agentTypeName)}`);
       for (const method of methods) {
         lines.push(`    ${pc.green(method.name)}: ${method.signature}`);
       }

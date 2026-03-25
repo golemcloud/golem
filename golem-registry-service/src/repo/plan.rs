@@ -112,26 +112,31 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                 tx.execute(
                     sqlx::query(indoc! { r#"
                         INSERT INTO plans (
-                            plan_id, name, max_memory_per_worker, total_app_count,
-                            total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
-                            total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
+                            plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                            total_app_count, total_env_count, total_component_count, total_worker_count,
+                            total_worker_connection_count, total_component_storage_bytes,
+                            monthly_gas_limit, monthly_component_upload_limit_bytes
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                         ON CONFLICT (plan_id) DO UPDATE SET
                             name = $2,
                             max_memory_per_worker = $3,
-                            total_app_count = $4,
-                            total_env_count = $5,
-                            total_component_count = $6,
-                            total_worker_count = $7,
-                            total_worker_connection_count = $8,
-                            total_component_storage_bytes = $9,
-                            monthly_gas_limit = $10,
-                            monthly_component_upload_limit_bytes = $11
+                            max_table_elements_per_worker = $4,
+                            max_disk_space_per_worker = $5,
+                            total_app_count = $6,
+                            total_env_count = $7,
+                            total_component_count = $8,
+                            total_worker_count = $9,
+                            total_worker_connection_count = $10,
+                            total_component_storage_bytes = $11,
+                            monthly_gas_limit = $12,
+                            monthly_component_upload_limit_bytes = $13
                     "#})
                     .bind(plan.plan_id)
                     .bind(plan.name)
                     .bind(plan.max_memory_per_worker)
+                    .bind(plan.max_table_elements_per_worker)
+                    .bind(plan.max_disk_space_per_worker)
                     .bind(plan.total_app_count)
                     .bind(plan.total_env_count)
                     .bind(plan.total_component_count)
@@ -156,9 +161,10 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        plan_id, name, max_memory_per_worker, total_app_count,
-                        total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
-                        total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
+                        plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                        total_app_count, total_env_count, total_component_count, total_worker_count,
+                        total_worker_connection_count, total_component_storage_bytes,
+                        monthly_gas_limit, monthly_component_upload_limit_bytes
                     FROM plans
                     WHERE plan_id = $1
                 "# })
@@ -177,9 +183,10 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             .with_ro("list")
             .fetch_all_as(sqlx::query_as(indoc! { r#"
                 SELECT
-                    plan_id, name, max_memory_per_worker, total_app_count,
-                    total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
-                    total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
+                    plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                    total_app_count, total_env_count, total_component_count, total_worker_count,
+                    total_worker_connection_count, total_component_storage_bytes,
+                    monthly_gas_limit, monthly_component_upload_limit_bytes
                 FROM plans
             "# }))
             .await?;

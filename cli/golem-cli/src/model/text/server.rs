@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{NamedProfile, BUILTIN_LOCAL_URL, CLOUD_URL};
+use crate::config::{builtin_local_url, NamedProfile, CLOUD_URL};
 use crate::model::app_raw::{BuiltinServer, Environment, Server};
 use colored::Colorize;
 
@@ -48,7 +48,10 @@ impl ToFormattedServerContext for Environment {
 }
 
 fn local_builtin() -> String {
-    format!("local - builtin ({})", BUILTIN_LOCAL_URL.underline())
+    format!(
+        "local - builtin ({})",
+        builtin_local_url().to_string().underline()
+    )
 }
 
 fn cloud_builtin() -> String {

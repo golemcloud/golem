@@ -29,6 +29,7 @@ tags:
 - name: Plugin
 - name: RegistryService
 - name: Reports
+- name: Resources
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
@@ -3030,6 +3031,12 @@ components:
       properties:
         idempotencyKey:
           type: string
+    ProcessOplogEntriesResultParameters:
+      type: object
+      title: ProcessOplogEntriesResultParameters
+      properties:
+        error:
+          type: string
     PublicAgentInvocation:
       type: object
       oneOf:
@@ -3056,7 +3063,7 @@ components:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -3065,7 +3072,7 @@ components:
           ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
-          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_AgentInvocationOutputParameters:
       allOf:
       - type: object
@@ -3099,9 +3106,21 @@ components:
           type:
             type: string
             enum:
+            - LoadSnapshot
+            example: LoadSnapshot
+      - $ref: '#/components/schemas/FallibleResultParameters'
+    PublicAgentInvocationResult_ProcessOplogEntriesResultParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
             - ProcessOplogEntries
             example: ProcessOplogEntries
-      - $ref: '#/components/schemas/FallibleResultParameters'
+      - $ref: '#/components/schemas/ProcessOplogEntriesResultParameters'
     PublicAgentInvocationResult_SaveSnapshotResultParameters:
       allOf:
       - type: object
@@ -3327,6 +3346,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#FilesystemStorageUsageUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -3369,6 +3389,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          FilesystemStorageUsageUpdate: '#/components/schemas/PublicOplogEntry_r#FilesystemStorageUsageUpdateParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -3628,6 +3649,18 @@ components:
             - FailedUpdate
             example: FailedUpdate
       - $ref: '#/components/schemas/r#FailedUpdateParams'
+    PublicOplogEntry_r#FilesystemStorageUsageUpdateParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - FilesystemStorageUsageUpdate
+            example: FilesystemStorageUsageUpdate
+      - $ref: '#/components/schemas/r#FilesystemStorageUsageUpdateParams'
     PublicOplogEntry_r#FinishSpanParams:
       allOf:
       - type: object
@@ -4925,6 +4958,7 @@ components:
       - timestamp
       - error
       - retryFrom
+      - insideAtomicRegion
       properties:
         timestamp:
           type: string
@@ -4934,6 +4968,8 @@ components:
         retryFrom:
           type: integer
           format: uint64
+        insideAtomicRegion:
+          type: boolean
     r#ExitedParams:
       type: object
       title: r#ExitedParams
@@ -4958,6 +4994,19 @@ components:
           format: uint64
         details:
           type: string
+    r#FilesystemStorageUsageUpdateParams:
+      type: object
+      title: r#FilesystemStorageUsageUpdateParams
+      required:
+      - timestamp
+      - delta
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        delta:
+          type: integer
+          format: int64
     r#FinishSpanParams:
       type: object
       title: r#FinishSpanParams

@@ -6,7 +6,7 @@ import pc from 'picocolors';
 import logSymbols from 'log-symbols';
 import { saveAndClearInMemoryMetadata, updateMetadataFromSourceFiles } from '../index.js';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import path from 'path';
+import { normalizeCliPath, normalizeFilePatterns } from './path-normalization.js';
 
 const program = new Command();
 
@@ -38,8 +38,11 @@ program
     ) => {
       console.log(logSymbols.info, pc.cyan('Starting type metadata generation…'));
 
-      const project = new Project({ tsConfigFilePath: path.resolve(tsconfig) });
-      const sourceFiles = project.getSourceFiles(options.files);
+      const normalizedTsconfig = normalizeCliPath(tsconfig);
+      const normalizedFilePatterns = normalizeFilePatterns(options.files);
+
+      const project = new Project({ tsConfigFilePath: normalizedTsconfig });
+      const sourceFiles = project.getSourceFiles(normalizedFilePatterns);
 
       console.log(logSymbols.info, pc.blue(`Processing ${sourceFiles.length} source files…`));
 
@@ -53,6 +56,18 @@ program
       updateMetadataFromSourceFiles(genConfig);
 
       const result = TypeMetadata.getAll();
+
+      if (result.size === 0) {
+        console.warn(
+          logSymbols.warning,
+          pc.yellow('No agent classes extracted; metadata is empty.'),
+        );
+        console.warn(logSymbols.info, pc.gray(`tsconfig: ${normalizedTsconfig}`));
+        console.warn(
+          logSymbols.info,
+          pc.gray(`file patterns: ${normalizedFilePatterns.join(', ')}`),
+        );
+      }
 
       console.log(
         logSymbols.success,

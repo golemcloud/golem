@@ -790,6 +790,7 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
 
     let fn_names = extract_function_names(&batches);
     let add_count = fn_names.iter().filter(|f| *f == "add").count();
+    let unknown_count = fn_names.iter().filter(|f| *f == "unknown").count();
     let init_count = fn_names
         .iter()
         .filter(|f| *f == "agent-initialization")
@@ -804,9 +805,16 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
     // Subtract 1 for agent-initialization's InvocationFinished
     let completed_adds_in_oplog = completed_invocations_in_oplog.saturating_sub(1);
 
+    // "unknown" callbacks come from AgentInvocationFinished entries whose
+    // matching AgentInvocationStarted was in a prior batch sent to a
+    // different plugin worker instance (e.g. after shard reassignment /
+    // locality recovery). These are still valid add invocations; they
+    // just couldn't be labelled.
+    let effective_add_count = add_count + unknown_count;
+
     tracing::info!(
         "After {CRASH_ROUNDS} crash rounds: received {} invocations \
-         ({add_count} adds, {init_count} inits). \
+         ({add_count} adds, {unknown_count} unknown, {init_count} inits). \
          Oplog has {completed_adds_in_oplog} completed adds (expected {expected_total_adds}).",
         invocation_count(&batches),
     );
@@ -821,11 +829,14 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
     );
 
     // Every completed add must have exactly one callback delivery.
+    // Some may be labelled "unknown" when a batch boundary splits
+    // AgentInvocationStarted / AgentInvocationFinished and locality
+    // recovery migrated to a new plugin worker in between.
     assert_eq!(
-        add_count, completed_adds_in_oplog,
+        effective_add_count, completed_adds_in_oplog,
         "Oplog processor must deliver exactly one callback per completed invocation. \
          Worker completed {completed_adds_in_oplog} adds but oplog processor delivered \
-         {add_count} add callbacks."
+         {effective_add_count} callbacks ({add_count} add + {unknown_count} unknown)."
     );
 
     Ok(())

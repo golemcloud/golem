@@ -196,6 +196,7 @@ pub enum EnvironmentAction {
     CreateHttpApiDefinition,
     CreateHttpApiDeployment,
     CreateMcpDeployment,
+    CreateResourceDefinition,
     CreateSecurityScheme,
     CreateShare,
     CreateWorker,
@@ -207,6 +208,7 @@ pub enum EnvironmentAction {
     DeleteHttpApiDefinition,
     DeleteHttpApiDeployment,
     DeleteMcpDeployment,
+    DeleteResourceDefinition,
     DeleteSecurityScheme,
     DeleteShare,
     DeleteWorker,
@@ -217,6 +219,7 @@ pub enum EnvironmentAction {
     UpdateHttpApiDefinition,
     UpdateHttpApiDeployment,
     UpdateMcpDeployment,
+    UpdateResourceDefinition,
     UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
@@ -231,6 +234,7 @@ pub enum EnvironmentAction {
     ViewHttpApiDefinition,
     ViewHttpApiDeployment,
     ViewMcpDeployment,
+    ViewResourceDefinition,
     ViewSecurityScheme,
     ViewShares,
     ViewWorker,
@@ -672,6 +676,27 @@ impl AuthCtx {
             EnvironmentAction::DeleteAgentSecret => has_any_role(
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            // resource definitions
+            EnvironmentAction::CreateResourceDefinition => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::UpdateResourceDefinition => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::DeleteResourceDefinition => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewResourceDefinition => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
             ),
         };
 

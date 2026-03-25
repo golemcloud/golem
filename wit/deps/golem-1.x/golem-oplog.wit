@@ -235,6 +235,11 @@ interface oplog {
         delta: u64
     }
 
+    record filesystem-storage-usage-update-parameters {
+        timestamp: datetime,
+        delta: s64
+    }
+
     type agent-resource-id = u64;
 
     record create-resource-parameters {
@@ -365,6 +370,9 @@ interface oplog {
         deterministic-trap(string),
         transient-error(string),
         permanent-error(string),
+        exceeded-table-limit,
+        node-out-of-filesystem-storage,
+        agent-exceeded-filesystem-storage-limit,
     }
 
     record raw-create-parameters {
@@ -548,6 +556,8 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
+        /// Updated filesystem usage by a signed delta
+        filesystem-storage-usage-update(filesystem-storage-usage-update-parameters),
         /// Created a resource instance
         create-resource(raw-create-resource-parameters),
         /// Dropped a resource instance
@@ -639,6 +649,8 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
+        /// Updated filesystem usage by a signed delta
+        filesystem-storage-usage-update(filesystem-storage-usage-update-parameters),
         /// Created a resource instance
         create-resource(create-resource-parameters),
         /// Dropped a resource instance

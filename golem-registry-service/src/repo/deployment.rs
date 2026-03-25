@@ -25,6 +25,8 @@ use super::model::deployment::{
     DeploymentHttpApiDeploymentRevisionRecord, DeploymentMcpDeploymentRevisionRecord,
     DeploymentRegisteredAgentTypeRecord,
 };
+use super::model::resource_definition::ResourceDefinitionRepoError;
+use super::resource_definition::DbResourceDefinitionRepo;
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::deployment::{
@@ -791,6 +793,26 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         .await
                         .map_err(|err| match err {
                             AgentSecretRepoError::ConcurrentModification => {
+                                DeployRepoError::ConcurrentModification
+                            }
+                            other => other.into(),
+                        })?;
+                    }
+
+                    for resource_definition in deployment_creation.created_resource_definitions {
+                        let resource_name = resource_definition.name.clone();
+                        DbResourceDefinitionRepo::<PostgresPool>::create_within_transaction(
+                            tx,
+                            resource_definition,
+                        )
+                        .await
+                        .map_err(|err| match err {
+                            ResourceDefinitionRepoError::ResourceDefinitionViolatesUniqueness => {
+                                DeployRepoError::ResourceConflict {
+                                    name: resource_name,
+                                }
+                            }
+                            ResourceDefinitionRepoError::ConcurrentModification => {
                                 DeployRepoError::ConcurrentModification
                             }
                             other => other.into(),

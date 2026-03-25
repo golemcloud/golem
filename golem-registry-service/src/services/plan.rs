@@ -72,7 +72,11 @@ impl PlanService {
                         || existing_plan.worker_limit != plan.worker_limit
                         || existing_plan.monthly_gas_limit != plan.monthly_gas_limit
                         || existing_plan.monthly_upload_limit != plan.app_limit
-                        || existing_plan.max_memory_per_worker != plan.max_memory_per_worker;
+                        || existing_plan.max_memory_per_worker != plan.max_memory_per_worker
+                        || existing_plan.max_table_elements_per_worker
+                            != plan.max_table_elements_per_worker
+                        || existing_plan.max_disk_space_per_worker
+                            != plan.max_disk_space_per_worker;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);
@@ -101,6 +105,8 @@ impl PlanService {
                         monthly_gas_limit: plan.monthly_gas_limit,
                         monthly_upload_limit: plan.monthly_upload_limit,
                         max_memory_per_worker: plan.max_memory_per_worker,
+                        max_table_elements_per_worker: plan.max_table_elements_per_worker,
+                        max_disk_space_per_worker: plan.max_disk_space_per_worker,
                     },
                     &AuthCtx::System,
                 )
@@ -133,6 +139,8 @@ impl PlanService {
             name: plan.name.0,
             plan_id: plan.plan_id.0,
             max_memory_per_worker: plan.max_memory_per_worker.into(),
+            max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
+            max_disk_space_per_worker: plan.max_disk_space_per_worker.into(),
             total_app_count: plan.app_limit.into(),
             total_env_count: plan.env_limit.into(),
             total_component_count: plan.component_limit.into(),

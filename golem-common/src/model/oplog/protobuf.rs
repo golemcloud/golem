@@ -16,12 +16,13 @@ use super::{
     AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
     LoadSnapshotParameters, LogLevel, ManualUpdateParameters, OplogCursor,
-    PluginInstallationDescription, ProcessOplogEntriesParameters, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicRetryConfig, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalSpanData,
+    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex, PublicRetryConfig,
+    PublicSnapshotData, PublicSpanData, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, StringAttributeValue,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::model::agent::DataValue;
@@ -33,12 +34,12 @@ use crate::model::oplog::public_oplog_entry::{
     CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostCallParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
+    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
@@ -102,6 +103,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::DeterministicTrap(inner) => Ok(Self::DeterministicTrap(inner.details)),
             Error::TransientError(inner) => Ok(Self::TransientError(inner.details)),
             Error::PermanentError(inner) => Ok(Self::PermanentError(inner.details)),
+            Error::ExceededTableLimit(_) => Ok(Self::ExceededTableLimit),
+            Error::NodeOutOfFilesystemStorage(_) => Ok(Self::NodeOutOfFilesystemStorage),
+            Error::AgentExceededFilesystemStorageLimit(_) => {
+                Ok(Self::AgentExceededFilesystemStorageLimit)
+            }
         }
     }
 }
@@ -133,6 +139,17 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
             }
             AgentError::PermanentError(details) => {
                 Error::PermanentError(grpc_worker::PermanentError { details })
+            }
+            AgentError::ExceededTableLimit => {
+                Error::ExceededTableLimit(grpc_worker::ExceededTableLimit {})
+            }
+            AgentError::NodeOutOfFilesystemStorage => {
+                Error::NodeOutOfFilesystemStorage(grpc_worker::NodeOutOfFilesystemStorage {})
+            }
+            AgentError::AgentExceededFilesystemStorageLimit => {
+                Error::AgentExceededFilesystemStorageLimit(
+                    grpc_worker::AgentExceededFilesystemStorageLimit {},
+                )
             }
         };
         Self { error: Some(error) }
@@ -448,6 +465,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     delta: grow_memory.delta,
                 }))
+            }
+            oplog_entry::Entry::FilesystemStorageUsageUpdate(filesystem_storage_usage_update) => {
+                Ok(PublicOplogEntry::FilesystemStorageUsageUpdate(
+                    FilesystemStorageUsageUpdateParams {
+                        timestamp: filesystem_storage_usage_update
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        delta: filesystem_storage_usage_update.delta,
+                    },
+                ))
             }
             oplog_entry::Entry::CreateResource(create_resource) => {
                 Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
@@ -855,6 +883,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
                             timestamp: Some(grow_memory.timestamp.into()),
                             delta: grow_memory.delta,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::FilesystemStorageUsageUpdate(filesystem_storage_usage_update) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::FilesystemStorageUsageUpdate(
+                        golem_api_grpc::proto::golem::worker::FilesystemStorageUsageUpdateParameters {
+                            timestamp: Some(filesystem_storage_usage_update.timestamp.into()),
+                            delta: filesystem_storage_usage_update.delta,
                         },
                     )),
                 }
@@ -1474,11 +1512,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
                     SaveSnapshotResultParameters { snapshot: data },
                 ))
             }
-            ProtoResult::ProcessOplogEntries(opt_err) => Ok(
-                PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters {
-                    error: opt_err.error,
-                }),
-            ),
+            ProtoResult::ProcessOplogEntries(result) => {
+                Ok(PublicAgentInvocationResult::ProcessOplogEntries(
+                    ProcessOplogEntriesResultParameters {
+                        error: result.error,
+                    },
+                ))
+            }
         }
     }
 }
@@ -1546,10 +1586,10 @@ impl TryFrom<PublicAgentInvocationResult>
                 };
                 ProtoResult::SaveSnapshot(snapshot_data)
             }
-            PublicAgentInvocationResult::ProcessOplogEntries(fallible) => {
+            PublicAgentInvocationResult::ProcessOplogEntries(result) => {
                 ProtoResult::ProcessOplogEntries(
-                    golem_api_grpc::proto::golem::worker::OptionalError {
-                        error: fallible.error,
+                    golem_api_grpc::proto::golem::worker::ProcessOplogEntriesResult {
+                        error: result.error,
                     },
                 )
             }

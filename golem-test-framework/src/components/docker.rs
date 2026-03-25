@@ -39,7 +39,7 @@ pub(super) async fn get_docker_container_name(prefix: &str, container_id: &str) 
         .await
         .expect("Failed to get docker client instance");
     let network = client
-        .inspect_network::<String>(&network(prefix), None)
+        .inspect_network(&network(prefix), None)
         .await
         .expect("Failed to get network");
     let containers = network.containers.expect("Containers not found in network");

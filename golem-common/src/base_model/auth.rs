@@ -117,6 +117,7 @@ declare_enums! {
     pub enum AccountRole {
         Admin = 0,
         MarketingAdmin = 1,
+        BuiltinPluginOwner = 2,
     }
 
     #[derive(Hash, FromRepr, EnumIter, PartialOrd, Ord)]

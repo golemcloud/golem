@@ -13,6 +13,9 @@ message AgentError {
     DeterministicTrap deterministic_trap = 7;
     TransientError transient_error = 8;
     PermanentError permanent_error = 9;
+    ExceededTableLimit exceeded_table_limit = 10;
+    NodeOutOfFilesystemStorage node_out_of_filesystem_storage = 11;
+    AgentExceededFilesystemStorageLimit agent_exceeded_filesystem_storage_limit = 12;
   }
 }
 
@@ -45,3 +48,9 @@ message TransientError {
 message PermanentError {
   string details = 1;
 }
+
+message ExceededTableLimit {}
+
+message NodeOutOfFilesystemStorage {}
+
+message AgentExceededFilesystemStorageLimit {}

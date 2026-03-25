@@ -41,10 +41,10 @@ pub mod poem;
 pub mod protobuf;
 pub mod regions;
 pub mod reports;
+pub mod resource_definition;
 pub mod security_scheme;
 #[cfg(test)]
 mod tests;
-pub mod trim_date;
 pub mod worker;
 
 pub use crate::base_model::*;
@@ -699,6 +699,7 @@ pub struct AgentStatusRecord {
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
+    pub current_filesystem_storage_usage: u64,
     pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
     pub active_plugins: HashSet<EnvironmentPluginGrantId>,
@@ -735,6 +736,7 @@ impl Default for AgentStatusRecord {
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
+            current_filesystem_storage_usage: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
@@ -1209,6 +1211,11 @@ pub enum AgentEvent {
         function: String,
         idempotency_key: IdempotencyKey,
     },
+    PluginError {
+        timestamp: Timestamp,
+        plugin_name: String,
+        message: String,
+    },
     /// The client fell behind and the point it left of is no longer in our buffer.
     /// {number_of_skipped_messages} is the number of messages between the client left of and the point it is now at.
     ClientLagged { number_of_missed_messages: u64 },
@@ -1252,6 +1259,13 @@ impl Display for AgentEvent {
                 ..
             } => {
                 write!(f, "<invocation-finished> {function} {idempotency_key}")
+            }
+            AgentEvent::PluginError {
+                plugin_name,
+                message,
+                ..
+            } => {
+                write!(f, "<plugin-error> [{plugin_name}] {message}")
             }
             AgentEvent::ClientLagged {
                 number_of_missed_messages,

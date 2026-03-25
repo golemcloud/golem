@@ -28,6 +28,11 @@ pub enum InternalWorkerEvent {
         function: String,
         idempotency_key: IdempotencyKey,
     },
+    PluginError {
+        timestamp: Timestamp,
+        plugin_name: String,
+        message: String,
+    },
 }
 
 impl InternalWorkerEvent {
@@ -70,6 +75,14 @@ impl InternalWorkerEvent {
         }
     }
 
+    pub fn plugin_error(plugin_name: &str, message: &str) -> Self {
+        Self::PluginError {
+            timestamp: Timestamp::now_utc(),
+            plugin_name: plugin_name.to_string(),
+            message: message.to_string(),
+        }
+    }
+
     pub fn as_oplog_entry(&self) -> Option<OplogEntry> {
         match self {
             Self::StdOut { timestamp, bytes } => Some(OplogEntry::Log {
@@ -104,6 +117,7 @@ impl InternalWorkerEvent {
             }),
             Self::InvocationStart { .. } => None,
             Self::InvocationFinished { .. } => None,
+            Self::PluginError { .. } => None,
         }
     }
 }
@@ -141,6 +155,15 @@ impl From<InternalWorkerEvent> for AgentEvent {
                 timestamp,
                 function,
                 idempotency_key,
+            },
+            InternalWorkerEvent::PluginError {
+                timestamp,
+                plugin_name,
+                message,
+            } => Self::PluginError {
+                timestamp,
+                plugin_name,
+                message,
             },
         }
     }
