@@ -14,7 +14,7 @@
 
 use crate::repo::model::token::TokenRecord;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -267,10 +267,6 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                 })
             })
             .await?;
-
-        if let Some(event_id) = result {
-            self.db_pool.notify_change_event(event_id).await;
-        }
 
         Ok(result)
     }

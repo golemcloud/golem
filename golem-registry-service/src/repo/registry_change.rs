@@ -499,9 +499,12 @@ impl DbRegistryChangeRepo<PostgresPool> {
             )
             .await?;
 
-        Ok(ChangeEventId(
-            row.try_get("event_id").map_err(RepoError::from)?,
-        ))
+        let event_id = ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?);
+
+        tx.execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
+            .await?;
+
+        Ok(event_id)
     }
 }
 
@@ -540,28 +543,4 @@ impl DbRegistryChangeRepo<SqlitePool> {
             row.try_get("event_id").map_err(RepoError::from)?,
         ))
     }
-}
-
-/// Trait for sending best-effort `pg_notify` after a registry change event has been committed.
-///
-/// Postgres sends a real notification for multi-node propagation; SQLite is a no-op
-/// since in-process broadcast is sufficient for single-node.
-#[async_trait]
-pub trait NotifyChangeEvent: Send + Sync {
-    async fn notify_change_event(&self, event_id: ChangeEventId);
-}
-
-#[async_trait]
-impl NotifyChangeEvent for PostgresPool {
-    async fn notify_change_event(&self, event_id: ChangeEventId) {
-        let _ = self
-            .with_rw("registry_change", "pg_notify")
-            .execute(sqlx::query("SELECT pg_notify('registry_change', $1::text)").bind(event_id.0))
-            .await;
-    }
-}
-
-#[async_trait]
-impl NotifyChangeEvent for SqlitePool {
-    async fn notify_change_event(&self, _event_id: ChangeEventId) {}
 }

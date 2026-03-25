@@ -27,8 +27,7 @@ use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
-    DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent, RegistryChangeEvent,
-    RegistryChangeRepo,
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
 };
 use golem_registry_service::services::registry_change_notifier::{
     PostgresRegistryChangeNotifier, RegistryChangeNotifier,
@@ -424,8 +423,6 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
         })
         .await
         .unwrap();
-    db.pool.notify_change_event(event_id).await;
-
     // The PgListener should pick up the NOTIFY, read the event from the DB,
     // and broadcast it through the sender.
     let received = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())

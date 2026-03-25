@@ -16,7 +16,7 @@ use super::model::domain_registration::{DomainRegistrationRecord, DomainRegistra
 use crate::repo::model::BindFields;
 use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -230,8 +230,6 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
             })
             .await?;
 
-        self.db_pool.notify_change_event(result.1).await;
-
         Ok(result)
     }
 
@@ -285,10 +283,6 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
                 .boxed()
             })
             .await?;
-
-        if let Some((_, event_id)) = &result {
-            self.db_pool.notify_change_event(*event_id).await;
-        }
 
         Ok(result)
     }

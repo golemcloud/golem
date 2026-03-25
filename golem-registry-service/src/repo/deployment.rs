@@ -37,7 +37,7 @@ use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -850,8 +850,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             })
             .await?;
 
-        self.db_pool.notify_change_event(result.1).await;
-
         Ok(result)
     }
 
@@ -1270,8 +1268,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 })
             })
             .await?;
-
-        self.db_pool.notify_change_event(result.1).await;
 
         Ok(result)
     }

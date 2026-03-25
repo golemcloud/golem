@@ -19,7 +19,7 @@ use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account::AccountRepoError;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -303,8 +303,6 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
             }.boxed()
         })
         .await?;
-
-        self.db_pool.notify_change_event(result.1).await;
 
         Ok(result)
     }
