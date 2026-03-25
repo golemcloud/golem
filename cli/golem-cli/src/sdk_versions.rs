@@ -12,14 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub const GOLEM_RUST_VERSION_DEFAULT: &str = "2.0.0-dev.2";
-pub const GOLEM_TS_VERSION_DEFAULT: &str = "0.1.0-dev.1";
+pub mod sdk {
+    pub const RUST: &str = "2.0.0-dev.2";
+    pub const TS: &str = "0.1.0-dev.1";
+}
 
-pub const GOLEM_BUILD_TOOL_RUSTUP_VERSION_MIN: &str = "1.27.1";
-pub const GOLEM_BUILD_TOOL_RUSTC_VERSION_MIN: &str = "1.94.0";
-pub const GOLEM_BUILD_TOOL_CARGO_VERSION_MIN: &str = "1.94.0";
-pub const GOLEM_BUILD_TOOL_NODE_VERSION_MIN: &str = "24.11.0";
-pub const GOLEM_BUILD_TOOL_NPM_VERSION_MIN: &str = "11.6.2";
+pub mod build_tool {
+    pub const RUSTUP_MIN: &str = "1.27.1";
+    pub const RUSTC_MIN: &str = "1.94.0";
+    pub const CARGO_MIN: &str = "1.94.0";
+    pub const NODE_MIN: &str = "24.11.0";
+    pub const NPM_MIN: &str = "11.6.2";
+}
 
-pub const GOLEM_AI_VERSION: &str = "v0.5.0-dev.1";
-pub const GOLEM_AI_SUFFIX: &str = "-dev.wasm";
+// Keep this aligned with the TS component template
+pub mod ts_dep {
+    pub const ROLLUP_PLUGIN_ALIAS: &str = "^5.1.1";
+    pub const ROLLUP_PLUGIN_NODE_RESOLVE: &str = "^16.0.1";
+    pub const ROLLUP_PLUGIN_TYPESCRIPT: &str = "^12.1.4";
+    pub const ROLLUP_PLUGIN_COMMONJS: &str = "^28.0.6";
+    pub const ROLLUP_PLUGIN_JSON: &str = "^6.1.0";
+    pub const TYPES_NODE: &str = "^24.3.1";
+    pub const ROLLUP: &str = "^4.50.1";
+    pub const TSLIB: &str = "^2.8.1";
+    pub const TYPESCRIPT: &str = "^5.9.2";
+}
+
+// Keep this aligned with the Rust component template
+pub mod rust_dep {
+    pub const LOG: &str = "0.4.29";
+    pub const SERDE: &str = "1";
+    pub const SERDE_JSON: &str = "1";
+    pub const WSTD: &str = "=0.6.5";
+}
+
+pub mod ai {
+    pub const VERSION: &str = "v0.5.0-dev.1";
+    pub const SUFFIX: &str = "-dev.wasm";
+}

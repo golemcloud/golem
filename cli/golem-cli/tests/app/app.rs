@@ -196,10 +196,34 @@ async fn build_check(_tracing: &Tracing) {
 
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains(
-        "Planned required changes for dependencies and configurations"
-    ));
+    assert!(outputs.stdout_contains("Planned required changes for dependencies and configurations"));
     assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
+
+    fs::write_str(
+        &package_json_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": "app",
+            "dependencies": {},
+            "devDependencies": {}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cargo_toml: DocumentMut = fs::read_to_string(&cargo_toml_path)
+        .unwrap()
+        .parse()
+        .unwrap();
+    cargo_toml["dependencies"] = toml_edit::Item::Table(toml_edit::Table::default());
+    fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
+
+    let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Planned required changes for dependencies and configurations"));
+    assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
 }
 
 #[test]

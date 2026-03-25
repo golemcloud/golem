@@ -27,6 +27,7 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::GuestLanguage;
 use crate::sdk_overrides::{sdk_overrides, RustDependency};
+use crate::sdk_versions;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use regex::Regex;
@@ -51,6 +52,7 @@ enum DependencyMatcherSemantics {
 #[derive(Clone, Debug)]
 enum ExpectedDependencyKind {
     ExactPath(String),
+    ExactLiteral(String),
     SemanticCompatibleVersion { base_version: String },
 }
 
@@ -260,7 +262,7 @@ fn plan_rust_cargo_fix_steps(
     overrides: &crate::sdk_overrides::SdkOverrides,
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<Vec<DependencyFixStep>> {
-    let expected = match overrides.golem_rust_dependency() {
+    let golem_rust_expected = match overrides.golem_rust_dependency() {
         RustDependency::Path(path) => {
             ExpectedDependencyKind::ExactPath(path.to_string_lossy().to_string())
         }
@@ -268,6 +270,71 @@ fn plan_rust_cargo_fix_steps(
             base_version: version,
         },
     };
+
+    let mut requirements = vec![
+        CargoDependencyRequirement {
+            name: "log",
+            expected_spec: DependencySpec::Version {
+                version: sdk_versions::rust_dep::LOG.to_string(),
+                features: vec!["kv".to_string()],
+            },
+            matcher: CargoDependencyMatcher::Exact,
+        },
+        CargoDependencyRequirement {
+            name: "serde",
+            expected_spec: DependencySpec::Version {
+                version: sdk_versions::rust_dep::SERDE.to_string(),
+                features: vec!["derive".to_string()],
+            },
+            matcher: CargoDependencyMatcher::Exact,
+        },
+        CargoDependencyRequirement {
+            name: "serde_json",
+            expected_spec: DependencySpec::Version {
+                version: sdk_versions::rust_dep::SERDE_JSON.to_string(),
+                features: Vec::new(),
+            },
+            matcher: CargoDependencyMatcher::Exact,
+        },
+        CargoDependencyRequirement {
+            name: "wstd",
+            expected_spec: DependencySpec::Version {
+                version: sdk_versions::rust_dep::WSTD.to_string(),
+                features: vec!["default".to_string(), "json".to_string()],
+            },
+            matcher: CargoDependencyMatcher::Exact,
+        },
+    ];
+
+    let golem_rust_expected_spec = match &golem_rust_expected {
+        ExpectedDependencyKind::ExactPath(path) => DependencySpec::Path {
+            path: path.clone(),
+            features: vec!["export_golem_agentic".to_string()],
+        },
+        ExpectedDependencyKind::SemanticCompatibleVersion { base_version } => {
+            DependencySpec::Version {
+                version: base_version.clone(),
+                features: vec!["export_golem_agentic".to_string()],
+            }
+        }
+        ExpectedDependencyKind::ExactLiteral(value) => DependencySpec::Version {
+            version: value.clone(),
+            features: vec!["export_golem_agentic".to_string()],
+        },
+    };
+    requirements.push(CargoDependencyRequirement {
+        name: "golem-rust",
+        expected_spec: golem_rust_expected_spec,
+        matcher: CargoDependencyMatcher::Kind {
+            expected: golem_rust_expected,
+            semantics: DependencyMatcherSemantics::Rust,
+        },
+    });
+
+    let spec_names = requirements
+        .iter()
+        .map(|requirement| requirement.name)
+        .collect::<Vec<_>>();
 
     let mut steps = Vec::new();
     for component_name in ctx.application_context().selected_component_names() {
@@ -277,56 +344,36 @@ fn plan_rust_cargo_fix_steps(
         }
 
         let cargo_toml_path = component.component_dir().join("Cargo.toml");
-        let cargo_toml_str_content = fs::read_to_string(&cargo_toml_path)?;
-        let specs =
-            edit::cargo_toml::collect_dependency_specs(&cargo_toml_str_content, &["golem-rust"])?;
+        let original = fs::read_to_string(&cargo_toml_path)?;
+        let mut working = original.clone();
+        let specs = edit::cargo_toml::collect_dependency_specs(&original, &spec_names)?;
 
-        let compliance = match specs.get("golem-rust").and_then(|spec| spec.as_ref()) {
-            Some(DependencySpec::Version(version)) => evaluate_dependency_spec_compliance(
-                version,
-                &expected,
-                DependencyMatcherSemantics::Rust,
-            ),
-            Some(DependencySpec::Path(path)) => evaluate_dependency_spec_compliance(
-                path,
-                &expected,
-                DependencyMatcherSemantics::Rust,
-            ),
-            Some(DependencySpec::Unsupported(raw)) => DependencySpecCompliance::SkipWarn(format!(
-                "Skipped dependency check for complex Cargo spec '{}'",
-                raw
-            )),
-            None => DependencySpecCompliance::NeedsUpdate,
-        };
+        for requirement in &requirements {
+            let found = specs.get(requirement.name).and_then(|spec| spec.as_ref());
+            let compliance = evaluate_cargo_dependency_compliance(found, requirement);
 
-        match compliance {
-            DependencySpecCompliance::Compatible => {}
-            DependencySpecCompliance::SkipWarn(message) => {
-                warnings.push(format!("{} ({})", message, cargo_toml_path.display()));
-            }
-            DependencySpecCompliance::NeedsUpdate => {
-                let update_spec = match &expected {
-                    ExpectedDependencyKind::ExactPath(path) => DependencySpec::Path(path.clone()),
-                    ExpectedDependencyKind::SemanticCompatibleVersion { base_version } => {
-                        DependencySpec::Version(base_version.clone())
-                    }
-                };
-
-                let new = edit::cargo_toml::upsert_dependency_auto(
-                    cargo_toml_str_content.as_str(),
-                    "golem-rust",
-                    &update_spec,
-                    DependencyTable::Dependencies,
-                )?;
-
-                if new != cargo_toml_str_content {
-                    steps.push(DependencyFixStep {
-                        path: cargo_toml_path,
-                        current: cargo_toml_str_content,
-                        new,
-                    });
+            match compliance {
+                DependencySpecCompliance::Compatible => {}
+                DependencySpecCompliance::SkipWarn(message) => {
+                    warnings.push(format!("{} ({})", message, cargo_toml_path.display()));
+                }
+                DependencySpecCompliance::NeedsUpdate => {
+                    working = edit::cargo_toml::upsert_dependency_auto(
+                        &working,
+                        requirement.name,
+                        &requirement.expected_spec,
+                        DependencyTable::Dependencies,
+                    )?;
                 }
             }
+        }
+
+        if working != original {
+            steps.push(DependencyFixStep {
+                path: cargo_toml_path,
+                current: original,
+                new: working,
+            });
         }
     }
 
@@ -339,6 +386,20 @@ enum DependencySpecCompliance {
     SkipWarn(String),
 }
 
+enum CargoDependencyMatcher {
+    Exact,
+    Kind {
+        expected: ExpectedDependencyKind,
+        semantics: DependencyMatcherSemantics,
+    },
+}
+
+struct CargoDependencyRequirement {
+    name: &'static str,
+    expected_spec: DependencySpec,
+    matcher: CargoDependencyMatcher,
+}
+
 fn evaluate_dependency_spec_compliance(
     found_text: &str,
     expected: &ExpectedDependencyKind,
@@ -347,6 +408,13 @@ fn evaluate_dependency_spec_compliance(
     match expected {
         ExpectedDependencyKind::ExactPath(expected_path) => {
             if normalize_path_str(found_text) == normalize_path_str(expected_path) {
+                DependencySpecCompliance::Compatible
+            } else {
+                DependencySpecCompliance::NeedsUpdate
+            }
+        }
+        ExpectedDependencyKind::ExactLiteral(expected_literal) => {
+            if found_text == expected_literal {
                 DependencySpecCompliance::Compatible
             } else {
                 DependencySpecCompliance::NeedsUpdate
@@ -369,9 +437,69 @@ fn evaluate_dependency_spec_compliance(
     }
 }
 
+fn evaluate_cargo_dependency_compliance(
+    found: Option<&DependencySpec>,
+    requirement: &CargoDependencyRequirement,
+) -> DependencySpecCompliance {
+    let Some(found) = found else {
+        return DependencySpecCompliance::NeedsUpdate;
+    };
+
+    if !has_required_features(found, &requirement.expected_spec) {
+        return DependencySpecCompliance::NeedsUpdate;
+    }
+
+    match (&requirement.matcher, found) {
+        (_, DependencySpec::Unsupported(raw)) => DependencySpecCompliance::SkipWarn(format!(
+            "Skipped dependency check for complex Cargo spec '{}'",
+            raw
+        )),
+        (CargoDependencyMatcher::Exact, _) => {
+            if found == &requirement.expected_spec {
+                DependencySpecCompliance::Compatible
+            } else {
+                DependencySpecCompliance::NeedsUpdate
+            }
+        }
+        (
+            CargoDependencyMatcher::Kind {
+                expected,
+                semantics,
+            },
+            DependencySpec::Version { version, .. },
+        ) => evaluate_dependency_spec_compliance(version, expected, *semantics),
+        (
+            CargoDependencyMatcher::Kind {
+                expected,
+                semantics,
+            },
+            DependencySpec::Path { path, .. },
+        ) => evaluate_dependency_spec_compliance(path, expected, *semantics),
+    }
+}
+
+fn has_required_features(found: &DependencySpec, expected: &DependencySpec) -> bool {
+    let found_features = match found {
+        DependencySpec::Version { features, .. } => features,
+        DependencySpec::Path { features, .. } => features,
+        DependencySpec::Unsupported(_) => return true,
+    };
+
+    let expected_features = match expected {
+        DependencySpec::Version { features, .. } => features,
+        DependencySpec::Path { features, .. } => features,
+        DependencySpec::Unsupported(_) => return true,
+    };
+
+    expected_features
+        .iter()
+        .all(|feature| found_features.contains(feature))
+}
+
 fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
     match expected {
         ExpectedDependencyKind::ExactPath(path) => path.clone(),
+        ExpectedDependencyKind::ExactLiteral(value) => value.clone(),
         ExpectedDependencyKind::SemanticCompatibleVersion { base_version } => base_version.clone(),
     }
 }
@@ -469,6 +597,78 @@ fn typescript_sdk_requirements(
             name: "@golemcloud/golem-ts-typegen",
             section: PackageJsonSection::DevDependencies,
             expected: make_expected("golem-ts-typegen"),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "@rollup/plugin-alias",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::ROLLUP_PLUGIN_ALIAS.to_string(),
+            ),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "@rollup/plugin-node-resolve",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE.to_string(),
+            ),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "@rollup/plugin-typescript",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::ROLLUP_PLUGIN_TYPESCRIPT.to_string(),
+            ),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "@rollup/plugin-commonjs",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::ROLLUP_PLUGIN_COMMONJS.to_string(),
+            ),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "@rollup/plugin-json",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::ROLLUP_PLUGIN_JSON.to_string(),
+            ),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "@types/node",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::TYPES_NODE.to_string(),
+            ),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "rollup",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::ROLLUP.to_string(),
+            ),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "tslib",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::TSLIB.to_string(),
+            ),
+            semantics: DependencyMatcherSemantics::TypeScript,
+        },
+        PackageJsonDependencyRequirement {
+            name: "typescript",
+            section: PackageJsonSection::DevDependencies,
+            expected: ExpectedDependencyKind::ExactLiteral(
+                sdk_versions::ts_dep::TYPESCRIPT.to_string(),
+            ),
             semantics: DependencyMatcherSemantics::TypeScript,
         },
     ]

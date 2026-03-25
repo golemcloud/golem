@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::fs;
-use crate::sdk_versions::{GOLEM_RUST_VERSION_DEFAULT, GOLEM_TS_VERSION_DEFAULT};
+use crate::sdk_versions;
 use anyhow::{anyhow, bail, Context};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -91,7 +91,7 @@ impl SdkOverrides {
             None => self
                 .ts_version
                 .as_deref()
-                .unwrap_or(GOLEM_TS_VERSION_DEFAULT)
+                .unwrap_or(sdk_versions::sdk::TS)
                 .to_string(),
         }
     }
@@ -106,7 +106,7 @@ impl SdkOverrides {
             None => RustDependency::Version(
                 self.golem_rust_version
                     .clone()
-                    .unwrap_or_else(|| GOLEM_RUST_VERSION_DEFAULT.to_string()),
+                    .unwrap_or_else(|| sdk_versions::sdk::RUST.to_string()),
             ),
         }
     }

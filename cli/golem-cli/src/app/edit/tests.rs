@@ -68,6 +68,46 @@ fn package_json_merge_and_collect() {
 }
 
 #[test]
+fn package_json_merge_many_entries_into_empty_sections_produces_valid_json() {
+    let source = r#"{
+  "name": "app",
+  "dependencies": {},
+  "devDependencies": {}
+}"#;
+
+    let updated = package_json::merge_dependencies(
+        source,
+        &[(
+            "@golemcloud/golem-ts-sdk".to_string(),
+            "0.1.0-dev.1".to_string(),
+        )],
+        &[
+            (
+                "@golemcloud/golem-ts-typegen".to_string(),
+                "0.1.0-dev.1".to_string(),
+            ),
+            ("@rollup/plugin-alias".to_string(), "^5.1.1".to_string()),
+            (
+                "@rollup/plugin-node-resolve".to_string(),
+                "^16.0.1".to_string(),
+            ),
+            ("typescript".to_string(), "^5.9.2".to_string()),
+        ],
+    )
+    .unwrap();
+
+    let parsed: serde_json::Value = serde_json::from_str(updated.as_str()).unwrap();
+    assert_eq!(
+        parsed["dependencies"]["@golemcloud/golem-ts-sdk"],
+        serde_json::Value::String("0.1.0-dev.1".to_string())
+    );
+    assert_eq!(
+        parsed["devDependencies"]["@rollup/plugin-alias"],
+        serde_json::Value::String("^5.1.1".to_string())
+    );
+}
+
+#[test]
 fn tsconfig_merge_and_check() {
     let base = r#"{
   "compilerOptions": {
@@ -248,9 +288,10 @@ golem-rust = { path = "/tmp/sdks/rust/golem-rust", features = ["export_golem_age
 
     assert_eq!(
         specs.get("golem-rust"),
-        Some(&Some(DependencySpec::Path(
-            "/tmp/sdks/rust/golem-rust".to_string()
-        )))
+        Some(&Some(DependencySpec::Path {
+            path: "/tmp/sdks/rust/golem-rust".to_string(),
+            features: vec!["export_golem_agentic".to_string()],
+        }))
     );
 }
 
@@ -269,7 +310,10 @@ golem-rust = "2.0.0-dev.2"
     let updated = cargo_toml::upsert_dependency_auto(
         source,
         "golem-rust",
-        &DependencySpec::Version("2.1.0".to_string()),
+        &DependencySpec::Version {
+            version: "2.1.0".to_string(),
+            features: Vec::new(),
+        },
         DependencyTable::Dependencies,
     )
     .unwrap();
@@ -291,7 +335,10 @@ golem-rust = "2.0.0"
     let updated = cargo_toml::upsert_dependency_auto(
         source,
         "golem-rust",
-        &DependencySpec::Version("2.1.0".to_string()),
+        &DependencySpec::Version {
+            version: "2.1.0".to_string(),
+            features: Vec::new(),
+        },
         DependencyTable::Dependencies,
     )
     .unwrap();
@@ -331,7 +378,10 @@ golem-rust = "2.0.0-dev.2"
     let specs = cargo_toml::collect_dependency_specs(source, &["golem-rust"]).unwrap();
     assert_eq!(
         specs.get("golem-rust"),
-        Some(&Some(DependencySpec::Version("2.3.0".to_string())))
+        Some(&Some(DependencySpec::Version {
+            version: "2.3.0".to_string(),
+            features: Vec::new(),
+        }))
     );
 }
 

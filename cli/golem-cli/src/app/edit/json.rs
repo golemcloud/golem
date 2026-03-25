@@ -229,29 +229,85 @@ fn merge_entries_into_object(
     entries: &[(String, String)],
 ) -> anyhow::Result<Vec<TextEdit>> {
     let mut edits = Vec::new();
+    let pairs = object_pair_nodes(object, source)?;
+
+    let mut existing = BTreeMap::new();
+    for (key, _pair, value_node) in &pairs {
+        existing.insert(key.clone(), *value_node);
+    }
+
+    let mut missing = Vec::<(String, String)>::new();
     for (key, value) in entries {
-        let mut existing = None;
-        for (pair_key, value_node) in object_pairs(object, source)? {
-            if pair_key == *key {
-                existing = Some(value_node);
-                break;
-            }
-        }
-        if let Some(value_node) = existing {
+        if let Some(value_node) = existing.get(key) {
             edits.push(TextEdit::new(
                 value_node.start_byte(),
                 value_node.end_byte(),
                 format!("\"{}\"", escape_json_string(value)),
             ));
         } else {
-            edits.push(insert_object_pair_edit(
-                source,
-                object,
-                key,
-                &format!("\"{}\"", escape_json_string(value)),
-            )?);
+            missing.push((key.clone(), format!("\"{}\"", escape_json_string(value))));
         }
     }
+
+    if !missing.is_empty() {
+        let (indent, multiline) = detect_object_indent(source, object)?;
+        if pairs.is_empty() {
+            let insert_pos = object.end_byte() - 1;
+            let insertion = if multiline {
+                let body = missing
+                    .iter()
+                    .map(|(key, value)| {
+                        format!("{}\"{}\": {}", indent, escape_json_string(key), value)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",\n");
+                format!("\n{}", body)
+            } else {
+                let body = missing
+                    .iter()
+                    .map(|(key, value)| format!("\"{}\": {}", escape_json_string(key), value))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(" {}", body)
+            };
+            edits.push(TextEdit::new(insert_pos, insert_pos, insertion));
+        } else {
+            let last_pair_end = pairs.last().unwrap().1.end_byte();
+
+            let rendered = if multiline {
+                missing
+                    .iter()
+                    .map(|(key, value)| {
+                        format!("\n{}\"{}\": {}", indent, escape_json_string(key), value)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            } else {
+                missing
+                    .iter()
+                    .map(|(key, value)| format!("\"{}\": {}", escape_json_string(key), value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+
+            if let Some(comma_pos) = find_trailing_comma(source, last_pair_end, object.end_byte()) {
+                let insertion = if multiline {
+                    rendered
+                } else {
+                    format!(" {}", rendered)
+                };
+                edits.push(TextEdit::new(comma_pos + 1, comma_pos + 1, insertion));
+            } else {
+                let insertion = if multiline {
+                    format!(",{}", rendered)
+                } else {
+                    format!(", {}", rendered)
+                };
+                edits.push(TextEdit::new(last_pair_end, last_pair_end, insertion));
+            }
+        }
+    }
+
     Ok(edits)
 }
 

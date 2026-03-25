@@ -18,8 +18,14 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DependencySpec {
-    Version(String),
-    Path(String),
+    Version {
+        version: String,
+        features: Vec<String>,
+    },
+    Path {
+        path: String,
+        features: Vec<String>,
+    },
     Unsupported(String),
 }
 
@@ -88,8 +94,8 @@ pub fn collect_versions(
         .into_iter()
         .map(|(name, spec)| {
             let version = spec.and_then(|spec| match spec {
-                DependencySpec::Version(version) => Some(version),
-                DependencySpec::Path(_) | DependencySpec::Unsupported(_) => None,
+                DependencySpec::Version { version, .. } => Some(version),
+                DependencySpec::Path { .. } | DependencySpec::Unsupported(_) => None,
             });
             (name, version)
         })
@@ -314,26 +320,44 @@ fn collect_dependency_spec(doc: &DocumentMut, name: &str) -> Option<DependencySp
 
 fn dependency_spec(item: &Item) -> Option<DependencySpec> {
     if item.is_str() {
-        return item
-            .as_str()
-            .map(|s| DependencySpec::Version(s.to_string()));
+        return item.as_str().map(|s| DependencySpec::Version {
+            version: s.to_string(),
+            features: Vec::new(),
+        });
     }
 
     let table = item.as_table_like()?;
+    let features = table
+        .get("features")
+        .and_then(|item| item.as_array())
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     if let Some(path) = table
         .get("path")
         .and_then(|item| item.as_value())
         .and_then(|value| value.as_str())
     {
-        return Some(DependencySpec::Path(path.to_string()));
+        return Some(DependencySpec::Path {
+            path: path.to_string(),
+            features,
+        });
     }
 
     table
         .get("version")
         .and_then(|item| item.as_value())
         .and_then(|value| value.as_str())
-        .map(|value| DependencySpec::Version(value.to_string()))
+        .map(|value| DependencySpec::Version {
+            version: value.to_string(),
+            features,
+        })
         .or_else(|| Some(DependencySpec::Unsupported(item.to_string())))
 }
 
@@ -353,10 +377,22 @@ fn is_workspace_ref(item: &Item) -> bool {
 
 fn dependency_spec_to_item(spec: &DependencySpec) -> anyhow::Result<Item> {
     match spec {
-        DependencySpec::Version(version) => Ok(value(version.as_str())),
-        DependencySpec::Path(path) => {
+        DependencySpec::Version { version, features } => {
+            if features.is_empty() {
+                Ok(value(version.as_str()))
+            } else {
+                let mut table = Table::default();
+                table["version"] = value(version.as_str());
+                table["features"] = value(features_to_array(features.clone()));
+                Ok(Item::Table(table))
+            }
+        }
+        DependencySpec::Path { path, features } => {
             let mut table = Table::default();
             table["path"] = value(path.as_str());
+            if !features.is_empty() {
+                table["features"] = value(features_to_array(features.clone()));
+            }
             Ok(Item::Table(table))
         }
         DependencySpec::Unsupported(spec) => {

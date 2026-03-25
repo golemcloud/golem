@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app_manifest_version;
-use crate::sdk_versions::{GOLEM_AI_SUFFIX, GOLEM_AI_VERSION};
+use crate::sdk_versions;
 use indoc::formatdoc;
 use std::sync::LazyLock;
 
@@ -53,7 +53,9 @@ pub static DOC_DEPENDENCIES: LazyLock<Vec<DocDependencyGroup>> = LazyLock::new(|
     fn golem_ai(name: &str) -> String {
         format!(
             "https://github.com/golemcloud/golem-ai/releases/download/{}/{}{}",
-            GOLEM_AI_VERSION, name, GOLEM_AI_SUFFIX
+            sdk_versions::ai::VERSION,
+            name,
+            sdk_versions::ai::SUFFIX
         )
     }
 

@@ -13,11 +13,7 @@
 // limitations under the License.
 
 use crate::model::GuestLanguage;
-use crate::sdk_versions::{
-    GOLEM_BUILD_TOOL_CARGO_VERSION_MIN, GOLEM_BUILD_TOOL_NODE_VERSION_MIN,
-    GOLEM_BUILD_TOOL_NPM_VERSION_MIN, GOLEM_BUILD_TOOL_RUSTC_VERSION_MIN,
-    GOLEM_BUILD_TOOL_RUSTUP_VERSION_MIN,
-};
+use crate::sdk_versions;
 
 #[derive(Clone, Copy, Debug)]
 pub struct VersionRange {
@@ -68,7 +64,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "rustup",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_RUSTUP_VERSION_MIN)),
+        version_range: Some(VersionRange::at_least(sdk_versions::build_tool::RUSTUP_MIN)),
         install_hint: "Install Rust tooling using rustup: https://www.rust-lang.org/tools/install",
     },
     ToolRequirement {
@@ -78,7 +74,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "rustc",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_RUSTC_VERSION_MIN)),
+        version_range: Some(VersionRange::at_least(sdk_versions::build_tool::RUSTC_MIN)),
         install_hint:
             "Install stable Rust with rustup: rustup install stable && rustup default stable",
     },
@@ -89,7 +85,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "cargo",
             args: &["version"],
         },
-        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_CARGO_VERSION_MIN)),
+        version_range: Some(VersionRange::at_least(sdk_versions::build_tool::CARGO_MIN)),
         install_hint: "Cargo is installed with Rust toolchain from rustup",
     },
     ToolRequirement {
@@ -111,7 +107,7 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "node",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_NODE_VERSION_MIN)),
+        version_range: Some(VersionRange::at_least(sdk_versions::build_tool::NODE_MIN)),
         install_hint: "Install Node.js: https://nodejs.org/",
     },
     ToolRequirement {
@@ -121,7 +117,7 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "npm",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_NPM_VERSION_MIN)),
+        version_range: Some(VersionRange::at_least(sdk_versions::build_tool::NPM_MIN)),
         install_hint: "npm is installed with Node.js",
     },
 ];
