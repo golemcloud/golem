@@ -27,12 +27,7 @@ import { clearAgentValidationError, getAgentValidationError } from './decorators
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
 export { description } from './decorators/description';
-export {
-  agent,
-  AgentDecoratorOptions,
-  SnapshottingOption,
-  clearAgentValidationError,
-} from './decorators/agent';
+export { agent, AgentDecoratorOptions, SnapshottingOption, clearAgentValidationError } from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
 export * from './agentClassName';
