@@ -20,16 +20,15 @@ use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
 use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::registry::{CallCountUpdate, FuelUsageUpdate};
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, BatchUpdateHttpCallCountRequest,
-    BatchUpdateRpcCallCountRequest, DownloadComponentRequest,
-    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentTypeRequest,
-    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
-    GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
-    GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
-    GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
+    BatchUpdateRpcCallCountRequest, DownloadComponentRequest, GetActiveMcpForDomainRequest,
+    GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
+    GetAllDeployedComponentRevisionsRequest, GetAuthDetailsForEnvironmentRequest,
+    GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest,
+    GetDeployedComponentMetadataRequest, GetResourceDefinitionByIdRequest,
+    GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
     UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
     batch_update_fuel_usage_response, batch_update_http_call_count_response,
@@ -44,6 +43,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     resolve_component_response, resolve_latest_agent_type_by_names_response,
     update_worker_connection_limit_response, update_worker_limit_response,
 };
+use golem_api_grpc::proto::golem::registry::{CallCountUpdate, FuelUsageUpdate};
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
@@ -522,9 +522,7 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?;
                 Ok(converted)
             }
-            Some(batch_update_http_call_count_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(batch_update_http_call_count_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -561,9 +559,7 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?;
                 Ok(converted)
             }
-            Some(batch_update_rpc_call_count_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(batch_update_rpc_call_count_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

@@ -16,12 +16,12 @@ use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
-use golem_common::model::Timestamp;
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
 use golem_common::model::IdempotencyKey;
+use golem_common::model::Timestamp;
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;

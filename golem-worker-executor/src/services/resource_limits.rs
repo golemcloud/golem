@@ -224,12 +224,12 @@ impl AtomicResourceEntry {
     /// have been made but not yet synced (unsynced) or are currently being synced
     /// (syncing).
     pub fn remaining_http_calls(&self) -> u64 {
-        let available = self.available_http_calls_from_server.load(Ordering::Acquire);
+        let available = self
+            .available_http_calls_from_server
+            .load(Ordering::Acquire);
         let unsynced = self.unsynced_http_calls.load(Ordering::Acquire);
         let syncing = self.syncing_http_calls.load(Ordering::Acquire);
-        available
-            .saturating_sub(unsynced)
-            .saturating_sub(syncing)
+        available.saturating_sub(unsynced).saturating_sub(syncing)
     }
 
     /// Returns the number of RPC calls remaining in this billing period.
@@ -237,9 +237,7 @@ impl AtomicResourceEntry {
         let available = self.available_rpc_calls_from_server.load(Ordering::Acquire);
         let unsynced = self.unsynced_rpc_calls.load(Ordering::Acquire);
         let syncing = self.syncing_rpc_calls.load(Ordering::Acquire);
-        available
-            .saturating_sub(unsynced)
-            .saturating_sub(syncing)
+        available.saturating_sub(unsynced).saturating_sub(syncing)
     }
 
     /// Records one outgoing HTTP call against the monthly account quota.
@@ -250,8 +248,7 @@ impl AtomicResourceEntry {
         if self.remaining_http_calls() == 0 {
             return false;
         }
-        self.unsynced_http_calls
-            .fetch_add(1, Ordering::AcqRel);
+        self.unsynced_http_calls.fetch_add(1, Ordering::AcqRel);
         true
     }
 
@@ -262,8 +259,7 @@ impl AtomicResourceEntry {
         if self.remaining_rpc_calls() == 0 {
             return false;
         }
-        self.unsynced_rpc_calls
-            .fetch_add(1, Ordering::AcqRel);
+        self.unsynced_rpc_calls.fetch_add(1, Ordering::AcqRel);
         true
     }
 }
@@ -475,7 +471,7 @@ impl ResourceLimitsGrpc {
                 }
                 Err(err) => {
                     error!("Failed to send batched HTTP call count updates: {}", err);
-                    for (account_id, _) in &http_updates {
+                    for account_id in http_updates.keys() {
                         error!("Lost HTTP call count updates for account {account_id}");
                         if let Some(cell) =
                             self.entries.read_async(account_id, |_, e| e.clone()).await
@@ -504,7 +500,7 @@ impl ResourceLimitsGrpc {
                 }
                 Err(err) => {
                     error!("Failed to send batched RPC call count updates: {}", err);
-                    for (account_id, _) in &rpc_updates {
+                    for account_id in rpc_updates.keys() {
                         error!("Lost RPC call count updates for account {account_id}");
                         if let Some(cell) =
                             self.entries.read_async(account_id, |_, e| e.clone()).await
@@ -870,7 +866,14 @@ mod tests {
     fn update_last_known_limits_resets_syncing_and_refreshes_available() {
         // Simulate a batch response: syncing is cleared, available_from_server refreshed.
         let entry = AtomicResourceEntry::new_with_all_limits(
-            0, 0, usize::MAX, u64::MAX, u64::MAX, u64::MAX, 5, 5,
+            0,
+            0,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            5,
+            5,
         );
         // Simulate what send_batch does: move unsynced → syncing
         entry.syncing_http_calls.store(3, Ordering::Release);
@@ -878,9 +881,13 @@ mod tests {
 
         // Manually apply what update_last_known_limits does
         entry.syncing_http_calls.store(0, Ordering::Release);
-        entry.available_http_calls_from_server.store(50, Ordering::Release);
+        entry
+            .available_http_calls_from_server
+            .store(50, Ordering::Release);
         entry.syncing_rpc_calls.store(0, Ordering::Release);
-        entry.available_rpc_calls_from_server.store(40, Ordering::Release);
+        entry
+            .available_rpc_calls_from_server
+            .store(40, Ordering::Release);
 
         assert_eq!(entry.remaining_http_calls(), 50);
         assert_eq!(entry.remaining_rpc_calls(), 40);
@@ -890,7 +897,14 @@ mod tests {
     fn record_http_call_returns_false_when_budget_exhausted() {
         // 0 available; any call should fail immediately.
         let entry = AtomicResourceEntry::new_with_all_limits(
-            1000, 512, usize::MAX, u64::MAX, u64::MAX, u64::MAX, 0, u64::MAX,
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
+            u64::MAX,
         );
         assert!(
             !entry.record_http_call(),
@@ -902,7 +916,14 @@ mod tests {
     fn record_http_call_exhausts_exactly_at_limit() {
         // 2 available; two calls succeed, third fails.
         let entry = AtomicResourceEntry::new_with_all_limits(
-            1000, 512, usize::MAX, u64::MAX, u64::MAX, u64::MAX, 2, u64::MAX,
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            2,
+            u64::MAX,
         );
         assert!(entry.record_http_call(), "first call should succeed");
         assert!(entry.record_http_call(), "second call should succeed");
@@ -915,7 +936,14 @@ mod tests {
     #[test]
     fn record_rpc_call_decrements_remaining_rpc_calls() {
         let entry = AtomicResourceEntry::new_with_all_limits(
-            1000, 512, usize::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, 3,
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            3,
         );
         assert!(entry.record_rpc_call());
         assert_eq!(entry.remaining_rpc_calls(), 2);
@@ -924,7 +952,14 @@ mod tests {
     #[test]
     fn record_rpc_call_returns_false_when_budget_exhausted() {
         let entry = AtomicResourceEntry::new_with_all_limits(
-            1000, 512, usize::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, 0,
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
         );
         assert!(!entry.record_rpc_call());
     }
@@ -933,7 +968,14 @@ mod tests {
     fn http_and_rpc_budgets_are_independent() {
         // HTTP exhausted, RPC still available.
         let entry = AtomicResourceEntry::new_with_all_limits(
-            1000, 512, usize::MAX, u64::MAX, u64::MAX, u64::MAX, 0, 5,
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
+            5,
         );
         assert!(!entry.record_http_call(), "HTTP should be exhausted");
         assert!(entry.record_rpc_call(), "RPC should still be available");
@@ -943,7 +985,14 @@ mod tests {
     fn unsynced_http_calls_accumulates_across_calls() {
         // Each record_http_call increments unsynced_http_calls by 1.
         let entry = AtomicResourceEntry::new_with_all_limits(
-            1000, 512, usize::MAX, u64::MAX, u64::MAX, u64::MAX, 10, u64::MAX,
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            10,
+            u64::MAX,
         );
         entry.record_http_call();
         entry.record_http_call();
@@ -1101,9 +1150,7 @@ mod tests {
                     available_rpc_calls: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
-                http_batch_update_result: Mutex::new(Ok(AccountResourceLimits(
-                    HashMap::new(),
-                ))),
+                http_batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
                 rpc_batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
             }
         }

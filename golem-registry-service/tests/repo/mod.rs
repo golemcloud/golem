@@ -15,7 +15,6 @@
 use crate::Tracing;
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
-use golem_registry_service::services::account_usage::AccountUsageService;
 use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
@@ -38,6 +37,7 @@ use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::plan::PlanRepo;
 use golem_registry_service::repo::plugin::PluginRepo;
 use golem_registry_service::repo::registry_change::RegistryChangeRepo;
+use golem_registry_service::services::account_usage::AccountUsageService;
 use std::str::FromStr;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;

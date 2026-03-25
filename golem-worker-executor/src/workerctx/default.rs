@@ -232,7 +232,6 @@ impl FuelManagement for Context {
         debug!("reset fuel mark to {}", current_level);
         consumed
     }
-
 }
 
 impl CallCountManagement for Context {

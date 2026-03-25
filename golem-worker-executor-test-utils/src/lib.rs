@@ -616,7 +616,6 @@ impl FuelManagement for TestWorkerCtx {
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
     }
-
 }
 
 impl CallCountManagement for TestWorkerCtx {

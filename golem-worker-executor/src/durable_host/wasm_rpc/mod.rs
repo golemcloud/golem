@@ -36,8 +36,6 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::{
     SerializableInvokeResult, SerializableScheduledInvocation,
 };
-use golem_common::model::Timestamp;
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
@@ -45,10 +43,12 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
+use golem_common::model::Timestamp;
 use golem_common::model::{
     AgentId, AgentInvocation, IdempotencyKey, OplogIndex, OwnedAgentId, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_wasm::{
     CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, ValueAndType, WasmRpcEntry,
 };
