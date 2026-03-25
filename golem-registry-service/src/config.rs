@@ -173,8 +173,8 @@ impl Default for RegistryServiceConfig {
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
                 max_table_elements_per_worker: 16_384,
                 max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_limit: 10_000_000_000_000_000_000,
+                per_invocation_rpc_limit: 10_000_000_000_000_000_000,
             },
         );
 
@@ -462,7 +462,7 @@ fn default_max_disk_space_per_worker() -> u64 {
 }
 
 fn default_unlimited() -> u64 {
-    u64::MAX
+    10_000_000_000_000_000_000
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
