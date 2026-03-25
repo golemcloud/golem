@@ -462,26 +462,7 @@ async fn ensure_npm_dependencies(
         );
     }
 
-    let first_try = run_npm_install(app_root_dir).await;
-    let result = if first_try.is_ok() {
-        first_try
-    } else if std::fs::exists(&node_modules_path)? {
-        log_warn_action(
-            "Retrying",
-            format!(
-                "{} failed, removing {} and trying again",
-                "npm install".log_color_highlight(),
-                "node_modules".log_color_highlight()
-            ),
-        );
-
-        std::fs::remove_dir_all(&node_modules_path)?;
-        run_npm_install(app_root_dir).await
-    } else {
-        first_try
-    };
-
-    marker.result(result)
+    marker.result(run_npm_install(app_root_dir).await)
 }
 
 async fn run_npm_install(app_root_dir: &Path) -> anyhow::Result<()> {
