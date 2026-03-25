@@ -28,7 +28,6 @@ use crate::command_handler::app::deploy_diff::{
 use crate::command_handler::app::template::TemplateHandler;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::diagnose::diagnose;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
@@ -412,17 +411,6 @@ impl AppCommandHandler {
         self.ctx.log_handler().log_view(&agent_types);
 
         Ok(())
-    }
-
-    pub async fn cmd_diagnose(
-        &self,
-        component_names: OptionalComponentNames,
-    ) -> anyhow::Result<()> {
-        self.diagnose(
-            component_names.component_name,
-            &ApplicationComponentSelectMode::All,
-        )
-        .await
     }
 
     pub async fn list_agent_types(
@@ -2087,45 +2075,6 @@ impl AppCommandHandler {
                     template.0.description(),
                 ));
             }
-        }
-
-        Ok(())
-    }
-
-    pub async fn diagnose(
-        &self,
-        component_names: Vec<ComponentName>,
-        default_component_select_mode: &ApplicationComponentSelectMode,
-    ) -> anyhow::Result<()> {
-        self.must_select_components(component_names, default_component_select_mode)
-            .await?;
-
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
-
-        let selected_component_names = app_ctx
-            .selected_component_names()
-            .iter()
-            .collect::<Vec<_>>();
-
-        if selected_component_names.is_empty() {
-            log_warn("The application has no components.");
-        }
-
-        for component_name in selected_component_names {
-            log_action(
-                "Diagnosing",
-                format!(
-                    "component {} for recommended tooling",
-                    component_name.as_str().log_color_highlight()
-                ),
-            );
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
-
-            diagnose(
-                app_ctx.application().component(component_name).source(),
-                None,
-            );
         }
 
         Ok(())

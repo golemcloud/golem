@@ -707,11 +707,6 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         component_name: OptionalComponentNames,
     },
-    /// Diagnose possible tooling problems
-    Diagnose {
-        #[command(flatten)]
-        component_name: OptionalComponentNames,
-    },
     /// List all the deployed agent types
     ListAgentTypes {},
 
@@ -964,11 +959,6 @@ pub mod component {
         RedeployAgents {
             #[command(flatten)]
             component_name: OptionalComponentName,
-        },
-        /// Diagnose possible tooling problems
-        Diagnose {
-            #[command(flatten)]
-            component_name: OptionalComponentNames,
         },
         /// Show component manifest properties with source trace
         ManifestTrace {

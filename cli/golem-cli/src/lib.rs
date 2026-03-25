@@ -35,7 +35,6 @@ pub mod command_handler;
 pub mod composition;
 pub mod config;
 pub mod context;
-pub mod diagnose;
 pub mod error;
 pub mod evcxr_repl;
 pub mod fs;
