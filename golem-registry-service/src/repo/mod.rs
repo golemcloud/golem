@@ -35,5 +35,7 @@ pub mod resource_definition;
 pub mod security_scheme;
 pub mod token;
 
+pub(crate) const REGISTRY_CHANGE_ADVISORY_LOCK_KEY: i64 = 100;
+
 // Model for SQL records and fields
 pub mod model;

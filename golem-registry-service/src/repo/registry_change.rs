@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::datetime::SqlDateTime;
+use crate::repo::REGISTRY_CHANGE_ADVISORY_LOCK_KEY;
 use async_trait::async_trait;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -468,14 +469,15 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
 /// `DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(...)`
 /// or `DbRegistryChangeRepo::<SqlitePool>::insert_change_event_in_tx(...)`.
 impl DbRegistryChangeRepo<PostgresPool> {
-    const ADVISORY_LOCK_KEY: i64 = 1459048342;
-
     pub async fn insert_change_event_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         event: &NewRegistryChangeEvent,
     ) -> RepoResult<ChangeEventId> {
-        tx.execute(sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(Self::ADVISORY_LOCK_KEY))
-            .await?;
+        tx.execute(
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(REGISTRY_CHANGE_ADVISORY_LOCK_KEY),
+        )
+        .await?;
 
         let event_type: i16 = event.event_type.into();
         let domains: &[String] = &event.domains;
