@@ -1,0 +1,8 @@
+# golem-app-manifest-header
+
+httpApi:
+  deployments:
+    local:
+    - domain: app-name.localhost:9006
+      agents:
+        ChatAgent: {}

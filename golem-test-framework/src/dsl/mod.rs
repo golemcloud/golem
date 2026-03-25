@@ -37,9 +37,7 @@ use golem_common::model::component::{
     PluginInstallation, PluginInstallationAction,
 };
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentAgentSecretDefault, DeploymentRevision,
-};
+use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -666,14 +664,13 @@ pub trait TestDslExtended: TestDsl {
         &self,
         environment_id: EnvironmentId,
     ) -> anyhow::Result<CurrentDeployment> {
-        self.deploy_environment_with(environment_id, Vec::new())
-            .await
+        self.deploy_environment_with(environment_id, |_| {}).await
     }
 
     async fn deploy_environment_with(
         &self,
         environment_id: EnvironmentId,
-        agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+        modify_deployment: impl for<'a> FnOnce(&'a mut DeploymentCreation) + Send,
     ) -> anyhow::Result<CurrentDeployment>;
 
     fn get_last_deployment_revision(
@@ -909,6 +906,7 @@ pub fn log_event_to_string(event: &LogEvent) -> String {
         Some(log_event::Event::InvocationFinished(_)) => "".to_string(),
         Some(log_event::Event::InvocationStarted(_)) => "".to_string(),
         Some(log_event::Event::ClientLagged { .. }) => "".to_string(),
+        Some(log_event::Event::PluginError(err)) => err.message.clone(),
         None => std::panic!("Unexpected event type"),
     }
 }

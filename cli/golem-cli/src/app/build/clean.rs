@@ -24,6 +24,8 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
 
+        let app_root_dir = ctx.application().app_root_dir();
+
         let paths = {
             let mut paths = BTreeSet::<(&'static str, PathBuf)>::new();
 
@@ -39,9 +41,8 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
 
             for component_name in &component_names {
                 let component = ctx.application().component(component_name);
-                let component_source_dir = component.source_dir();
+                let component_source_dir = component.component_dir();
 
-                paths.insert(("generated wit", component.generated_wit()));
                 paths.insert(("component wasm", component.wasm()));
                 paths.insert(("output wasm", component.final_wasm()));
 
@@ -52,9 +53,13 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
                         .unwrap_or_else(|| component_source_dir.to_path_buf());
 
                     paths.extend(
-                        fs::compile_and_collect_globs(&build_dir, &build_step.targets())?
-                            .into_iter()
-                            .map(|path| ("build output", path)),
+                        fs::compile_and_collect_globs(
+                            app_root_dir,
+                            &build_dir,
+                            &build_step.targets(),
+                        )?
+                        .into_iter()
+                        .map(|path| ("build output", path)),
                     );
                 }
 

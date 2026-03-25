@@ -219,6 +219,9 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::model::resource_definition::{
+        ResourceDefinition, ResourceDefinitionId, ResourceName,
+    };
     use golem_service_base::clients::registry::RegistryServiceError;
     use golem_service_base::model::auth::AuthCtx;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -424,6 +427,19 @@ mod tests {
             _: EnvironmentId,
         ) -> Result<golem_service_base::model::environment::EnvironmentState, RegistryServiceError>
         {
+            unimplemented!()
+        }
+        async fn get_resource_definition_by_id(
+            &self,
+            _resource_definition_id: ResourceDefinitionId,
+        ) -> Result<ResourceDefinition, RegistryServiceError> {
+            unimplemented!()
+        }
+        async fn get_resource_definition_by_name(
+            &self,
+            _environment_id: EnvironmentId,
+            _resource_name: ResourceName,
+        ) -> Result<ResourceDefinition, RegistryServiceError> {
             unimplemented!()
         }
         async fn subscribe_registry_invalidations(

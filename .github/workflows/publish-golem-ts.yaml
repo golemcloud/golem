@@ -10,7 +10,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASM_RQUICKJS_VERSION: "0.0.24"
+  WASM_RQUICKJS_VERSION: "v0.1.3"
 
 jobs:
   publish:
@@ -38,7 +38,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
 
       - name: Install wasm-rquickjs
-        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
+        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
       - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
@@ -55,7 +55,7 @@ jobs:
         working-directory: sdks/ts
         run: |
           VERSION=${{ steps.get_version.outputs.version }}
-          for pkg in packages/golem-ts-types-core packages/golem-ts-typegen packages/golem-ts-sdk packages/golem-ts-repl; do
+          for pkg in packages/golem-ts-types-core packages/golem-ts-typegen packages/golem-ts-sdk packages/golem-bridge packages/golem-ts-repl; do
             cd $pkg
             npm version $VERSION --no-git-tag-version
             cd ../../

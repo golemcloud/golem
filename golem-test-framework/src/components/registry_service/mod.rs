@@ -25,6 +25,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +46,7 @@ pub trait RegistryService: Send + Sync {
 
     fn default_plan(&self) -> PlanId;
     fn low_fuel_plan(&self) -> PlanId;
+    fn low_disk_space_plan(&self) -> PlanId;
 
     async fn kill(&self);
 
@@ -86,7 +88,9 @@ async fn env_vars(
     admin_token: &TokenSecret,
     default_plan_id: &PlanId,
     low_fuel_plan_id: &PlanId,
+    low_disk_space_plan_id: &PlanId,
     otlp: bool,
+    otlp_wasm_path: Option<&Path>,
 ) -> HashMap<String, String> {
     let builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -111,12 +115,13 @@ async fn env_vars(
         _ => builder.with_str("GOLEM__COMPONENT_COMPILATION__TYPE", "Disabled"),
     };
 
-    builder
+    let builder = builder
         // users
         .with(
             "GOLEM__INITIAL_ACCOUNTS__ROOT__ID",
             admin_account_id.to_string(),
         )
+        .with_str("GOLEM__INITIAL_ACCOUNTS__ROOT__NAME", "Root")
         .with(
             "GOLEM__INITIAL_ACCOUNTS__ROOT__EMAIL",
             admin_account_email.to_string(),
@@ -128,6 +133,31 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN",
             admin_token.secret().to_string(),
+        )
+        .with_str("GOLEM__INITIAL_ACCOUNTS__ROOT__ROLE", "admin")
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ID",
+            "adb2694f-cd9f-425d-905d-ca2888c9c5de",
+        )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__NAME",
+            "Builtin Plugin Owner",
+        )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__EMAIL",
+            "builtin-plugin-owner@golem.cloud",
+        )
+        .with(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__PLAN_ID",
+            default_plan_id.to_string(),
+        )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__TOKEN",
+            golem_client::LOCAL_WELL_KNOWN_BUILTIN_PLUGIN_OWNER_TOKEN,
+        )
+        .with_str(
+            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ROLE",
+            "builtin-plugin-owner",
         )
         // plans
         .with(
@@ -160,6 +190,10 @@ async fn env_vars(
         )
         .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_MEMORY_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_DISK_SPACE_PER_WORKER",
             "10000000000000000".to_string(),
         )
         .with(
@@ -207,6 +241,10 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_DISK_SPACE_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_GAS_LIMIT",
             "1".to_string(),
         )
@@ -226,10 +264,71 @@ async fn env_vars(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
+        // Low disk space plan — per-worker disk quota of 5 bytes so "hello world" exceeds it
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_ID",
+            low_disk_space_plan_id.to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_NAME",
+            "low_disk_space".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__APP_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__COMPONENT_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__ENV_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_DISK_SPACE_PER_WORKER",
+            "5".to_string(), // 5 bytes — "hello world" (11 bytes) exceeds this
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_GAS_LIMIT",
+            "1000000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_UPLOAD_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__STORAGE_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_CONNECTION_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_LIMIT",
+            "10000000000000000".to_string(),
+        )
         //
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_all(rdb.info().env("golem_registry", rdb_private_connection))
-        .with_optional_otlp("registry_service", otlp)
-        .build()
+        .with_optional_otlp("registry_service", otlp);
+
+    let builder = if let Some(wasm_path) = otlp_wasm_path {
+        builder
+            .with_str("GOLEM__BUILTIN_PLUGINS__ENABLED", "true")
+            .with(
+                "GOLEM__BUILTIN_PLUGINS__OTLP_EXPORTER_WASM_PATH",
+                wasm_path.to_string_lossy().to_string(),
+            )
+    } else {
+        builder
+    };
+
+    builder.build()
 }

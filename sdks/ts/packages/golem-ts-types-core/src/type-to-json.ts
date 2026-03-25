@@ -18,22 +18,22 @@ import * as Type from './type-lite';
 export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
   switch (type.kind) {
     case 'number':
-      return { kind: 'number', name: type.name, optional: type.optional };
+      return { kind: 'number', name: type.name, owner: type.owner, optional: type.optional };
 
     case 'string':
-      return { kind: 'string', name: type.name, optional: type.optional };
+      return { kind: 'string', name: type.name, owner: type.owner, optional: type.optional };
 
     case 'bigint':
-      return { kind: 'bigint', name: type.name, optional: type.optional };
+      return { kind: 'bigint', name: type.name, owner: type.owner, optional: type.optional };
 
     case 'null':
-      return { kind: 'null', name: type.name, optional: type.optional };
+      return { kind: 'null', name: type.name, owner: type.owner, optional: type.optional };
 
     case 'undefined':
-      return { kind: 'undefined', name: type.name, optional: type.optional };
+      return { kind: 'undefined', name: type.name, owner: type.owner, optional: type.optional };
 
     case 'void':
-      return { kind: 'void', name: type.name, optional: type.optional };
+      return { kind: 'void', name: type.name, owner: type.owner, optional: type.optional };
 
     case 'array':
       const elem = Type.getArrayElementType(type);
@@ -43,6 +43,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'array',
         name: type.name,
+        owner: type.owner,
         element: buildJSONFromType(elem),
         optional: type.optional,
       };
@@ -51,6 +52,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'tuple',
         name: type.name,
+        owner: type.owner,
         elements: type.elements.map(buildJSONFromType),
         optional: type.optional,
       };
@@ -59,6 +61,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'union',
         name: type.name,
+        owner: type.owner,
         types: type.unionTypes.map(buildJSONFromType),
         optional: type.optional,
         typeParams: type.typeParams.map(buildJSONFromType),
@@ -80,6 +83,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'object',
         name: type.name,
+        owner: type.owner,
         properties: props,
         optional: type.optional,
         typeParams: type.typeParams.map(buildJSONFromType),
@@ -100,6 +104,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'class',
         name: type.name,
+        owner: type.owner,
         properties: classProps,
         optional: type.optional,
       };
@@ -119,6 +124,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'interface',
         name: type.name,
+        owner: type.owner,
         properties: interfaceProps,
         optional: type.optional,
         typeParams: type.typeParams.map(buildJSONFromType),
@@ -132,6 +138,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'promise',
         name: type.name,
+        owner: type.owner,
         element: buildJSONFromType(elementType),
         optional: type.optional,
       };
@@ -146,6 +153,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'map',
         name: type.name,
+        owner: type.owner,
         typeArgs: [keyJson, valueJson],
         optional: type.optional,
       };
@@ -154,6 +162,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'literal',
         name: type.name,
+        owner: type.owner,
         literalValue: type.literalValue,
         optional: type.optional,
       };
@@ -166,6 +175,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'alias',
         name: type.name ?? 'alias',
+        owner: type.owner,
         target: buildJSONFromType(target),
         optional: type.optional,
       };
@@ -174,17 +184,19 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'others',
         name: type.name,
+        owner: type.owner,
         optional: type.optional,
         recursive: type.recursive,
       };
 
     case 'boolean':
-      return { kind: 'boolean', name: type.name, optional: type.optional };
+      return { kind: 'boolean', name: type.name, owner: type.owner, optional: type.optional };
 
     case 'config':
       return {
         kind: 'config',
         name: type.name,
+        owner: type.owner,
         properties: type.properties.map(({ path, secret, type }) => ({
           path,
           secret,
@@ -197,6 +209,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
       return {
         kind: 'unresolved-type',
         name: type.name,
+        owner: type.owner,
         optional: type.optional,
         text: type.text,
         error: type.error,

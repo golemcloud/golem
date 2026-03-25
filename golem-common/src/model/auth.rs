@@ -101,6 +101,7 @@ mod protobuf {
             match value {
                 GrpcAccountRole::Admin => Ok(Self::Admin),
                 GrpcAccountRole::MarketingAdmin => Ok(Self::MarketingAdmin),
+                GrpcAccountRole::BuiltinPluginOwner => Ok(Self::BuiltinPluginOwner),
                 GrpcAccountRole::Unspecified => Err("unknown account role".to_string()),
             }
         }
@@ -111,6 +112,7 @@ mod protobuf {
             match value {
                 AccountRole::Admin => Self::Admin,
                 AccountRole::MarketingAdmin => Self::MarketingAdmin,
+                AccountRole::BuiltinPluginOwner => Self::BuiltinPluginOwner,
             }
         }
     }

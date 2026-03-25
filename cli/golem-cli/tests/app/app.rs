@@ -5,6 +5,7 @@ use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
 use indoc::indoc;
 use std::path::Path;
+use std::time::Duration;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
 
@@ -25,18 +26,44 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::NEW, app_name, "typescript", "rust"]).await;
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::TEMPLATE,
+            "ts",
+            flag::TEMPLATE,
+            "rust",
+        ])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "typescript", "app:typescript"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "app:typescript",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "app:rust",
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
@@ -47,7 +74,6 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
     assert!(outputs.stderr_contains("app:rust"));
     assert!(outputs.stderr_contains("app:typescript"));
     assert!(outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
-    assert!(outputs.stderr_contains("cargo-clean"));
     assert!(outputs.stderr_contains("npm-install"));
 }
 
@@ -56,37 +82,34 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
-        .await;
-    assert!(outputs.success_or_dump());
-
     // First build
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
     check_component_metadata(
         &ctx.working_dir
-            .join("golem-temp/agents/app_rust_debug.wasm"),
-        "app:rust".to_string(),
+            .join("golem-temp/agents/test_app_name_rust_main_debug.wasm"),
+        "test-app-name:rust-main".to_string(),
         None,
     );
 
     // Rebuild - 1
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
     // Rebuild - 2
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
     // Rebuild - 3 - force, but cargo is smart to skip actual compile
     let outputs = ctx.cli([cmd::BUILD, flag::FORCE_BUILD]).await;
@@ -96,7 +119,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // Rebuild - 4
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 
     // Clean
     let outputs = ctx.cli([cmd::BUILD]).await;
@@ -105,13 +128,13 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // Rebuild - 5
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
-    assert!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
+    assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
 }
 
 #[test]
 async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::NEW, "dummy-app-name"]).await;
+    let outputs = ctx.cli([flag::YES, cmd::NEW, "dummy-app-name"]).await;
     assert!(!outputs.success());
     assert!(outputs.stdout_contains("Available languages:"));
 
@@ -147,29 +170,194 @@ async fn completion(_tracing: &Tracing) {
 }
 
 #[test]
-async fn basic_ifs_deploy(_tracing: &Tracing) {
+async fn ts_repl_interactive(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
-    let app_name = "test-app-name";
+    let app_name = "test-app-repl-interactive";
 
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
+        .await;
     assert!(outputs.success_or_dump());
 
     ctx.cd(app_name);
 
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("sample-agent.ts")),
+        indoc! {
+            r#"
+            import {
+                BaseAgent,
+                agent,
+                prompt,
+                description
+            } from '@golemcloud/golem-ts-sdk';
+
+            @agent({})
+            class SampleAgent extends BaseAgent {
+                private readonly name: string;
+                private readonly region: string;
+                private readonly mode: "fast" | "safe";
+                private readonly complex: { a: number, b: string };
+                private value: number = 0;
+
+                constructor(name: string, region: string, mode: "fast" | "safe", complex?: { a: number, b: string }) {
+                    super()
+                    this.name = name;
+                    this.region = region;
+                    this.mode = mode;
+                    this.complex = complex ?? { a: 0, b: "default" };
+                }
+
+                @prompt("Run sample method")
+                @description("Runs the sample method and returns the new value")
+                async sampleMethod(): Promise<number> {
+                    this.value += 1;
+                    return this.value;
+                }
+            }
+            "#
+        },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("src").join("main.ts")),
+        indoc! {
+            r#"
+            export * from './counter-agent';
+            export * from './sample-agent';
+            "#
+        },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cli_interactive([cmd::REPL, flag::LANGUAGE, "ts", flag::YES], move |repl| {
+        let agent_type_info_regex = indoc! {
+            r#"(?sx)
+            Available\s+agent\s+client\s+types:
+            .*
+            (
+                SampleAgent\.get\(
+                    name:\s*string,\s*
+                    region:\s*string,\s*
+                    mode:\s*"fast"\s*\|\s*"safe",\s*
+                    complex:\s*.*
+                \)
+                .*
+                CounterAgent\.get\(name:\s*string\)
+            |
+                CounterAgent\.get\(name:\s*string\)
+                .*
+                SampleAgent\.get\(
+                    name:\s*string,\s*
+                    region:\s*string,\s*
+                    mode:\s*"fast"\s*\|\s*"safe",\s*
+                    complex:\s*.*
+                \)
+            )
+            .*"#
+        };
+
+        let methods_regex = indoc! {
+            r#"(?sx)
+            (
+                sampleMethod:\s*\(\)\s*=>\s*number
+                .*
+                increment:\s*\(\)\s*=>\s*number
+            |
+                increment:\s*\(\)\s*=>\s*number
+                .*
+                sampleMethod:\s*\(\)\s*=>\s*number
+            )"#
+        };
+
+        repl.set_expect_timeout(Some(Duration::from_secs(30)));
+        repl.expect_str("golem-ts-repl[test-app-repl-interactive][local]>")?;
+        repl.send_line_and_expect_regex(".agent-type-info", agent_type_info_regex)?;
+        repl.expect_regex(methods_regex)?;
+
+        repl.set_expect_timeout(Some(Duration::from_secs(2)));
+
+        // Hints on "enter"
+        {
+            repl.send_line_and_expect_str("Counter", "CounterAgent")?;
+            repl.send_line_and_expect_regex("CounterAgent.", "get .* getPhantom ")?;
+            repl.send_line_and_expect_str(
+                "CounterAgent.get",
+                "(method) CounterAgent.get(name: string): CounterAgent",
+            )?;
+            repl.send_line_and_expect_str("CounterAgent.get(", "\"?\"")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\")", "> CounterAgent")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\").", "increment")?;
+        }
+
+        // Hints on "tab"
+        {
+            repl.send_tab_complete_expect_str("Counter", "Agent")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex("CounterAgent.", "get .* getPhantom ")?;
+            repl.send_line("")?;
+
+            repl.send_tab_complete_expect_str("CounterAgent.g", "et")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex("CounterAgent.get", "get .* getPhantom")?;
+            repl.send_line("")?;
+
+            repl.send_tab_complete_expect_str("CounterAgent.get(", "\"?\"")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex("CounterAgent.get(\"xyz\").", "increment")?;
+            repl.send_line("")?;
+
+            repl.send_tab_complete_expect_str("Sample", "Agent")?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex(
+                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).",
+                "sampleMethod",
+            )?;
+            repl.send_line("")?;
+        }
+
+        Ok(())
+    })
+    .await;
+}
+
+#[test]
+async fn basic_ifs_deploy(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let app_name = "test-app-name";
+
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
         .await;
     assert!(outputs.success_or_dump());
 
+    ctx.cd(app_name);
+
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("app-rust")
-                .join("golem.yaml"),
-        ),
+        ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+            app: test-app-name
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
             components:
-              app:rust:
+              test-app-name:rust-main:
                 templates: rust
                 presets:
                   debug:
@@ -195,18 +383,24 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         "+      /src/lib.rs:",
         "+        permissions: read-write",
         "Planning",
-        "- create component app:rust",
+        "- create component test-app-name:rust-main",
     ]));
 
     fs::write_str(
-        ctx.cwd_path_join(
-            Path::new("components-rust")
-                .join("app-rust")
-                .join("golem.yaml"),
-        ),
+        ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+            app: test-app-name
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+              cloud:
+                server: cloud
+                componentPresets: release
+
             components:
-              app:rust:
+              test-app-name:rust-main:
                 templates: rust
                 presets:
                   debug:
@@ -233,7 +427,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         "-        permissions: read-write",
         "+        permissions: read-only",
         "Planning",
-        "- update component app:rust, changes:",
+        "- update component test-app-name:rust-main, changes:",
         "  - files",
         "    - delete file /Cargo.toml",
         "    - create file /Cargo2.toml",
@@ -246,42 +440,4 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     assert!(outputs.stdout_contains(
         "Finished deployment planning, no changes are required for the environment [UP-TO-DATE]"
     ));
-}
-
-// TODO: atomic: re-enable IF we will have any builtin subcommands for golem app
-#[ignore]
-#[test]
-async fn custom_app_subcommand_with_builtin_name() {
-    let mut ctx = TestContext::new();
-    let app_name = "test-app-name";
-
-    let outputs = ctx.cli([cmd::NEW, app_name, "rust"]).await;
-    assert!(outputs.success_or_dump());
-
-    ctx.cd(app_name);
-
-    let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    fs::append_str(
-        ctx.cwd_path_join("golem.yaml"),
-        indoc! {"
-
-            customCommands:
-              new:
-                - command: cargo tree
-
-        "},
-    )
-    .unwrap();
-
-    let outputs = ctx.cli(cmd::NO_ARGS).await;
-    assert!(!outputs.success());
-    assert!(outputs.stderr_contains(":new"));
-
-    let outputs = ctx.cli([":new"]).await;
-    assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Executing external command 'cargo tree'"));
 }

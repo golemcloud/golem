@@ -453,7 +453,7 @@ async fn outgoing_http_contains_idempotency_key(
 
     assert_eq!(
         result, data_value!(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"8c25adee-7935-5315-a99b-457f41180bc1\") }"
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"15f8d7f6-663b-584d-b597-23d46a929eed\") }"
             )
     );
     Ok(())

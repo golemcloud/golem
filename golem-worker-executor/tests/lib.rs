@@ -37,9 +37,11 @@ pub mod namespace_routed_key_value_storage;
 pub mod observability;
 pub mod rdbms;
 pub mod rdbms_service;
+pub mod resource_limits;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
+pub mod storage_quota;
 pub mod transactions;
 pub mod wasi;
 
@@ -63,6 +65,8 @@ tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
 
 tag_suite!(rdbms_service, rdbms_service);
+tag_suite!(resource_limits, group1);
+tag_suite!(storage_quota, group1);
 
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);

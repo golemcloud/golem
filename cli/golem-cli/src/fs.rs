@@ -14,7 +14,9 @@
 
 use crate::log::{log_warn_action, LogColorize};
 use anyhow::{anyhow, bail, Context, Error};
+use serde_json::Value as JsonValue;
 use std::cmp::PartialEq;
+use std::collections::BTreeSet;
 use std::fs::{Metadata, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -42,6 +44,10 @@ pub fn path_to_str(path: &Path) -> anyhow::Result<&str> {
         .ok_or_else(|| anyhow!("Path {} cannot be converted to string", path.display()))
 }
 
+pub fn path_to_unix_str(path: &Path) -> anyhow::Result<String> {
+    Ok(normalize_str_path_as_unix(path_to_str(path)?))
+}
+
 pub fn file_name_to_str(path: &Path) -> anyhow::Result<&str> {
     path.file_name()
         .ok_or_else(|| anyhow!("Path {} has no filename", path.display()))?
@@ -54,13 +60,42 @@ pub fn canonicalize_path(path: &Path) -> anyhow::Result<PathBuf> {
         .map_err(|err| anyhow!("Failed to canonicalize path ({}): {}", path.display(), err))
 }
 
-pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
+pub fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                Some(Component::ParentDir) | None => {
+                    if !normalized.has_root() {
+                        normalized.push("..");
+                    }
+                }
+                Some(Component::RootDir) | Some(Component::Prefix(_)) | Some(Component::CurDir) => {
+                }
+            },
+            Component::Normal(name) => normalized.push(name),
+        }
+    }
+
+    normalized
+}
+
+pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<bool> {
     let path = path.as_ref();
     if path.exists() {
-        Ok(())
+        Ok(false)
     } else {
-        std::fs::create_dir_all(path)
-            .with_context(|| anyhow!("Failed to create directory {}", path.log_color_highlight()))
+        std::fs::create_dir_all(path).with_context(|| {
+            anyhow!("Failed to create directory {}", path.log_color_highlight())
+        })?;
+        Ok(true)
     }
 }
 
@@ -175,6 +210,22 @@ pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> anyhow::Re
     let target_parent = path.parent().with_context(context)?;
     create_dir_all(target_parent).with_context(context)?;
     std::fs::write(path, contents).with_context(context)
+}
+
+pub fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<()> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+
+    let context = || {
+        anyhow!(
+            "Failed to rename {} to {}",
+            from.log_color_highlight(),
+            to.log_color_highlight()
+        )
+    };
+
+    create_dir_all(parent_or_err(to)?).with_context(context)?;
+    std::fs::rename(from, to).with_context(context)
 }
 
 pub fn remove<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
@@ -425,6 +476,7 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
 ) -> anyhow::Result<(PathBuf, String)> {
     let glob = glob.as_ref();
     let path = Path::new(glob);
+
     let mut prefix_path = PathBuf::new();
     let mut resolved_path = PathBuf::new();
     let mut prefix_ended = false;
@@ -471,41 +523,184 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
     ))
 }
 
-pub fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<PathBuf>, Error> {
-    Ok(globs
+fn split_absolute_glob(base_dir: &Path, glob: &str) -> anyhow::Result<(PathBuf, String)> {
+    let path = Path::new(glob);
+    if !path.is_absolute() {
+        bail!(
+            "Expected absolute glob, got: {}",
+            glob.log_color_error_highlight()
+        );
+    }
+
+    let relative = path.strip_prefix(base_dir).map_err(|_| {
+        anyhow!(
+            "Absolute glob {} is outside base directory {}",
+            glob.log_color_error_highlight(),
+            base_dir.display().to_string().log_color_highlight()
+        )
+    })?;
+
+    Ok((base_dir.to_path_buf(), path_to_str(relative)?.to_string()))
+}
+
+pub fn compile_and_collect_globs(
+    root_dir_for_absolute_globs: &Path,
+    root_dir_for_relative_globs: &Path,
+    globs: &[String],
+) -> Result<Vec<PathBuf>, Error> {
+    let compiled_globs = compile_globs(
+        root_dir_for_absolute_globs,
+        root_dir_for_relative_globs,
+        globs,
+    )?;
+    Ok(collect_glob_matches(&compiled_globs).into_iter().collect())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobExpander {
+    TsConfigInclude,
+}
+
+pub fn compile_and_collect_globs_with_expanders(
+    root_dir_for_absolute_globs: &Path,
+    root_dir_for_relative_globs: &Path,
+    globs: &[String],
+    expanders: &[GlobExpander],
+) -> Result<Vec<PathBuf>, Error> {
+    let specs = compile_globs(
+        root_dir_for_absolute_globs,
+        root_dir_for_relative_globs,
+        globs,
+    )?;
+    let mut matches = collect_glob_matches(&specs);
+
+    if expanders.contains(&GlobExpander::TsConfigInclude) {
+        for spec in specs
+            .iter()
+            .filter(|spec| is_explicit_tsconfig_pattern(&spec.original_pattern))
+        {
+            for tsconfig in collect_single_glob_matches(spec) {
+                for include_pattern in read_tsconfig_include_patterns(&tsconfig) {
+                    let include_specs = vec![compile_glob_spec(
+                        root_dir_for_absolute_globs,
+                        tsconfig.parent().unwrap_or(root_dir_for_relative_globs),
+                        &include_pattern,
+                    )?];
+                    matches.extend(collect_glob_matches(&include_specs));
+                }
+            }
+        }
+    }
+
+    Ok(matches.into_iter().collect())
+}
+
+#[derive(Debug)]
+struct CompiledGlob {
+    root_dir: PathBuf,
+    glob: Glob<'static>,
+    original_pattern: String,
+}
+
+fn compile_globs(
+    root_dir_for_absolute_globs: &Path,
+    root_dir_for_relative_globs: &Path,
+    globs: &[String],
+) -> Result<Vec<CompiledGlob>, Error> {
+    globs
         .iter()
-        .map(|pattern| resolve_relative_glob(root_dir, pattern))
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .map(|(root_dir, pattern)| {
-            let normalized_pattern = normalize_pattern(pattern);
-            Glob::new(&normalized_pattern)
-                .with_context(|| anyhow!("Failed to compile glob expression: {}", pattern))
-                .map(|pattern| (root_dir, pattern.into_owned()))
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .flat_map(|(root_dir, glob)| {
-            glob.walk_with_behavior(
-                root_dir,
-                WalkBehavior {
-                    link: LinkBehavior::ReadFile,
-                    ..WalkBehavior::default()
-                },
+        .map(|pattern| {
+            compile_glob_spec(
+                root_dir_for_absolute_globs,
+                root_dir_for_relative_globs,
+                pattern,
             )
-            .filter_map(|entry| entry.ok())
-            .map(|walk_item| walk_item.path().to_path_buf())
         })
-        .collect::<Vec<_>>())
+        .collect()
+}
+
+fn compile_glob_spec(
+    root_dir_for_absolute_globs: &Path,
+    root_dir_for_relative_globs: &Path,
+    pattern: &str,
+) -> Result<CompiledGlob, Error> {
+    let (root_dir, resolved_pattern) = if Path::new(pattern).is_absolute() {
+        split_absolute_glob(root_dir_for_absolute_globs, pattern)?
+    } else {
+        resolve_relative_glob(root_dir_for_relative_globs, pattern)?
+    };
+
+    let normalized_pattern = normalize_str_path_as_unix(&resolved_pattern);
+    let glob = Glob::new(&normalized_pattern)
+        .with_context(|| anyhow!("Failed to compile glob expression: {}", resolved_pattern))?
+        .into_owned();
+
+    Ok(CompiledGlob {
+        root_dir,
+        glob,
+        original_pattern: pattern.to_string(),
+    })
+}
+
+fn collect_glob_matches(specs: &[CompiledGlob]) -> BTreeSet<PathBuf> {
+    let mut matches = BTreeSet::new();
+    for spec in specs {
+        matches.extend(collect_single_glob_matches(spec));
+    }
+    matches
+}
+
+fn collect_single_glob_matches(spec: &CompiledGlob) -> BTreeSet<PathBuf> {
+    spec.glob
+        .walk_with_behavior(
+            &spec.root_dir,
+            WalkBehavior {
+                link: LinkBehavior::ReadFile,
+                ..WalkBehavior::default()
+            },
+        )
+        .filter_map(|entry| entry.ok())
+        .map(|walk_item| walk_item.path().to_path_buf())
+        .collect::<BTreeSet<_>>()
+}
+
+fn is_explicit_tsconfig_pattern(pattern: &str) -> bool {
+    Path::new(pattern)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name == "tsconfig.json")
+        .unwrap_or(false)
+}
+
+fn read_tsconfig_include_patterns(path: &Path) -> Vec<String> {
+    let Ok(contents) = read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(json) = serde_json::from_str::<JsonValue>(&contents) else {
+        return Vec::new();
+    };
+
+    let Some(include) = json.get("include") else {
+        return Vec::new();
+    };
+
+    match include {
+        JsonValue::String(value) => vec![value.clone()],
+        JsonValue::Array(values) => values
+            .iter()
+            .filter_map(|value| value.as_str().map(ToString::to_string))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 #[cfg(not(windows))]
-fn normalize_pattern(pattern: &str) -> String {
+fn normalize_str_path_as_unix(pattern: &str) -> String {
     pattern.to_string()
 }
 
 #[cfg(windows)]
-fn normalize_pattern(pattern: &str) -> String {
+fn normalize_str_path(pattern: &str) -> String {
     // Replacing \ with / to make it work as a glob pattern
     pattern.replace('\\', "/")
 }
@@ -531,7 +726,10 @@ pub fn delete_logged(context: &str, path: &Path) -> anyhow::Result<()> {
 mod test {
     use crate::fs;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeSet;
+    use std::path::Path;
     use std::path::PathBuf;
+    use tempfile::TempDir;
     use test_r::test;
 
     #[test]
@@ -555,5 +753,130 @@ mod test {
                 .unwrap(),
             (base_dir.join("../../../"), "target/a".to_string())
         );
+    }
+
+    #[test]
+    fn normalize_path_lexically_collapses_current_and_parent_segments() {
+        assert_eq!(
+            fs::normalize_path_lexically(Path::new("./a/./b/../c")),
+            PathBuf::from("a/c")
+        );
+    }
+
+    #[test]
+    fn normalize_path_lexically_keeps_leading_parent_segments_for_relative_paths() {
+        assert_eq!(
+            fs::normalize_path_lexically(Path::new("../../a/b")),
+            PathBuf::from("../../a/b")
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn normalize_path_lexically_handles_absolute_paths() {
+        assert_eq!(
+            fs::normalize_path_lexically(Path::new("/tmp/golem/./a/../b")),
+            PathBuf::from("/tmp/golem/b")
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn resolve_absolute_globs_under_base_dir() {
+        let base_dir = PathBuf::from("/tmp/golem");
+
+        assert_eq!(
+            fs::split_absolute_glob(&base_dir, "/tmp/golem/dir/**/*.ts").unwrap(),
+            (base_dir.clone(), "dir/**/*.ts".to_string())
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn resolve_absolute_globs_outside_base_dir() {
+        let base_dir = PathBuf::from("/tmp/golem");
+
+        assert!(fs::split_absolute_glob(&base_dir, "/tmp/other/**/*.ts").is_err());
+    }
+
+    #[test]
+    fn compile_globs_with_tsconfig_include_expander() {
+        let temp_dir = TempDir::new().unwrap();
+        let app_root = temp_dir.path();
+        let build_dir = app_root.join("component");
+
+        fs::create_dir_all(&build_dir).unwrap();
+        fs::write_str(
+            build_dir.join("tsconfig.json"),
+            r#"{
+  "include": ["src/**/*.ts", "shared.ts"]
+}"#,
+        )
+        .unwrap();
+        fs::write_str(build_dir.join("src/main.ts"), "export {};").unwrap();
+        fs::write_str(build_dir.join("shared.ts"), "export {};").unwrap();
+
+        let patterns = vec!["tsconfig.json".to_string()];
+
+        let without_expander =
+            fs::compile_and_collect_globs(app_root, &build_dir, &patterns).unwrap();
+        let with_expander = fs::compile_and_collect_globs_with_expanders(
+            app_root,
+            &build_dir,
+            &patterns,
+            &[fs::GlobExpander::TsConfigInclude],
+        )
+        .unwrap();
+
+        assert_eq!(
+            path_set(without_expander),
+            path_set(vec![build_dir.join("tsconfig.json")])
+        );
+
+        assert_eq!(
+            path_set(with_expander),
+            path_set(vec![
+                build_dir.join("tsconfig.json"),
+                build_dir.join("src/main.ts"),
+                build_dir.join("shared.ts"),
+            ])
+        );
+    }
+
+    #[test]
+    fn compile_globs_with_tsconfig_include_expander_is_lenient() {
+        let temp_dir = TempDir::new().unwrap();
+        let app_root = temp_dir.path();
+        let build_dir = app_root.join("component");
+
+        fs::create_dir_all(&build_dir).unwrap();
+        fs::write_str(build_dir.join("tsconfig.json"), "{ invalid json }").unwrap();
+        fs::write_str(build_dir.join("src/main.ts"), "export {};").unwrap();
+
+        let patterns = vec!["tsconfig.json".to_string()];
+
+        let with_expander = fs::compile_and_collect_globs_with_expanders(
+            app_root,
+            &build_dir,
+            &patterns,
+            &[fs::GlobExpander::TsConfigInclude],
+        )
+        .unwrap();
+
+        assert_eq!(
+            path_set(with_expander),
+            path_set(vec![build_dir.join("tsconfig.json")])
+        );
+    }
+
+    fn path_set(paths: Vec<PathBuf>) -> BTreeSet<PathBuf> {
+        paths
+            .into_iter()
+            .map(|path| normalize_for_assert(path.as_path()))
+            .collect()
+    }
+
+    fn normalize_for_assert(path: &Path) -> PathBuf {
+        fs::canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf())
     }
 }

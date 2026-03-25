@@ -19,6 +19,7 @@ use crate::services::component_resolver::ComponentResolverError;
 use crate::services::deployment::{DeployedMcpError, DeployedRoutesError, DeploymentError};
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_state::EnvironmentStateError;
+use crate::services::resource_definition::ResourceDefinitionError;
 use golem_common::IntoAnyhow;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
@@ -263,6 +264,36 @@ impl From<EnvironmentStateError> for GrpcApiError {
         let error: String = value.to_string();
         match value {
             EnvironmentStateError::InternalError(_) => Self::InternalError(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            }),
+        }
+    }
+}
+
+impl From<ResourceDefinitionError> for GrpcApiError {
+    fn from(value: ResourceDefinitionError) -> Self {
+        let error: String = value.to_string();
+        match value {
+            ResourceDefinitionError::ResourceDefinitionByNameNotFound(_)
+            | ResourceDefinitionError::ResourceDefinitionNotFound(_)
+            | ResourceDefinitionError::ParentEnvironmentNotFound(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+
+            ResourceDefinitionError::LimitTypeCannotBeChanged => Self::BadRequest(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            }),
+
+            ResourceDefinitionError::ResourceDefinitionForNameAlreadyExists(_) => {
+                Self::AlreadyExists(ErrorBody { error, cause: None })
+            }
+
+            ResourceDefinitionError::Unauthorized(inner) => inner.into(),
+
+            ResourceDefinitionError::InternalError(_)
+            | ResourceDefinitionError::ConcurrentUpdate => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             }),

@@ -186,6 +186,14 @@ impl Context {
     pub fn get_max_memory(&self) -> usize {
         self.resource_limit_entry.max_memory_limit()
     }
+
+    pub fn get_max_table_elements(&self) -> usize {
+        self.resource_limit_entry.max_table_elements_limit()
+    }
+
+    pub fn get_max_disk_space(&self) -> u64 {
+        self.resource_limit_entry.max_disk_space_limit()
+    }
 }
 
 impl DurableWorkerCtxView<Context> for Context {
@@ -346,10 +354,14 @@ impl ResourceLimiterAsync for Context {
         desired: usize,
         maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
+        let limit = self.get_max_table_elements();
         debug!(
-            "table_growing: current={}, desired={}, maximum={:?}",
-            current, desired, maximum
+            "table_growing: current={}, desired={}, maximum={:?}, account limit={}",
+            current, desired, maximum, limit
         );
+        if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
+            Err(GolemSpecificWasmTrap::WorkerExceededTableLimit)?;
+        }
         Ok(true)
     }
 }
@@ -742,6 +754,7 @@ impl WorkerCtx for Context {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
+        let account_resource_limits = resource_limits.initialize_account(account_id).await?;
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id.clone(),
             agent_id,
@@ -759,6 +772,7 @@ impl WorkerCtx for Context {
             rpc,
             worker_proxy,
             component_service,
+            account_resource_limits.clone(),
             config.clone(),
             worker_config.clone(),
             execution_status,
@@ -773,7 +787,6 @@ impl WorkerCtx for Context {
             original_phantom_id,
         )
         .await?;
-        let account_resource_limits = resource_limits.initialize_account(account_id).await?;
         Ok(Self::new(golem_ctx, config, account_resource_limits))
     }
 
@@ -835,6 +848,10 @@ impl WorkerCtx for Context {
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
+    }
+
+    fn max_disk_space(&self) -> u64 {
+        self.get_max_disk_space()
     }
 }
 
