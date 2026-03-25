@@ -58,9 +58,24 @@ function createDriver(agent: SupportedAgent): AgentDriver {
 }
 
 async function cleanupGolemState(cwd: string): Promise<void> {
+  // Find a subdirectory containing golem.yaml (the app dir is one level inside the workspace)
+  const fsSync = await import("node:fs");
+  let appDir = cwd;
+  if (!fsSync.existsSync(path.join(cwd, "golem.yaml"))) {
+    const entries = fsSync.readdirSync(cwd, { withFileTypes: true });
+    for (const entry of entries) {
+      if (
+        entry.isDirectory() &&
+        fsSync.existsSync(path.join(cwd, entry.name, "golem.yaml"))
+      ) {
+        appDir = path.join(cwd, entry.name);
+        break;
+      }
+    }
+  }
   return new Promise((resolve) => {
     const child = spawn("golem", ["deploy", "--reset", "--yes"], {
-      cwd,
+      cwd: appDir,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
