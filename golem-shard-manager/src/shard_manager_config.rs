@@ -20,6 +20,7 @@ use golem_common::config::{
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,8 @@ pub struct ShardManagerConfig {
     pub grpc: GrpcApiConfig,
     pub number_of_shards: usize,
     pub rebalance_threshold: f64,
+    pub registry_service: GrpcRegistryServiceConfig,
+    pub quota: QuotaServiceConfig,
 }
 
 impl SafeDisplay for ShardManagerConfig {
@@ -73,6 +76,14 @@ impl SafeDisplay for ShardManagerConfig {
             "rebalance threshold: {}",
             self.rebalance_threshold
         );
+        let _ = writeln!(&mut result, "registry service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.registry_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "quota:");
+        let _ = writeln!(&mut result, "{}", self.quota.to_safe_string_indented());
         result
     }
 }
@@ -88,6 +99,8 @@ impl Default for ShardManagerConfig {
             grpc: GrpcApiConfig::default(),
             number_of_shards: 1024,
             rebalance_threshold: 0.1,
+            registry_service: GrpcRegistryServiceConfig::default(),
+            quota: QuotaServiceConfig::default(),
         }
     }
 }
@@ -107,6 +120,47 @@ impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
                 ..Self::default()
             },
         )]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QuotaServiceConfig {
+    pub definition_cache_max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub definition_cache_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub definition_cache_eviction_period: Duration,
+}
+
+impl SafeDisplay for QuotaServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "definition cache max capacity: {}",
+            self.definition_cache_max_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "definition cache ttl: {:?}",
+            self.definition_cache_ttl
+        );
+        let _ = writeln!(
+            &mut result,
+            "definition cache eviction period: {:?}",
+            self.definition_cache_eviction_period
+        );
+        result
+    }
+}
+
+impl Default for QuotaServiceConfig {
+    fn default() -> Self {
+        Self {
+            definition_cache_max_capacity: 1024,
+            definition_cache_ttl: Duration::from_secs(5 * 60),
+            definition_cache_eviction_period: Duration::from_secs(60),
+        }
     }
 }
 

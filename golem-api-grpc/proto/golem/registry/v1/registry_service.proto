@@ -416,6 +416,7 @@ message RegistryInvalidationEvent {
     EnvironmentPermissionsChangedEvent permissions_changed = 5;
     DomainRegistrationChangedEvent domain_registration_changed = 6;
     SecuritySchemeChangedEvent security_scheme_changed = 7;
+    ResourceDefinitionChangedEvent resource_definition_changed = 8;
   }
 }
 
@@ -449,4 +450,11 @@ message EnvironmentPermissionsChangedEvent {
 // Sent when a security scheme is created, updated, or deleted.
 message SecuritySchemeChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
+}
+
+// Sent when a resource definition is created, updated, or deleted.
+message ResourceDefinitionChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.registry.ResourceDefinitionId resource_definition_id = 2;
+  string resource_name = 3;
 }

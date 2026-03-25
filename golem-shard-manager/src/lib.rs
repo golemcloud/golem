@@ -16,7 +16,9 @@ mod error;
 mod healthcheck;
 mod model;
 mod persistence;
+mod quota;
 mod rebalancing;
+mod registry_event_subscriber;
 mod shard_management;
 pub mod shard_manager_config;
 mod worker_executor;
@@ -24,6 +26,7 @@ mod worker_executor;
 use self::error::ShardManagerTraceErrorKind;
 use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
 use crate::persistence::RoutingTableFileSystemPersistence;
+use crate::quota::{GrpcResourceDefinitionFetcher, QuotaService};
 use crate::shard_manager_config::{HealthCheckK8sConfig, HealthCheckMode, PersistenceConfig};
 use error::ShardManagerError;
 use futures::TryFutureExt;
@@ -33,6 +36,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server
     ShardManagerService, ShardManagerServiceServer,
 };
 use golem_common::recorded_grpc_api_request;
+use golem_service_base::clients::registry::GrpcRegistryService;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use prometheus::Registry;
 use shard_management::ShardManagement;
@@ -290,6 +294,14 @@ pub async fn run(
                 .expect("Failed to initialize K8s health checker"),
             ),
         };
+
+    let registry_service = Arc::new(GrpcRegistryService::new(
+        &shard_manager_config.registry_service,
+    ));
+
+    let fetcher = Arc::new(GrpcResourceDefinitionFetcher::new(registry_service.clone()));
+    let quota_service = QuotaService::new(shard_manager_config.quota.clone(), fetcher);
+    registry_event_subscriber::start(registry_service, quota_service, join_set);
 
     let shard_manager = ShardManagerServiceImpl::new(
         persistence_service,

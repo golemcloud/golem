@@ -45,3 +45,9 @@ CREATE TABLE resource_definition_revisions
     CONSTRAINT resource_definition_revisions_resource_definitions_fk
         FOREIGN KEY (resource_definition_id) REFERENCES resource_definitions
 );
+
+ALTER TABLE registry_change_events
+    ADD resource_definition_id UUID;
+
+ALTER TABLE registry_change_events
+    ADD resource_name TEXT;
