@@ -242,7 +242,12 @@ function validateAgentByName(agentClassName: string) {
   if (!agentType) {
     throw new Error(`Agent type ${agentClassName} not found in registry`);
   }
-  validateAgentHttpConfig(agentClassName, agentType.httpMount, agentType.constructor, agentType.methods);
+  validateAgentHttpConfig(
+    agentClassName,
+    agentType.httpMount,
+    agentType.constructor,
+    agentType.methods,
+  );
 }
 
 test('Agent with with unsatisfied http mount is rejected at initialization', async () => {

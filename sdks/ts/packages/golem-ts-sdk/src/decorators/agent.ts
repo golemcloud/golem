@@ -45,6 +45,18 @@ import { getAgentMethodSchema } from '../internal/schema/method';
 import ms from 'ms';
 import { fromTsType } from '../internal/mapping/types/WitType';
 import { TypeScope } from '../internal/mapping/types/scope';
+import { validateAgentHttpConfig } from '../internal/http/validation';
+
+// Global storage for validation errors
+let agentValidationError: Error | undefined = undefined;
+
+export function clearAgentValidationError() {
+  agentValidationError = undefined;
+}
+
+export function getAgentValidationError(): Error | undefined {
+  return agentValidationError;
+}
 
 export type SnapshottingOption = 'disabled' | 'enabled' | { periodic: string } | { every: number };
 
@@ -280,8 +292,9 @@ export function agent(options?: AgentDecoratorOptions) {
       inputSchema: constructorDataSchema,
     };
 
-    // HTTP mount/endpoint validation is deferred to initialization time
-    // for better error messages (via AgentError instead of WASM instantiation errors)
+    // HTTP mount/endpoint validation is performed during agent registration
+    // Errors are stored globally and checked in discover-agent-types
+    // This allows proper error reporting as typed errors rather than WASM instantiation failures
 
     const agentConfigEntries = Either.getOrThrowWith(
       getAgentConfigEntries(classMetadata.constructorArgs),
@@ -300,6 +313,19 @@ export function agent(options?: AgentDecoratorOptions) {
       snapshotting: resolveSnapshotting(options?.snapshotting),
       config: agentConfigEntries,
     };
+
+    // Validate HTTP configuration during registration
+    try {
+      validateAgentHttpConfig(agentTypeName.value, httpMount, constructor, methods);
+    } catch (e) {
+      // Store the validation error but don't throw it
+      // This will be checked in discoverAgentTypes
+      if (!agentValidationError) {
+        agentValidationError = new Error(
+          `HTTP validation failed for agent '${agentTypeName.value}': ${e instanceof Error ? e.message : e}`,
+        );
+      }
+    }
 
     AgentTypeRegistry.register(agentClassName, agentType);
 
