@@ -26,10 +26,12 @@
 //! - **Zone 2**: Retry during response body reading — the response was partially consumed.
 //!   Requires re-sending the request and verifying the response prefix matches.
 
-use crate::durable_host::durability::{AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind, InFunctionRetryHost, InFunctionRetryState};
+use crate::durable_host::durability::{
+    AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind,
+    InFunctionRetryHost, InFunctionRetryState,
+};
 use crate::durable_host::http::types::classify_http_error_code;
 use crate::durable_host::HttpRequestState;
-use crate::metrics::wasm::record_in_function_retry;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::{HasOplog, HasWorker};
 use bytes::Bytes;
@@ -40,7 +42,6 @@ use golem_common::model::oplog::{
     PersistenceLevel,
 };
 use golem_common::model::RetryConfig;
-use golem_common::retries::get_delay;
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
@@ -49,7 +50,9 @@ use std::time::Duration;
 use tracing::Instrument;
 use wasmtime_wasi::OutputStream;
 use wasmtime_wasi_http::bindings::http::types as wasi_http_types;
-use wasmtime_wasi_http::body::{HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext};
+use wasmtime_wasi_http::body::{
+    HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
+};
 use wasmtime_wasi_http::types::{
     default_send_request_with_pool, FutureIncomingResponseHandle, HostFutureIncomingResponse,
     IncomingResponse, OutgoingRequestConfig,
@@ -130,7 +133,10 @@ pub fn is_http_inline_retry_eligible(
         return Err(InlineRetryIneligible::HasOutgoingTrailers);
     }
 
-    if zone == RetryZone::Zone1 && !request_state.retry.body_finished {
+    if zone == RetryZone::Zone1
+        && request_state.output_stream_rep.is_some()
+        && !request_state.retry.body_finished
+    {
         return Err(InlineRetryIneligible::BodyNotFinished);
     }
 
@@ -185,6 +191,14 @@ pub async fn reconstruct_outgoing_body_chunks(
     oplog: &Arc<dyn Oplog>,
     begin_index: OplogIndex,
 ) -> Result<Vec<BodyChunk>, anyhow::Error> {
+    reconstruct_outgoing_body_chunks_after(oplog, begin_index, None).await
+}
+
+async fn reconstruct_outgoing_body_chunks_after(
+    oplog: &Arc<dyn Oplog>,
+    begin_index: OplogIndex,
+    after_index: Option<OplogIndex>,
+) -> Result<Vec<BodyChunk>, anyhow::Error> {
     let current_idx = oplog.current_oplog_index().await;
 
     if current_idx < begin_index {
@@ -202,7 +216,11 @@ pub async fn reconstruct_outgoing_body_chunks(
     let write_zeroes_fn_name =
         golem_common::model::oplog::host_functions::HttpTypesOutgoingBodyStreamWriteZeroes::HOST_FUNCTION_NAME;
 
-    for (_idx, entry) in &entries {
+    for (idx, entry) in &entries {
+        if after_index.is_some_and(|after| *idx <= after) {
+            continue;
+        }
+
         if let OplogEntry::HostCall {
             function_name,
             response,
@@ -216,9 +234,12 @@ pub async fn reconstruct_outgoing_body_chunks(
 
             if *function_name == write_fn_name {
                 let response_value =
-                    oplog.download_payload(response.clone()).await.map_err(|err| {
-                        anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
-                    })?;
+                    oplog
+                        .download_payload(response.clone())
+                        .await
+                        .map_err(|err| {
+                            anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
+                        })?;
 
                 if let HostResponse::StreamWriteWithBytes(payload) = response_value {
                     if let Ok(data) = &payload.result {
@@ -229,9 +250,12 @@ pub async fn reconstruct_outgoing_body_chunks(
                 }
             } else if *function_name == write_zeroes_fn_name {
                 let response_value =
-                    oplog.download_payload(response.clone()).await.map_err(|err| {
-                        anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
-                    })?;
+                    oplog
+                        .download_payload(response.clone())
+                        .await
+                        .map_err(|err| {
+                            anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
+                        })?;
 
                 if let HostResponse::StreamWriteZeroes(payload) = response_value {
                     if let Ok(len) = &payload.result {
@@ -245,6 +269,31 @@ pub async fn reconstruct_outgoing_body_chunks(
     }
 
     Ok(chunks)
+}
+
+async fn find_last_retry_error_index(
+    oplog: &Arc<dyn Oplog>,
+    begin_index: OplogIndex,
+) -> Result<Option<OplogIndex>, anyhow::Error> {
+    let current_idx = oplog.current_oplog_index().await;
+
+    if current_idx < begin_index {
+        return Ok(None);
+    }
+
+    let n: u64 = Into::<u64>::into(current_idx) - Into::<u64>::into(begin_index) + 1;
+    let entries = oplog.read_many(begin_index, n).await;
+
+    let mut last_retry_error_idx = None;
+    for (idx, entry) in entries {
+        if let OplogEntry::Error { retry_from, .. } = entry {
+            if retry_from == begin_index {
+                last_retry_error_idx = Some(idx);
+            }
+        }
+    }
+
+    Ok(last_retry_error_idx)
 }
 
 /// Counts the total number of incoming body bytes successfully delivered to
@@ -285,9 +334,12 @@ pub async fn count_incoming_body_bytes(
 
             if *function_name == read_fn_name || *function_name == blocking_read_fn_name {
                 let response_value =
-                    oplog.download_payload(response.clone()).await.map_err(|err| {
-                        anyhow::anyhow!("failed to download incoming body chunk payload: {err}")
-                    })?;
+                    oplog
+                        .download_payload(response.clone())
+                        .await
+                        .map_err(|err| {
+                            anyhow::anyhow!("failed to download incoming body chunk payload: {err}")
+                        })?;
 
                 if let HostResponse::StreamChunk(payload) = response_value {
                     if let Ok(data) = &payload.result {
@@ -315,9 +367,10 @@ pub fn reconstruct_http_request(
     extra_headers: &[(String, String)],
 ) -> Result<hyper::Request<HyperOutgoingBody>, anyhow::Error> {
     let method = http::Method::try_from(&request.method)?;
-    let uri: hyper::Uri = request.uri.parse().map_err(|e| {
-        anyhow::anyhow!("failed to parse stored URI '{}': {e}", request.uri)
-    })?;
+    let uri: hyper::Uri = request
+        .uri
+        .parse()
+        .map_err(|e| anyhow::anyhow!("failed to parse stored URI '{}': {e}", request.uri))?;
 
     let mut builder = hyper::Request::builder().method(method).uri(uri);
 
@@ -355,26 +408,23 @@ pub fn body_chunks_to_hyper_body(chunks: Vec<BodyChunk>) -> HyperOutgoingBody {
 
     const ZERO_BUF_SIZE: usize = 64 * 1024;
 
-    let frames = chunks.into_iter().flat_map(move |chunk| {
-        match chunk {
-            BodyChunk::Data(data) => {
-                vec![hyper::body::Frame::data(data)]
+    let frames = chunks.into_iter().flat_map(move |chunk| match chunk {
+        BodyChunk::Data(data) => {
+            vec![hyper::body::Frame::data(data)]
+        }
+        BodyChunk::Zeroes(total) => {
+            let mut frames = Vec::new();
+            let mut remaining = total as usize;
+            while remaining > 0 {
+                let len = remaining.min(ZERO_BUF_SIZE);
+                frames.push(hyper::body::Frame::data(Bytes::from(vec![0u8; len])));
+                remaining -= len;
             }
-            BodyChunk::Zeroes(total) => {
-                let mut frames = Vec::new();
-                let mut remaining = total as usize;
-                while remaining > 0 {
-                    let len = remaining.min(ZERO_BUF_SIZE);
-                    frames.push(hyper::body::Frame::data(Bytes::from(vec![0u8; len])));
-                    remaining -= len;
-                }
-                frames
-            }
+            frames
         }
     });
 
-    let body_stream =
-        stream::iter(frames.map(Ok::<_, wasi_http_types::ErrorCode>));
+    let body_stream = stream::iter(frames.map(Ok::<_, wasi_http_types::ErrorCode>));
     let stream_body: StreamBody<_> = StreamBody::new(body_stream);
     stream_body.boxed_unsync()
 }
@@ -406,22 +456,43 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     request_state: &HttpRequestState,
     body_chunks: &[BodyChunk],
     extra_headers: &[(String, String)],
+    retry_function_name: Option<&'static str>,
 ) -> Result<Option<IncomingResponse>, anyhow::Error> {
-    use crate::durable_host::DurabilityHost;
-
-    let retry_config = ctx.retry_config();
-    let max_delay = ctx.durable_execution_state().max_in_function_retry_delay;
-    let connection_pool = ctx.wasi_http.connection_pool.clone();
-    let mut retry_count: u32 = 0;
+    let mut retry_state = retry_function_name.map(|_| InFunctionRetryState::new());
+    let reconstructed_body_len: u64 = body_chunks
+        .iter()
+        .map(|chunk| match chunk {
+            BodyChunk::Data(data) => data.len() as u64,
+            BodyChunk::Zeroes(len) => *len,
+        })
+        .sum();
+    let request_has_content_length = request_state
+        .request
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
 
     loop {
         let hyper_body = body_chunks_to_hyper_body(body_chunks.to_vec());
+        let mut merged_extra_headers = extra_headers.to_vec();
+        let extra_has_content_length = merged_extra_headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+        if !request_has_content_length && !extra_has_content_length {
+            merged_extra_headers.push((
+                "content-length".to_string(),
+                reconstructed_body_len.to_string(),
+            ));
+        }
+
         let http_request =
-            reconstruct_http_request(&request_state.request, hyper_body, extra_headers)?;
+            reconstruct_http_request(&request_state.request, hyper_body, &merged_extra_headers)?;
         let config = request_state.outgoing_request_config();
 
-        let mut future_resp =
-            default_send_request_with_pool(http_request, config, None, connection_pool.clone());
+        // Force a fresh transport for each inline retry attempt. Reusing pooled
+        // connections after mid-body failures can keep retrying a poisoned
+        // socket and repeatedly hit read timeouts.
+        let mut future_resp = default_send_request_with_pool(http_request, config, None, None);
 
         use wasmtime_wasi::Pollable;
         future_resp.ready().await;
@@ -435,48 +506,36 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                 return Ok(None);
             }
             Ok(Err(error_code)) => {
-                // Transient error — check retry budget
-                let delay = match get_delay(&retry_config, retry_count) {
-                    Some(d) => d,
-                    None => {
-                        tracing::debug!(
-                            retry_count,
-                            ?error_code,
-                            "Zone 2 send retries exhausted, falling back"
-                        );
-                        return Ok(None);
-                    }
-                };
+                if let (Some(retry_state), Some(function_name)) =
+                    (retry_state.as_mut(), retry_function_name)
+                {
+                    match retry_state.decide_retry(ctx, function_name).await {
+                        AsyncRetryDecision::RetryAfterDelay(delay) => {
+                            // Interrupt-aware sleep
+                            let interrupt = ctx.create_interrupt_signal();
+                            let sleep = tokio::time::sleep(delay);
+                            tokio::pin!(sleep);
 
-                if delay > max_delay {
-                    tracing::debug!(
-                        retry_count,
-                        ?delay,
-                        ?max_delay,
-                        "Zone 2 send retry delay exceeds max, falling back"
-                    );
+                            match futures::future::select(sleep, interrupt).await {
+                                futures::future::Either::Left(_) => {
+                                    tracing::debug!(
+                                        retry_count = retry_state.retry_count(),
+                                        ?delay,
+                                        ?error_code,
+                                        "Zone 2 inline retry: transient send error, retrying"
+                                    );
+                                }
+                                futures::future::Either::Right((interrupt_kind, _)) => {
+                                    return Err(anyhow::Error::from(interrupt_kind));
+                                }
+                            }
+                        }
+                        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
+                            return Ok(None);
+                        }
+                    }
+                } else {
                     return Ok(None);
-                }
-
-                // Interrupt-aware sleep
-                let interrupt = ctx.create_interrupt_signal();
-                let sleep = tokio::time::sleep(delay);
-                tokio::pin!(sleep);
-
-                match futures::future::select(sleep, interrupt).await {
-                    futures::future::Either::Left(_) => {
-                        retry_count += 1;
-                        tracing::debug!(
-                            retry_count,
-                            ?delay,
-                            ?error_code,
-                            "Zone 2 inline retry: transient send error, retrying"
-                        );
-                        record_in_function_retry();
-                    }
-                    futures::future::Either::Right((interrupt_kind, _)) => {
-                        return Err(anyhow::Error::from(interrupt_kind));
-                    }
                 }
             }
         }
@@ -511,9 +570,9 @@ async fn replay_body_chunks(
             BodyChunk::Data(data) => {
                 let mut offset = 0;
                 while offset < data.len() {
-                    let budget = stream
-                        .check_write()
-                        .map_err(|e| anyhow::anyhow!("check_write failed during body replay: {e}"))?;
+                    let budget = stream.check_write().map_err(|e| {
+                        anyhow::anyhow!("check_write failed during body replay: {e}")
+                    })?;
 
                     if budget == 0 {
                         stream.ready().await;
@@ -532,9 +591,9 @@ async fn replay_body_chunks(
                 const ZERO_BUF_SIZE: usize = 64 * 1024;
                 let mut remaining = *total as usize;
                 while remaining > 0 {
-                    let budget = stream
-                        .check_write()
-                        .map_err(|e| anyhow::anyhow!("check_write failed during zeroes replay: {e}"))?;
+                    let budget = stream.check_write().map_err(|e| {
+                        anyhow::anyhow!("check_write failed during zeroes replay: {e}")
+                    })?;
 
                     if budget == 0 {
                         stream.ready().await;
@@ -589,12 +648,7 @@ pub async fn rebuild_streaming_request(
     // 5. Send the request BEFORE writing prior bytes. Hyper starts consuming
     //    the pipe in the background once dispatched, preventing deadlock when
     //    prior bytes exceed hyper's internal pipe capacity (~1MB).
-    let new_future = default_send_request_with_pool(
-        reconstructed,
-        config,
-        None,
-        connection_pool,
-    );
+    let new_future = default_send_request_with_pool(reconstructed, config, None, connection_pool);
 
     // 6. Stream all prior body chunks into the new stream using raw OutputStream.
     //    Now that hyper is actively consuming, the pipe won't fill up permanently.
@@ -620,7 +674,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     original_handle: FutureIncomingResponseHandle,
     request: HostRequestHttpRequest,
     config: OutgoingRequestConfig,
-    connection_pool: Option<HttpConnectionPool>,
+    _connection_pool: Option<HttpConnectionPool>,
     worker: Arc<crate::worker::Worker<Ctx>>,
     retry_config: RetryConfig,
     max_delay: Duration,
@@ -653,44 +707,67 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                 }
 
                 // Transient HTTP error: enter retry loop
-                Ok(Err(_initial_error)) => {
+                Ok(Err(initial_error)) => {
                     let oplog = worker.oplog();
-                    let base_retry_count =
-                        crate::durable_host::durability::count_oplog_errors_for(&oplog, begin_index)
-                            .await;
-                    let task_ctx = crate::durable_host::durability::TaskRetryContext {
+                    let mut base_retry_count =
+                        crate::durable_host::durability::count_oplog_errors_for(
+                            &oplog,
+                            begin_index,
+                        )
+                        .await;
+                    let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: begin_index,
                         retry_config,
                         max_in_function_retry_delay: max_delay,
                         base_retry_count,
                         worker,
                     };
+
+                    // Account for the initial transient failure of the original request
+                    // so retry metrics/oplog entries include it as part of in-function
+                    // retry budgeting (matching host-call retry semantics).
+                    let mut initial_retry_state = InFunctionRetryState::new();
+                    match initial_retry_state
+                        .decide_retry(&mut task_ctx, "in-task")
+                        .await
+                    {
+                        AsyncRetryDecision::RetryAfterDelay(delay) => {
+                            tokio::time::sleep(delay).await;
+                            base_retry_count += initial_retry_state.retry_count();
+                            task_ctx.base_retry_count = base_retry_count;
+                        }
+                        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
+                            return Ok(Err(initial_error));
+                        }
+                    }
+
                     let result = crate::durable_host::durability::in_task_retry_loop(
                         task_ctx,
                         classify_http_error_code,
                         || {
                             let oplog = oplog.clone();
                             let request = request.clone();
-                            let connection_pool = connection_pool.clone();
                             async move {
                                 // Reconstruct body chunks from oplog
-                                let body_chunks = reconstruct_outgoing_body_chunks(&oplog, begin_index)
-                                    .await
-                                    .map_err(|e| {
-                                        wasi_http_types::ErrorCode::InternalError(Some(format!(
-                                            "body reconstruction failed: {e}"
-                                        )))
-                                    })?;
+                                let body_chunks =
+                                    reconstruct_outgoing_body_chunks(&oplog, begin_index)
+                                        .await
+                                        .map_err(|e| {
+                                            wasi_http_types::ErrorCode::InternalError(Some(
+                                                format!("body reconstruction failed: {e}"),
+                                            ))
+                                        })?;
 
                                 // Build the request with a streaming body
                                 let hyper_body = body_chunks_to_hyper_body(body_chunks);
                                 let http_request =
-                                    reconstruct_http_request(&request, hyper_body, &[])
-                                        .map_err(|e| {
+                                    reconstruct_http_request(&request, hyper_body, &[]).map_err(
+                                        |e| {
                                             wasi_http_types::ErrorCode::InternalError(Some(
                                                 format!("request reconstruction failed: {e}"),
                                             ))
-                                        })?;
+                                        },
+                                    )?;
 
                                 let retry_config = OutgoingRequestConfig {
                                     use_tls,
@@ -704,7 +781,11 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                                     http_request,
                                     retry_config,
                                     None,
-                                    connection_pool,
+                                    // Force a fresh connection for each in-task retry attempt.
+                                    // Reusing pooled connections after mid-body failures can
+                                    // keep retrying a poisoned transport and lead to repeated
+                                    // read timeouts.
+                                    None,
                                 );
 
                                 // Wait for the response to be ready
@@ -720,7 +801,12 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                                 }
                             }
                         },
-                        || execution_status.read().unwrap().create_await_interrupt_signal(),
+                        || {
+                            execution_status
+                                .read()
+                                .unwrap()
+                                .create_await_interrupt_signal()
+                        },
                     )
                     .await;
 
@@ -764,7 +850,9 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
 
     // 2. Check eligibility — use OutputStreamWrite zone (body is still being written)
     let exec_state = ctx.durable_execution_state();
-    if is_http_inline_retry_eligible(&exec_state, &request_state, RetryZone::OutputStreamWrite).is_err() {
+    if is_http_inline_retry_eligible(&exec_state, &request_state, RetryZone::OutputStreamWrite)
+        .is_err()
+    {
         return Ok(false);
     }
 
@@ -795,13 +883,12 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         }
     }
 
-    // 4. Get connection pool and oplog
+    // 4. Get oplog
     let oplog = ctx.public_state.oplog();
-    let connection_pool = ctx.wasi_http.connection_pool.clone();
     let config = request_state.outgoing_request_config();
 
     // 5. Rebuild the streaming request
-    let rebuilt = rebuild_streaming_request(&oplog, &request_state, config, connection_pool).await?;
+    let rebuilt = rebuild_streaming_request(&oplog, &request_state, config, None).await?;
 
     // 6. Swap resources in the resource table
     // Swap the FutureIncomingResponse — re-wrap with background retry if the
@@ -826,9 +913,11 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     } else {
         rebuilt.future
     };
-    let future_res: &mut HostFutureIncomingResponse = ctx
-        .table()
-        .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(request_handle))?;
+    let future_res: &mut HostFutureIncomingResponse = ctx.table().get_mut(&Resource::<
+        FutureIncomingResponse,
+    >::new_borrow(
+        request_handle
+    ))?;
     *future_res = new_future;
 
     // Swap the OutgoingBody if we have a rep
@@ -842,9 +931,9 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     // Swap the OutputStream
     use wasmtime_wasi::p2::bindings::io::streams::OutputStream as WasiOutputStream;
 
-    let stream_entry: &mut wasmtime_wasi::DynOutputStream = ctx
-        .table()
-        .get_mut(&Resource::<WasiOutputStream>::new_borrow(stream_rep))?;
+    let stream_entry: &mut wasmtime_wasi::DynOutputStream =
+        ctx.table()
+            .get_mut(&Resource::<WasiOutputStream>::new_borrow(stream_rep))?;
     *stream_entry = rebuilt.output_stream;
 
     Ok(true)
@@ -907,6 +996,29 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     if has_range {
         return Ok(false);
     }
+
+    // Record and budget this Zone 2 transition as an in-function retry attempt
+    // so oplog/error accounting reflects that we recovered from a transient read
+    // failure by reconstructing and resuming the request.
+    let mut retry_state = InFunctionRetryState::new();
+    match retry_state.decide_retry(ctx, "http-zone2-read").await {
+        AsyncRetryDecision::RetryAfterDelay(delay) => {
+            let interrupt = ctx.create_interrupt_signal();
+            let sleep = tokio::time::sleep(delay);
+            tokio::pin!(sleep);
+
+            match futures::future::select(sleep, interrupt).await {
+                futures::future::Either::Left(_) => {}
+                futures::future::Either::Right((interrupt_kind, _)) => {
+                    return Err(anyhow::Error::from(interrupt_kind));
+                }
+            }
+        }
+        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
+            return Ok(false);
+        }
+    }
+
     let extra_headers = if consumed_len > 0 {
         vec![("range".to_string(), format!("bytes={consumed_len}-"))]
     } else {
@@ -918,6 +1030,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         &request_state,
         &body_chunks,
         &extra_headers,
+        Some("http-zone2-send"),
     )
     .await?
     {
@@ -945,13 +1058,12 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 Some(start) if start == consumed_len => {
                     // Range matches — swap body+stream
                     let (_parts, body) = response.resp.into_parts();
-                    let new_body =
-                        HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
+                    let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
 
                     // Swap IncomingBody at body_handle, then take stream from it
-                    let body_entry: &mut HostIncomingBody = ctx
-                        .table()
-                        .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
+                    let body_entry: &mut HostIncomingBody =
+                        ctx.table()
+                            .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
                     *body_entry = new_body;
                     let new_stream = body_entry.take_stream().ok_or_else(|| {
                         anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
@@ -987,9 +1099,9 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
             let (_parts, body) = response.resp.into_parts();
             let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
 
-            let body_entry: &mut HostIncomingBody = ctx
-                .table()
-                .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
+            let body_entry: &mut HostIncomingBody =
+                ctx.table()
+                    .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
             *body_entry = new_body;
             let new_stream = body_entry.take_stream().ok_or_else(|| {
                 anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
@@ -1015,9 +1127,9 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
             let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
 
             // Swap IncomingBody at body_handle first
-            let body_entry: &mut HostIncomingBody = ctx
-                .table()
-                .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
+            let body_entry: &mut HostIncomingBody =
+                ctx.table()
+                    .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
             *body_entry = new_body;
             let mut new_stream = body_entry.take_stream().ok_or_else(|| {
                 anyhow::anyhow!("HTTP retry failed: could not take stream from new body")
@@ -1034,12 +1146,12 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                     wasmtime_wasi::StreamError::Closed => anyhow::anyhow!(
                         "HTTP retry failed: response shorter than previously consumed bytes"
                     ),
-                    wasmtime_wasi::StreamError::LastOperationFailed(e) => anyhow::anyhow!(
-                        "HTTP retry failed: error reading prefix for skip: {e}"
-                    ),
-                    wasmtime_wasi::StreamError::Trap(e) => anyhow::anyhow!(
-                        "HTTP retry failed: trap reading prefix for skip: {e}"
-                    ),
+                    wasmtime_wasi::StreamError::LastOperationFailed(e) => {
+                        anyhow::anyhow!("HTTP retry failed: error reading prefix for skip: {e}")
+                    }
+                    wasmtime_wasi::StreamError::Trap(e) => {
+                        anyhow::anyhow!("HTTP retry failed: trap reading prefix for skip: {e}")
+                    }
                 })?;
 
                 if chunk.is_empty() {
@@ -1081,6 +1193,39 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     }
 }
 
+/// Attempts Zone 1 inline retry from FutureIncomingResponse::get() after a
+/// transient response error.
+///
+pub async fn try_zone1_get_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    request_state: &HttpRequestState,
+) -> Result<Option<IncomingResponse>, anyhow::Error> {
+    let exec_state = ctx.durable_execution_state();
+    let mut eligibility_state = request_state.clone();
+    // Zone1 get()-time resend does not swap output stream resources, so an
+    // output-stream subscribe() pollable cannot go stale here.
+    eligibility_state.retry.output_stream_subscribed = false;
+
+    if is_http_inline_retry_eligible(&exec_state, &eligibility_state, RetryZone::Zone1).is_err() {
+        return Ok(None);
+    }
+
+    let oplog = ctx.public_state.oplog();
+    let last_retry_error_idx =
+        find_last_retry_error_index(&oplog, request_state.begin_index).await?;
+
+    let mut body_chunks = reconstruct_outgoing_body_chunks_after(
+        &oplog,
+        request_state.begin_index,
+        last_retry_error_idx,
+    )
+    .await?;
+    if body_chunks.is_empty() {
+        body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
+    }
+    send_with_interrupt_aware_retries(ctx, request_state, &body_chunks, &[], None).await
+}
+
 /// Parses the start byte position from a Content-Range header value.
 ///
 /// Expected format: `bytes <start>-<end>/<total>` or `bytes <start>-<end>/*`
@@ -1107,9 +1252,9 @@ mod tests {
         assert!(!is_method_idempotent(&SerializableHttpMethod::Patch));
         assert!(!is_method_idempotent(&SerializableHttpMethod::Connect));
         assert!(!is_method_idempotent(&SerializableHttpMethod::Trace));
-        assert!(!is_method_idempotent(
-            &SerializableHttpMethod::Other("CUSTOM".to_string())
-        ));
+        assert!(!is_method_idempotent(&SerializableHttpMethod::Other(
+            "CUSTOM".to_string()
+        )));
     }
 
     #[test]
@@ -1127,10 +1272,7 @@ mod tests {
 
     #[test]
     fn test_parse_content_range_start_zero() {
-        assert_eq!(
-            parse_content_range_start("bytes 0-999/1000"),
-            Some(0)
-        );
+        assert_eq!(parse_content_range_start("bytes 0-999/1000"), Some(0));
     }
 
     #[test]
@@ -1210,12 +1352,9 @@ mod tests {
             is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
-        // OutputStreamWrite should still be eligible — subscribe is called
-        // internally by wasmtime's component model for blocking operations,
-        // and the pollable is transient.
-        req.retry.body_finished = false; // OutputStreamWrite doesn't require body_finished
-        assert!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::OutputStreamWrite).is_ok()
+        assert_eq!(
+            is_http_inline_retry_eligible(&exec, &req, RetryZone::OutputStreamWrite),
+            Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
     }
 

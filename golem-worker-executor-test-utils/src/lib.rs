@@ -107,8 +107,7 @@ use golem_worker_executor::services::rdbms::{
 };
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{
-    DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc, RpcDemand,
-    RpcError as ServiceRpcError,
+    DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc, RpcDemand, RpcError as ServiceRpcError,
 };
 use golem_worker_executor::services::resource_limits::{
     AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
@@ -462,8 +461,10 @@ pub async fn start_with_oplog_config(
 /// Overrides for customizing the test executor. Allows wrapping services with
 /// failure-injecting wrappers and modifying the GolemConfig.
 type ConfigureFn = dyn Fn(&mut GolemConfig) + Send + Sync;
-type WrapKeyValueServiceFn = dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
-type WrapBlobStoreServiceFn = dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+type WrapKeyValueServiceFn =
+    dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
+type WrapBlobStoreServiceFn =
+    dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 
 #[derive(Clone, Default)]

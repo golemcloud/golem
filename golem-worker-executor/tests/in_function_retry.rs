@@ -721,9 +721,7 @@ async fn async_rpc_inline_retry_on_transient_remote_error(
             };
             config.max_in_function_retry_delay = Duration::from_secs(1);
         })),
-        wrap_rpc: Some(Arc::new(|inner| {
-            Arc::new(FailingRpc::new(inner, 2))
-        })),
+        wrap_rpc: Some(Arc::new(|inner| Arc::new(FailingRpc::new(inner, 2)))),
         ..Default::default()
     };
 
@@ -822,6 +820,17 @@ async fn start_body_dropping_http_server(fail_count: usize) -> (u16, Arc<AtomicU
                                     .unwrap_or(0);
                                 let body_start = header_end + 4;
                                 if data.len() >= body_start + cl {
+                                    break;
+                                }
+                            } else if headers
+                                .lines()
+                                .any(|l| l.to_lowercase().contains("transfer-encoding: chunked"))
+                            {
+                                // Chunked request bodies end with a final zero-size chunk and a
+                                // blank line. Accept optional trailers by checking for terminal
+                                // "\r\n\r\n" in the body section.
+                                let body_data = &data_str[header_end + 4..];
+                                if body_data.ends_with("\r\n\r\n") {
                                     break;
                                 }
                             }
@@ -986,9 +995,7 @@ async fn http_output_stream_inline_retry_on_body_write_failure(
         .invoke_and_await_agent(&component, &agent_id, "post_large_body", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     // The response should be "200 received <N> bytes" — verify it succeeded
     assert!(
@@ -1067,17 +1074,10 @@ async fn http_post_not_retried_inline_when_idempotence_disabled(
     // POST is not idempotent, so inline retry should NOT happen.
     // It should still eventually succeed via trap+replay.
     let result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "post_non_idempotent",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "post_non_idempotent", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     assert!(
         matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
@@ -1149,9 +1149,7 @@ async fn http_get_retried_inline_even_when_idempotence_disabled(
         .invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     assert!(
         matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
@@ -1492,9 +1490,7 @@ async fn http_zone2_inline_retry_on_body_read_failure(
         )
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     // Verify the response contains the full body (1024 bytes of sequential pattern)
     assert!(
@@ -1577,9 +1573,7 @@ async fn http_write_zeroes_body_reconstruction(
         )
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     // Server should validate the body and return "200 body-ok len=2052"
     assert_eq!(
@@ -1656,17 +1650,10 @@ async fn http_no_output_stream_retry_when_subscribe_used(
     // post_with_subscribe calls subscribe() on the output stream before writing,
     // which sets output_stream_subscribed=true and disqualifies inline retry.
     let result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "post_with_subscribe",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "post_with_subscribe", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     assert!(
         matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
@@ -1742,17 +1729,10 @@ async fn http_no_retry_when_trailers_present(
     // post_with_trailers finishes the outgoing body with trailers,
     // which sets has_outgoing_trailers=true and disqualifies inline retry.
     let result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "post_with_trailers",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "post_with_trailers", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     assert!(
         matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
@@ -1829,17 +1809,10 @@ async fn http_no_zone2_retry_when_body_skip_used(
     // get_with_body_skip reads 256 bytes, skips 256, then reads remaining.
     // The skip sets had_body_skip=true, disqualifying Zone 2 retry.
     let result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "get_with_body_skip",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "get_with_body_skip", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     // Should eventually succeed (via trap+replay, not Zone 2 inline retry)
     assert!(

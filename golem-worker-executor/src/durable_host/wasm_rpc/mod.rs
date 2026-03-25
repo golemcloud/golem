@@ -30,6 +30,7 @@ use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::UntypedDataValue;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
     GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke,
@@ -45,7 +46,6 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{
     AgentId, AgentInvocation, IdempotencyKey, OplogIndex, OwnedAgentId, RetryConfig,
     ScheduledAction,
@@ -1010,12 +1010,11 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         async move {
             let result = match retry_config {
                 Some(retry_config) => {
-                    let base_retry_count =
-                        crate::durable_host::durability::count_oplog_errors_for(
-                            &worker.oplog(),
-                            retry_point,
-                        )
-                        .await;
+                    let base_retry_count = crate::durable_host::durability::count_oplog_errors_for(
+                        &worker.oplog(),
+                        retry_point,
+                    )
+                    .await;
                     let task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point,
                         retry_config,
