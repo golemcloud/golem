@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::quota_lease::QuotaLease;
 use super::quota_service::{QuotaError, QuotaService};
 use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
+use crate::model::Pod;
 use crate::shard_manager_config::QuotaServiceConfig;
 use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::resource_definition::{
-    EnforcementAction, ResourceCapacityLimit, ResourceDefinition, ResourceDefinitionId,
-    ResourceDefinitionRevision, ResourceLimit, ResourceName,
+    EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceDefinition,
+    ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
+    ResourceRateLimit, TimePeriod,
 };
+use golem_service_base::model::quota_lease::{LeaseEpoch, QuotaAllocation};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,17 +33,10 @@ use tokio::sync::RwLock;
 
 fn test_config() -> QuotaServiceConfig {
     QuotaServiceConfig {
-        definition_cache_max_capacity: 1024,
-        definition_cache_ttl: Duration::from_secs(300),
-        definition_cache_eviction_period: Duration::from_secs(60),
-    }
-}
-
-fn short_ttl_config() -> QuotaServiceConfig {
-    QuotaServiceConfig {
-        definition_cache_max_capacity: 1024,
-        definition_cache_ttl: Duration::from_millis(50),
-        definition_cache_eviction_period: Duration::from_millis(25),
+        lease_duration: Duration::from_secs(60),
+        definition_staleness_ttl: Duration::from_secs(300),
+        min_executors: 2,
+        exhausted_retry_after: Duration::from_secs(30),
     }
 }
 
@@ -100,7 +97,10 @@ impl InMemoryFetcher {
 
 #[async_trait]
 impl ResourceDefinitionFetcher for InMemoryFetcher {
-    async fn get_by_id(&self, id: ResourceDefinitionId) -> Result<ResourceDefinition, FetchError> {
+    async fn fetch_by_id(
+        &self,
+        id: ResourceDefinitionId,
+    ) -> Result<ResourceDefinition, FetchError> {
         self.definitions
             .read()
             .await
@@ -110,7 +110,7 @@ impl ResourceDefinitionFetcher for InMemoryFetcher {
             .ok_or(FetchError::NotFound)
     }
 
-    async fn get_by_name(
+    async fn resolve_by_name(
         &self,
         environment_id: EnvironmentId,
         name: ResourceName,
@@ -122,186 +122,241 @@ impl ResourceDefinitionFetcher for InMemoryFetcher {
             .cloned()
             .ok_or(FetchError::NotFound)
     }
+
+    async fn invalidate(&self, _environment_id: EnvironmentId, _name: ResourceName) {}
+
+    async fn invalidate_all(&self) {}
 }
 
-fn assert_not_found(result: Result<ResourceDefinition, QuotaError>) {
+fn assert_unlimited(lease: &QuotaLease) {
     assert!(
-        matches!(
-            result,
-            Err(QuotaError::ResourceDefinitionNotFoundById(_))
-                | Err(QuotaError::ResourceDefinitionNotFoundByName { .. })
-        ),
-        "expected not found, got: {result:?}"
+        matches!(lease, QuotaLease::Unlimited { .. }),
+        "expected Unlimited, got: {lease:?}"
     );
+}
+
+impl QuotaLease {
+    fn epoch(&self) -> LeaseEpoch {
+        match self {
+            QuotaLease::Bounded { epoch, .. } => *epoch,
+            QuotaLease::Unlimited { .. } => panic!("epoch() called on Unlimited lease"),
+        }
+    }
+
+    fn id(&self) -> ResourceDefinitionId {
+        match self {
+            QuotaLease::Bounded {
+                resource_definition_id,
+                ..
+            } => *resource_definition_id,
+            QuotaLease::Unlimited { .. } => panic!("id() called on Unlimited lease"),
+        }
+    }
+
+    fn allocation(&self) -> &QuotaAllocation {
+        match self {
+            QuotaLease::Bounded { allocation, .. } => allocation,
+            QuotaLease::Unlimited { .. } => panic!("allocation() called on Unlimited lease"),
+        }
+    }
 }
 
 fn env_id() -> EnvironmentId {
     EnvironmentId(uuid::Uuid::new_v4())
 }
 
-#[test]
-async fn get_by_id_returns_cached_definition() {
-    let fetcher = Arc::new(InMemoryFetcher::new());
-    let env = env_id();
-    let def = make_definition(env, "tokens");
-    let id = def.id;
-    fetcher.put(def.clone()).await;
+fn test_pod() -> Pod {
+    Pod::new("localhost".to_string(), 9000)
+}
 
-    let svc = QuotaService::new(test_config(), fetcher);
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-
-    let result = svc.get_by_id(id).await;
-    assert_eq!(result.unwrap(), def);
+fn test_pod_2() -> Pod {
+    Pod::new("localhost".to_string(), 9001)
 }
 
 #[test]
-async fn get_by_id_returns_not_found_for_unknown_id() {
+async fn acquire_lease_returns_lease_for_existing_resource() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def.clone()).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+    let lease = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+
+    assert_eq!(lease.id(), def.id);
+    assert_eq!(lease.epoch(), LeaseEpoch::initial());
+}
+
+#[test]
+async fn release_lease_fails_for_unknown_resource() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let svc = QuotaService::new(test_config(), fetcher);
 
     let result = svc
-        .get_by_id(ResourceDefinitionId(uuid::Uuid::new_v4()))
+        .release_lease(
+            ResourceDefinitionId(uuid::Uuid::new_v4()),
+            test_pod(),
+            LeaseEpoch::initial(),
+            0,
+        )
         .await;
-    assert_not_found(result);
+    assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
 }
 
 #[test]
-async fn get_by_id_returns_not_found_for_tombstoned_entry() {
+async fn acquire_lease_increments_epoch_on_repeated_calls() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
     let def = make_definition(env, "tokens");
-    let id = def.id;
     fetcher.put(def).await;
-
-    let svc = QuotaService::new(test_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-
-    // Remove and trigger CDC to tombstone.
-    fetcher.remove(env, "tokens").await;
-    svc.on_resource_definition_changed(env, id, ResourceName("tokens".into()))
-        .await;
-
-    let result = svc.get_by_id(id).await;
-    assert_not_found(result);
-}
-
-#[test]
-async fn get_by_id_refreshes_stale_entry() {
-    let fetcher = Arc::new(InMemoryFetcher::new());
-    let env = env_id();
-    let id = ResourceDefinitionId(uuid::Uuid::new_v4());
-    let rev0 = ResourceDefinitionRevision::INITIAL;
-    let rev1 = rev0.next().unwrap();
-    let v1 = make_definition_with_id(id, env, "tokens", rev0);
-    fetcher.put(v1.clone()).await;
-
-    let svc = QuotaService::new(short_ttl_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-
-    // Update in fetcher.
-    let v2 = make_definition_with_id(id, env, "tokens", rev1);
-    fetcher.put(v2.clone()).await;
-
-    // Not stale yet — returns v1.
-    let r1 = svc.get_by_id(id).await;
-    assert_eq!(r1.unwrap(), v1);
-
-    // Wait for TTL to expire.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Stale — refreshes by id, returns v2.
-    let r2 = svc.get_by_id(id).await;
-    assert_eq!(r2.unwrap(), v2);
-}
-
-#[test]
-async fn get_by_id_tombstones_on_stale_refresh_not_found() {
-    let fetcher = Arc::new(InMemoryFetcher::new());
-    let env = env_id();
-    let def = make_definition(env, "tokens");
-    let id = def.id;
-    fetcher.put(def).await;
-
-    let svc = QuotaService::new(short_ttl_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-
-    // Remove from fetcher.
-    fetcher.remove(env, "tokens").await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Stale refresh discovers NotFound — tombstones.
-    let result = svc.get_by_id(id).await;
-    assert_not_found(result);
-}
-
-#[test]
-async fn get_or_fetch_returns_definition_on_cache_miss() {
-    let fetcher = Arc::new(InMemoryFetcher::new());
-    let env = env_id();
-    let def = make_definition(env, "tokens");
-    fetcher.put(def.clone()).await;
 
     let svc = QuotaService::new(test_config(), fetcher);
-    let result = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
+    let pod = test_pod();
 
-    assert_eq!(result.unwrap(), def);
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+
+    assert_eq!(l1.epoch(), LeaseEpoch::initial());
+    assert_eq!(l2.epoch(), LeaseEpoch::initial().next());
 }
 
 #[test]
-async fn get_or_fetch_returns_cached_value_on_second_call() {
+async fn acquire_lease_tracks_separate_epochs_per_pod() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
     let def = make_definition(env, "tokens");
-    fetcher.put(def.clone()).await;
+    fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
+    let svc = QuotaService::new(test_config(), fetcher);
 
-    // Remove from fetcher — should still return cached value.
-    fetcher.remove(env, "tokens").await;
-    let result = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
+        .await
+        .unwrap();
 
-    assert_eq!(result.unwrap(), def);
+    // Both pods get initial epoch independently.
+    assert_eq!(l1.epoch(), LeaseEpoch::initial());
+    assert_eq!(l2.epoch(), LeaseEpoch::initial());
 }
 
 #[test]
-async fn get_or_fetch_returns_not_found_when_missing() {
+async fn renew_lease_succeeds_with_correct_epoch() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .renew_lease(id, pod.clone(), l1.epoch(), 0)
+        .await
+        .unwrap();
+
+    assert_eq!(l2.id(), id);
+    assert_eq!(l2.epoch(), l1.epoch().next());
+}
+
+#[test]
+async fn renew_lease_rejects_stale_epoch() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+    let l2 = svc
+        .renew_lease(id, pod.clone(), l1.epoch(), 0)
+        .await
+        .unwrap();
+
+    let result = svc.renew_lease(id, pod.clone(), l1.epoch(), 0).await;
+    assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
+
+    let l3 = svc
+        .renew_lease(id, pod.clone(), l2.epoch(), 0)
+        .await
+        .unwrap();
+    assert_eq!(l3.epoch(), l2.epoch().next());
+}
+
+#[test]
+async fn renew_lease_fails_for_unknown_pod() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+    let _ = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+
+    let result = svc
+        .renew_lease(id, test_pod_2(), LeaseEpoch::initial(), 0)
+        .await;
+    assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
+}
+
+#[test]
+async fn acquire_lease_returns_unlimited_for_missing_resource() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let svc = QuotaService::new(test_config(), fetcher);
+
+    let lease = svc
+        .acquire_lease(env_id(), ResourceName("missing".into()), test_pod())
+        .await
+        .unwrap();
+    assert_unlimited(&lease);
+}
+
+#[test]
+async fn renew_lease_fails_for_unknown_resource() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let svc = QuotaService::new(test_config(), fetcher);
 
     let result = svc
-        .get_or_fetch(env_id(), ResourceName("missing".into()))
+        .renew_lease(
+            ResourceDefinitionId(uuid::Uuid::new_v4()),
+            test_pod(),
+            LeaseEpoch::initial(),
+            0,
+        )
         .await;
-
-    assert_not_found(result);
+    assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
 }
 
 #[test]
-async fn cache_ttl_eviction_causes_refetch() {
-    let fetcher = Arc::new(InMemoryFetcher::new());
-    let env = env_id();
-    let id = ResourceDefinitionId(uuid::Uuid::new_v4());
-    let rev0 = ResourceDefinitionRevision::INITIAL;
-    let rev1 = rev0.next().unwrap();
-    let v1 = make_definition_with_id(id, env, "tokens", rev0);
-    fetcher.put(v1.clone()).await;
-
-    let svc = QuotaService::new(short_ttl_config(), fetcher.clone());
-    let r1 = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-    assert_eq!(r1.unwrap(), v1);
-
-    let v2 = make_definition_with_id(id, env, "tokens", rev1);
-    fetcher.put(v2.clone()).await;
-
-    // Wait for TTL + eviction period to expire the cache entry.
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    let r2 = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-    assert_eq!(r2.unwrap(), v2);
-}
-
-#[test]
-async fn cdc_event_tombstones_deleted_resource() {
+async fn renew_lease_fails_for_tombstoned_resource() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
     let def = make_definition(env, "tokens");
@@ -309,24 +364,165 @@ async fn cdc_event_tombstones_deleted_resource() {
     fetcher.put(def).await;
 
     let svc = QuotaService::new(test_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
+    let pod = test_pod();
 
-    // Remove and trigger CDC — will tombstone the entry.
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+
+    // Tombstone via CDC.
     fetcher.remove(env, "tokens").await;
-    svc.on_resource_definition_changed(env, id, ResourceName("tokens".into()))
-        .await;
+    svc.on_resource_definition_changed(id).await;
 
-    // get_by_id returns NotFound for tombstoned entries.
-    let result = svc.get_by_id(id).await;
-    assert_not_found(result);
-
-    // get_or_fetch re-fetches by name (cache was invalidated by CDC).
-    let result2 = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-    assert_not_found(result2);
+    let result = svc.renew_lease(id, pod, l1.epoch(), 0).await;
+    assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
 }
 
 #[test]
-async fn cdc_event_refreshes_live_entry() {
+async fn cdc_tombstones_deleted_resource() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let _ = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+
+    fetcher.remove(env, "tokens").await;
+    svc.on_resource_definition_changed(id).await;
+
+    // Acquiring with the same name re-fetches — returns unlimited.
+    let lease = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    assert_unlimited(&lease);
+}
+
+#[test]
+async fn cdc_for_tombstoned_id_is_noop() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let _ = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+
+    fetcher.remove(env, "tokens").await;
+    svc.on_resource_definition_changed(id).await;
+
+    // Repeated CDC for same tombstoned id is a no-op.
+    svc.on_resource_definition_changed(id).await;
+}
+
+#[test]
+async fn release_lease_succeeds_with_correct_epoch() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+
+    svc.release_lease(id, pod, l1.epoch(), 0).await.unwrap();
+}
+
+#[test]
+async fn release_lease_removes_pod_from_leases() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+
+    svc.release_lease(id, pod.clone(), l1.epoch(), 0)
+        .await
+        .unwrap();
+
+    let result = svc.renew_lease(id, pod, l1.epoch(), 0).await;
+    assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
+}
+
+#[test]
+async fn release_lease_rejects_stale_epoch() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+    let l2 = svc
+        .renew_lease(id, pod.clone(), l1.epoch(), 0)
+        .await
+        .unwrap();
+
+    let result = svc.release_lease(id, pod.clone(), l1.epoch(), 0).await;
+    assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
+
+    svc.release_lease(id, pod, l2.epoch(), 0).await.unwrap();
+}
+
+#[test]
+async fn release_lease_allows_re_acquire() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+
+    svc.release_lease(id, pod.clone(), l1.epoch(), 0)
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
+        .await
+        .unwrap();
+    assert_eq!(l2.epoch(), LeaseEpoch::initial());
+}
+
+#[test]
+async fn cdc_refreshes_definition_in_live_entry() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
     let id = ResourceDefinitionId(uuid::Uuid::new_v4());
@@ -336,76 +532,27 @@ async fn cdc_event_refreshes_live_entry() {
     fetcher.put(v1).await;
 
     let svc = QuotaService::new(test_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
 
     let v2 = make_definition_with_id(id, env, "tokens", rev1);
-    fetcher.put(v2.clone()).await;
+    fetcher.put(v2).await;
 
-    svc.on_resource_definition_changed(env, id, ResourceName("tokens".into()))
-        .await;
+    svc.on_resource_definition_changed(id).await;
 
-    // get_by_id returns the refreshed definition.
-    let result = svc.get_by_id(id).await;
-    assert_eq!(result.unwrap(), v2);
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+
+    assert_eq!(l2.id(), id);
+    assert!(l2.epoch() > l1.epoch());
 }
 
 #[test]
-async fn cdc_event_for_tombstoned_id_is_noop() {
-    let fetcher = Arc::new(InMemoryFetcher::new());
-    let env = env_id();
-    let def = make_definition(env, "tokens");
-    let id = def.id;
-    fetcher.put(def).await;
-
-    let svc = QuotaService::new(test_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-
-    // Remove from fetcher, then trigger CDC — will tombstone.
-    fetcher.remove(env, "tokens").await;
-    svc.on_resource_definition_changed(env, id, ResourceName("tokens".into()))
-        .await;
-
-    // Subsequent CDC events for the same id are no-ops (not live).
-    svc.on_resource_definition_changed(env, id, ResourceName("tokens".into()))
-        .await;
-
-    let result = svc.get_by_id(id).await;
-    assert_not_found(result);
-}
-
-#[test]
-async fn cdc_invalidates_definition_cache() {
-    let fetcher = Arc::new(InMemoryFetcher::new());
-    let env = env_id();
-    let id = ResourceDefinitionId(uuid::Uuid::new_v4());
-    let rev0 = ResourceDefinitionRevision::INITIAL;
-    let rev1 = rev0.next().unwrap();
-    let v1 = make_definition_with_id(id, env, "tokens", rev0);
-    fetcher.put(v1.clone()).await;
-
-    let svc = QuotaService::new(test_config(), fetcher.clone());
-    let r1 = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-    assert_eq!(r1.unwrap(), v1);
-
-    // Update in fetcher — cache still has old value.
-    let v2 = make_definition_with_id(id, env, "tokens", rev1);
-    fetcher.put(v2.clone()).await;
-
-    let r2 = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-    assert_eq!(r2.unwrap(), v1);
-
-    // CDC invalidates the definition cache, next fetch gets v2.
-    svc.on_resource_definition_changed(env, id, ResourceName("tokens".into()))
-        .await;
-
-    let r3 = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-    assert_eq!(r3.unwrap(), v2);
-}
-
-// --- cursor expired ---
-
-#[test]
-async fn cursor_expired_refreshes_all_live_entries() {
+async fn cursor_expired_refreshes_live_entries() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
     let id = ResourceDefinitionId(uuid::Uuid::new_v4());
@@ -415,15 +562,22 @@ async fn cursor_expired_refreshes_all_live_entries() {
     fetcher.put(v1).await;
 
     let svc = QuotaService::new(test_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
+    let _ = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
 
     let v2 = make_definition_with_id(id, env, "tokens", rev1);
-    fetcher.put(v2.clone()).await;
+    fetcher.put(v2).await;
 
     svc.on_cursor_expired().await;
 
-    let result = svc.get_by_id(id).await;
-    assert_eq!(result.unwrap(), v2);
+    // Lease should reflect updated definition after refresh.
+    let lease = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(lease.id(), id);
 }
 
 #[test]
@@ -432,8 +586,12 @@ async fn cursor_expired_clears_definition_cache() {
     let env = env_id();
     let svc = QuotaService::new(test_config(), fetcher.clone());
 
-    // Cache a not-found.
-    let _ = svc.get_or_fetch(env, ResourceName("missing".into())).await;
+    // First acquire: resource doesn't exist — gets unlimited.
+    let r1 = svc
+        .acquire_lease(env, ResourceName("missing".into()), test_pod())
+        .await
+        .unwrap();
+    assert_unlimited(&r1);
 
     let def = make_definition(env, "missing");
     fetcher.put(def.clone()).await;
@@ -441,11 +599,12 @@ async fn cursor_expired_clears_definition_cache() {
     svc.on_cursor_expired().await;
 
     // Cache was cleared, so re-fetches successfully.
-    let result = svc.get_or_fetch(env, ResourceName("missing".into())).await;
-    assert_eq!(result.unwrap(), def);
+    let lease = svc
+        .acquire_lease(env, ResourceName("missing".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(lease.id(), def.id);
 }
-
-// --- name replaced (delete + recreate with same name, different id) ---
 
 #[test]
 async fn cdc_handles_name_replaced_with_new_id() {
@@ -457,21 +616,562 @@ async fn cdc_handles_name_replaced_with_new_id() {
     fetcher.put(v1).await;
 
     let svc = QuotaService::new(test_config(), fetcher.clone());
-    let _ = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
+    let _ = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
 
     // Replace with a new id under the same name.
     let id2 = ResourceDefinitionId(uuid::Uuid::new_v4());
     let v2 = make_definition_with_id(id2, env, "tokens", rev0);
-    fetcher.put(v2.clone()).await;
+    fetcher.put(v2).await;
 
-    // CDC for old id: tombstones id1, invalidates "tokens" in definition cache.
-    svc.on_resource_definition_changed(env, id1, ResourceName("tokens".into()))
-        .await;
+    // CDC for old id: tombstones id1.
+    // In production, the registry_event_subscriber also invalidates the fetcher cache.
+    fetcher.invalidate(env, ResourceName("tokens".into())).await;
+    svc.on_resource_definition_changed(id1).await;
 
-    // Next get_or_fetch resolves to v2 via cache miss.
-    let result = svc.get_or_fetch(env, ResourceName("tokens".into())).await;
-    assert_eq!(result.unwrap(), v2);
+    // Next acquire resolves to new id.
+    let lease = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(lease.id(), id2);
+    assert_eq!(lease.epoch(), LeaseEpoch::initial());
+}
 
-    // Old id is tombstoned.
-    assert_not_found(svc.get_by_id(id1).await);
+#[test]
+async fn single_pod_gets_fair_share_not_full_budget() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def).await;
+
+    // min_executors=2, so single pod gets 100/2 = 50.
+    let svc = QuotaService::new(test_config(), fetcher);
+    let lease = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+
+    assert_eq!(*lease.allocation(), QuotaAllocation::Budget { amount: 50 });
+}
+
+#[test]
+async fn two_pods_each_get_fair_share() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def).await;
+
+    // min_executors=2.
+    let svc = QuotaService::new(test_config(), fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    // First pod: 100 / max(1, 2) = 50.
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
+        .await
+        .unwrap();
+    // Second pod: 50 remaining / max(2, 2) = 25.
+    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 25 });
+}
+
+#[test]
+async fn renew_returns_unused_and_reallocates() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    // Gets 50 (100 / min_executors=2).
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+
+    // Pod used 10, returning 40 unused.
+    let l2 = svc
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 40)
+        .await
+        .unwrap();
+
+    // Remaining was 50, +40 returned = 90. Single pod: 90 / max(1,2) = 45.
+    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 45 });
+}
+
+#[test]
+async fn release_returns_unused_to_pool() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+
+    // Release with 30 unused.
+    svc.release_lease(id, test_pod(), l1.epoch(), 30)
+        .await
+        .unwrap();
+
+    // Remaining was 50 + 30 returned = 80. New pod: 80 / max(1, 2) = 40.
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
+        .await
+        .unwrap();
+    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 40 });
+}
+
+#[test]
+async fn unused_capped_at_allocated() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+
+    // Executor claims 200 unused — capped at allocated (50).
+    // Remaining was 50, +50 returned = 100. 100 / max(1,2) = 50.
+    let l2 = svc
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 200)
+        .await
+        .unwrap();
+    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 50 });
+}
+
+#[test]
+async fn exhausted_when_no_remaining_budget() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def).await;
+
+    // min_executors=1 so first pod takes everything.
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
+        .await
+        .unwrap();
+    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+}
+
+fn make_concurrency_definition(
+    env_id: EnvironmentId,
+    name: &str,
+    value: u64,
+) -> ResourceDefinition {
+    ResourceDefinition {
+        id: ResourceDefinitionId(uuid::Uuid::new_v4()),
+        revision: ResourceDefinitionRevision::INITIAL,
+        environment_id: env_id,
+        name: ResourceName(name.to_string()),
+        limit: ResourceLimit::Concurrency(ResourceConcurrencyLimit { value }),
+        enforcement_action: EnforcementAction::Reject,
+        unit: "slot".to_string(),
+        units: "slots".to_string(),
+    }
+}
+
+#[test]
+async fn concurrency_expired_lease_returns_slots() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_concurrency_definition(env, "workers", 10);
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        lease_duration: Duration::from_millis(50),
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("workers".into()), pod.clone())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 10 });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Expired concurrency lease returns all slots.
+    let l2 = svc
+        .acquire_lease(env, ResourceName("workers".into()), test_pod_2())
+        .await
+        .unwrap();
+    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 10 });
+}
+
+#[test]
+async fn concurrency_release_returns_all_slots() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_concurrency_definition(env, "workers", 10);
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("workers".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 10 });
+
+    // Release with unused=0 — but concurrency always returns all slots.
+    svc.release_lease(id, test_pod(), l1.epoch(), 0)
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .acquire_lease(env, ResourceName("workers".into()), test_pod_2())
+        .await
+        .unwrap();
+    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 10 });
+}
+
+#[test]
+async fn capacity_expired_lease_loses_budget() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        lease_duration: Duration::from_millis(50),
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Expired capacity lease loses budget — assume executor consumed it all.
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
+        .await
+        .unwrap();
+    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+}
+
+#[test]
+async fn capacity_release_returns_only_reported_unused() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+
+    // Executor consumed 60, returning 40 unused.
+    svc.release_lease(id, test_pod(), l1.epoch(), 40)
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
+        .await
+        .unwrap();
+    // Only the 40 unused was returned, not the full 100.
+    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 40 });
+}
+
+fn make_rate_definition(
+    env_id: EnvironmentId,
+    name: &str,
+    value: u64,
+    period: TimePeriod,
+    max: u64,
+) -> ResourceDefinition {
+    ResourceDefinition {
+        id: ResourceDefinitionId(uuid::Uuid::new_v4()),
+        revision: ResourceDefinitionRevision::INITIAL,
+        environment_id: env_id,
+        name: ResourceName(name.to_string()),
+        limit: ResourceLimit::Rate(ResourceRateLimit { value, period, max }),
+        enforcement_action: EnforcementAction::Throttle,
+        unit: "request".to_string(),
+        units: "requests".to_string(),
+    }
+}
+
+#[test]
+async fn rate_limit_allocates_from_pool() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_rate_definition(env, "api-calls", 100, TimePeriod::Second, 100);
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+
+    // Pool starts at max=100. Single executor gets 100.
+    let lease = svc
+        .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*lease.allocation(), QuotaAllocation::Budget { amount: 100 });
+}
+
+#[test]
+async fn rate_limit_divides_pool_across_executors() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_rate_definition(env, "api-calls", 100, TimePeriod::Minute, 100);
+    fetcher.put(def).await;
+
+    // min_executors=2, so single pod gets half the pool (100/2 = 50).
+    let svc = QuotaService::new(test_config(), fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+
+    let l2 = svc
+        .acquire_lease(env, ResourceName("api-calls".into()), test_pod_2())
+        .await
+        .unwrap();
+    // Remaining 50 / max(2, 2) = 25.
+    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 25 });
+}
+
+#[test]
+async fn rate_limit_renew_returns_unused_to_pool() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_rate_definition(env, "api-calls", 90, TimePeriod::Second, 90);
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+
+    // Pod 1 acquires — gets full pool (90).
+    let l1 = svc
+        .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 90 });
+
+    // Pod 2 acquires — pool is 0, gets Exhausted.
+    let l2 = svc
+        .acquire_lease(env, ResourceName("api-calls".into()), test_pod_2())
+        .await
+        .unwrap();
+    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+
+    // Pod 1 renews returning 45 unused. Pool refills from rate + returned.
+    // 45 returned, remaining = 45, divided by 2 active = 22.
+    let l1_renewed = svc
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 45)
+        .await
+        .unwrap();
+    assert_eq!(
+        *l1_renewed.allocation(),
+        QuotaAllocation::Budget { amount: 22 }
+    );
+}
+
+#[test]
+async fn rate_limit_refills_after_full_period() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    // 100/second with max=100.
+    let def = make_rate_definition(env, "api-calls", 100, TimePeriod::Second, 100);
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+
+    // Consume all tokens, wait less than a full period — no refill.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let l2 = svc
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 0)
+        .await
+        .unwrap();
+    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+
+    // Wait for a full period to elapse from the start.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    let l3 = svc
+        .renew_lease(l1.id(), test_pod(), l2.epoch(), 0)
+        .await
+        .unwrap();
+    assert_eq!(*l3.allocation(), QuotaAllocation::Budget { amount: 100 });
+}
+
+#[test]
+async fn rate_limit_no_partial_refill() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    // 1000/second with max=1000.
+    let def = make_rate_definition(env, "api-calls", 1000, TimePeriod::Second, 1000);
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 1000 });
+
+    // Wait 500ms — less than 1 full period. Should get nothing.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let l2 = svc
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 0)
+        .await
+        .unwrap();
+    // retry_after should hint at the time remaining until next full period (~500ms).
+    match l2.allocation() {
+        QuotaAllocation::Exhausted { retry_after } => {
+            assert!(
+                *retry_after >= Duration::from_millis(400)
+                    && *retry_after <= Duration::from_millis(600),
+                "expected retry_after ~500ms, got {retry_after:?}"
+            );
+        }
+        other => panic!("expected Exhausted, got {other:?}"),
+    }
+}
+
+#[test]
+async fn rate_limit_exhausted_retry_after_uses_config_fallback_not_period() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def).await;
+
+    // Capacity limit — no time-based refill, uses config fallback.
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        exhausted_retry_after: Duration::from_secs(42),
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .renew_lease(l1.id(), pod.clone(), l1.epoch(), 0)
+        .await
+        .unwrap();
+    match l2.allocation() {
+        QuotaAllocation::Exhausted { retry_after } => {
+            assert_eq!(*retry_after, Duration::from_secs(42));
+        }
+        other => panic!("expected Exhausted, got {other:?}"),
+    }
+}
+
+#[test]
+async fn capacity_limit_does_not_refill() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    fetcher.put(def).await;
+
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher);
+    let pod = test_pod();
+
+    let l1 = svc
+        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .await
+        .unwrap();
+    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+
+    // Wait and renew with 0 unused — capacity does not refill.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let l2 = svc
+        .renew_lease(l1.id(), pod.clone(), l1.epoch(), 0)
+        .await
+        .unwrap();
+    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
 }

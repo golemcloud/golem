@@ -10551,12 +10551,17 @@ components:
       required:
       - value
       - period
+      - max
       properties:
         value:
           type: integer
           format: uint64
         period:
           $ref: '#/components/schemas/TimePeriod'
+        max:
+          type: integer
+          format: uint64
+          description: Maximum burst capacity. Defaults to `value` if not specified.
     SecuritySchemeAgentSecurity:
       type: object
       title: SecuritySchemeAgentSecurity

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod quota_lease;
 mod quota_service;
 pub mod resource_definition_fetcher;
 
@@ -19,8 +20,10 @@ pub mod resource_definition_fetcher;
 mod quota_service_tests;
 
 #[allow(unused)]
+pub use quota_lease::QuotaLease;
+#[allow(unused)]
 pub use quota_service::QuotaError;
 pub use quota_service::QuotaService;
-pub use resource_definition_fetcher::GrpcResourceDefinitionFetcher;
 #[allow(unused)]
-pub use resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
+pub use resource_definition_fetcher::FetchError;
+pub use resource_definition_fetcher::{GrpcResourceDefinitionFetcher, ResourceDefinitionFetcher};

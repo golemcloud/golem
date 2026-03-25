@@ -11,3 +11,11 @@ message ShardManagerError {
     golem.common.ErrorBody unknown = 3;
   }
 }
+
+message QuotaError {
+  oneof error {
+    golem.common.ErrorBody lease_not_found = 1;
+    golem.common.ErrorBody stale_epoch = 2;
+    golem.common.ErrorBody internal = 3;
+  }
+}

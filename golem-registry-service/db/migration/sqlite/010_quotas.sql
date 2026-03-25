@@ -34,6 +34,7 @@ CREATE TABLE resource_definition_revisions
 
     limit_value NUMERIC NOT NULL,
     limit_period TEXT,
+    limit_max NUMERIC,
 
     enforcement_action TEXT NOT NULL,
 

@@ -18,7 +18,7 @@ import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/environment_state.proto";
-import "golem/registry/quota.proto";
+import "golem/common/quota.proto";
 import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
@@ -367,7 +367,7 @@ message GetCurrentEnvironmentStateSuccessResponse {
 }
 
 message GetResourceDefinitionByIdRequest {
-  ResourceDefinitionId resource_definition_id = 1;
+  golem.common.ResourceDefinitionId resource_definition_id = 1;
 }
 
 message GetResourceDefinitionByIdResponse {
@@ -378,7 +378,7 @@ message GetResourceDefinitionByIdResponse {
 }
 
 message GetResourceDefinitionByIdSuccessResponse {
-  ResourceDefinition resource_definition = 1;
+  golem.common.ResourceDefinition resource_definition = 1;
 }
 
 message GetResourceDefinitionByNameRequest {
@@ -394,7 +394,7 @@ message GetResourceDefinitionByNameResponse {
 }
 
 message GetResourceDefinitionByNameSuccessResponse {
-  ResourceDefinition resource_definition = 1;
+  golem.common.ResourceDefinition resource_definition = 1;
 }
 
 // ── Multiplexed registry invalidation stream ──
@@ -455,6 +455,6 @@ message SecuritySchemeChangedEvent {
 // Sent when a resource definition is created, updated, or deleted.
 message ResourceDefinitionChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
-  golem.registry.ResourceDefinitionId resource_definition_id = 2;
+  golem.common.ResourceDefinitionId resource_definition_id = 2;
   string resource_name = 3;
 }

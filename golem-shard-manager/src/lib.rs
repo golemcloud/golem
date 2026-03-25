@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod error;
+mod grpc;
 mod healthcheck;
 mod model;
 mod persistence;
@@ -23,7 +24,6 @@ mod shard_management;
 pub mod shard_manager_config;
 mod worker_executor;
 
-use self::error::ShardManagerTraceErrorKind;
 use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
 use crate::persistence::RoutingTableFileSystemPersistence;
 use crate::quota::{GrpcResourceDefinitionFetcher, QuotaService};
@@ -32,10 +32,7 @@ use error::ShardManagerError;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::{
-    ShardManagerService, ShardManagerServiceServer,
-};
-use golem_common::recorded_grpc_api_request;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
 use golem_service_base::clients::registry::GrpcRegistryService;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use prometheus::Registry;
@@ -48,7 +45,6 @@ use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
-use tonic::Response;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;
@@ -72,6 +68,7 @@ pub struct ShardManagerServiceImpl {
     shard_management: ShardManagement,
     shard_manager_config: Arc<ShardManagerConfig>,
     health_check: Arc<dyn HealthCheck + Send + Sync>,
+    quota_service: Arc<QuotaService>,
 }
 
 impl ShardManagerServiceImpl {
@@ -80,6 +77,7 @@ impl ShardManagerServiceImpl {
         worker_executor_service: Arc<dyn WorkerExecutorService + Send + Sync>,
         shard_manager_config: Arc<ShardManagerConfig>,
         health_check: Arc<dyn HealthCheck + Send + Sync>,
+        quota_service: Arc<QuotaService>,
     ) -> Result<ShardManagerServiceImpl, ShardManagerError> {
         let shard_management = ShardManagement::new(
             persistence_service.clone(),
@@ -93,6 +91,7 @@ impl ShardManagerServiceImpl {
             shard_management,
             shard_manager_config,
             health_check,
+            quota_service,
         };
 
         shard_manager_service.start_health_check();
@@ -156,69 +155,6 @@ impl ShardManagerServiceImpl {
         }
 
         debug!("Finished checking health of registered pods");
-    }
-}
-
-#[tonic::async_trait]
-impl ShardManagerService for ShardManagerServiceImpl {
-    async fn get_routing_table(
-        &self,
-        _request: tonic::Request<golem::shardmanager::v1::GetRoutingTableRequest>,
-    ) -> Result<Response<golem::shardmanager::v1::GetRoutingTableResponse>, tonic::Status> {
-        let record = recorded_grpc_api_request!("get_routing_table",);
-
-        let response = self
-            .get_routing_table_internal()
-            .instrument(record.span.clone())
-            .await;
-
-        Ok(Response::new(
-            golem::shardmanager::v1::GetRoutingTableResponse {
-                result: Some(
-                    golem::shardmanager::v1::get_routing_table_response::Result::Success(
-                        response.into(),
-                    ),
-                ),
-            },
-        ))
-    }
-
-    async fn register(
-        &self,
-        request: tonic::Request<golem::shardmanager::v1::RegisterRequest>,
-    ) -> Result<Response<golem::shardmanager::v1::RegisterResponse>, tonic::Status> {
-        let source_ip = request.remote_addr();
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "register",
-            source_ip = source_ip.map(|ip| ip.to_string()),
-            host = &request.host,
-            port = &request.port.to_string(),
-        );
-
-        let response = self
-            .register_internal(source_ip, request)
-            .instrument(record.span.clone())
-            .await;
-
-        let result = match response {
-            Ok(_) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
-                golem::shardmanager::v1::RegisterSuccess {
-                    number_of_shards: self.shard_manager_config.number_of_shards as u32,
-                },
-            )),
-            Err(error) => {
-                let error: golem::shardmanager::v1::ShardManagerError = error.into();
-                record.fail(
-                    golem::shardmanager::v1::register_response::Result::Failure(error.clone()),
-                    &mut ShardManagerTraceErrorKind(&error),
-                )
-            }
-        };
-
-        Ok(Response::new(golem::shardmanager::v1::RegisterResponse {
-            result: Some(result),
-        }))
     }
 }
 
@@ -299,15 +235,20 @@ pub async fn run(
         &shard_manager_config.registry_service,
     ));
 
-    let fetcher = Arc::new(GrpcResourceDefinitionFetcher::new(registry_service.clone()));
-    let quota_service = QuotaService::new(shard_manager_config.quota.clone(), fetcher);
-    registry_event_subscriber::start(registry_service, quota_service, join_set);
+    let fetcher: Arc<dyn crate::quota::ResourceDefinitionFetcher> =
+        Arc::new(GrpcResourceDefinitionFetcher::new(
+            registry_service.clone(),
+            &shard_manager_config.resource_definition_fetcher,
+        ));
+    let quota_service = QuotaService::new(shard_manager_config.quota.clone(), fetcher.clone());
+    registry_event_subscriber::start(registry_service, fetcher, quota_service.clone(), join_set);
 
     let shard_manager = ShardManagerServiceImpl::new(
         persistence_service,
         worker_executors,
         shard_manager_config.clone(),
         health_check,
+        quota_service,
     )
     .await?;
 
