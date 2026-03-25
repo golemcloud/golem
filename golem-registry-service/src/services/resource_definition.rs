@@ -18,9 +18,6 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::resource_definition::{
     ResourceDefinitionCreationArgs, ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
 };
-use crate::repo::registry_change::{
-    NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
-};
 use crate::repo::resource_definition::ResourceDefinitionRepo;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::resource_definition::{
@@ -77,7 +74,6 @@ error_forwarding!(
 pub struct ResourceDefinitionService {
     environment_service: Arc<EnvironmentService>,
     resource_definition_repo: Arc<dyn ResourceDefinitionRepo>,
-    registry_change_repo: Arc<dyn RegistryChangeRepo>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
@@ -85,13 +81,11 @@ impl ResourceDefinitionService {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
         resource_definition_repo: Arc<dyn ResourceDefinitionRepo>,
-        registry_change_repo: Arc<dyn RegistryChangeRepo>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             environment_service,
             resource_definition_repo,
-            registry_change_repo,
             registry_change_notifier,
         }
     }
@@ -146,12 +140,7 @@ impl ResourceDefinitionService {
             })?
             .try_into()?;
 
-        self.notify_resource_definition_changed(
-            environment_id,
-            stored_resource_definition.id,
-            stored_resource_definition.name.clone(),
-        )
-        .await;
+        self.notify_resource_definition_changed().await;
 
         Ok(stored_resource_definition)
     }
@@ -219,12 +208,7 @@ impl ResourceDefinitionService {
             })?
             .try_into()?;
 
-        self.notify_resource_definition_changed(
-            stored_resource_definition.environment_id,
-            resource_definition_id,
-            stored_resource_definition.name.clone(),
-        )
-        .await;
+        self.notify_resource_definition_changed().await;
 
         Ok(stored_resource_definition)
     }
@@ -251,8 +235,6 @@ impl ResourceDefinitionService {
 
         resource_definition.revision = resource_definition.revision.next()?;
 
-        let environment_id = resource_definition.environment_id;
-        let resource_name = resource_definition.name.clone();
         let record = ResourceDefinitionRevisionRecord::from_model(
             resource_definition,
             DeletableRevisionAuditFields::deletion(auth.account_id().0),
@@ -268,12 +250,7 @@ impl ResourceDefinitionService {
                 other => other.into(),
             })?;
 
-        self.notify_resource_definition_changed(
-            environment_id,
-            resource_definition_id,
-            resource_name,
-        )
-        .await;
+        self.notify_resource_definition_changed().await;
 
         Ok(())
     }
@@ -401,37 +378,8 @@ impl ResourceDefinitionService {
         Ok(resource_definitions)
     }
 
-    async fn notify_resource_definition_changed(
-        &self,
-        environment_id: EnvironmentId,
-        resource_definition_id: ResourceDefinitionId,
-        resource_name: ResourceName,
-    ) {
-        let event = NewRegistryChangeEvent::resource_definition_changed(
-            environment_id.0,
-            resource_definition_id.0,
-            resource_name.0.clone(),
-        );
-        match self.registry_change_repo.record_change_event(&event).await {
-            Ok(event_id) => {
-                self.registry_change_notifier.notify(
-                    RegistryChangeEvent::ResourceDefinitionChanged {
-                        event_id,
-                        environment_id: environment_id.0,
-                        resource_definition_id: resource_definition_id.0,
-                        resource_name: resource_name.0,
-                    },
-                );
-            }
-            Err(err) => {
-                tracing::error!(
-                    %environment_id,
-                    %resource_definition_id,
-                    error = %err,
-                    "Failed to record resource definition change event"
-                );
-            }
-        }
+    async fn notify_resource_definition_changed(&self) {
+        self.registry_change_notifier.signal_new_events_available();
     }
 
     async fn get_with_environment(

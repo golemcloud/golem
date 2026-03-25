@@ -18,6 +18,7 @@ use super::model::resource_definition::{
 };
 use crate::repo::model::BindFields;
 use crate::repo::model::resource_definition::ResourceDefinitionRecord;
+use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -307,6 +308,13 @@ impl DbResourceDefinitionRepo<PostgresPool> {
 
         let revision = Self::insert_revision(tx, args.revision).await?;
 
+        let change_event = NewRegistryChangeEvent::resource_definition_changed(
+            args.environment_id,
+            revision.resource_definition_id,
+            args.name.clone(),
+        );
+        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event).await?;
+
         Ok(ResourceDefinitionExtRevisionRecord {
             environment_id: args.environment_id,
             limit_type: args.limit_type,
@@ -353,6 +361,14 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                     .await?
                     .ok_or(ResourceDefinitionRepoError::ConcurrentModification)?;
 
+                let change_event = NewRegistryChangeEvent::resource_definition_changed(
+                    main_record.environment_id,
+                    revision_record.resource_definition_id,
+                    main_record.name.clone(),
+                );
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                    .await?;
+
                 Ok(ResourceDefinitionExtRevisionRecord {
                     environment_id: main_record.environment_id,
                     limit_type: main_record.limit_type,
@@ -373,17 +389,29 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             async move {
                 let revision_record = Self::insert_revision(tx, revision).await?;
 
-                tx.execute(
-                    sqlx::query(indoc! { r#"
-                        UPDATE resource_definitions
-                        SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
-                        WHERE resource_definition_id = $4
-                    "#})
-                    .bind(&revision_record.audit.created_at)
-                    .bind(revision_record.audit.created_by)
-                    .bind(revision_record.revision_id)
-                    .bind(revision_record.resource_definition_id),
-                ).await?;
+                let main_record: ResourceDefinitionRecord = tx
+                    .fetch_optional_as(
+                        sqlx::query_as(indoc! { r#"
+                            UPDATE resource_definitions
+                            SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
+                            WHERE resource_definition_id = $4
+                            RETURNING resource_definition_id, environment_id, limit_type, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
+                        "#})
+                        .bind(&revision_record.audit.created_at)
+                        .bind(revision_record.audit.created_by)
+                        .bind(revision_record.revision_id)
+                        .bind(revision_record.resource_definition_id),
+                    )
+                    .await?
+                    .ok_or(ResourceDefinitionRepoError::ConcurrentModification)?;
+
+                let change_event = NewRegistryChangeEvent::resource_definition_changed(
+                    main_record.environment_id,
+                    revision_record.resource_definition_id,
+                    main_record.name,
+                );
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                    .await?;
 
                 Ok(())
             }
