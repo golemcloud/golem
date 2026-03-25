@@ -147,23 +147,16 @@ jobs:
           npm install -g @openai/codex
           printenv OPENAI_API_KEY | codex login --with-api-key
 
-      - name: Install wasm-rquickjs-cli (needed for TS SDK build)
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag v0.1.3
-
-      - name: Install cargo-component and wasm target (needed for agent_guest.wasm)
+      - name: Install TS SDK build prerequisites
         run: |
+          cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag v0.1.3
           rustup target add wasm32-wasip1
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm cargo-component@0.21.1
+          cargo binstall --no-confirm cargo-component@0.21.1 cargo-make
+          npm install -g pnpm@10
 
       - name: Build TS SDK (for GOLEM_PATH local SDK references)
-        run: |
-          cd sdks/ts
-          npm install -g pnpm@10
-          pnpm install
-          pnpm run build
-          cd packages/golem-ts-sdk
-          pnpm run build-agent-template
+        run: cargo make build-sdk-ts
 
       - name: Install Harness Dependencies
         run: |
