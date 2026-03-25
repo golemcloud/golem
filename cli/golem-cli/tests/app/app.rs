@@ -4,10 +4,12 @@ use crate::Tracing;
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
 use indoc::indoc;
+use serde_json::Value as JsonValue;
 use std::path::Path;
 use std::time::Duration;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
+use toml_edit::{value, DocumentMut};
 
 inherit_test_dep!(Tracing);
 
@@ -129,6 +131,70 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
     assert!(!outputs.stdout_contains("Compiling test_app_name_rust_main v0.0.1"));
+}
+
+#[test]
+async fn build_check(_tracing: &Tracing) {
+    let app_name = "test-app-check-step";
+
+    let mut ctx = TestContext::new();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::TEMPLATE,
+            "ts",
+            flag::TEMPLATE,
+            "rust",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::BUILD, flag::STEP, "check"]).await;
+    assert!(outputs.success_or_dump());
+
+    let ts_component_dir = Path::new("ts-main");
+    let rust_component_dir = Path::new("rust-main");
+
+    let package_json_path = ctx.cwd_path_join("package.json");
+    let mut package_json: JsonValue =
+        serde_json::from_str(fs::read_to_string(&package_json_path).unwrap().as_str()).unwrap();
+
+    package_json["dependencies"]["@golemcloud/golem-ts-sdk"] =
+        JsonValue::String("0.0.1".to_string());
+    package_json["devDependencies"]["@golemcloud/golem-ts-typegen"] =
+        JsonValue::String("0.0.1".to_string());
+    fs::write_str(
+        &package_json_path,
+        serde_json::to_string_pretty(&package_json).unwrap(),
+    )
+    .unwrap();
+
+    let tsconfig_path = ctx.cwd_path_join(ts_component_dir.join("tsconfig.json"));
+    let mut tsconfig: JsonValue =
+        serde_json::from_str(fs::read_to_string(&tsconfig_path).unwrap().as_str()).unwrap();
+
+    tsconfig["compilerOptions"]["moduleResolution"] = JsonValue::String("node".to_string());
+    tsconfig["compilerOptions"]["experimentalDecorators"] = JsonValue::Bool(false);
+    tsconfig["compilerOptions"]["emitDecoratorMetadata"] = JsonValue::Bool(false);
+    fs::write_str(
+        &tsconfig_path,
+        serde_json::to_string_pretty(&tsconfig).unwrap(),
+    )
+    .unwrap();
+
+    let cargo_toml_path = ctx.cwd_path_join(rust_component_dir.join("Cargo.toml"));
+    let mut cargo_toml: DocumentMut = fs::read_to_string(&cargo_toml_path).unwrap().parse().unwrap();
+    cargo_toml["dependencies"]["golem-rust"] = value("999.0.0");
+    fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
+
+    let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("Planned required changes for dependency checks"));
+    assert!(outputs.stdout_contains("Applying build check fixes"));
 }
 
 #[test]

@@ -13,7 +13,38 @@
 // limitations under the License.
 
 use anyhow::anyhow;
+use std::collections::BTreeMap;
 use toml_edit::{value, Array, DocumentMut, Item, Table};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DependencySpec {
+    Version(String),
+    Path(String),
+    Unsupported(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DependencyTable {
+    Dependencies,
+    DevDependencies,
+    BuildDependencies,
+}
+
+impl DependencyTable {
+    fn as_str(&self) -> &'static str {
+        match self {
+            DependencyTable::Dependencies => "dependencies",
+            DependencyTable::DevDependencies => "dev-dependencies",
+            DependencyTable::BuildDependencies => "build-dependencies",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DependencyLocation {
+    Package(DependencyTable),
+    WorkspaceDependencies,
+}
 
 pub fn merge_documents(base_source: &str, update_source: &str) -> anyhow::Result<String> {
     let mut base: DocumentMut = base_source.parse().map_err(|e| anyhow!("{e}"))?;
@@ -46,6 +77,135 @@ pub fn check_required_deps(source: &str, required: &[&str]) -> anyhow::Result<Ve
         }
     }
     Ok(missing)
+}
+
+pub fn collect_versions(
+    source: &str,
+    names: &[&str],
+) -> anyhow::Result<BTreeMap<String, Option<String>>> {
+    let specs = collect_dependency_specs(source, names)?;
+    Ok(specs
+        .into_iter()
+        .map(|(name, spec)| {
+            let version = spec.and_then(|spec| match spec {
+                DependencySpec::Version(version) => Some(version),
+                DependencySpec::Path(_) | DependencySpec::Unsupported(_) => None,
+            });
+            (name, version)
+        })
+        .collect())
+}
+
+pub fn collect_dependency_specs(
+    source: &str,
+    names: &[&str],
+) -> anyhow::Result<BTreeMap<String, Option<DependencySpec>>> {
+    let doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+    let mut result = BTreeMap::new();
+
+    for name in names {
+        result.insert((*name).to_string(), collect_dependency_spec(&doc, name));
+    }
+
+    Ok(result)
+}
+
+pub fn resolve_dependency_location(
+    source: &str,
+    name: &str,
+) -> anyhow::Result<Option<DependencyLocation>> {
+    let doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+
+    for table in [
+        DependencyTable::Dependencies,
+        DependencyTable::DevDependencies,
+        DependencyTable::BuildDependencies,
+    ] {
+        if let Some(item) = doc
+            .get(table.as_str())
+            .and_then(|table_item| table_item.get(name))
+        {
+            let is_workspace_ref = item
+                .as_table_like()
+                .and_then(|tbl| tbl.get("workspace"))
+                .and_then(|workspace| workspace.as_value())
+                .and_then(|workspace| workspace.as_bool())
+                .unwrap_or(false);
+
+            if is_workspace_ref {
+                return Ok(Some(DependencyLocation::WorkspaceDependencies));
+            }
+
+            return Ok(Some(DependencyLocation::Package(table)));
+        }
+    }
+
+    if doc
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(|deps| deps.get(name))
+        .is_some()
+    {
+        return Ok(Some(DependencyLocation::WorkspaceDependencies));
+    }
+
+    Ok(None)
+}
+
+pub fn upsert_dependency_in_package(
+    source: &str,
+    table: DependencyTable,
+    name: &str,
+    spec: &DependencySpec,
+) -> anyhow::Result<String> {
+    let mut doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+    let table_name = table.as_str();
+
+    if !doc.as_table().contains_key(table_name) {
+        doc[table_name] = Item::Table(Table::default());
+    }
+
+    doc[table_name][name] = dependency_spec_to_item(spec)?;
+    Ok(doc.to_string())
+}
+
+pub fn upsert_dependency_in_workspace_dependencies(
+    source: &str,
+    name: &str,
+    spec: &DependencySpec,
+) -> anyhow::Result<String> {
+    let mut doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+
+    if !doc.as_table().contains_key("workspace") {
+        doc["workspace"] = Item::Table(Table::default());
+    }
+    if doc["workspace"]
+        .as_table_like()
+        .and_then(|workspace| workspace.get("dependencies"))
+        .is_none()
+    {
+        doc["workspace"]["dependencies"] = Item::Table(Table::default());
+    }
+
+    doc["workspace"]["dependencies"][name] = dependency_spec_to_item(spec)?;
+    Ok(doc.to_string())
+}
+
+pub fn upsert_dependency_auto(
+    source: &str,
+    name: &str,
+    spec: &DependencySpec,
+    preferred_table: DependencyTable,
+) -> anyhow::Result<String> {
+    match resolve_dependency_location(source, name)? {
+        Some(DependencyLocation::WorkspaceDependencies) => {
+            upsert_dependency_in_workspace_dependencies(source, name, spec)
+        }
+        Some(DependencyLocation::Package(table)) => {
+            upsert_dependency_in_package(source, table, name, spec)
+        }
+        None => upsert_dependency_in_package(source, preferred_table, name, spec),
+    }
 }
 
 fn merge_table(
@@ -137,6 +297,73 @@ fn has_dependency(doc: &DocumentMut, name: &str) -> bool {
             .and_then(|table| table.get("dependencies"))
             .and_then(|table| table.get(name))
             .is_some()
+}
+
+fn collect_dependency_spec(doc: &DocumentMut, name: &str) -> Option<DependencySpec> {
+    let own = ["dependencies", "dev-dependencies", "build-dependencies"]
+        .iter()
+        .filter_map(|table_name| doc.get(table_name))
+        .filter_map(|table| table.get(name))
+        .find_map(|item| dependency_spec(item, doc, name));
+
+    own.or_else(|| {
+        doc.get("workspace")
+            .and_then(|workspace| workspace.get("dependencies"))
+            .and_then(|table| table.get(name))
+            .and_then(|item| dependency_spec(item, doc, name))
+    })
+}
+
+fn dependency_spec(item: &Item, doc: &DocumentMut, dep_name: &str) -> Option<DependencySpec> {
+    if item.is_str() {
+        return item
+            .as_str()
+            .map(|s| DependencySpec::Version(s.to_string()));
+    }
+
+    let table = item.as_table_like()?;
+
+    if table
+        .get("workspace")
+        .and_then(|item| item.as_value())
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return doc
+            .get("workspace")
+            .and_then(|workspace| workspace.get("dependencies"))
+            .and_then(|deps| deps.get(dep_name))
+            .and_then(|workspace_dep| dependency_spec(workspace_dep, doc, dep_name));
+    }
+
+    if let Some(path) = table
+        .get("path")
+        .and_then(|item| item.as_value())
+        .and_then(|value| value.as_str())
+    {
+        return Some(DependencySpec::Path(path.to_string()));
+    }
+
+    table
+        .get("version")
+        .and_then(|item| item.as_value())
+        .and_then(|value| value.as_str())
+        .map(|value| DependencySpec::Version(value.to_string()))
+        .or_else(|| Some(DependencySpec::Unsupported(item.to_string())))
+}
+
+fn dependency_spec_to_item(spec: &DependencySpec) -> anyhow::Result<Item> {
+    match spec {
+        DependencySpec::Version(version) => Ok(value(version.as_str())),
+        DependencySpec::Path(path) => {
+            let mut table = Table::default();
+            table["path"] = value(path.as_str());
+            Ok(Item::Table(table))
+        }
+        DependencySpec::Unsupported(spec) => {
+            Err(anyhow!("Unsupported dependency spec for update: {spec}"))
+        }
+    }
 }
 
 fn merge_tables(base: &mut Table, update: &Table) {

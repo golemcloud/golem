@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::check::plan_dependency_fixes;
+use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
 use crate::command::builtin_exec_subcommands;
@@ -29,6 +31,7 @@ use crate::context::Context;
 use crate::diagnose::diagnose;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit};
+use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
     log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
@@ -36,7 +39,7 @@ use crate::log::{
     logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{
-    ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
+    AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
 };
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
@@ -118,7 +121,8 @@ impl AppCommandHandler {
         let build_config = {
             let mut build_config = BuildConfig::new()
                 .with_steps_filter(build_args.step.into_iter().collect())
-                .with_skip_up_to_date_checks(build_args.force_build.force_build);
+                .with_skip_up_to_date_checks(build_args.force_build.force_build)
+                .with_skip_check(build_args.skip_check);
 
             if let Some(repl_bridge_sdk_target) = build_args.repl_bridge_sdk_target {
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -1691,7 +1695,80 @@ impl AppCommandHandler {
             .await?;
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
+
+        // NOTE: dependency checks are done here, as they are interactive, and they modify
+        //       the projects, tool checks are done as part of app_ctx.build
+        if build_config.should_run_step(AppBuildStep::Check) {
+            self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config))?;
+        }
+
         app_ctx.build(build_config).await
+    }
+
+    fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+        let plan = plan_dependency_fixes(build_ctx)?;
+
+        for warning in &plan.warnings {
+            logln("");
+            log_warn(warning);
+            logln("");
+        }
+
+        if plan.is_empty() {
+            return Ok(());
+        }
+
+        {
+            logln("");
+            log_warn_action(
+                "Found",
+                "missing or incompatible dependencies or configurations",
+            );
+            log_action(
+                "Planned",
+                "required changes for dependencies and configurations",
+            );
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+
+            for step in &plan.steps {
+                let path = step.path.display().to_string();
+                logln(format!(
+                    "- {} {}",
+                    "update".green(),
+                    path.log_color_highlight()
+                ));
+                let _indent = LogIndent::new();
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                log_unified_diff(&diff::unified_diff(
+                    step.current.as_str(),
+                    step.new.as_str(),
+                ));
+            }
+        }
+
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_dependency_fix_plan_apply()?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        {
+            logln("");
+            log_action("Applying", "dependency and configuration updates");
+            let _indent = LogIndent::new();
+
+            for step in &plan.steps {
+                log_action(
+                    "Updating",
+                    format!("{}", step.path.display().to_string().log_color_highlight()),
+                );
+                fs::write_str(&step.path, step.new.as_str())?;
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn clean(

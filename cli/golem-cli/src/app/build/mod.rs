@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::build::add_metadata::add_metadata_to_selected_components;
-use crate::app::build::check::check_app;
+use crate::app::build::check::check_build_tool_requirements;
 use crate::app::build::componentize::build_components;
 use crate::app::build::gen_bridge::gen_bridge;
 use crate::app::context::BuildContext;
@@ -30,7 +30,7 @@ pub mod up_to_date_check;
 
 pub async fn build_app(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
     if ctx.should_run_step(AppBuildStep::Check) {
-        check_app(ctx).await?;
+        check_build_tool_requirements(ctx).await?;
     }
 
     if ctx.should_run_step(AppBuildStep::Build) {

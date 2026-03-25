@@ -57,6 +57,7 @@ pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 #[derive(Clone, Debug, Default)]
 pub struct BuildConfig {
     pub skip_up_to_date_checks: bool,
+    pub skip_check: bool,
     pub steps_filter: HashSet<AppBuildStep>,
     pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
     pub repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
@@ -69,6 +70,11 @@ impl BuildConfig {
 
     pub fn with_skip_up_to_date_checks(mut self, skip_up_to_date_checks: bool) -> Self {
         self.skip_up_to_date_checks = skip_up_to_date_checks;
+        self
+    }
+
+    pub fn with_skip_check(mut self, skip_check: bool) -> Self {
+        self.skip_check = skip_check;
         self
     }
 
@@ -95,7 +101,11 @@ impl BuildConfig {
 
     pub fn should_run_step(&self, step: AppBuildStep) -> bool {
         if self.steps_filter.is_empty() {
-            true
+            if matches!(step, AppBuildStep::Check) && self.skip_check {
+                false
+            } else {
+                true
+            }
         } else {
             self.steps_filter.contains(&step)
         }

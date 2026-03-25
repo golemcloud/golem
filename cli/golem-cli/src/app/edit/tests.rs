@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::edit::cargo_toml::DependencySpec;
+use crate::app::edit::cargo_toml::{DependencyLocation, DependencyTable};
 use crate::app::edit::{
     agents_md, cargo_toml, gitignore, golem_yaml, json, main_rs, main_ts, package_json,
     tsconfig_json,
@@ -190,6 +192,128 @@ workspace_shared = "2.0"
     let missing =
         cargo_toml::check_required_deps(&updated, &["serde", "tokio", "workspace_shared"]).unwrap();
     assert_eq!(missing, vec!["tokio".to_string()]);
+}
+
+#[test]
+fn cargo_toml_collect_versions_resolves_workspace_reference() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { workspace = true, features = ["export_golem_agentic"] }
+serde = "1"
+
+[workspace.dependencies]
+golem-rust = "2.0.0-dev.2"
+"#;
+
+    let versions =
+        cargo_toml::collect_versions(source, &["golem-rust", "serde", "missing"]).unwrap();
+
+    assert_eq!(
+        versions.get("golem-rust").and_then(|v| v.as_deref()),
+        Some("2.0.0-dev.2")
+    );
+    assert_eq!(versions.get("serde").and_then(|v| v.as_deref()), Some("1"));
+    assert_eq!(versions.get("missing"), Some(&None));
+}
+
+#[test]
+fn cargo_toml_collect_versions_reads_inline_dependency_version() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { version = "2.1.0", features = ["export_golem_agentic"] }
+"#;
+
+    let versions = cargo_toml::collect_versions(source, &["golem-rust"]).unwrap();
+
+    assert_eq!(
+        versions.get("golem-rust").and_then(|v| v.as_deref()),
+        Some("2.1.0")
+    );
+}
+
+#[test]
+fn cargo_toml_collect_dependency_specs_reads_path_dependency() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { path = "/tmp/sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+"#;
+
+    let specs = cargo_toml::collect_dependency_specs(source, &["golem-rust"]).unwrap();
+
+    assert_eq!(
+        specs.get("golem-rust"),
+        Some(&Some(DependencySpec::Path(
+            "/tmp/sdks/rust/golem-rust".to_string()
+        )))
+    );
+}
+
+#[test]
+fn cargo_toml_upsert_dependency_auto_updates_workspace_dependencies() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { workspace = true }
+
+[workspace.dependencies]
+golem-rust = "2.0.0-dev.2"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_auto(
+        source,
+        "golem-rust",
+        &DependencySpec::Version("2.1.0".to_string()),
+        DependencyTable::Dependencies,
+    )
+    .unwrap();
+
+    assert!(updated.contains("[workspace.dependencies]"));
+    assert!(updated.contains("golem-rust = \"2.1.0\""));
+    assert!(updated.contains("golem-rust = { workspace = true }"));
+}
+
+#[test]
+fn cargo_toml_upsert_dependency_auto_updates_local_table() {
+    let source = r#"[package]
+name = "demo"
+
+[dev-dependencies]
+golem-rust = "2.0.0"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_auto(
+        source,
+        "golem-rust",
+        &DependencySpec::Version("2.1.0".to_string()),
+        DependencyTable::Dependencies,
+    )
+    .unwrap();
+
+    assert!(updated.contains("[dev-dependencies]"));
+    assert!(updated.contains("golem-rust = \"2.1.0\""));
+}
+
+#[test]
+fn cargo_toml_resolve_dependency_location_detects_workspace_reference() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { workspace = true }
+
+[workspace.dependencies]
+golem-rust = "2.0.0-dev.2"
+"#;
+
+    let location = cargo_toml::resolve_dependency_location(source, "golem-rust").unwrap();
+    assert_eq!(location, Some(DependencyLocation::WorkspaceDependencies));
 }
 
 fn table_like(item: &toml_edit::Item) -> &dyn toml_edit::TableLike {

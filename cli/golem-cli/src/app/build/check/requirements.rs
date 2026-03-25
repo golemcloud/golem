@@ -13,6 +13,11 @@
 // limitations under the License.
 
 use crate::model::GuestLanguage;
+use crate::sdk_versions::{
+    GOLEM_BUILD_TOOL_CARGO_VERSION_MIN, GOLEM_BUILD_TOOL_NODE_VERSION_MIN,
+    GOLEM_BUILD_TOOL_NPM_VERSION_MIN, GOLEM_BUILD_TOOL_RUSTC_VERSION_MIN,
+    GOLEM_BUILD_TOOL_RUSTUP_VERSION_MIN,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct VersionRange {
@@ -41,6 +46,12 @@ pub enum ToolRequirementCheck {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct TsConfigSettingRequirement {
+    pub path: &'static [&'static str],
+    pub expected_literal: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ToolRequirement {
     pub key: &'static str,
     pub name: &'static str,
@@ -57,7 +68,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "rustup",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least("1.27.1")),
+        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_RUSTUP_VERSION_MIN)),
         install_hint: "Install Rust tooling using rustup: https://www.rust-lang.org/tools/install",
     },
     ToolRequirement {
@@ -67,7 +78,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "rustc",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least("1.94.0")),
+        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_RUSTC_VERSION_MIN)),
         install_hint:
             "Install stable Rust with rustup: rustup install stable && rustup default stable",
     },
@@ -78,7 +89,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "cargo",
             args: &["version"],
         },
-        version_range: Some(VersionRange::at_least("1.94.0")),
+        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_CARGO_VERSION_MIN)),
         install_hint: "Cargo is installed with Rust toolchain from rustup",
     },
     ToolRequirement {
@@ -100,7 +111,7 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "node",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least("24.11.0")),
+        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_NODE_VERSION_MIN)),
         install_hint: "Install Node.js: https://nodejs.org/",
     },
     ToolRequirement {
@@ -110,8 +121,23 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             command: "npm",
             args: &["--version"],
         },
-        version_range: Some(VersionRange::at_least("11.6.2")),
+        version_range: Some(VersionRange::at_least(GOLEM_BUILD_TOOL_NPM_VERSION_MIN)),
         install_hint: "npm is installed with Node.js",
+    },
+];
+
+const TYPESCRIPT_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[
+    TsConfigSettingRequirement {
+        path: &["compilerOptions", "moduleResolution"],
+        expected_literal: Some("\"bundler\""),
+    },
+    TsConfigSettingRequirement {
+        path: &["compilerOptions", "experimentalDecorators"],
+        expected_literal: Some("true"),
+    },
+    TsConfigSettingRequirement {
+        path: &["compilerOptions", "emitDecoratorMetadata"],
+        expected_literal: Some("true"),
     },
 ];
 
@@ -120,4 +146,8 @@ pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [Tool
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
         GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
     }
+}
+
+pub fn typescript_tsconfig_requirements() -> &'static [TsConfigSettingRequirement] {
+    TYPESCRIPT_TSCONFIG_REQUIREMENTS
 }

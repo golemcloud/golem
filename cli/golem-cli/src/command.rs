@@ -819,8 +819,11 @@ pub mod shared_args {
     #[derive(Debug, Args)]
     pub struct BuildArgs {
         /// Select specific build step(s)
-        #[clap(long, short)]
+        #[clap(long, short, conflicts_with = "skip_check")]
         pub step: Vec<AppBuildStep>,
+        /// Skip build-time requirement checks
+        #[clap(long, default_value = "false", conflicts_with = "step")]
+        pub skip_check: bool,
         #[command(flatten)]
         pub force_build: ForceBuildArg,
         /// Internal flag for REPL reload

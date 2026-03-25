@@ -15,5 +15,11 @@
 pub const GOLEM_RUST_VERSION_DEFAULT: &str = "2.0.0-dev.2";
 pub const GOLEM_TS_VERSION_DEFAULT: &str = "0.1.0-dev.1";
 
+pub const GOLEM_BUILD_TOOL_RUSTUP_VERSION_MIN: &str = "1.27.1";
+pub const GOLEM_BUILD_TOOL_RUSTC_VERSION_MIN: &str = "1.94.0";
+pub const GOLEM_BUILD_TOOL_CARGO_VERSION_MIN: &str = "1.94.0";
+pub const GOLEM_BUILD_TOOL_NODE_VERSION_MIN: &str = "24.11.0";
+pub const GOLEM_BUILD_TOOL_NPM_VERSION_MIN: &str = "11.6.2";
+
 pub const GOLEM_AI_VERSION: &str = "v0.5.0-dev.1";
 pub const GOLEM_AI_SUFFIX: &str = "-dev.wasm";
