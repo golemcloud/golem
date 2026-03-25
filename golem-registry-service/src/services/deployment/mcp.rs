@@ -1,12 +1,12 @@
+use crate::model::security_scheme::SecurityScheme;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
-use crate::services::security_scheme::SecuritySchemeService;
+use crate::repo::security_scheme::SecuritySchemeRepo;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
-use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
 
@@ -31,17 +31,17 @@ error_forwarding!(DeployedMcpError, RepoError, DeployRepoError);
 
 pub struct DeployedMcpService {
     deployment_repo: Arc<dyn DeploymentRepo>,
-    security_scheme_service: Arc<SecuritySchemeService>,
+    security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
 }
 
 impl DeployedMcpService {
     pub fn new(
         deployment_repo: Arc<dyn DeploymentRepo>,
-        security_scheme_service: Arc<SecuritySchemeService>,
+        security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     ) -> Self {
         Self {
             deployment_repo,
-            security_scheme_service,
+            security_scheme_repo,
         }
     }
 
@@ -56,33 +56,39 @@ impl DeployedMcpService {
 
         match optional_deployment {
             Some(deployment) => {
-                let security_scheme_id = deployment.mcp_data.value().security_scheme_id;
-                let environment_id = deployment.environment_id;
                 let mut compiled_mcp = CompiledMcp::try_from(deployment)?;
-
-                if let Some(scheme_id) = security_scheme_id {
-                    let scheme = self
-                        .security_scheme_service
-                        .get(scheme_id, &AuthCtx::system())
+                
+                // Resolve security scheme by name at runtime
+                if let Some(scheme_name) = &compiled_mcp.security_scheme_name {
+                    let scheme_record = self
+                        .security_scheme_repo
+                        .get_for_environment_and_name(compiled_mcp.environment_id.0, &scheme_name.0)
                         .await
-                        .ok();
+                        .ok()
+                        .flatten();
 
-                    compiled_mcp.security_scheme = scheme.map(|s| SecuritySchemeDetails {
-                        id: s.id,
-                        name: s.name,
-                        provider_type: s.provider_type,
-                        client_id: s.client_id,
-                        client_secret: s.client_secret,
-                        redirect_url: s.redirect_url,
-                        scopes: s.scopes,
-                    });
+                    if let Some(record) = scheme_record {
+                        if let Ok(scheme) = SecurityScheme::try_from(record) {
+                            compiled_mcp.security_scheme = Some(SecuritySchemeDetails {
+                                id: scheme.id,
+                                name: scheme.name,
+                                provider_type: scheme.provider_type,
+                                client_id: scheme.client_id,
+                                client_secret: scheme.client_secret,
+                                redirect_url: scheme.redirect_url,
+                                scopes: scheme.scopes,
+                            });
+                        }
+                    }
+                    // If security scheme is not found, leave it as None
+                    // This is consistent with how routes filter out entries with missing security schemes
                 }
 
                 let mut registered_agent_types = Vec::new();
                 for agent_type_name in compiled_mcp.agent_type_implementers.keys() {
                     match self
                         .deployment_repo
-                        .get_deployed_agent_type(environment_id, &agent_type_name.0)
+                        .get_deployed_agent_type(compiled_mcp.environment_id.0, &agent_type_name.0)
                         .await
                     {
                         Ok(Some(record)) => {

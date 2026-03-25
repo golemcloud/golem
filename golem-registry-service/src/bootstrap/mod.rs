@@ -350,7 +350,7 @@ impl Services {
 
         let deployed_mcp_service = Arc::new(DeployedMcpService::new(
             repos.deployment_repo.clone(),
-            security_scheme_service.clone(),
+            repos.security_scheme_repo.clone(),
         ));
 
         let environment_state_service = Arc::new(EnvironmentStateService::new(

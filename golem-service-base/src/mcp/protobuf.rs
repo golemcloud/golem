@@ -78,6 +78,11 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
                 .map_err(|e| format!("Invalid deployment_revision: {}", e))?,
             domain: Domain(value.domain),
             agent_type_implementers,
+            security_scheme_name: value
+                .security_scheme
+                .as_ref()
+                .map(|s| s.name.clone())
+                .map(|n| golem_common::model::security_scheme::SecuritySchemeName(n)),
             security_scheme: value
                 .security_scheme
                 .map(|s| s.try_into())
