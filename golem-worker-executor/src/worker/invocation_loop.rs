@@ -418,7 +418,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 self.active
                     .write()
                     .await
-                    .push_back(QueuedWorkerInvocation::SaveSnapshot);
+                    .push_back(QueuedWorkerInvocation::SaveSnapshot { pending_flag: None });
             }
         }
     }
@@ -509,7 +509,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::SaveSnapshot => self.save_snapshot().await,
+            QueuedWorkerInvocation::SaveSnapshot { pending_flag } => {
+                let outcome = self.save_snapshot().await;
+                if let Some(flag) = pending_flag {
+                    flag.store(false, Ordering::Release);
+                }
+                outcome
+            }
         }
     }
 

@@ -1604,7 +1604,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
                     let _ = sender.send(Err(error.clone()));
                 }
-                QueuedWorkerInvocation::SaveSnapshot => {}
+                QueuedWorkerInvocation::SaveSnapshot { .. } => {}
             }
         }
 
@@ -2335,10 +2335,11 @@ impl RunningWorker {
                 loop {
                     interval.tick().await;
                     if !snapshot_pending.swap(true, Ordering::AcqRel) {
-                        snapshot_queue
-                            .write()
-                            .await
-                            .push_back(QueuedWorkerInvocation::SaveSnapshot);
+                        snapshot_queue.write().await.push_back(
+                            QueuedWorkerInvocation::SaveSnapshot {
+                                pending_flag: Some(snapshot_pending.clone()),
+                            },
+                        );
                         if snapshot_sender.send(WorkerCommand::Unblock).is_err() {
                             break;
                         }
@@ -2727,10 +2728,20 @@ fn resolve_agent_properties<T: HasConfig>(
         .as_ref()
         .map_or(AgentMode::Durable, |at| at.mode);
 
-    let snapshot_policy = resolve_snapshot_policy(
-        &deps.config().oplog.default_snapshotting,
-        resolved_agent_type.as_ref().map(|at| &at.snapshotting),
-    );
+    let snapshot_policy = if let Some(agent_type) = resolved_agent_type.as_ref() {
+        // Agent with explicit metadata — use agent-level snapshotting config
+        resolve_snapshot_policy(
+            &deps.config().oplog.default_snapshotting,
+            Some(&agent_type.snapshotting),
+        )
+    } else if is_snapshot_capable_oplog_processor(metadata) {
+        // Oplog processor that exports save-snapshot/load-snapshot — use the
+        // oplog-processor-specific global config
+        normalize_snapshot_policy(&deps.config().oplog.oplog_processor_snapshotting)
+    } else {
+        // Non-agent, non-snapshot-capable-oplog-processor — use default
+        resolve_snapshot_policy(&deps.config().oplog.default_snapshotting, None)
+    };
 
     ResolvedAgentProperties {
         agent_mode,
@@ -2744,7 +2755,7 @@ fn resolve_snapshot_policy(
 ) -> SnapshotPolicy {
     match agent_snapshotting {
         None | Some(Snapshotting::Enabled(SnapshottingConfig::Default(_))) => {
-            default_config.clone()
+            normalize_snapshot_policy(default_config)
         }
         Some(Snapshotting::Disabled(_)) => SnapshotPolicy::Disabled,
         Some(Snapshotting::Enabled(SnapshottingConfig::Periodic(p))) => {
@@ -2765,6 +2776,64 @@ fn resolve_snapshot_policy(
             }
         }
     }
+}
+
+fn normalize_snapshot_policy(policy: &SnapshotPolicy) -> SnapshotPolicy {
+    match policy {
+        SnapshotPolicy::Disabled => SnapshotPolicy::Disabled,
+        SnapshotPolicy::Periodic { period } => {
+            if period.is_zero() {
+                warn!("Snapshot periodic duration is zero, disabling");
+                SnapshotPolicy::Disabled
+            } else {
+                SnapshotPolicy::Periodic { period: *period }
+            }
+        }
+        SnapshotPolicy::EveryNInvocation { count } => {
+            if *count == 0 {
+                warn!("Snapshot every-n-invocation count is zero, disabling");
+                SnapshotPolicy::Disabled
+            } else {
+                SnapshotPolicy::EveryNInvocation { count: *count }
+            }
+        }
+    }
+}
+
+/// Returns true if the component is an oplog processor that also exports
+/// save-snapshot and load-snapshot functions, making it eligible for
+/// automatic snapshot-based recovery.
+fn is_snapshot_capable_oplog_processor(
+    metadata: &golem_common::model::component_metadata::ComponentMetadata,
+) -> bool {
+    let has_oplog_processor = match metadata.oplog_processor() {
+        Ok(Some(_)) => true,
+        Ok(None) => return false,
+        Err(err) => {
+            warn!("Failed to check oplog processor export: {err}");
+            return false;
+        }
+    };
+    if !has_oplog_processor {
+        return false;
+    }
+    let has_save = match metadata.save_snapshot() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            warn!("Failed to check save-snapshot export: {err}");
+            false
+        }
+    };
+    let has_load = match metadata.load_snapshot() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            warn!("Failed to check load-snapshot export: {err}");
+            false
+        }
+    };
+    has_save && has_load
 }
 
 #[derive(Debug)]
@@ -2794,8 +2863,13 @@ pub enum QueuedWorkerInvocation {
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
-    // Triggers a periodic snapshot save for the worker
-    SaveSnapshot,
+    // Triggers a periodic snapshot save for the worker.
+    // When enqueued by the periodic snapshot timer, `pending_flag` carries the
+    // `AtomicBool` that must be reset to `false` after the snapshot completes so
+    // the timer can schedule the next one.
+    SaveSnapshot {
+        pending_flag: Option<Arc<AtomicBool>>,
+    },
 }
 
 pub enum ResultOrSubscription {
