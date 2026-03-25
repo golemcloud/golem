@@ -239,6 +239,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_MODEL: anthropic/claude-sonnet-4-6
           DATABASE_URL: postgres://golem:golem@localhost:5432/golem_test
           MYSQL_URL: mysql://root:golem@localhost:3306/golem_test
           GOLEM_PATH: ${{ github.workspace }}
