@@ -24,7 +24,9 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::domain_registration::{
     DomainRegistrationRecord, DomainRegistrationRepoError,
 };
-use crate::services::registry_change_notifier::RegistryChangeNotifier;
+use crate::services::registry_change_notifier::{
+    RegistryChangeNotifier, RequiresNotificationSignalExt,
+};
 use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
@@ -147,11 +149,10 @@ impl DomainRegistrationService {
                     DomainRegistrationError::DomainAlreadyExists(data.domain)
                 }
                 other => other.into(),
-            })?;
+            })?
+            .signal_new_events_available(&self.registry_change_notifier);
 
         let created: DomainRegistration = created_record.into();
-
-        self.registry_change_notifier.signal_new_events_available();
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
         self.domain_provisioner
@@ -182,11 +183,10 @@ impl DomainRegistrationService {
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
                 domain_registration_id,
-            ))?;
+            ))?
+            .signal_new_events_available(&self.registry_change_notifier);
 
         let deleted: DomainRegistration = deleted_record.into();
-
-        self.registry_change_notifier.signal_new_events_available();
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
         self.domain_provisioner

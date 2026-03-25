@@ -19,6 +19,7 @@ use super::model::resource_definition::{
 use crate::repo::model::BindFields;
 use crate::repo::model::resource_definition::ResourceDefinitionRecord;
 use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent};
+use crate::repo::registry_change::{RequiresNotificationSignal, RequiresSignalExt};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -37,17 +38,17 @@ pub trait ResourceDefinitionRepo: Send + Sync {
     async fn create(
         &self,
         args: ResourceDefinitionCreationArgs,
-    ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError>;
+    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError>;
 
     async fn update(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError>;
+    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError>;
 
     async fn delete(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<(), ResourceDefinitionRepoError>;
+    ) -> Result<RequiresNotificationSignal<()>, ResourceDefinitionRepoError>;
 
     async fn get(
         &self,
@@ -89,7 +90,7 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
     async fn create(
         &self,
         args: ResourceDefinitionCreationArgs,
-    ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError> {
+    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError> {
         let span = info_span!(
             SPAN_NAME,
             resource_definition_id = %args.revision.resource_definition_id,
@@ -101,7 +102,7 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
     async fn update(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError> {
+    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError> {
         let span = info_span!(
             SPAN_NAME,
             resource_definition_id = %revision.resource_definition_id,
@@ -113,7 +114,7 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
     async fn delete(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<(), ResourceDefinitionRepoError> {
+    ) -> Result<RequiresNotificationSignal<()>, ResourceDefinitionRepoError> {
         let span = info_span!(
             SPAN_NAME,
             resource_definition_id = %revision.resource_definition_id,
@@ -330,17 +331,18 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
     async fn create(
         &self,
         args: ResourceDefinitionCreationArgs,
-    ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError> {
+    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError> {
         self.with_tx_err("create", |tx| {
             Self::create_within_transaction(tx, args).boxed()
         })
         .await
+        .map(RequiresSignalExt::requires_signal)
     }
 
     async fn update(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<ResourceDefinitionExtRevisionRecord, ResourceDefinitionRepoError> {
+    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision).await?;
@@ -379,12 +381,13 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             .boxed()
         })
         .await
+        .map(RequiresSignalExt::requires_signal)
     }
 
     async fn delete(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<(), ResourceDefinitionRepoError> {
+    ) -> Result<RequiresNotificationSignal<()>, ResourceDefinitionRepoError> {
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision).await?;
@@ -418,6 +421,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             .boxed()
         })
         .await
+        .map(RequiresSignalExt::requires_signal)
     }
 
     async fn get(

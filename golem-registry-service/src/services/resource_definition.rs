@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
-use super::registry_change_notifier::RegistryChangeNotifier;
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::resource_definition::{
     ResourceDefinitionCreationArgs, ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
@@ -138,9 +138,8 @@ impl ResourceDefinitionService {
                 }
                 other => other.into(),
             })?
+            .signal_new_events_available(&self.registry_change_notifier)
             .try_into()?;
-
-        self.notify_resource_definition_changed().await;
 
         Ok(stored_resource_definition)
     }
@@ -206,9 +205,8 @@ impl ResourceDefinitionService {
                 }
                 other => other.into(),
             })?
+            .signal_new_events_available(&self.registry_change_notifier)
             .try_into()?;
-
-        self.notify_resource_definition_changed().await;
 
         Ok(stored_resource_definition)
     }
@@ -248,9 +246,8 @@ impl ResourceDefinitionService {
                     ResourceDefinitionError::ConcurrentUpdate
                 }
                 other => other.into(),
-            })?;
-
-        self.notify_resource_definition_changed().await;
+            })?
+            .signal_new_events_available(&self.registry_change_notifier);
 
         Ok(())
     }
@@ -376,10 +373,6 @@ impl ResourceDefinitionService {
             .collect::<Result<_, _>>()?;
 
         Ok(resource_definitions)
-    }
-
-    async fn notify_resource_definition_changed(&self) {
-        self.registry_change_notifier.signal_new_events_available();
     }
 
     async fn get_with_environment(

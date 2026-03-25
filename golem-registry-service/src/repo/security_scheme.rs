@@ -18,7 +18,9 @@ use super::model::security_scheme::{
 use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::security_scheme::SecuritySchemeRecord;
-use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent};
+use crate::repo::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -38,21 +40,21 @@ pub trait SecuritySchemeRepo: Send + Sync {
         environment_id: Uuid,
         name: String,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError>;
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
 
     /// Update a security scheme and record a change event in the same transaction.
     async fn update(
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError>;
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
 
     /// Delete a security scheme and record a change event in the same transaction.
     async fn delete(
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError>;
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>;
 
     async fn get_by_id(
         &self,
@@ -98,7 +100,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         environment_id: Uuid,
         name: String,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let span = Self::span_environment_id(environment_id);
         self.repo
             .create(environment_id, name, revision)
@@ -110,7 +112,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let span = Self::span_security_scheme_id(revision.security_scheme_id);
         self.repo
             .update(environment_id, revision)
@@ -122,7 +124,7 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let span = Self::span_security_scheme_id(revision.security_scheme_id);
         self.repo
             .delete(environment_id, revision)
@@ -237,7 +239,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         environment_id: Uuid,
         name: String,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let result = self
             .with_tx_err("create", |tx| {
                 async move {
@@ -279,14 +281,14 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.requires_signal())
     }
 
     async fn update(
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let result = self
             .with_tx_err("update", |tx| {
                 async move {
@@ -326,14 +328,14 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.requires_signal())
     }
 
     async fn delete(
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
         let result = self
             .with_tx_err("delete", |tx| {
                 async move {
@@ -373,7 +375,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.requires_signal())
     }
 
     async fn get_by_id(

@@ -39,6 +39,7 @@ use golem_registry_service::repo::plugin::PluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::Pool;
@@ -78,12 +79,41 @@ pub enum TestDb {
     Sqlite(SqlitePool),
 }
 
+struct NoopRegistryChangeNotifier {
+    sender: tokio::sync::broadcast::Sender<
+        golem_registry_service::repo::registry_change::RegistryChangeEvent,
+    >,
+}
+
+impl NoopRegistryChangeNotifier {
+    fn new() -> Self {
+        let (sender, _) = tokio::sync::broadcast::channel(1);
+        Self { sender }
+    }
+}
+
+impl RegistryChangeNotifier for NoopRegistryChangeNotifier {
+    fn signal_new_events_available(&self) {}
+
+    fn subscribe(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<
+        golem_registry_service::repo::registry_change::RegistryChangeEvent,
+    > {
+        self.sender.subscribe()
+    }
+}
+
 impl Deps {
     pub fn registry_change_repo_for_notifier(&self) -> std::sync::Arc<dyn RegistryChangeRepo> {
         match &self.test_db {
             TestDb::Postgres(pool) => std::sync::Arc::new(DbRegistryChangeRepo::new(pool.clone())),
             TestDb::Sqlite(pool) => std::sync::Arc::new(DbRegistryChangeRepo::new(pool.clone())),
         }
+    }
+
+    pub fn test_registry_change_notifier(&self) -> std::sync::Arc<dyn RegistryChangeNotifier> {
+        std::sync::Arc::new(NoopRegistryChangeNotifier::new())
     }
 
     pub async fn record_registry_change_event(

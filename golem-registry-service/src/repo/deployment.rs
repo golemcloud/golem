@@ -37,7 +37,7 @@ use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use crate::repo::registry_change::{
-    DbRegistryChangeRepo, NewRegistryChangeEvent,
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -98,7 +98,7 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>;
 
     async fn list_active_compiled_routes_for_domain(
         &self,
@@ -172,7 +172,7 @@ pub trait DeploymentRepo: Send + Sync {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -304,7 +304,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError> {
         let span = Self::span_user_and_env(
             deployment_creation.user_account_id,
             deployment_creation.environment_id,
@@ -493,7 +493,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
         self.repo
             .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
             .instrument(info_span!(
@@ -702,7 +702,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError> {
         if version_check
             && self
                 .version_exists(
@@ -847,7 +847,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.requires_signal())
     }
 
     async fn get_active_mcp_for_domain(
@@ -1238,7 +1238,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
         let result = self
             .with_tx_err("set_current_deployment", |tx| {
                 Box::pin(async move {
@@ -1265,7 +1265,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.requires_signal())
     }
 
     async fn get_latest_deployed_agent_type_by_component_revision(

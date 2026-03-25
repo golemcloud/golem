@@ -17,7 +17,9 @@ use crate::config::PrecreatedAccount;
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
-use crate::services::registry_change_notifier::RegistryChangeNotifier;
+use crate::services::registry_change_notifier::{
+    RegistryChangeNotifier, RequiresNotificationSignalExt,
+};
 use anyhow::anyhow;
 use golem_common::model::account::AccountSetRoles;
 use golem_common::model::account::{
@@ -229,8 +231,9 @@ impl AccountService {
 
         match self.account_repo.delete(record).await {
             Ok(record) => {
-                let account: Account = record.try_into()?;
-                self.registry_change_notifier.signal_new_events_available();
+                let account: Account = record
+                    .signal_new_events_available(&self.registry_change_notifier)
+                    .try_into()?;
                 Ok(account)
             }
             Err(AccountRepoError::ConcurrentModification) => Err(AccountError::ConcurrentUpdate)?,

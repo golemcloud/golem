@@ -17,7 +17,9 @@ use crate::model::security_scheme::SecurityScheme;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::security_scheme::{SecuritySchemeRepoError, SecuritySchemeRevisionRecord};
 use crate::repo::security_scheme::SecuritySchemeRepo;
-use crate::services::registry_change_notifier::RegistryChangeNotifier;
+use crate::services::registry_change_notifier::{
+    RegistryChangeNotifier, RequiresNotificationSignalExt,
+};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::security_scheme::{
     SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
@@ -135,10 +137,9 @@ impl SecuritySchemeService {
             .await;
 
         match result {
-            Ok(record) => {
-                self.registry_change_notifier.signal_new_events_available();
-                Ok(record.try_into()?)
-            }
+            Ok(record) => Ok(record
+                .signal_new_events_available(&self.registry_change_notifier)
+                .try_into()?),
             Err(SecuritySchemeRepoError::SecuritySchemeViolatesUniqueness) => Err(
                 SecuritySchemeError::SecuritySchemeWithNameAlreadyExists(data.name),
             ),
@@ -198,10 +199,9 @@ impl SecuritySchemeService {
             .await;
 
         match result {
-            Ok(record) => {
-                self.registry_change_notifier.signal_new_events_available();
-                Ok(record.try_into()?)
-            }
+            Ok(record) => Ok(record
+                .signal_new_events_available(&self.registry_change_notifier)
+                .try_into()?),
             Err(SecuritySchemeRepoError::ConcurrentModification) => {
                 Err(SecuritySchemeError::ConcurrentUpdateAttempt)
             }
@@ -243,10 +243,9 @@ impl SecuritySchemeService {
             .await;
 
         match result {
-            Ok(record) => {
-                self.registry_change_notifier.signal_new_events_available();
-                Ok(record.try_into()?)
-            }
+            Ok(record) => Ok(record
+                .signal_new_events_available(&self.registry_change_notifier)
+                .try_into()?),
             Err(SecuritySchemeRepoError::ConcurrentModification) => {
                 Err(SecuritySchemeError::ConcurrentUpdateAttempt)
             }

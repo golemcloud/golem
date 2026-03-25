@@ -18,7 +18,9 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment_share::{
     EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
-use crate::services::registry_change_notifier::RegistryChangeNotifier;
+use crate::services::registry_change_notifier::{
+    RegistryChangeNotifier, RequiresNotificationSignalExt,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_share::{
@@ -88,10 +90,6 @@ impl EnvironmentShareService {
         }
     }
 
-    fn notify_permissions_changed(&self) {
-        self.registry_change_notifier.signal_new_events_available();
-    }
-
     pub async fn create(
         &self,
         environment_id: EnvironmentId,
@@ -125,8 +123,9 @@ impl EnvironmentShareService {
 
         match result {
             Ok(record) => {
-                let share: EnvironmentShare = record.try_into()?;
-                self.notify_permissions_changed();
+                let share: EnvironmentShare = record
+                    .signal_new_events_available(&self.registry_change_notifier)
+                    .try_into()?;
                 Ok(share)
             }
             Err(EnvironmentShareRepoError::ShareViolatesUniqueness) => {
@@ -171,8 +170,9 @@ impl EnvironmentShareService {
 
         match result {
             Ok(record) => {
-                let share: EnvironmentShare = record.try_into()?;
-                self.notify_permissions_changed();
+                let share: EnvironmentShare = record
+                    .signal_new_events_available(&self.registry_change_notifier)
+                    .try_into()?;
                 Ok(share)
             }
             Err(EnvironmentShareRepoError::ConcurrentModification) => {
@@ -216,8 +216,9 @@ impl EnvironmentShareService {
 
         match result {
             Ok(record) => {
-                let share: EnvironmentShare = record.try_into()?;
-                self.notify_permissions_changed();
+                let share: EnvironmentShare = record
+                    .signal_new_events_available(&self.registry_change_notifier)
+                    .try_into()?;
                 Ok(share)
             }
             Err(EnvironmentShareRepoError::ConcurrentModification) => {

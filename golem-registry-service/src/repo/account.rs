@@ -19,7 +19,7 @@ use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account::AccountRepoError;
 use crate::repo::registry_change::{
-    DbRegistryChangeRepo, NewRegistryChangeEvent,
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -47,7 +47,7 @@ pub trait AccountRepo: Send + Sync {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
+    ) -> Result<RequiresNotificationSignal<AccountExtRevisionRecord>, AccountRepoError>;
 
     async fn get_by_id(
         &self,
@@ -106,7 +106,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+    ) -> Result<RequiresNotificationSignal<AccountExtRevisionRecord>, AccountRepoError> {
         let span = Self::span_account_id(revision.account_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -263,7 +263,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
+    ) -> Result<RequiresNotificationSignal<AccountExtRevisionRecord>, AccountRepoError> {
         let result = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
@@ -300,7 +300,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
         })
         .await?;
 
-        Ok(result)
+        Ok(result.requires_signal())
     }
 
     async fn get_by_id(

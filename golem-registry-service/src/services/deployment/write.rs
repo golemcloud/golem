@@ -22,7 +22,9 @@ use crate::services::deployment::deploy_validation_error::format_validation_erro
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
-use crate::services::registry_change_notifier::RegistryChangeNotifier;
+use crate::services::registry_change_notifier::{
+    RegistryChangeNotifier, RequiresNotificationSignalExt,
+};
 use crate::services::resource_definition::{ResourceDefinitionError, ResourceDefinitionService};
 use crate::services::security_scheme::SecuritySchemeService;
 use futures::TryFutureExt;
@@ -337,11 +339,10 @@ impl DeploymentWriteService {
                     DeploymentWriteError::VersionAlreadyExists { version }
                 }
                 other => other.into(),
-            })?;
+            })?
+            .signal_new_events_available(&self.registry_change_notifier);
 
         let deployment: CurrentDeployment = ext_revision.try_into()?;
-
-        self.registry_change_notifier.signal_new_events_available();
 
         Ok(deployment)
     }
@@ -404,12 +405,11 @@ impl DeploymentWriteService {
                     DeploymentWriteError::ConcurrentDeployment
                 }
                 other => other.into(),
-            })?;
+            })?
+            .signal_new_events_available(&self.registry_change_notifier);
 
         let current_deployment: CurrentDeployment = revision_record
             .into_model(target_deployment.version, target_deployment.deployment_hash)?;
-
-        self.registry_change_notifier.signal_new_events_available();
 
         Ok(current_deployment)
     }

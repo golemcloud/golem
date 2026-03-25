@@ -58,6 +58,7 @@ use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
 };
+use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
 use golem_registry_service::services::registry_change_notifier::{
     LocalRegistryChangeNotifier, RegistryChangeNotifier,
 };
@@ -1287,7 +1288,8 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
     deps.full_deployment_repo
         .deploy(deployment_creation, false)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
 
     ResolveTestEnv {
         owner_account_id,
@@ -1348,7 +1350,8 @@ pub async fn test_resolve_agent_type_shared_with_email(deps: &Deps) {
             grantee_account_id,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
 
     // Grantee resolves using owner's email
     let result = deps

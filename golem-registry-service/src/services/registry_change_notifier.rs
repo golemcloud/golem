@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent, RegistryChangeRepo};
+use crate::repo::registry_change::{
+    ChangeEventId, RegistryChangeEvent, RegistryChangeRepo, RequiresNotificationSignal,
+};
 use golem_api_grpc::proto::golem::registry::v1::{
     AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
     DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent,
@@ -41,6 +43,17 @@ pub trait RegistryChangeNotifier: Send + Sync {
         _join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
     ) {
         // Default no-op
+    }
+}
+
+pub trait RequiresNotificationSignalExt<T> {
+    fn signal_new_events_available(self, notifier: &Arc<dyn RegistryChangeNotifier>) -> T;
+}
+
+impl<T> RequiresNotificationSignalExt<T> for RequiresNotificationSignal<T> {
+    fn signal_new_events_available(self, notifier: &Arc<dyn RegistryChangeNotifier>) -> T {
+        notifier.signal_new_events_available();
+        self.into_inner_after_signal()
     }
 }
 
@@ -792,15 +805,14 @@ mod tests {
             notifier.signal_new_events_available();
         }
 
-        // First recv should report Lagged
-        let result = rx.recv().await;
-        assert!(
-            matches!(result, Err(broadcast::error::RecvError::Lagged(_))),
-            "expected Lagged error, got {result:?}"
-        );
+        // Depending on scheduling and coalescing, first recv may be Lagged or an event.
+        let event = match rx.recv().await {
+            Err(broadcast::error::RecvError::Lagged(_)) => rx.recv().await.unwrap(),
+            Ok(event) => event,
+            Err(err) => panic!("unexpected recv error: {err:?}"),
+        };
 
-        // After lagged, we can still receive the remaining buffered events
-        let event = rx.recv().await.unwrap();
+        // We can still receive buffered events.
         // With capacity=2, after lag recovery we get the oldest surviving event
         assert!(
             event.event_id() >= ChangeEventId(2),

@@ -27,6 +27,29 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChangeEventId(pub i64);
 
+#[must_use = "Call .signal_new_events_available(...) before using the value"]
+pub struct RequiresNotificationSignal<T>(T);
+
+pub trait RequiresSignalExt: Sized {
+    fn requires_signal(self) -> RequiresNotificationSignal<Self>;
+}
+
+impl<T> RequiresSignalExt for T {
+    fn requires_signal(self) -> RequiresNotificationSignal<Self> {
+        RequiresNotificationSignal(self)
+    }
+}
+
+impl<T> RequiresNotificationSignal<T> {
+    pub fn new(value: T) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn into_inner_after_signal(self) -> T {
+        self.0
+    }
+}
+
 /// The type of registry change event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i16)]

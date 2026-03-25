@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::repo::model::token::TokenRecord;
-use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent};
+use crate::repo::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
@@ -37,7 +39,7 @@ pub trait TokenRepo: Send + Sync {
 
     async fn get_by_account(&self, account_id: Uuid) -> RepoResult<Vec<TokenRecord>>;
 
-    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<Uuid>>;
+    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<RequiresNotificationSignal<Uuid>>>;
 }
 
 pub struct LoggedTokenRepo<Repo: TokenRepo> {
@@ -88,7 +90,7 @@ impl<Repo: TokenRepo> TokenRepo for LoggedTokenRepo<Repo> {
             .await
     }
 
-    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<Uuid>> {
+    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<RequiresNotificationSignal<Uuid>>> {
         self.repo
             .delete(token_id)
             .instrument(Self::span_id(token_id))
@@ -210,7 +212,7 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .await
     }
 
-    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<Uuid>> {
+    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<RequiresNotificationSignal<Uuid>>> {
         let result: Option<Uuid> = self
             .with_tx_err("delete", |tx| {
                 Box::pin(async move {
@@ -237,6 +239,6 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result)
+        Ok(result.map(RequiresSignalExt::requires_signal))
     }
 }
