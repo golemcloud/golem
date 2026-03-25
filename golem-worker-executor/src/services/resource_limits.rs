@@ -614,7 +614,12 @@ mod tests {
     #[test]
     fn new_with_invocation_limits_stores_http_limit() {
         let entry = AtomicResourceEntry::new_with_invocation_limits(
-            1000, 512, usize::MAX, u64::MAX, 42, u64::MAX,
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            42,
+            u64::MAX,
         );
         assert_eq!(entry.per_invocation_http_limit(), 42);
     }
@@ -622,7 +627,12 @@ mod tests {
     #[test]
     fn new_with_invocation_limits_stores_rpc_limit() {
         let entry = AtomicResourceEntry::new_with_invocation_limits(
-            1000, 512, usize::MAX, u64::MAX, u64::MAX, 99,
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            99,
         );
         assert_eq!(entry.per_invocation_rpc_limit(), 99);
     }
