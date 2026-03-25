@@ -129,7 +129,7 @@ impl From<QuotaError> for golem::shardmanager::v1::QuotaError {
                 },
             QuotaError::StaleEpoch { resource_definition_id, current, provided } =>
                 golem::shardmanager::v1::QuotaError {
-                    error: Some(grpc_quota_error::Error::LeaseNotFound(golem::common::ErrorBody { error: format!("Stale epoch provided for {resource_definition_id} (provided: {provided}, current: {current}) ") })),
+                    error: Some(grpc_quota_error::Error::StaleEpoch(golem::common::ErrorBody { error: format!("Stale epoch provided for {resource_definition_id} (provided: {provided}, current: {current}) ") })),
                 },
             QuotaError::InternalError(_) =>
                 golem::shardmanager::v1::QuotaError {
