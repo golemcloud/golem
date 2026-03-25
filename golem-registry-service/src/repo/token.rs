@@ -239,6 +239,6 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result.map(RequiresSignalExt::requires_signal))
+        Ok(result.map(RequiresSignalExt::requires_notification_signal))
     }
 }

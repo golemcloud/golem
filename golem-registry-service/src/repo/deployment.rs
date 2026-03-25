@@ -847,7 +847,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result.requires_signal())
+        Ok(result.requires_notification_signal())
     }
 
     async fn get_active_mcp_for_domain(
@@ -1265,7 +1265,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result.requires_signal())
+        Ok(result.requires_notification_signal())
     }
 
     async fn get_latest_deployed_agent_type_by_component_revision(

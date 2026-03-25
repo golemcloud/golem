@@ -281,7 +281,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result.requires_signal())
+        Ok(result.requires_notification_signal())
     }
 
     async fn update(
@@ -328,7 +328,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result.requires_signal())
+        Ok(result.requires_notification_signal())
     }
 
     async fn delete(
@@ -375,7 +375,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
             })
             .await?;
 
-        Ok(result.requires_signal())
+        Ok(result.requires_notification_signal())
     }
 
     async fn get_by_id(

@@ -300,7 +300,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
         })
         .await?;
 
-        Ok(result.requires_signal())
+        Ok(result.requires_notification_signal())
     }
 
     async fn get_by_id(

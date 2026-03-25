@@ -336,7 +336,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             Self::create_within_transaction(tx, args).boxed()
         })
         .await
-        .map(RequiresSignalExt::requires_signal)
+        .map(RequiresSignalExt::requires_notification_signal)
     }
 
     async fn update(
@@ -381,7 +381,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .map(RequiresSignalExt::requires_signal)
+        .map(RequiresSignalExt::requires_notification_signal)
     }
 
     async fn delete(
@@ -421,7 +421,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
             .boxed()
         })
         .await
-        .map(RequiresSignalExt::requires_signal)
+        .map(RequiresSignalExt::requires_notification_signal)
     }
 
     async fn get(

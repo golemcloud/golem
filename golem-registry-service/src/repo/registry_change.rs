@@ -31,11 +31,11 @@ pub struct ChangeEventId(pub i64);
 pub struct RequiresNotificationSignal<T>(T);
 
 pub trait RequiresSignalExt: Sized {
-    fn requires_signal(self) -> RequiresNotificationSignal<Self>;
+    fn requires_notification_signal(self) -> RequiresNotificationSignal<Self>;
 }
 
 impl<T> RequiresSignalExt for T {
-    fn requires_signal(self) -> RequiresNotificationSignal<Self> {
+    fn requires_notification_signal(self) -> RequiresNotificationSignal<Self> {
         RequiresNotificationSignal(self)
     }
 }
