@@ -1184,11 +1184,13 @@ async fn start_partial_response_http_server(
     fail_count: usize,
     prefix_len: usize,
     body_size: usize,
-) -> (u16, Arc<AtomicUsize>) {
+) -> (u16, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
+    let range_counter = Arc::new(AtomicUsize::new(0));
+    let range_counter_clone = range_counter.clone();
 
     // Generate the full body (deterministic pattern)
     let full_body: Vec<u8> = (0..body_size).map(|i| (i % 256) as u8).collect();
@@ -1204,6 +1206,22 @@ async fn start_partial_response_http_server(
                 let full_body = full_body.clone();
 
                 if n < fail_count {
+                    // Read request headers first to make failure timing deterministic.
+                    let mut req_buf = [0u8; 4096];
+                    let mut req_header_data = Vec::new();
+                    loop {
+                        match stream.read(&mut req_buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                req_header_data.extend_from_slice(&req_buf[..n]);
+                                if req_header_data.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+
                     // Send headers + partial body, then drop
                     let headers = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -1246,6 +1264,10 @@ async fn start_partial_response_http_server(
                         }
                     });
 
+                    if range_start.is_some() {
+                        range_counter_clone.fetch_add(1, Ordering::SeqCst);
+                    }
+
                     if let Some(start) = range_start {
                         if start <= body_size {
                             // 206 Partial Content
@@ -1280,7 +1302,7 @@ async fn start_partial_response_http_server(
         .in_current_span(),
     );
 
-    (port, counter)
+    (port, counter, range_counter)
 }
 
 /// Decodes an HTTP chunked transfer-encoded body into raw bytes.
@@ -1459,7 +1481,8 @@ async fn http_zone2_inline_retry_on_body_read_failure(
 
     // Server sends 1024-byte body. First connection sends 256 bytes then drops.
     // Second connection checks for Range header and responds with 206 + remaining bytes.
-    let (port, connection_counter) = start_partial_response_http_server(1, 256, 1024).await;
+    let (port, connection_counter, range_counter) =
+        start_partial_response_http_server(1, 256, 1024).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -1503,6 +1526,12 @@ async fn http_zone2_inline_retry_on_body_read_failure(
     assert_eq!(
         total_connections, 2,
         "Expected 2 total connections (1 partial + 1 resumed)"
+    );
+
+    let range_requests = range_counter.load(Ordering::SeqCst);
+    assert!(
+        range_requests > 0,
+        "Expected at least 1 range request from Zone 2 retry, got {range_requests}"
     );
 
     // Verify oplog contains in-function retry error entries for Zone 2
@@ -1786,7 +1815,8 @@ async fn http_no_zone2_retry_when_body_skip_used(
     // Server sends 2048-byte body. First connection sends 1024 bytes then drops.
     // The guest reads first 256, skips 256, then tries to read more — which will fail.
     // Zone 2 should be disqualified because blocking_skip was used.
-    let (port, connection_counter) = start_partial_response_http_server(1, 1024, 2048).await;
+    let (port, connection_counter, range_counter) =
+        start_partial_response_http_server(1, 1024, 2048).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -1827,13 +1857,12 @@ async fn http_no_zone2_retry_when_body_skip_used(
         "Expected at least 2 connections (1 partial + 1 replay), got {total_connections}"
     );
 
-    // Verify NO in-function retry error entries in oplog
-    // Zone 2 retry should have been disqualified by had_body_skip
-    let retry_count =
-        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    // Zone 2 retry should be disqualified by had_body_skip, so the recovery
+    // request must not use a Range header.
+    let range_requests = range_counter.load(Ordering::SeqCst);
     assert_eq!(
-        retry_count, 0,
-        "Expected 0 in-function retry error entries (body skip disqualifies Zone 2 retry)"
+        range_requests, 0,
+        "Expected 0 range requests (body skip must disqualify Zone 2 retry), got {range_requests}"
     );
 
     Ok(())
