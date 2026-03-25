@@ -947,6 +947,10 @@ export class ScenarioExecutor {
       // Deploy implies build — run build first if not already run
       if (!step.verify?.build) {
         const buildDir = await this.findGolemProjectDir();
+        // Clean golem-temp to force a fresh build — the agent may have built
+        // with different SDK paths, leaving stale cached artifacts
+        const golemTempDir = path.join(buildDir, "golem-temp");
+        await fs.rm(golemTempDir, { recursive: true, force: true });
         console.log(
           `Step ${step.id ?? "(unnamed)"}: running implicit golem build before deploy in ${buildDir}`,
         );
