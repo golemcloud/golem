@@ -67,9 +67,9 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::future::Future;
@@ -104,8 +104,19 @@ impl FuelManagement for DebugContext {
         0
     }
 
+}
+
+impl CallCountManagement for DebugContext {
     fn reset_invocation_call_counts(&mut self) {
         self.durable_ctx.reset_invocation_call_counts();
+    }
+
+    fn record_monthly_http_call(&mut self) -> bool {
+        true
+    }
+
+    fn record_monthly_rpc_call(&mut self) -> bool {
+        true
     }
 }
 

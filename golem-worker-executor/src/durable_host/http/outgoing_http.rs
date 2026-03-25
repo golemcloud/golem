@@ -16,6 +16,8 @@ use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
+use golem_common::model::Timestamp;
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
@@ -43,6 +45,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.state
             .check_and_increment_http_call_count()
             .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+
+        // Record against the monthly account-level HTTP call quota.
+        // Only in live mode (is_live is checked inside record_monthly_http_call).
+        if self.state.is_live() && !self.record_monthly_http_call() {
+            return Err(HttpError::trap(wasmtime::Error::from(
+                InterruptKind::Suspend(Timestamp::now_utc()),
+            )));
+        }
 
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self

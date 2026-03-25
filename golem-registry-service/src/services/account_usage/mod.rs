@@ -202,6 +202,70 @@ impl AccountUsageService {
                             max_disk_space_per_worker: 0,
                             per_invocation_http_limit: 0,
                             per_invocation_rpc_limit: 0,
+                            available_http_calls: 0,
+                            available_rpc_calls: 0,
+                        },
+                    );
+                }
+                Err(other) => return Err(other),
+            };
+        }
+        Ok(AccountResourceLimits(limits_of_updates_accounts))
+    }
+
+    pub async fn update_http_call_counts(
+        &self,
+        updates: HashMap<AccountId, i64>,
+        auth: &AuthCtx,
+    ) -> Result<AccountResourceLimits, AccountUsageError> {
+        self.update_call_counts(updates, auth, UsageType::MonthlyHttpCalls, "HTTP")
+            .await
+    }
+
+    pub async fn update_rpc_call_counts(
+        &self,
+        updates: HashMap<AccountId, i64>,
+        auth: &AuthCtx,
+    ) -> Result<AccountResourceLimits, AccountUsageError> {
+        self.update_call_counts(updates, auth, UsageType::MonthlyRpcCalls, "RPC")
+            .await
+    }
+
+    async fn update_call_counts(
+        &self,
+        updates: HashMap<AccountId, i64>,
+        auth: &AuthCtx,
+        usage_type: UsageType,
+        call_type: &str,
+    ) -> Result<AccountResourceLimits, AccountUsageError> {
+        let mut limits_of_updates_accounts = HashMap::new();
+        for (account_id, update) in updates {
+            auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+            match self.get_account_usage(account_id, Some(usage_type)).await {
+                Ok(mut account_usage) => {
+                    // Call counts are allowed to slightly exceed the monthly limit.
+                    // The worker executor will suspend the worker at the next opportunity.
+                    account_usage.add_change(usage_type, update);
+
+                    tracing::debug!(
+                        "Updating monthly {call_type} call count for account {account_id}: {update}"
+                    );
+
+                    self.account_usage_repo.add(&account_usage).await?;
+                    limits_of_updates_accounts.insert(account_id, account_usage.resource_limits());
+                }
+                Err(AccountUsageError::AccountNotfound(_)) => {
+                    limits_of_updates_accounts.insert(
+                        account_id,
+                        ResourceLimits {
+                            available_fuel: 0,
+                            max_memory_per_worker: 0,
+                            max_table_elements_per_worker: 0,
+                            max_disk_space_per_worker: 0,
+                            per_invocation_http_limit: 0,
+                            per_invocation_rpc_limit: 0,
+                            available_http_calls: 0,
+                            available_rpc_calls: 0,
                         },
                     );
                 }

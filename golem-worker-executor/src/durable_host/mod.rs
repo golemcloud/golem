@@ -331,6 +331,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.last_snapshot_index,
                 per_invocation_http_limit,
                 per_invocation_rpc_limit,
+                resource_limits.clone(),
             )
             .await,
             temp_dir,
@@ -351,6 +352,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Delegates to `PrivateDurableWorkerState::reset_invocation_call_counts`.
     pub fn reset_invocation_call_counts(&mut self) {
         self.state.reset_invocation_call_counts();
+    }
+
+    /// Records one outgoing HTTP call against the monthly account quota.
+    ///
+    /// Returns `false` when the monthly budget is exhausted.
+    pub fn record_monthly_http_call(&mut self) -> bool {
+        self.state.resource_limit_entry.record_http_call()
+    }
+
+    /// Records one outgoing RPC call against the monthly account quota.
+    ///
+    /// Returns `false` when the monthly budget is exhausted.
+    pub fn record_monthly_rpc_call(&mut self) -> bool {
+        self.state.resource_limit_entry.record_rpc_call()
     }
 
     fn check_if_file_is_readonly(
@@ -3147,6 +3162,9 @@ struct PrivateDurableWorkerState {
     rpc_call_count: u64,
     /// Per-invocation RPC call limit from the account's Plan. u64::MAX means unlimited.
     per_invocation_rpc_limit: u64,
+
+    /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption.
+    resource_limit_entry: Arc<AtomicResourceEntry>,
 }
 
 impl PrivateDurableWorkerState {
@@ -3189,6 +3207,7 @@ impl PrivateDurableWorkerState {
         last_snapshot_index: Option<OplogIndex>,
         per_invocation_http_limit: u64,
         per_invocation_rpc_limit: u64,
+        resource_limit_entry: Arc<AtomicResourceEntry>,
     ) -> Self {
         let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
             let mut regions = deleted_regions;
@@ -3265,6 +3284,7 @@ impl PrivateDurableWorkerState {
             active_atomic_regions: Vec::new(),
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
+            resource_limit_entry,
         }
     }
 

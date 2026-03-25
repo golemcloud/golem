@@ -36,6 +36,8 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::{
     SerializableInvokeResult, SerializableScheduledInvocation,
 };
+use golem_common::model::Timestamp;
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
@@ -154,6 +156,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.state
             .check_and_increment_rpc_call_count()
             .map_err(wasmtime::Error::from)?;
+
+        // Record against the monthly account-level RPC call quota.
+        if self.state.is_live() && !self.record_monthly_rpc_call() {
+            return Err(anyhow::Error::from(wasmtime::Error::from(
+                InterruptKind::Suspend(Timestamp::now_utc()),
+            )));
+        }
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -278,6 +287,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .check_and_increment_rpc_call_count()
             .map_err(wasmtime::Error::from)?;
 
+        // Record against the monthly account-level RPC call quota.
+        if self.state.is_live() && !self.record_monthly_rpc_call() {
+            return Err(anyhow::Error::from(wasmtime::Error::from(
+                InterruptKind::Suspend(Timestamp::now_utc()),
+            )));
+        }
+
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
@@ -376,6 +392,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.state
             .check_and_increment_rpc_call_count()
             .map_err(wasmtime::Error::from)?;
+
+        // Record against the monthly account-level RPC call quota.
+        if self.state.is_live() && !self.record_monthly_rpc_call() {
+            return Err(anyhow::Error::from(wasmtime::Error::from(
+                InterruptKind::Suspend(Timestamp::now_utc()),
+            )));
+        }
 
         let current_idempotency_key = self
             .get_current_idempotency_key()

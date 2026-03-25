@@ -412,7 +412,8 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                     p.plan_id, p.name, p.max_memory_per_worker, p.max_table_elements_per_worker, p.max_disk_space_per_worker, p.total_app_count,
                     p.total_env_count, p.total_component_count, p.total_worker_count, p.total_worker_connection_count,
                     p.total_component_storage_bytes, p.monthly_gas_limit, p.monthly_component_upload_limit_bytes,
-                    p.per_invocation_http_limit, p.per_invocation_rpc_limit
+                    p.per_invocation_http_limit, p.per_invocation_rpc_limit,
+                    p.monthly_http_limit, p.monthly_rpc_limit
                 FROM accounts a
                 JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                 JOIN plans p ON p.plan_id = ar.plan_id

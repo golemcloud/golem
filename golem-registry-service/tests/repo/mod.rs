@@ -15,6 +15,7 @@
 use crate::Tracing;
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
+use golem_registry_service::services::account_usage::AccountUsageService;
 use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
@@ -52,7 +53,7 @@ sequential_suite!(sqlite);
 
 pub struct Deps {
     pub account_repo: Box<dyn AccountRepo>,
-    pub account_usage_repo: Box<dyn AccountUsageRepo>,
+    pub account_usage_repo: std::sync::Arc<dyn AccountUsageRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
     pub plan_repo: Box<dyn PlanRepo>,
@@ -85,6 +86,8 @@ impl Deps {
                 max_disk_space_per_worker: 1073741824.into(),
                 per_invocation_http_limit: u64::MAX.into(),
                 per_invocation_rpc_limit: u64::MAX.into(),
+                monthly_http_limit: 5000.into(),
+                monthly_rpc_limit: 5000.into(),
             })
             .await
             .unwrap();
@@ -92,6 +95,10 @@ impl Deps {
 
     pub fn test_plan_id(&self) -> Uuid {
         Uuid::from_str("e449dca1-cf07-4270-a8a2-6bcfc6528038").unwrap()
+    }
+
+    pub fn account_usage_service(&self) -> AccountUsageService {
+        AccountUsageService::new(self.account_usage_repo.clone())
     }
 
     pub async fn create_account(&self) -> AccountExtRevisionRecord {

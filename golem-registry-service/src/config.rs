@@ -15,12 +15,12 @@
 use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
-use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
+use golem_common::model::Empty;
 use golem_common::tracing::TracingConfig;
-use golem_common::{SafeDisplay, grpc_uri};
+use golem_common::{grpc_uri, SafeDisplay};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
@@ -175,6 +175,8 @@ impl Default for RegistryServiceConfig {
                 max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
                 per_invocation_http_limit: 1_000_000_000_000_000_000,
                 per_invocation_rpc_limit: 1_000_000_000_000_000_000,
+                monthly_http_limit: 1_000_000_000_000_000_000,
+                monthly_rpc_limit: 1_000_000_000_000_000_000,
             },
         );
 
@@ -451,6 +453,10 @@ pub struct PrecreatedPlan {
     pub per_invocation_http_limit: u64,
     #[serde(default = "default_unlimited")]
     pub per_invocation_rpc_limit: u64,
+    #[serde(default = "default_unlimited")]
+    pub monthly_http_limit: u64,
+    #[serde(default = "default_unlimited")]
+    pub monthly_rpc_limit: u64,
 }
 
 fn default_max_table_elements_per_worker() -> u64 {

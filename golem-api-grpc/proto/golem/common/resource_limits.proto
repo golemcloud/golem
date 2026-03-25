@@ -11,6 +11,8 @@ message ResourceLimits {
   uint64 max_disk_space_per_worker = 4;
   uint64 per_invocation_http_limit = 5;
   uint64 per_invocation_rpc_limit = 6;
+  uint64 available_http_calls = 7;
+  uint64 available_rpc_calls = 8;
 }
 
 message AccountResourceLimitsEntry {

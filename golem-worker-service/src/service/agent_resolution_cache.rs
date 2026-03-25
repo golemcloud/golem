@@ -322,6 +322,20 @@ mod tests {
         {
             unimplemented!()
         }
+        async fn batch_update_http_call_count(
+            &self,
+            _: std::collections::HashMap<AccountId, i64>,
+        ) -> Result<golem_service_base::model::AccountResourceLimits, RegistryServiceError>
+        {
+            unimplemented!()
+        }
+        async fn batch_update_rpc_call_count(
+            &self,
+            _: std::collections::HashMap<AccountId, i64>,
+        ) -> Result<golem_service_base::model::AccountResourceLimits, RegistryServiceError>
+        {
+            unimplemented!()
+        }
         async fn download_component(
             &self,
             _: ComponentId,

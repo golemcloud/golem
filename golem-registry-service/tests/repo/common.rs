@@ -996,6 +996,8 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalComponentStorageBytes => 1000,
             UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
+            UsageType::MonthlyHttpCalls => 5000,
+            UsageType::MonthlyRpcCalls => 5000,
         };
         let plan_limit = usage.plan.limit(usage_type);
         assert!(plan_limit == limit);
@@ -2006,4 +2008,144 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
         RegistryChangeEvent::EnvironmentPermissionsChanged { environment_id, grantee_account_id, .. }
         if *environment_id == env_id && *grantee_account_id == grantee_id
     ));
+}
+
+pub async fn test_update_http_call_counts(deps: &Deps) {
+    use golem_common::model::account::AccountId;
+    use golem_service_base::model::auth::AuthCtx;
+    use std::collections::HashMap;
+
+    let user = deps.create_account().await;
+    let account_id = AccountId(user.revision.account_id);
+    let svc = deps.account_usage_service();
+
+    // Empty updates → no accounts in the response.
+    let initial = svc
+        .update_http_call_counts(HashMap::new(), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert!(initial.0.is_empty());
+
+    // Recording 10 HTTP calls reduces available by 10.
+    let mut updates = HashMap::new();
+    updates.insert(account_id, 10_i64);
+    let result = svc
+        .update_http_call_counts(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).expect("account must be in response");
+    check!(limits.available_http_calls == 4990, "expected 4990, got {}", limits.available_http_calls);
+    // RPC should be untouched.
+    check!(limits.available_rpc_calls == 5000, "expected RPC untouched at 5000, got {}", limits.available_rpc_calls);
+
+    // Exactly reaching the limit returns 0.
+    let mut updates = HashMap::new();
+    updates.insert(account_id, 4990_i64);
+    let result = svc
+        .update_http_call_counts(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).unwrap();
+    check!(limits.available_http_calls == 0, "expected 0 at limit, got {}", limits.available_http_calls);
+
+    // Slightly exceeding the limit is allowed (optimistic) — saturates at 0, not an error.
+    let mut updates = HashMap::new();
+    updates.insert(account_id, 1_i64);
+    let result = svc
+        .update_http_call_counts(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).unwrap();
+    check!(limits.available_http_calls == 0, "available_http_calls should saturate at 0, got {}", limits.available_http_calls);
+}
+
+pub async fn test_update_rpc_call_counts(deps: &Deps) {
+    use golem_common::model::account::AccountId;
+    use golem_service_base::model::auth::AuthCtx;
+    use std::collections::HashMap;
+
+    let user = deps.create_account().await;
+    let account_id = AccountId(user.revision.account_id);
+    let svc = deps.account_usage_service();
+
+    // Empty updates → no accounts in the response.
+    let initial = svc
+        .update_rpc_call_counts(HashMap::new(), &AuthCtx::System)
+        .await
+        .unwrap();
+    assert!(initial.0.is_empty());
+
+    // Recording 100 RPC calls reduces available by 100.
+    let mut updates = HashMap::new();
+    updates.insert(account_id, 100_i64);
+    let result = svc
+        .update_rpc_call_counts(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).expect("account must be in response");
+    check!(limits.available_rpc_calls == 4900, "expected 4900, got {}", limits.available_rpc_calls);
+    // HTTP should be untouched.
+    check!(limits.available_http_calls == 5000, "expected HTTP untouched at 5000, got {}", limits.available_http_calls);
+
+    // Exactly reaching the limit returns 0.
+    let mut updates = HashMap::new();
+    updates.insert(account_id, 4900_i64);
+    let result = svc
+        .update_rpc_call_counts(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).unwrap();
+    check!(limits.available_rpc_calls == 0, "expected 0 at limit, got {}", limits.available_rpc_calls);
+
+    // Slightly exceeding the limit is allowed (optimistic) — saturates at 0, not an error.
+    let mut updates = HashMap::new();
+    updates.insert(account_id, 1_i64);
+    let result = svc
+        .update_rpc_call_counts(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).unwrap();
+    check!(limits.available_rpc_calls == 0, "available_rpc_calls should saturate at 0, got {}", limits.available_rpc_calls);
+}
+
+pub async fn test_update_call_counts_batch(deps: &Deps) {
+    use golem_common::model::account::AccountId;
+    use golem_service_base::model::auth::AuthCtx;
+    use std::collections::HashMap;
+
+    let svc = deps.account_usage_service();
+    let a1 = AccountId(deps.create_account().await.revision.account_id);
+    let a2 = AccountId(deps.create_account().await.revision.account_id);
+    let a3 = AccountId(deps.create_account().await.revision.account_id);
+    let a4 = AccountId(deps.create_account().await.revision.account_id);
+
+    // HTTP batch — multiple accounts in one call.
+    let mut http_updates = HashMap::new();
+    http_updates.insert(a1, 50_i64);
+    http_updates.insert(a2, 200_i64);
+    let result = svc
+        .update_http_call_counts(http_updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(result.0.get(&a1).unwrap().available_http_calls == 4950, "a1: expected 4950");
+    check!(result.0.get(&a2).unwrap().available_http_calls == 4800, "a2: expected 4800");
+    // Accounts not in the batch are absent from the response.
+    assert!(!result.0.contains_key(&a3), "a3 should not appear in HTTP response");
+
+    // RPC batch — different accounts, same call.
+    let mut rpc_updates = HashMap::new();
+    rpc_updates.insert(a3, 300_i64);
+    rpc_updates.insert(a4, 1000_i64);
+    let result = svc
+        .update_rpc_call_counts(rpc_updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(result.0.get(&a3).unwrap().available_rpc_calls == 4700, "a3: expected 4700");
+    check!(result.0.get(&a4).unwrap().available_rpc_calls == 4000, "a4: expected 4000");
+    // HTTP budgets are untouched for accounts that only had RPC calls recorded.
+    check!(result.0.get(&a3).unwrap().available_http_calls == 5000, "a3: HTTP should be untouched");
+    check!(result.0.get(&a4).unwrap().available_http_calls == 5000, "a4: HTTP should be untouched");
+    // a1/a2 (HTTP-only) are absent from the RPC response.
+    assert!(!result.0.contains_key(&a1), "a1 should not appear in RPC response");
+    assert!(!result.0.contains_key(&a2), "a2 should not appear in RPC response");
 }

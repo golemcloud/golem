@@ -20,10 +20,11 @@ use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
 use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
+use golem_api_grpc::proto::golem::registry::{CallCountUpdate, FuelUsageUpdate};
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
+    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, BatchUpdateHttpCallCountRequest,
+    BatchUpdateRpcCallCountRequest, DownloadComponentRequest,
     GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentTypeRequest,
     GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
@@ -31,7 +32,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
     UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
-    batch_update_fuel_usage_response, download_component_response,
+    batch_update_fuel_usage_response, batch_update_http_call_count_response,
+    batch_update_rpc_call_count_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
@@ -103,6 +105,16 @@ pub trait RegistryService: Send + Sync {
     // will be a noop if the account no longer exists
     // will return all current limits of updated accounts
     async fn batch_update_fuel_usage(
+        &self,
+        updates: HashMap<AccountId, i64>,
+    ) -> Result<AccountResourceLimits, RegistryServiceError>;
+
+    async fn batch_update_http_call_count(
+        &self,
+        updates: HashMap<AccountId, i64>,
+    ) -> Result<AccountResourceLimits, RegistryServiceError>;
+
+    async fn batch_update_rpc_call_count(
         &self,
         updates: HashMap<AccountId, i64>,
     ) -> Result<AccountResourceLimits, RegistryServiceError>;
@@ -474,6 +486,84 @@ impl RegistryService for GrpcRegistryService {
                 Ok(converted)
             }
             Some(batch_update_fuel_usage_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn batch_update_http_call_count(
+        &self,
+        updates: HashMap<AccountId, i64>,
+    ) -> Result<AccountResourceLimits, RegistryServiceError> {
+        let updates: Vec<CallCountUpdate> = updates
+            .into_iter()
+            .map(|(k, v)| CallCountUpdate {
+                account_id: Some(k.into()),
+                value: v,
+            })
+            .collect();
+
+        let response = self
+            .client
+            .call("batch_update_http_call_count", move |client| {
+                let request = BatchUpdateHttpCallCountRequest {
+                    updates: updates.clone(),
+                };
+
+                Box::pin(client.batch_update_http_call_count(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(batch_update_http_call_count_response::Result::Success(payload)) => {
+                let converted = payload
+                    .account_resource_limits
+                    .ok_or("missing account_resource_limits field")?
+                    .try_into()?;
+                Ok(converted)
+            }
+            Some(batch_update_http_call_count_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+        }
+    }
+
+    async fn batch_update_rpc_call_count(
+        &self,
+        updates: HashMap<AccountId, i64>,
+    ) -> Result<AccountResourceLimits, RegistryServiceError> {
+        let updates: Vec<CallCountUpdate> = updates
+            .into_iter()
+            .map(|(k, v)| CallCountUpdate {
+                account_id: Some(k.into()),
+                value: v,
+            })
+            .collect();
+
+        let response = self
+            .client
+            .call("batch_update_rpc_call_count", move |client| {
+                let request = BatchUpdateRpcCallCountRequest {
+                    updates: updates.clone(),
+                };
+
+                Box::pin(client.batch_update_rpc_call_count(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(batch_update_rpc_call_count_response::Result::Success(payload)) => {
+                let converted = payload
+                    .account_resource_limits
+                    .ok_or("missing account_resource_limits field")?
+                    .try_into()?;
+                Ok(converted)
+            }
+            Some(batch_update_rpc_call_count_response::Result::Error(error)) => {
+                Err(error.into())
+            }
         }
     }
 

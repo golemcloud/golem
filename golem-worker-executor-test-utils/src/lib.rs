@@ -122,9 +122,9 @@ use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
@@ -617,8 +617,19 @@ impl FuelManagement for TestWorkerCtx {
         0
     }
 
+}
+
+impl CallCountManagement for TestWorkerCtx {
     fn reset_invocation_call_counts(&mut self) {
         self.durable_ctx.reset_invocation_call_counts();
+    }
+
+    fn record_monthly_http_call(&mut self) -> bool {
+        true
+    }
+
+    fn record_monthly_rpc_call(&mut self) -> bool {
+        true
     }
 }
 

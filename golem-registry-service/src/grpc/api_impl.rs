@@ -31,6 +31,9 @@ use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
     BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, BatchUpdateFuelUsageSuccessResponse,
+    BatchUpdateHttpCallCountRequest, BatchUpdateHttpCallCountResponse,
+    BatchUpdateHttpCallCountSuccessResponse, BatchUpdateRpcCallCountRequest,
+    BatchUpdateRpcCallCountResponse, BatchUpdateRpcCallCountSuccessResponse,
     DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
     GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
     GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
@@ -56,7 +59,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveLatestAgentTypeByNamesResponse, ResolveLatestAgentTypeByNamesSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    authenticate_token_response, batch_update_fuel_usage_response,
+    batch_update_http_call_count_response, batch_update_rpc_call_count_response,
+    download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
@@ -247,6 +252,52 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(BatchUpdateFuelUsageSuccessResponse {
+            account_resource_limits: Some(account_resource_limits.into()),
+        })
+    }
+
+    async fn batch_update_http_call_count_internal(
+        &self,
+        request: BatchUpdateHttpCallCountRequest,
+    ) -> Result<BatchUpdateHttpCallCountSuccessResponse, GrpcApiError> {
+        let updates: HashMap<AccountId, i64> = request
+            .updates
+            .into_iter()
+            .map(|u| {
+                let account_id = u.account_id.ok_or("missing account_id field")?.try_into()?;
+                Ok::<_, GrpcApiError>((account_id, u.value))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let account_resource_limits = self
+            .account_usage_service
+            .update_http_call_counts(updates, &AuthCtx::System)
+            .await?;
+
+        Ok(BatchUpdateHttpCallCountSuccessResponse {
+            account_resource_limits: Some(account_resource_limits.into()),
+        })
+    }
+
+    async fn batch_update_rpc_call_count_internal(
+        &self,
+        request: BatchUpdateRpcCallCountRequest,
+    ) -> Result<BatchUpdateRpcCallCountSuccessResponse, GrpcApiError> {
+        let updates: HashMap<AccountId, i64> = request
+            .updates
+            .into_iter()
+            .map(|u| {
+                let account_id = u.account_id.ok_or("missing account_id field")?.try_into()?;
+                Ok::<_, GrpcApiError>((account_id, u.value))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let account_resource_limits = self
+            .account_usage_service
+            .update_rpc_call_counts(updates, &AuthCtx::System)
+            .await?;
+
+        Ok(BatchUpdateRpcCallCountSuccessResponse {
             account_resource_limits: Some(account_resource_limits.into()),
         })
     }
@@ -736,6 +787,50 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(BatchUpdateFuelUsageResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn batch_update_http_call_count(
+        &self,
+        request: Request<BatchUpdateHttpCallCountRequest>,
+    ) -> Result<Response<BatchUpdateHttpCallCountResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("batch_update_http_call_count",);
+
+        let response = match self
+            .batch_update_http_call_count_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => batch_update_http_call_count_response::Result::Success(result),
+            Err(error) => batch_update_http_call_count_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(BatchUpdateHttpCallCountResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn batch_update_rpc_call_count(
+        &self,
+        request: Request<BatchUpdateRpcCallCountRequest>,
+    ) -> Result<Response<BatchUpdateRpcCallCountResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("batch_update_rpc_call_count",);
+
+        let response = match self
+            .batch_update_rpc_call_count_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => batch_update_rpc_call_count_response::Result::Success(result),
+            Err(error) => batch_update_rpc_call_count_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(BatchUpdateRpcCallCountResponse {
             result: Some(response),
         }))
     }
