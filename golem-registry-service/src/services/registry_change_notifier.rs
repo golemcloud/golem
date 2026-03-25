@@ -21,13 +21,13 @@ use golem_api_grpc::proto::golem::registry::v1::{
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 /// Manages registry change event broadcasting. Delivery is at-least-once;
 /// subscribers must deduplicate by event_id.
 pub trait RegistryChangeNotifier: Send + Sync {
-    /// Publish an event to all subscribers.
-    fn notify(&self, event: RegistryChangeEvent);
+    /// Signal that new events may be available.
+    fn signal_new_events_available(&self);
 
     /// Get a new broadcast receiver for subscribing to live events.
     fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent>;
@@ -43,25 +43,78 @@ pub trait RegistryChangeNotifier: Send + Sync {
 }
 
 /// Local in-process notifier for single-node deployments (e.g., SQLite).
-/// No background tasks needed — notify() directly publishes to the broadcast.
 pub struct LocalRegistryChangeNotifier {
     sender: broadcast::Sender<RegistryChangeEvent>,
+    repo: Arc<dyn RegistryChangeRepo>,
+    signal_tx: mpsc::Sender<()>,
+    signal_rx: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
 }
 
 impl LocalRegistryChangeNotifier {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, repo: Arc<dyn RegistryChangeRepo>) -> Self {
         let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
+        let (signal_tx, signal_rx) = mpsc::channel(1);
+        Self {
+            sender,
+            repo,
+            signal_tx,
+            signal_rx: Arc::new(Mutex::new(Some(signal_rx))),
+        }
     }
 }
 
 impl RegistryChangeNotifier for LocalRegistryChangeNotifier {
-    fn notify(&self, event: RegistryChangeEvent) {
-        let _ = self.sender.send(event);
+    fn signal_new_events_available(&self) {
+        if let Err(err) = self.signal_tx.try_send(()) {
+            match err {
+                mpsc::error::TrySendError::Full(_) => {
+                    // A signal is already queued and the worker drains/replays from the outbox,
+                    // so dropping this duplicate signal is safe.
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    tracing::warn!("Local notifier worker is not running");
+                }
+            }
+        }
     }
 
     fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent> {
         self.sender.subscribe()
+    }
+
+    fn start_background_tasks(
+        &self,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) {
+        let repo = self.repo.clone();
+        let sender = self.sender.clone();
+        let signal_rx = self.signal_rx.clone();
+
+        join_set.spawn(async move {
+            let Some(mut signal_rx) = signal_rx.lock().await.take() else {
+                return Ok(());
+            };
+
+            let mut last_processed_event_id = ChangeEventId(0);
+
+            while signal_rx.recv().await.is_some() {
+                while signal_rx.try_recv().is_ok() {}
+
+                match repo.get_events_since(last_processed_event_id).await {
+                    Ok(events) => {
+                        for event in events {
+                            last_processed_event_id = event.event_id();
+                            let _ = sender.send(event);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch events after signal: {e}");
+                    }
+                }
+            }
+
+            Ok(())
+        });
     }
 }
 
@@ -99,8 +152,8 @@ impl PostgresRegistryChangeNotifier {
 }
 
 impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
-    fn notify(&self, event: RegistryChangeEvent) {
-        let _ = self.sender.send(event);
+    fn signal_new_events_available(&self) {
+        // Postgres path relies on LISTEN/NOTIFY and background replay.
     }
 
     fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent> {
@@ -394,15 +447,19 @@ mod tests {
 
     #[test]
     async fn test_broadcast_single_subscriber() {
-        let notifier = LocalRegistryChangeNotifier::new(16);
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
         let mut rx = notifier.subscribe();
 
         let env_id = Uuid::new_v4();
-        notifier.notify(RegistryChangeEvent::DeploymentChanged {
+        repo.push(RegistryChangeEvent::DeploymentChanged {
             event_id: ChangeEventId(1),
             environment_id: env_id,
             deployment_revision_id: 42,
         });
+        notifier.signal_new_events_available();
 
         let event = rx.recv().await.unwrap();
         assert_eq!(event.event_id(), ChangeEventId(1));
@@ -414,20 +471,25 @@ mod tests {
                 ..
             } if environment_id == env_id
         ));
+        join_set.abort_all();
     }
 
     #[test]
     async fn test_broadcast_multiple_subscribers() {
-        let notifier = LocalRegistryChangeNotifier::new(16);
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
         let mut rx1 = notifier.subscribe();
         let mut rx2 = notifier.subscribe();
 
         let env_id = Uuid::new_v4();
-        notifier.notify(RegistryChangeEvent::DeploymentChanged {
+        repo.push(RegistryChangeEvent::DeploymentChanged {
             event_id: ChangeEventId(5),
             environment_id: env_id,
             deployment_revision_id: 99,
         });
+        notifier.signal_new_events_available();
 
         let e1 = rx1.recv().await.unwrap();
         let e2 = rx2.recv().await.unwrap();
@@ -450,28 +512,23 @@ mod tests {
                 ..
             } if environment_id == env_id
         ));
+        join_set.abort_all();
     }
 
     #[test]
-    fn test_notify_no_receivers() {
-        let notifier = LocalRegistryChangeNotifier::new(16);
+    fn test_signal_no_receivers() {
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        let notifier = LocalRegistryChangeNotifier::new(16, repo);
         // Should not panic even with no subscribers
-        notifier.notify(RegistryChangeEvent::DeploymentChanged {
-            event_id: ChangeEventId(10),
-            environment_id: Uuid::new_v4(),
-            deployment_revision_id: 7,
-        });
+        notifier.signal_new_events_available();
     }
 
     #[test]
-    fn test_subscribe_after_notify() {
-        let notifier = LocalRegistryChangeNotifier::new(16);
+    fn test_subscribe_after_signal() {
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        let notifier = LocalRegistryChangeNotifier::new(16, repo);
 
-        notifier.notify(RegistryChangeEvent::DeploymentChanged {
-            event_id: ChangeEventId(20),
-            environment_id: Uuid::new_v4(),
-            deployment_revision_id: 100,
-        });
+        notifier.signal_new_events_available();
 
         // Subscribe after the event was sent
         let mut rx = notifier.subscribe();
@@ -548,7 +605,9 @@ mod tests {
         repo.push(make_deployment_change_event(2));
         repo.push(make_deployment_change_event(3));
 
-        let notifier = LocalRegistryChangeNotifier::new(16);
+        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
         let mut stream = subscribe_registry_invalidations(repo, &notifier, Some(1));
 
         let e1 = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
@@ -564,6 +623,7 @@ mod tests {
             .expect("stream ended")
             .expect("error");
         assert_eq!(e2.event_id, 3);
+        join_set.abort_all();
     }
 
     #[test]
@@ -571,14 +631,16 @@ mod tests {
         use tokio_stream::StreamExt;
 
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        let notifier = LocalRegistryChangeNotifier::new(16);
-        let mut stream = subscribe_registry_invalidations(repo, &notifier, None);
+        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
+        let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
 
         // Give the spawned task time to start
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let ev = make_deployment_change_event(10);
-        notifier.notify(ev);
+        repo.push(make_deployment_change_event(10));
+        notifier.signal_new_events_available();
 
         let received = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
             .await
@@ -586,6 +648,7 @@ mod tests {
             .expect("stream ended")
             .expect("error");
         assert_eq!(received.event_id, 10);
+        join_set.abort_all();
     }
 
     #[test]
@@ -593,21 +656,21 @@ mod tests {
         use tokio_stream::StreamExt;
 
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        let ev1 = make_deployment_change_event(1);
-        let ev2 = make_deployment_change_event(2);
-        repo.push(ev1.clone());
-        repo.push(ev2.clone());
+        repo.push(make_deployment_change_event(1));
+        repo.push(make_deployment_change_event(2));
 
-        let notifier = LocalRegistryChangeNotifier::new(16);
+        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
         // Subscribe with cursor 0, so replay returns events 1 and 2
-        let mut stream = subscribe_registry_invalidations(repo, &notifier, Some(0));
+        let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, Some(0));
 
-        // Also push the same events through the notifier (simulating overlap)
-        notifier.notify(ev1);
-        notifier.notify(ev2);
+        // Also signal replay through the notifier (simulating overlap)
+        notifier.signal_new_events_available();
+        notifier.signal_new_events_available();
         // Push a new event to confirm the stream advances
-        let ev3 = make_deployment_change_event(3);
-        notifier.notify(ev3);
+        repo.push(make_deployment_change_event(3));
+        notifier.signal_new_events_available();
 
         let mut received_ids = Vec::new();
         for _ in 0..3 {
@@ -621,6 +684,7 @@ mod tests {
 
         // Should see exactly [1, 2, 3] with no duplicates
         assert_eq!(received_ids, vec![1, 2, 3]);
+        join_set.abort_all();
     }
 
     #[test]
@@ -634,15 +698,17 @@ mod tests {
         }
 
         // Capacity 2 — will lag when we burst
-        let notifier = LocalRegistryChangeNotifier::new(2);
+        let notifier = LocalRegistryChangeNotifier::new(2, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
         let mut stream = subscribe_registry_invalidations(repo, &notifier, None);
 
         // Give the spawned task time to start listening
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Burst 5 events to overflow the capacity-2 broadcast
-        for i in 1..=5 {
-            notifier.notify(make_deployment_change_event(i));
+        for _ in 1..=5 {
+            notifier.signal_new_events_available();
         }
 
         // The stream should eventually deliver all 5 events (via lag recovery replay)
@@ -659,6 +725,7 @@ mod tests {
         for i in 1..=5u64 {
             assert!(seen.contains(&i), "missing event_id {i}");
         }
+        join_set.abort_all();
     }
 
     #[test]
@@ -670,7 +737,9 @@ mod tests {
         // but latest_event_id is 100 (events existed and were cleaned up).
         repo.set_latest_event_id_override(ChangeEventId(100));
 
-        let notifier = LocalRegistryChangeNotifier::new(16);
+        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
         // Subscribe with cursor 5 — events 6..100 were purged
         let mut stream = subscribe_registry_invalidations(repo, &notifier, Some(5));
 
@@ -685,21 +754,26 @@ mod tests {
             ev.payload
         );
         assert_eq!(ev.event_id, 100);
+        join_set.abort_all();
     }
 
     #[test]
     async fn test_lagged_receiver() {
         // Create notifier with capacity of 2
-        let notifier = LocalRegistryChangeNotifier::new(2);
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        let notifier = LocalRegistryChangeNotifier::new(2, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
         let mut rx = notifier.subscribe();
 
         // Send 3 events to overflow the capacity-2 buffer
         for i in 1..=3 {
-            notifier.notify(RegistryChangeEvent::DeploymentChanged {
+            repo.push(RegistryChangeEvent::DeploymentChanged {
                 event_id: ChangeEventId(i),
                 environment_id: Uuid::new_v4(),
                 deployment_revision_id: i * 10,
             });
+            notifier.signal_new_events_available();
         }
 
         // First recv should report Lagged
@@ -717,5 +791,6 @@ mod tests {
             "expected surviving event, got {}",
             event.event_id().0
         );
+        join_set.abort_all();
     }
 }

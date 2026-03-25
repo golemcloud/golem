@@ -16,7 +16,6 @@ use super::DeployValidationError;
 use super::deployment_context::DeploymentContext;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
-use crate::repo::registry_change::RegistryChangeEvent;
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
@@ -319,7 +318,7 @@ impl DeploymentWriteService {
             auth.account_id(),
         )?;
 
-        let (ext_revision, change_event_id) = self
+        let ext_revision = self
             .deployment_repo
             .deploy(record, deployment_context.environment.version_check)
             .await
@@ -342,13 +341,7 @@ impl DeploymentWriteService {
 
         let deployment: CurrentDeployment = ext_revision.try_into()?;
 
-        // Notify subscribers (event was already recorded in the deploy transaction)
-        self.registry_change_notifier
-            .notify(RegistryChangeEvent::DeploymentChanged {
-                event_id: change_event_id,
-                environment_id: environment_id.0,
-                deployment_revision_id: deployment.revision.into(),
-            });
+        self.registry_change_notifier.signal_new_events_available();
 
         Ok(deployment)
     }
@@ -398,7 +391,7 @@ impl DeploymentWriteService {
             ))?
             .try_into()?;
 
-        let (revision_record, change_event_id) = self
+        let revision_record = self
             .deployment_repo
             .set_current_deployment(
                 auth.account_id().0,
@@ -416,13 +409,7 @@ impl DeploymentWriteService {
         let current_deployment: CurrentDeployment = revision_record
             .into_model(target_deployment.version, target_deployment.deployment_hash)?;
 
-        // Notify subscribers (event was already recorded in the rollback transaction)
-        self.registry_change_notifier
-            .notify(RegistryChangeEvent::DeploymentChanged {
-                event_id: change_event_id,
-                environment_id: environment_id.0,
-                deployment_revision_id: payload.deployment_revision.into(),
-            });
+        self.registry_change_notifier.signal_new_events_available();
 
         Ok(current_deployment)
     }

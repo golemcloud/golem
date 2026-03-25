@@ -19,7 +19,7 @@ use crate::repo::model::BindFields;
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account::AccountRepoError;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
+    DbRegistryChangeRepo, NewRegistryChangeEvent,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -47,7 +47,7 @@ pub trait AccountRepo: Send + Sync {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<(AccountExtRevisionRecord, ChangeEventId), AccountRepoError>;
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError>;
 
     async fn get_by_id(
         &self,
@@ -106,7 +106,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<(AccountExtRevisionRecord, ChangeEventId), AccountRepoError> {
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let span = Self::span_account_id(revision.account_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -263,7 +263,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: AccountRevisionRecord,
-    ) -> Result<(AccountExtRevisionRecord, ChangeEventId), AccountRepoError> {
+    ) -> Result<AccountExtRevisionRecord, AccountRepoError> {
         let result = self
             .db_pool
             .with_tx_err(METRICS_SVC_NAME, "delete", |tx| {
@@ -289,17 +289,13 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
 
                 let change_event =
                     NewRegistryChangeEvent::account_tokens_invalidated(revision.account_id);
-                let change_event_id =
-                    DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &change_event)
-                        .await?;
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                    .await?;
 
-                Ok::<_, AccountRepoError>((
-                    AccountExtRevisionRecord {
-                        entity_created_at: account_record.audit.created_at,
-                        revision: revision_record,
-                    },
-                    change_event_id,
-                ))
+                Ok::<_, AccountRepoError>(AccountExtRevisionRecord {
+                    entity_created_at: account_record.audit.created_at,
+                    revision: revision_record,
+                })
             }.boxed()
         })
         .await?;

@@ -79,6 +79,13 @@ pub enum TestDb {
 }
 
 impl Deps {
+    pub fn registry_change_repo_for_notifier(&self) -> std::sync::Arc<dyn RegistryChangeRepo> {
+        match &self.test_db {
+            TestDb::Postgres(pool) => std::sync::Arc::new(DbRegistryChangeRepo::new(pool.clone())),
+            TestDb::Sqlite(pool) => std::sync::Arc::new(DbRegistryChangeRepo::new(pool.clone())),
+        }
+    }
+
     pub async fn record_registry_change_event(
         &self,
         event: NewRegistryChangeEvent,
@@ -87,7 +94,7 @@ impl Deps {
             TestDb::Postgres(pool) => pool
                 .with_tx_err("registry_change", "record_change_event_test", |tx| {
                     async move {
-                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &event)
+                        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &event)
                             .await
                     }
                     .boxed()
@@ -97,7 +104,7 @@ impl Deps {
             TestDb::Sqlite(pool) => pool
                 .with_tx_err("registry_change", "record_change_event_test", |tx| {
                     async move {
-                        DbRegistryChangeRepo::<SqlitePool>::insert_change_event_in_tx(tx, &event)
+                        DbRegistryChangeRepo::<SqlitePool>::create_change_event_in_tx(tx, &event)
                             .await
                     }
                     .boxed()

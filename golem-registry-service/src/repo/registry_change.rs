@@ -293,7 +293,7 @@ impl<DBP: Pool> DbRegistryChangeRepo<DBP> {
     }
 }
 
-// Postgres implementation — includes pg_notify for multi-node propagation.
+// Postgres implementation.
 #[async_trait]
 impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
     async fn get_events_since(
@@ -373,7 +373,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
     }
 }
 
-// SQLite implementation — no pg_notify; in-process notify() is sufficient for single-node.
+// SQLite implementation.
 #[async_trait]
 impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
     async fn get_events_since(
@@ -461,15 +461,20 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
     }
 }
 
-/// Insert a registry change event inside an existing transaction.
+/// Create a registry change event inside an existing transaction.
+///
+/// Postgres acquires an advisory transaction lock, inserts the event row,
+/// and sends `pg_notify('registry_change', event_id)` in the same transaction.
+/// SQLite inserts the event row in the same transaction and relies on signal_new_events_available
+/// being called after the transaction is finished.
 ///
 /// Postgres uses native `text[]` for the domains column; SQLite stores
 /// domains as a JSON string. We provide one inherent impl per supported
 /// pool type so `trait_gen`-expanded callers can invoke
-/// `DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(...)`
-/// or `DbRegistryChangeRepo::<SqlitePool>::insert_change_event_in_tx(...)`.
+/// `DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(...)`
+/// or `DbRegistryChangeRepo::<SqlitePool>::create_change_event_in_tx(...)`.
 impl DbRegistryChangeRepo<PostgresPool> {
-    pub async fn insert_change_event_in_tx(
+    pub async fn create_change_event_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         event: &NewRegistryChangeEvent,
     ) -> RepoResult<ChangeEventId> {
@@ -509,7 +514,7 @@ impl DbRegistryChangeRepo<PostgresPool> {
 }
 
 impl DbRegistryChangeRepo<SqlitePool> {
-    pub async fn insert_change_event_in_tx(
+    pub async fn create_change_event_in_tx(
         tx: &mut <<SqlitePool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         event: &NewRegistryChangeEvent,
     ) -> RepoResult<ChangeEventId> {

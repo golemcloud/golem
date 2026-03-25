@@ -37,7 +37,7 @@ use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent,
+    DbRegistryChangeRepo, NewRegistryChangeEvent,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -94,12 +94,11 @@ pub trait DeploymentRepo: Send + Sync {
     ) -> RepoResult<Option<DeployedDeploymentIdentity>>;
 
     /// Deploy and record a change event in the same transaction.
-    /// Returns the deployment record and the outbox event_id.
     async fn deploy(
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError>;
+    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
 
     async fn list_active_compiled_routes_for_domain(
         &self,
@@ -168,13 +167,12 @@ pub trait DeploymentRepo: Send + Sync {
     ) -> RepoResult<Option<ResolvedAgentTypeRecord>>;
 
     /// Set the current deployment and record a change event in the same transaction.
-    /// Returns the deployment record and the outbox event_id.
     async fn set_current_deployment(
         &self,
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError>;
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -306,7 +304,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError> {
+    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
         let span = Self::span_user_and_env(
             deployment_creation.user_account_id,
             deployment_creation.environment_id,
@@ -495,7 +493,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         self.repo
             .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
             .instrument(info_span!(
@@ -704,7 +702,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError> {
+    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
         if version_check
             && self
                 .version_exists(
@@ -831,12 +829,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         environment_id,
                         deployment_revision_id,
                     );
-                    let change_event_id =
-                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
-                            tx,
-                            &change_event,
-                        )
-                        .await?;
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                        tx,
+                        &change_event,
+                    )
+                    .await?;
 
                     let ext_revision = CurrentDeploymentExtRevisionRecord {
                         revision,
@@ -844,7 +841,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         deployment_hash: deployment_revision.hash,
                     };
 
-                    Ok::<_, DeployRepoError>((ext_revision, change_event_id))
+                    Ok::<_, DeployRepoError>(ext_revision)
                 }
                 .boxed()
             })
@@ -1241,7 +1238,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         let result = self
             .with_tx_err("set_current_deployment", |tx| {
                 Box::pin(async move {
@@ -1257,14 +1254,13 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         environment_id,
                         deployment_revision_id,
                     );
-                    let change_event_id =
-                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
-                            tx,
-                            &change_event,
-                        )
-                        .await?;
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                        tx,
+                        &change_event,
+                    )
+                    .await?;
 
-                    Ok::<_, DeployRepoError>((revision, change_event_id))
+                    Ok::<_, DeployRepoError>(revision)
                 })
             })
             .await?;

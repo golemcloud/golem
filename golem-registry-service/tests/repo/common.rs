@@ -1760,7 +1760,9 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
 
 pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     let env_id = new_repo_uuid();
-    let notifier = LocalRegistryChangeNotifier::new(64);
+    let notifier = LocalRegistryChangeNotifier::new(64, deps.registry_change_repo_for_notifier());
+    let mut join_set = tokio::task::JoinSet::new();
+    notifier.start_background_tasks(&mut join_set);
 
     // Insert some events in the DB (simulating past deployments)
     let id1 = deps
@@ -1803,11 +1805,7 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     let id3 = deps
         .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 30))
         .await;
-    notifier.notify(RegistryChangeEvent::DeploymentChanged {
-        event_id: id3,
-        environment_id: env_id,
-        deployment_revision_id: 30,
-    });
+    notifier.signal_new_events_available();
 
     // Verify we receive the live event
     let received = rx.recv().await.unwrap();
@@ -1830,6 +1828,7 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .collect();
     assert!(our_events.len() == 1);
     assert!(our_events[0].event_id() == id3);
+    join_set.abort_all();
 }
 
 pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {

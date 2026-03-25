@@ -16,7 +16,6 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use crate::model::security_scheme::SecurityScheme;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::security_scheme::{SecuritySchemeRepoError, SecuritySchemeRevisionRecord};
-use crate::repo::registry_change::RegistryChangeEvent;
 use crate::repo::security_scheme::SecuritySchemeRepo;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -136,12 +135,8 @@ impl SecuritySchemeService {
             .await;
 
         match result {
-            Ok((record, event_id)) => {
-                self.registry_change_notifier
-                    .notify(RegistryChangeEvent::SecuritySchemeChanged {
-                        event_id,
-                        environment_id: environment_id.0,
-                    });
+            Ok(record) => {
+                self.registry_change_notifier.signal_new_events_available();
                 Ok(record.try_into()?)
             }
             Err(SecuritySchemeRepoError::SecuritySchemeViolatesUniqueness) => Err(
@@ -203,12 +198,8 @@ impl SecuritySchemeService {
             .await;
 
         match result {
-            Ok((record, event_id)) => {
-                self.registry_change_notifier
-                    .notify(RegistryChangeEvent::SecuritySchemeChanged {
-                        event_id,
-                        environment_id: environment_id.0,
-                    });
+            Ok(record) => {
+                self.registry_change_notifier.signal_new_events_available();
                 Ok(record.try_into()?)
             }
             Err(SecuritySchemeRepoError::ConcurrentModification) => {
@@ -252,12 +243,8 @@ impl SecuritySchemeService {
             .await;
 
         match result {
-            Ok((record, event_id)) => {
-                self.registry_change_notifier
-                    .notify(RegistryChangeEvent::SecuritySchemeChanged {
-                        event_id,
-                        environment_id: environment_id.0,
-                    });
+            Ok(record) => {
+                self.registry_change_notifier.signal_new_events_available();
                 Ok(record.try_into()?)
             }
             Err(SecuritySchemeRepoError::ConcurrentModification) => {

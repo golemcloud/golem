@@ -173,7 +173,10 @@ impl Services {
                 repos.registry_change_repo.clone(),
                 pg_config,
             )),
-            _ => Arc::new(LocalRegistryChangeNotifier::new(1024)),
+            _ => Arc::new(LocalRegistryChangeNotifier::new(
+                1024,
+                repos.registry_change_repo.clone(),
+            )),
         };
 
         let account_service = Arc::new(AccountService::new(

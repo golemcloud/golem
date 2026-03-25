@@ -414,7 +414,7 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
         .pool
         .with_tx_err("registry_change", "record_change_event_test", |tx| {
             Box::pin(async move {
-                DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
                     tx,
                     &NewRegistryChangeEvent::deployment_changed(env_id, 42),
                 )

@@ -17,7 +17,6 @@ use crate::config::PrecreatedAccount;
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
-use crate::repo::registry_change::RegistryChangeEvent;
 use crate::services::registry_change_notifier::RegistryChangeNotifier;
 use anyhow::anyhow;
 use golem_common::model::account::AccountSetRoles;
@@ -229,15 +228,9 @@ impl AccountService {
         );
 
         match self.account_repo.delete(record).await {
-            Ok((record, event_id)) => {
+            Ok(record) => {
                 let account: Account = record.try_into()?;
-                // Account soft-delete invalidates all its tokens
-                self.registry_change_notifier.notify(
-                    RegistryChangeEvent::AccountTokensInvalidated {
-                        event_id,
-                        account_id: account_id.0,
-                    },
-                );
+                self.registry_change_notifier.signal_new_events_available();
                 Ok(account)
             }
             Err(AccountRepoError::ConcurrentModification) => Err(AccountError::ConcurrentUpdate)?,
