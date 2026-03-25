@@ -80,8 +80,6 @@ impl DeployedMcpService {
                             });
                         }
                     }
-                    // If security scheme is not found, leave it as None
-                    // This is consistent with how routes filter out entries with missing security schemes
                 }
 
                 let mut registered_agent_types = Vec::new();
