@@ -15,7 +15,9 @@
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
 use crate::fs;
 use crate::log::log_warn_action;
-use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
+use crate::model::app_raw::{
+    GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
+};
 use crate::model::{app_raw, GuestLanguage};
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::agent::AgentTypeName;
@@ -161,6 +163,26 @@ pub struct InjectToPrebuiltQuickJsCommandMarkerHash<'a> {
 impl TaskResultMarkerHashSource for InjectToPrebuiltQuickJsCommandMarkerHash<'_> {
     fn kind() -> &'static str {
         "InjectToPrebuiltQuickJsCommandMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
+#[derive(Serialize)]
+pub struct PreinitializeJsCommandMarkerHash<'a> {
+    pub build_dir: &'a Path,
+    pub command: &'a PreinitializeJs,
+}
+
+impl TaskResultMarkerHashSource for PreinitializeJsCommandMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "PreinitializeJsCommandMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {

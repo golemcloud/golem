@@ -1,5 +1,5 @@
 name: 'Setup Rust Environment'
-description: 'Checkout, setup Rust, cache, cargo-make, and purge v8'
+description: 'Checkout, setup Rust, cache, and cargo-make'
 inputs:
   fetch-tag:
     description: 'Whether to fetch tag with --deepen=1'
@@ -21,9 +21,6 @@ inputs:
     default: 'false'
   install-cargo-make:
     description: 'Whether to install cargo-make'
-    default: 'true'
-  purge-v8:
-    description: 'Whether to purge v8 from cache'
     default: 'true'
   install-cargo-binstall:
     description: 'Whether to install cargo-binstall'
@@ -56,7 +53,3 @@ runs:
     - name: Install cargo-binstall
       if: inputs.install-cargo-binstall == 'true'
       uses: cargo-bins/cargo-binstall@main
-    - name: Purge v8 from cache
-      if: inputs.purge-v8 == 'true'
-      shell: bash
-      run: cargo make --profile ci clear-v8

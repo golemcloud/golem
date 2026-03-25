@@ -235,6 +235,7 @@ fn registry_service_config(
                     monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,
                     max_table_elements_per_worker: u64::MAX,
+                    max_disk_space_per_worker: u64::MAX,
                 },
             );
             plans

@@ -34,12 +34,12 @@ use crate::model::oplog::public_oplog_entry::{
     CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostCallParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
+    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
@@ -100,6 +100,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
             Error::ExceededMemoryLimit(_) => Ok(Self::ExceededMemoryLimit),
             Error::ExceededTableLimit(_) => Ok(Self::ExceededTableLimit),
+            Error::NodeOutOfFilesystemStorage(_) => Ok(Self::NodeOutOfFilesystemStorage),
+            Error::AgentExceededFilesystemStorageLimit(_) => {
+                Ok(Self::AgentExceededFilesystemStorageLimit)
+            }
         }
     }
 }
@@ -125,6 +129,14 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
             }
             AgentError::ExceededTableLimit => {
                 Error::ExceededTableLimit(grpc_worker::ExceededTableLimit {})
+            }
+            AgentError::NodeOutOfFilesystemStorage => {
+                Error::NodeOutOfFilesystemStorage(grpc_worker::NodeOutOfFilesystemStorage {})
+            }
+            AgentError::AgentExceededFilesystemStorageLimit => {
+                Error::AgentExceededFilesystemStorageLimit(
+                    grpc_worker::AgentExceededFilesystemStorageLimit {},
+                )
             }
         };
         Self { error: Some(error) }
@@ -439,6 +451,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     delta: grow_memory.delta,
                 }))
+            }
+            oplog_entry::Entry::FilesystemStorageUsageUpdate(filesystem_storage_usage_update) => {
+                Ok(PublicOplogEntry::FilesystemStorageUsageUpdate(
+                    FilesystemStorageUsageUpdateParams {
+                        timestamp: filesystem_storage_usage_update
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        delta: filesystem_storage_usage_update.delta,
+                    },
+                ))
             }
             oplog_entry::Entry::CreateResource(create_resource) => {
                 Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
@@ -846,6 +869,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
                             timestamp: Some(grow_memory.timestamp.into()),
                             delta: grow_memory.delta,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::FilesystemStorageUsageUpdate(filesystem_storage_usage_update) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::FilesystemStorageUsageUpdate(
+                        golem_api_grpc::proto::golem::worker::FilesystemStorageUsageUpdateParameters {
+                            timestamp: Some(filesystem_storage_usage_update.timestamp.into()),
+                            delta: filesystem_storage_usage_update.delta,
                         },
                     )),
                 }

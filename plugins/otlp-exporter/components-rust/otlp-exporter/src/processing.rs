@@ -50,12 +50,7 @@ pub(crate) fn process_entries(
                 handle_finish_span(state, params, &mut completed_spans);
             }
             OplogEntry::AgentInvocationFinished(params) => {
-                handle_invocation_finished(
-                    state,
-                    params,
-                    &mut completed_spans,
-                    &mut metrics,
-                );
+                handle_invocation_finished(state, params, &mut completed_spans, &mut metrics);
             }
             OplogEntry::Error(params) => {
                 let error_msg = worker_error_to_string(&params.error);
@@ -233,9 +228,7 @@ fn non_empty_trace_id(trace_id: &str) -> Option<String> {
     }
 }
 
-fn worker_error_variant_name(
-    e: &golem_rust::bindings::golem::api::oplog::WorkerError,
-) -> String {
+fn worker_error_variant_name(e: &golem_rust::bindings::golem::api::oplog::WorkerError) -> String {
     match e {
         golem_rust::bindings::golem::api::oplog::WorkerError::Unknown(_) => {
             "Unknown".to_string()
@@ -255,6 +248,9 @@ fn worker_error_variant_name(
         golem_rust::bindings::golem::api::oplog::WorkerError::InternalError(_) => {
             "InternalError".to_string()
         }
+        golem_rust::bindings::golem::api::oplog::WorkerError::ExceededTableLimit => todo!(),
+        golem_rust::bindings::golem::api::oplog::WorkerError::NodeOutOfFilesystemStorage => todo!(),
+        golem_rust::bindings::golem::api::oplog::WorkerError::AgentExceededFilesystemStorageLimit => todo!(),
     }
 }
 
@@ -284,11 +280,7 @@ fn log_level_severity_text(level: &LogLevel) -> &'static str {
     }
 }
 
-fn handle_log(
-    state: &WorkerState,
-    params: LogParameters,
-    log_records: &mut Vec<OtlpLogRecord>,
-) {
+fn handle_log(state: &WorkerState, params: LogParameters, log_records: &mut Vec<OtlpLogRecord>) {
     let time_ns = datetime_to_nanos(&params.timestamp).to_string();
     let mut attributes = Vec::new();
     if !params.context.is_empty() {
@@ -398,7 +390,11 @@ fn handle_create(
     ));
 }
 
-fn handle_grow_memory(state: &mut WorkerState, params: GrowMemoryParameters, metrics: &mut Vec<OtlpMetric>) {
+fn handle_grow_memory(
+    state: &mut WorkerState,
+    params: GrowMemoryParameters,
+    metrics: &mut Vec<OtlpMetric>,
+) {
     let time_ns = datetime_to_nanos(&params.timestamp).to_string();
 
     state.total_memory_bytes += params.delta;
@@ -536,10 +532,8 @@ fn handle_invocation_started(
                     .map(|a| (a.key, attribute_value_to_string(&a.value)))
                     .collect();
 
-                let parent = resolve_parent_through_inherited(
-                    local.parent,
-                    &state.inherited_span_parents,
-                );
+                let parent =
+                    resolve_parent_through_inherited(local.parent, &state.inherited_span_parents);
 
                 state.implicit_spans.push(PendingSpan {
                     span_id: local.span_id,

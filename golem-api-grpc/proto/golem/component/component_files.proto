@@ -13,4 +13,5 @@ message InitialComponentFile {
   golem.common.Hash content_hash = 1;
   string path = 2;
   ComponentFilePermissions permissions = 3;
+  uint64 size = 4;
 }

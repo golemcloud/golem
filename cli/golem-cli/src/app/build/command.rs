@@ -15,23 +15,23 @@
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
     InjectToPrebuiltQuickJsCommandMarkerHash, NpmInstallDepsMarkerHash,
-    ResolvedExternalCommandMarkerHash, TaskResultMarker,
+    PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
 };
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
-use crate::composition::{compose, Plug};
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app_raw;
-use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
-use crate::process::{with_hidden_output_unless_error, CommandExt, HiddenOutput};
+use crate::model::app_raw::{
+    GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
+};
+use crate::process::CommandExt;
 use anyhow::{anyhow, Context as AnyhowContext};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
 use std::path::Path;
 use tokio::process::Command;
-use tracing::{enabled, Level};
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
@@ -55,12 +55,15 @@ pub async fn execute_build_command(
             execute_quickjs_d_ts(ctx, &base_build_dir, command)
         }
         app_raw::BuildCommand::InjectToPrebuiltQuickJs(command) => {
-            execute_inject_to_prebuilt_quick_js(ctx, &base_build_dir, command).await
+            execute_inject_to_prebuilt_quick_js(ctx, &base_build_dir, command)
+        }
+        app_raw::BuildCommand::PreinitializeJs(command) => {
+            execute_preinitialize_js(ctx, &base_build_dir, command).await
         }
     }
 }
 
-async fn execute_inject_to_prebuilt_quick_js(
+fn execute_inject_to_prebuilt_quick_js(
     ctx: &BuildContext<'_>,
     base_build_dir: &Path,
     command: &InjectToPrebuiltQuickJs,
@@ -68,9 +71,6 @@ async fn execute_inject_to_prebuilt_quick_js(
     let base_build_dir = Utf8Path::from_path(base_build_dir).unwrap();
     let base_wasm = base_build_dir.join(&command.inject_to_prebuilt_quickjs);
     let js_module = base_build_dir.join(&command.module);
-    let js_module_contents = std::fs::read_to_string(&js_module)
-        .with_context(|| format!("Failed to read JS module from {js_module}"))?;
-    let js_module_wasm = base_build_dir.join(&command.module_wasm);
     let target = base_build_dir.join(&command.into);
 
     new_task_up_to_date_check(ctx)
@@ -78,10 +78,10 @@ async fn execute_inject_to_prebuilt_quick_js(
             build_dir: base_build_dir.as_std_path(),
             command,
         })?
-        .with_sources(|| [&base_wasm, &js_module, &js_module_wasm])
+        .with_sources(|| [&base_wasm, &js_module])
         .with_targets(|| [&target])
-        .run_async_or_skip(
-            || async {
+        .run_or_skip(
+            || {
                 log_action(
                     "Injecting",
                     format!(
@@ -92,33 +92,59 @@ async fn execute_inject_to_prebuilt_quick_js(
                 );
                 let _indent = LogIndent::new();
 
-                with_hidden_output_unless_error(
-                    HiddenOutput::hide_stderr_if(!enabled!(Level::WARN)),
-                    || {
-                        moonbit_component_generator::get_script::generate_get_script_component(
-                            &js_module_contents,
-                            &js_module_wasm,
-                        )
-                    },
-                )?;
+                let js_source = std::fs::read_to_string(&js_module)
+                    .with_context(|| format!("Failed to read JS module from {js_module}"))?;
 
-                compose(
-                    base_wasm.as_std_path(),
-                    vec![Plug {
-                        name: "JS module".to_string(),
-                        wasm: js_module_wasm.as_std_path().to_path_buf(),
-                    }],
-                    target.as_std_path(),
-                )
-                .await?;
+                fs::create_dir_all(fs::parent_or_err(target.as_std_path())?)?;
 
-                Ok(())
+                wasm_rquickjs::inject_js_into_component(&base_wasm, &target, &[&js_source])
+                    .context("Failed to inject JS into QuickJS WASM component")
             },
             || {
                 log_skipping_up_to_date(format!(
                     "injecting JS module {} into QuickJS WASM {}",
                     js_module.log_color_highlight(),
                     base_wasm.log_color_highlight()
+                ));
+            },
+        )
+}
+
+async fn execute_preinitialize_js(
+    ctx: &BuildContext<'_>,
+    base_build_dir: &Path,
+    command: &PreinitializeJs,
+) -> anyhow::Result<()> {
+    let base_build_dir = Utf8Path::from_path(base_build_dir).unwrap();
+    let input = base_build_dir.join(&command.preinitialize_js);
+    let output = base_build_dir.join(&command.into);
+
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(PreinitializeJsCommandMarkerHash {
+            build_dir: base_build_dir.as_std_path(),
+            command,
+        })?
+        .with_sources(|| [&input])
+        .with_targets(|| [&output])
+        .run_async_or_skip(
+            || async {
+                log_action(
+                    "Pre-initializing",
+                    format!(
+                        "JS component {} into {}",
+                        input.log_color_highlight(),
+                        output.log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
+
+                wasm_rquickjs::optimize_component(&input, &output, "wizer-initialize").await
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "pre-initializing JS component {} into {}",
+                    input.log_color_highlight(),
+                    output.log_color_highlight()
                 ));
             },
         )
@@ -198,6 +224,8 @@ fn execute_quickjs_create(
     for (name, spec) in &command.js_modules {
         let mode = if spec == "@composition" {
             EmbeddingMode::Composition
+        } else if spec == "@slot" {
+            EmbeddingMode::BinarySlot
         } else {
             let js = base_build_dir.join(spec);
             js_paths.push(js.clone().into_std_path_buf());

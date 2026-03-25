@@ -199,6 +199,7 @@ impl AccountUsageService {
                             available_fuel: 0,
                             max_memory_per_worker: 0,
                             max_table_elements_per_worker: 0,
+                            max_disk_space_per_worker: 0,
                         },
                     );
                 }
