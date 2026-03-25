@@ -87,7 +87,14 @@ impl SdkOverrides {
 
     pub fn ts_package_dep(&self, package_name: &str) -> String {
         match &self.ts_packages_path {
-            Some(ts_packages_path) => format!("{}/{}", ts_packages_path, package_name),
+            Some(ts_packages_path) => {
+                // TODO: agent: are we sure on this one? i though npm overrides should work simply by unix style paths too
+                let package_path = Path::new(ts_packages_path)
+                    .join(package_name)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                format!("file:{package_path}")
+            }
             None => self
                 .ts_version
                 .as_deref()
@@ -304,7 +311,7 @@ impl RustDependency {
 
 pub fn workspace_root() -> anyhow::Result<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    fs::canonicalize_path(&manifest_dir.join("../.."))
+    Ok(fs::normalize_path_lexically(&manifest_dir.join("../..")))
 }
 
 fn running_from_golem_workspace_checkout() -> bool {
@@ -321,10 +328,10 @@ fn running_from_golem_workspace_checkout() -> bool {
 
     current_dir
         .as_deref()
-        .is_some_and(|path| path.starts_with(&workspace_root))
+        .is_some_and(|path| fs::path_starts_with_normalized(path, &workspace_root))
         || current_exe
             .as_deref()
-            .is_some_and(|path| path.starts_with(&workspace_root))
+            .is_some_and(|path| fs::path_starts_with_normalized(path, &workspace_root))
 }
 
 fn should_apply_test_layer() -> bool {
@@ -405,6 +412,7 @@ fn join_path(base: &str, suffix: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::tempdir;
     use test_r::test;
 
@@ -427,14 +435,23 @@ mod tests {
     #[test]
     fn golem_path_sets_default_sdk_paths() {
         let overrides = SdkOverrides::from_values(map(&[(GOLEM_PATH, "/repo")]), HashMap::new());
+        // TODO: agent: never use to_string_lossy, we have a function for this in out fs module, also inline
+        let expected_rust = Path::new("/repo")
+            .join("sdks/rust/golem-rust")
+            .to_string_lossy()
+            .to_string();
+        let expected_ts = Path::new("/repo")
+            .join("sdks/ts/packages")
+            .to_string_lossy()
+            .to_string();
 
         assert_eq!(
             overrides.golem_rust_path.as_deref(),
-            Some("/repo/sdks/rust/golem-rust")
+            Some(expected_rust.as_str())
         );
         assert_eq!(
             overrides.ts_packages_path.as_deref(),
-            Some("/repo/sdks/ts/packages")
+            Some(expected_ts.as_str())
         );
     }
 
@@ -451,6 +468,22 @@ mod tests {
 
         assert_eq!(overrides.golem_rust_path.as_deref(), Some("/custom/rust"));
         assert_eq!(overrides.ts_packages_path.as_deref(), Some("/custom/ts"));
+    }
+
+    #[test]
+    fn ts_package_dep_uses_file_url_for_local_path() {
+        let overrides = SdkOverrides {
+            golem_path: None,
+            golem_rust_path: None,
+            golem_rust_version: None,
+            ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
+            ts_version: None,
+        };
+
+        assert_eq!(
+            overrides.ts_package_dep("golem-ts-sdk"),
+            "file:/repo/sdks/ts/packages/golem-ts-sdk".to_string()
+        );
     }
 
     #[test]

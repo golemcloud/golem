@@ -336,14 +336,20 @@ impl TestContext {
         let ctx = Self {
             quiet,
             golem_path: {
-                let path = workspace_path().join("target/debug/golem");
+                let path = workspace_path().join(format!(
+                    "target/debug/golem{}",
+                    std::env::consts::EXE_SUFFIX
+                ));
                 if !path.exists() {
                     panic!("golem binary not found at {}", path.display());
                 }
                 path
             },
             golem_cli_path: {
-                let path = workspace_path().join("target/debug/golem-cli");
+                let path = workspace_path().join(format!(
+                    "target/debug/golem-cli{}",
+                    std::env::consts::EXE_SUFFIX
+                ));
                 if !path.exists() {
                     panic!("golem-cli binary not found at {}", path.display());
                 }
@@ -392,7 +398,8 @@ impl TestContext {
             );
             all_args
         };
-        let working_dir = &self.working_dir.canonicalize().unwrap();
+        // TODO: agent: this was canonicalized originally, let's use our new absolute_lex.. function
+        let working_dir = &self.working_dir;
 
         println!(
             "{} {}",
@@ -432,7 +439,8 @@ impl TestContext {
             );
             all_args
         };
-        let working_dir = self.working_dir.canonicalize().unwrap();
+        // TODO: agent: this was canonicalized originally, let's use our new absolute_lex.. function
+        let working_dir = self.working_dir.clone();
 
         println!(
             "{} {}",

@@ -24,7 +24,10 @@ use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app_raw;
 use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
-use crate::process::{with_hidden_output_unless_error, CommandExt, HiddenOutput};
+use crate::process::{
+    normalized_program_name, resolve_program_for_spawn, with_hidden_output_unless_error,
+    CommandExt, HiddenOutput,
+};
 use anyhow::{anyhow, Context as AnyhowContext};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
@@ -372,7 +375,9 @@ pub async fn execute_external_command(
                 )
                 .await?;
 
-                let mut cmd = Command::new(command_tokens[0].clone());
+                // TODO: agent: inline
+                let resolved_program = resolve_program_for_spawn(command_tokens[0].as_str())?;
+                let mut cmd = Command::new(&resolved_program);
                 cmd.args(command_tokens.iter().skip(1))
                     .current_dir(&build_dir)
                     .envs(&command.env)
@@ -394,7 +399,7 @@ pub async fn ensure_common_deps_for_tool(
     ctx: &ToolsWithEnsuredCommonDeps,
     tool: &str,
 ) -> anyhow::Result<()> {
-    match tool {
+    match normalized_program_name(tool).as_str() {
         "node" | "npx" => {
             ctx.ensure_common_deps_for_tool_once("node", || async {
                 if std::fs::exists("node_modules")? {
@@ -410,7 +415,10 @@ pub async fn ensure_common_deps_for_tool(
                     ),
                 );
 
-                Command::new("npm")
+                // TODO: agent: inline
+                let npm_path = resolve_program_for_spawn("npm")?;
+
+                Command::new(&npm_path)
                     .args(["install"])
                     .stream_and_run("npm")
                     .await

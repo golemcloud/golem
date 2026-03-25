@@ -60,6 +60,40 @@ pub fn canonicalize_path(path: &Path) -> anyhow::Result<PathBuf> {
         .map_err(|err| anyhow!("Failed to canonicalize path ({}): {}", path.display(), err))
 }
 
+pub fn current_dir_lexical() -> anyhow::Result<PathBuf> {
+    std::env::current_dir()
+        .map(|path| normalize_path_lexically(&path))
+        .map_err(|err| anyhow!("Failed to get current working directory: {}", err))
+}
+
+// TODO: agent: path should be in the function name, and this should have the "longer name", not the current dir version, also review the other function names for missing path
+pub fn absolute_lexical(path: &Path, base_dir: &Path) -> PathBuf {
+    let combined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base_dir.join(path)
+    };
+
+    normalize_path_lexically(&combined)
+}
+
+
+pub fn absolute_lexical_from_current_dir(path: &Path) -> anyhow::Result<PathBuf> {
+    current_dir_lexical().map(|base_dir| absolute_lexical(path, &base_dir))
+}
+
+pub fn normalize_for_comparison(path: &Path) -> PathBuf {
+    normalize_for_comparison_impl(path)
+}
+
+pub fn path_eq_normalized(left: &Path, right: &Path) -> bool {
+    normalize_for_comparison(left) == normalize_for_comparison(right)
+}
+
+pub fn path_starts_with_normalized(path: &Path, prefix: &Path) -> bool {
+    normalize_for_comparison(path).starts_with(normalize_for_comparison(prefix))
+}
+
 pub fn normalize_path_lexically(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
 
@@ -532,15 +566,64 @@ fn split_absolute_glob(base_dir: &Path, glob: &str) -> anyhow::Result<(PathBuf, 
         );
     }
 
-    let relative = path.strip_prefix(base_dir).map_err(|_| {
-        anyhow!(
-            "Absolute glob {} is outside base directory {}",
-            glob.log_color_error_highlight(),
-            base_dir.display().to_string().log_color_highlight()
-        )
-    })?;
+    let normalized_path = normalize_for_comparison(path);
+    let normalized_base_dir = normalize_for_comparison(base_dir);
+
+    let relative = normalized_path
+        .strip_prefix(&normalized_base_dir)
+        .map_err(|_| {
+            anyhow!(
+                "Absolute glob {} is outside base directory {}",
+                glob.log_color_error_highlight(),
+                base_dir.display().to_string().log_color_highlight()
+            )
+        })?;
 
     Ok((base_dir.to_path_buf(), path_to_str(relative)?.to_string()))
+}
+
+#[cfg(not(windows))]
+fn normalize_for_comparison_impl(path: &Path) -> PathBuf {
+    normalize_path_lexically(path)
+}
+
+#[cfg(windows)]
+fn normalize_for_comparison_impl(path: &Path) -> PathBuf {
+    let raw = path.as_os_str().to_string_lossy();
+
+    let normalized = if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{}", stripped))
+    } else if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_path_buf()
+    };
+
+    normalize_windows_drive_letter_case(normalize_path_lexically(&normalized))
+}
+
+#[cfg(windows)]
+fn normalize_windows_drive_letter_case(path: PathBuf) -> PathBuf {
+    let raw = path.as_os_str().to_string_lossy();
+    if raw.len() < 2 {
+        return path;
+    }
+
+    let mut chars = raw.chars();
+    let Some(first_char) = chars.next() else {
+        return path;
+    };
+
+    if chars.next() != Some(':') || !first_char.is_ascii_alphabetic() {
+        return path;
+    }
+
+    let mut normalized = String::with_capacity(raw.len());
+    normalized.push(first_char.to_ascii_uppercase());
+    normalized.push(':');
+    normalized.extend(chars);
+
+    PathBuf::from(normalized)
 }
 
 pub fn compile_and_collect_globs(
@@ -695,14 +778,13 @@ fn read_tsconfig_include_patterns(path: &Path) -> Vec<String> {
 }
 
 #[cfg(not(windows))]
-fn normalize_str_path_as_unix(pattern: &str) -> String {
-    pattern.to_string()
+fn normalize_str_path_as_unix(path: &str) -> String {
+    path.to_string()
 }
 
 #[cfg(windows)]
-fn normalize_str_path(pattern: &str) -> String {
-    // Replacing \ with / to make it work as a glob pattern
-    pattern.replace('\\', "/")
+fn normalize_str_path_as_unix(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 pub fn delete_logged(context: &str, path: &Path) -> anyhow::Result<()> {
@@ -740,18 +822,27 @@ mod test {
             fs::resolve_relative_glob(&base_dir, "").unwrap(),
             (base_dir.clone(), "".to_string())
         );
-        assert_eq!(
-            fs::resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap(),
-            (base_dir.clone(), "somepath/a/b/c".to_string())
-        );
-        assert_eq!(
-            fs::resolve_relative_glob(&base_dir, "../../target").unwrap(),
-            (base_dir.join("../.."), "target".to_string())
-        );
-        assert_eq!(
-            fs::resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..")
-                .unwrap(),
-            (base_dir.join("../../../"), "target/a".to_string())
+
+        // TODO: agent: what happened here?
+        let assert_resolved = |glob: &str, expected_base: PathBuf, expected_pattern: &str| {
+            let resolved = fs::resolve_relative_glob(&base_dir, glob).unwrap();
+            assert_eq!(
+                fs::path_to_unix_str(&resolved.0)
+                    .unwrap()
+                    .trim_end_matches('/'),
+                fs::path_to_unix_str(&expected_base)
+                    .unwrap()
+                    .trim_end_matches('/')
+            );
+            assert_eq!(resolved.1.replace('\\', "/"), expected_pattern);
+        };
+
+        assert_resolved("somepath/a/b/c", base_dir.clone(), "somepath/a/b/c");
+        assert_resolved("../../target", base_dir.join("../.."), "target");
+        assert_resolved(
+            "./.././../../target/a/b/../././c/d/.././..",
+            base_dir.join("../../../"),
+            "target/a",
         );
     }
 
@@ -769,6 +860,44 @@ mod test {
             fs::normalize_path_lexically(Path::new("../../a/b")),
             PathBuf::from("../../a/b")
         );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn absolute_lexical_keeps_absolute_paths_and_normalizes_segments() {
+        let base_dir = PathBuf::from("base");
+        assert_eq!(
+            fs::absolute_lexical(Path::new("/tmp/golem/./a/../b"), &base_dir),
+            PathBuf::from("/tmp/golem/b")
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn absolute_lexical_resolves_relative_paths_against_base_dir() {
+        let base_dir = PathBuf::from("/tmp/golem/work");
+        assert_eq!(
+            fs::absolute_lexical(Path::new("../src/./main.rs"), &base_dir),
+            PathBuf::from("/tmp/golem/src/main.rs")
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn path_eq_normalized_ignores_lexical_differences() {
+        assert!(fs::path_eq_normalized(
+            Path::new("/tmp/golem/./a/../b"),
+            Path::new("/tmp/golem/b")
+        ));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn path_starts_with_normalized_ignores_lexical_differences() {
+        assert!(fs::path_starts_with_normalized(
+            Path::new("/tmp/golem/work/./component/../src"),
+            Path::new("/tmp/golem/work/src")
+        ));
     }
 
     #[test]
@@ -797,6 +926,40 @@ mod test {
         let base_dir = PathBuf::from("/tmp/golem");
 
         assert!(fs::split_absolute_glob(&base_dir, "/tmp/other/**/*.ts").is_err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn resolve_absolute_globs_under_base_dir_with_verbatim_prefix() {
+        let base_dir = PathBuf::from(r"C:\tmp\golem");
+
+        assert_eq!(
+            fs::split_absolute_glob(&base_dir, r"\\?\C:\tmp\golem\dir\**\*.ts").unwrap(),
+            (base_dir.clone(), r"dir\**\*.ts".to_string())
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn normalize_for_comparison_handles_windows_verbatim_prefixes() {
+        assert!(fs::path_eq_normalized(
+            Path::new(r"C:\tmp\golem"),
+            Path::new(r"\\?\C:\tmp\golem")
+        ));
+
+        assert!(fs::path_eq_normalized(
+            Path::new(r"\\server\share\golem"),
+            Path::new(r"\\?\UNC\server\share\golem")
+        ));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn normalize_for_comparison_normalizes_drive_letter_case() {
+        assert!(fs::path_eq_normalized(
+            Path::new(r"c:\tmp\golem"),
+            Path::new(r"C:\tmp\golem")
+        ));
     }
 
     #[test]

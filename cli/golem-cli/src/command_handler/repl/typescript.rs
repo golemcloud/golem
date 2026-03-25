@@ -24,7 +24,7 @@ use crate::log::{log_action, log_skipping_up_to_date, logln, set_log_output, Log
 use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::model::GuestLanguage;
-use crate::process::{CommandExt, ExitStatusExt};
+use crate::process::{resolve_program_for_spawn, CommandExt, ExitStatusExt};
 use crate::sdk_overrides::sdk_overrides;
 use crate::{binary_path_to_string, fs};
 use golem_common::model::agent::DataSchema;
@@ -136,7 +136,10 @@ impl TypeScriptRepl {
                         &repl_ts_path,
                     )?;
 
-                    Command::new("npm")
+                    // TODO: agent: inline
+                    let npm_path = resolve_program_for_spawn("npm")?;
+
+                    Command::new(&npm_path)
                         .arg("install")
                         .current_dir(&args.repl_root_dir)
                         .stream_and_wait_for_status("npm")
@@ -336,7 +339,9 @@ impl TypeScriptRepl {
     }
 
     async fn prepare_command(&self, args: &BridgeReplArgs) -> anyhow::Result<Command> {
-        let mut command = Command::new("npx");
+        // TODO: agent: inline
+        let npx_path = resolve_program_for_spawn("npx")?;
+        let mut command = Command::new(&npx_path);
 
         command
             .current_dir(&args.repl_root_dir)
