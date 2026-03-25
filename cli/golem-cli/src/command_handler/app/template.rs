@@ -126,7 +126,7 @@ impl TemplateHandler {
             &context.existing_components,
         )?;
 
-        let template_plan = self.build_new_template_plan(
+        let template_plan = self.plan_applying_new_template(
             &selections.application_name,
             &context.application_path,
             &template_mapping.template_to_component,
@@ -509,7 +509,7 @@ impl TemplateHandler {
 
                         let component_template =
                             app_template_repo.component_template(component.language)?;
-                        let upgrade_plan = self.build_multi_component_layout_upgrade_plan(
+                        let upgrade_plan = self.plan_multi_component_layout_upgrade(
                             component,
                             application_path,
                             &new_component_dir,
@@ -567,7 +567,7 @@ impl TemplateHandler {
         })
     }
 
-    fn build_new_template_plan(
+    fn plan_applying_new_template(
         &self,
         application_name: &ApplicationName,
         application_path: &Path,
@@ -642,7 +642,7 @@ impl TemplateHandler {
         Ok(template_plan_builder.build())
     }
 
-    fn build_multi_component_layout_upgrade_plan(
+    fn plan_multi_component_layout_upgrade(
         &self,
         component: &ExistingComponent,
         application_path: &Path,
