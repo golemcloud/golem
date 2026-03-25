@@ -72,7 +72,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
@@ -125,6 +125,11 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     last_resume_request: Mutex<Timestamp>,
     pub(crate) snapshot_recovery_disabled: AtomicBool,
+    /// Bytes that triggered the last `NodeOutOfFilesystemStorage` trap. Set by
+    /// `acquire_filesystem_space` on failure so `WaitingWorker::new` can request
+    /// at least that many bytes from the blocking eviction path, ensuring
+    /// enough idle workers are evicted to satisfy the pending write.
+    desired_extra_filesystem_storage: AtomicU64,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -320,6 +325,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status_detached: AtomicBool::new(false),
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_recovery_disabled: AtomicBool::new(false),
+            desired_extra_filesystem_storage: AtomicU64::new(0),
         };
 
         // Wire the worker event service into the forwarding oplog so plugin errors
@@ -384,6 +390,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
                     this.memory_requirement().await?,
+                    this.filesystem_storage_requirement().await?,
                     oom_retry_count,
                 ));
                 Ok(true)
@@ -765,6 +772,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok((x * (ml + c * sw)) as u64)
     }
 
+    /// Gets the storage requirement of the worker based on the last known status.
+    /// Used by `WaitingWorker::new` to pre-acquire storage semaphore permits.
+    pub async fn filesystem_storage_requirement(&self) -> Result<u64, WorkerExecutorError> {
+        let metadata = self.get_latest_worker_metadata().await;
+        Ok(metadata.last_known_status.current_filesystem_storage_usage)
+    }
+
     /// Returns true if the worker is running, but it is not performing any invocations at the moment
     /// (ExecutionStatus::Suspended) and has no pending invocation in its invocation queue.
     ///
@@ -830,6 +844,106 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(_) => Ok(()),
             WorkerInstance::Unloaded { .. } => Ok(()),
             WorkerInstance::Deleting => Ok(()),
+        }
+    }
+
+    /// Return `freed_bytes` to the storage semaphore pool.
+    /// Called from `DurableWorkerCtx::release_filesystem_space` when a file is
+    /// deleted or truncated. Should only be called from the invocation loop.
+    ///
+    /// The permits are returned by splitting them off `RunningWorker.filesystem_storage_permit`
+    /// and dropping the split portion. This correctly reduces the permit count held
+    /// by the `RunningWorker`, preventing double-return when it later drops.
+    pub async fn release_filesystem_storage_space(&self, freed_bytes: u64) {
+        let permits_to_release =
+            crate::services::active_workers::bytes_to_filesystem_storage_permits(freed_bytes);
+        if permits_to_release == 0 {
+            return;
+        }
+        if let WorkerInstance::Running(ref mut running) = &mut *self.instance.lock().await {
+            if let Some(ref mut permit) = running.filesystem_storage_permit {
+                // Split off `permits_to_release` permits and drop them.
+                // Dropping an OwnedSemaphorePermit returns its permits to the
+                // semaphore automatically — no separate add_permits needed.
+                let n = permits_to_release as usize;
+                let to_drop = if permit.num_permits() >= n {
+                    permit.split(n)
+                } else {
+                    // Defensive: releasing more than we hold — drop all.
+                    permit.split(permit.num_permits())
+                };
+                drop(to_drop); // returns permits to the semaphore
+            }
+        }
+    }
+
+    /// Acquire storage semaphore permits for a write operation.
+    /// Called from `DurableWorkerCtx::acquire_filesystem_space` in live mode only.
+    /// Returns `NodeOutOfFilesystemStorage` if the executor pool is exhausted.
+    ///
+    /// Should only be called from the invocation loop.
+    pub async fn acquire_filesystem_storage_space(&self, new_bytes: u64) -> anyhow::Result<()> {
+        match &mut *self.instance.lock().await {
+            WorkerInstance::Running(ref mut running) => {
+                if let Some(permit) = self
+                    .active_workers()
+                    .try_acquire_filesystem_storage(new_bytes)
+                    .await
+                {
+                    running.merge_extra_filesystem_storage_permits(permit);
+                    // Success — clear any pending desired_extra_filesystem_storage.
+                    self.desired_extra_filesystem_storage
+                        .store(0, Ordering::Relaxed);
+                    Ok(())
+                } else {
+                    // Record the requested size so WaitingWorker can evict enough
+                    // idle workers to satisfy this write on the next restart.
+                    self.desired_extra_filesystem_storage
+                        .store(new_bytes, Ordering::Relaxed);
+                    Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
+                }
+            }
+            // Worker is stopping/unloaded — no-op; the current invocation will
+            // fail anyway and permits will be re-acquired on restart.
+            _ => Ok(()),
+        }
+    }
+
+    /// Acquire storage semaphore permits for the total size of all initial
+    /// component files. Called once from `DurableWorkerCtx::create` after
+    /// `prepare_filesystem` has loaded the files. Merges the acquired permits
+    /// into the running worker's `filesystem_storage_permit` so they are released
+    /// automatically when the worker stops.
+    ///
+    /// Uses the non-blocking priority path (`try_acquire_storage`). If the
+    /// semaphore pool is full, idle workers are evicted by the semaphore's own
+    /// logic; the permit is returned as `None` and the caller should propagate
+    /// a retriable `NodeOutOfFilesystemStorage` error.
+    ///
+    /// Should only be called from the invocation loop.
+    pub async fn acquire_initial_filesystem_storage(
+        &self,
+        total_bytes: u64,
+    ) -> Result<(), GolemSpecificWasmTrap> {
+        if total_bytes == 0 {
+            return Ok(());
+        }
+        match &mut *self.instance.lock().await {
+            WorkerInstance::Running(ref mut running) => {
+                if let Some(permit) = self
+                    .active_workers()
+                    .try_acquire_filesystem_storage(total_bytes)
+                    .await
+                {
+                    running.merge_extra_filesystem_storage_permits(permit);
+                    Ok(())
+                } else {
+                    Err(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage)
+                }
+            }
+            // Worker stopped between create and acquire — no-op, permits will be
+            // re-acquired on next startup from AgentStatusRecord.
+            _ => Ok(()),
         }
     }
 
@@ -1947,6 +2061,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
+        filesystem_storage_permit: Option<OwnedSemaphorePermit>,
         oom_retry_count: u32,
         start_attempt: Uuid,
     ) {
@@ -1955,16 +2070,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
-                *instance_guard = WorkerInstance::Running(
-                    RunningWorker::new(
-                        this.owned_agent_id.clone(),
-                        this.queue.clone(),
-                        this.clone(),
-                        permit,
-                        oom_retry_count,
-                    )
-                    .await,
-                );
+                let mut running = RunningWorker::new(
+                    this.owned_agent_id.clone(),
+                    this.queue.clone(),
+                    this.clone(),
+                    permit,
+                    oom_retry_count,
+                )
+                .await;
+                if let Some(sp) = filesystem_storage_permit {
+                    running.merge_extra_filesystem_storage_permits(sp);
+                }
+                *instance_guard = WorkerInstance::Running(running);
             }
             _ => {
                 debug!("worker was not waiting for permit anymore, not starting");
@@ -2040,6 +2157,7 @@ impl WaitingWorker {
     pub fn new<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
         memory_requirement: u64,
+        filesystem_storage_requirement: u64,
         oom_retry_count: u32,
     ) -> Self {
         let span = span!(
@@ -2060,8 +2178,62 @@ impl WaitingWorker {
         let handle = tokio::task::spawn(
             async move {
                 let permit = parent.active_workers().acquire(memory_requirement).await;
+                // Pre-acquire storage permits for this restart.
+                //
+                // We need to acquire `filesystem_storage_requirement + desired_extra` total:
+                // - `filesystem_storage_requirement`: bytes to hold as the pre-acquired permit
+                //   for replay (mirrors what the worker held before being evicted).
+                //   The old RunningWorker already returned these bytes to the pool
+                //   when it dropped, so the pool likely already has them — the
+                //   blocking acquire will find them without needing to evict anyone.
+                // - `desired_extra`: bytes for the write that triggered NodeOutOfFilesystemStorage.
+                //   The pool may not have these yet, so the blocking acquire will
+                //   evict idle workers only for the missing portion.
+                //
+                // After acquiring, we release `desired_extra` back to the pool so
+                // it is available for the pending write to re-acquire at runtime.
+                //
+                // Example: prior writes = 3 KB, failing write needs 1 KB extra.
+                //   Old RunningWorker drops → 3 KB returned to pool.
+                //   acquire_bytes = 4 KB. Pool has 3 KB → 1 KB gap → evict 1 KB.
+                //   Hold 3 KB as filesystem_storage_permit, release 1 KB → pool has 1 KB free.
+                //   Pending write re-acquires 1 KB → succeeds.
+                let desired_extra = parent
+                    .desired_extra_filesystem_storage
+                    .load(Ordering::Relaxed);
+                let acquire_bytes = filesystem_storage_requirement + desired_extra;
+                let filesystem_storage_permit = if acquire_bytes > 0 {
+                    let mut permit = parent
+                        .active_workers()
+                        .acquire_filesystem_storage(acquire_bytes)
+                        .await;
+                    // Release the `desired_extra` portion back to the pool.
+                    if desired_extra > 0 {
+                        let extra_permits =
+                            crate::services::active_workers::bytes_to_filesystem_storage_permits(
+                                desired_extra,
+                            ) as usize;
+                        if let Some(extra) = permit.split(extra_permits) {
+                            drop(extra); // returns to semaphore
+                        }
+                    }
+                    if permit.num_permits() > 0 {
+                        Some(permit)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 debug!("Attempting to start worker after acquiring enough permits");
-                Worker::start_waiting_worker(parent, permit, oom_retry_count, start_attempt).await;
+                Worker::start_waiting_worker(
+                    parent,
+                    permit,
+                    filesystem_storage_permit,
+                    oom_retry_count,
+                    start_attempt,
+                )
+                .await;
                 // If we do not start the worker here we will drop the permits here, which will release them to the host.
             }
             .instrument(span),
@@ -2096,6 +2268,11 @@ struct RunningWorker {
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     permit: OwnedSemaphorePermit,
+    /// Storage semaphore permits held by this worker. `None` until storage
+    /// space is first acquired (at startup or on first write). Dropped
+    /// automatically when `RunningWorker` is dropped, returning storage
+    /// permits to the pool.
+    filesystem_storage_permit: Option<OwnedSemaphorePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
     snapshot_task: Option<JoinHandle<()>>,
@@ -2178,6 +2355,7 @@ impl RunningWorker {
             sender,
             queue,
             permit,
+            filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
             snapshot_task,
@@ -2186,6 +2364,16 @@ impl RunningWorker {
 
     pub fn merge_extra_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
         self.permit.merge(extra_permit);
+    }
+
+    /// Merge additional storage permits into this worker's storage permit. If
+    /// the worker does not yet hold a storage permit, the given permit becomes
+    /// the initial one. Additional calls merge into that initial permit.
+    pub fn merge_extra_filesystem_storage_permits(&mut self, extra_permit: OwnedSemaphorePermit) {
+        match &mut self.filesystem_storage_permit {
+            Some(existing) => existing.merge(extra_permit),
+            None => self.filesystem_storage_permit = Some(extra_permit),
+        }
     }
 
     pub fn stop(mut self) -> JoinHandle<()> {
@@ -2330,6 +2518,9 @@ impl RunningWorker {
             AgentConfig::new(
                 skipped_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
+                worker_metadata
+                    .last_known_status
+                    .current_filesystem_storage_usage,
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.config_vars,

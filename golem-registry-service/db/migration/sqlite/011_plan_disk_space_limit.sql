@@ -1,0 +1,1 @@
+ALTER TABLE plans ADD COLUMN max_disk_space_per_worker NUMERIC NOT NULL DEFAULT 1073741824;

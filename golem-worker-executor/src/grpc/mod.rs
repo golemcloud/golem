@@ -67,8 +67,7 @@ use golem_common::model::{
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
-    proto_agent_id_string, proto_component_id_string, proto_idempotency_key_string,
-    proto_promise_id_string,
+    proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
 };
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
@@ -2234,7 +2233,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_running_workers_metadata",
-            component_id = proto_component_id_string(&request.component_id),
+            component_id = ComponentId::render_proto(request.component_id),
         );
 
         let result = self
@@ -2275,7 +2274,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_workers_metadata",
-            component_id = proto_component_id_string(&request.component_id),
+            component_id = ComponentId::render_proto(request.component_id),
         );
 
         let result = self

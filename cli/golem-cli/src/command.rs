@@ -1591,9 +1591,13 @@ pub mod server {
         #[clap(long)]
         pub custom_request_port: Option<u16>,
 
-        /// Port to serve custom requests on, defaults to 9006
+        /// Port to serve MCP server on, defaults to 9007
         #[clap(long)]
         pub mcp_port: Option<u16>,
+
+        /// Write discovered startup ports to this JSON file
+        #[clap(long)]
+        pub ports_file: Option<PathBuf>,
 
         /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
         #[clap(long)]

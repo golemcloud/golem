@@ -25,7 +25,7 @@ const project = new Project({
   tsConfigFilePath: 'tsconfig.json',
 });
 
-const sourceFiles = project.getSourceFiles('tests/testData.ts');
+const sourceFiles = project.getSourceFiles('tests/{testData,importedTypes}.ts');
 
 generateClassMetadata({
   sourceFiles: sourceFiles,

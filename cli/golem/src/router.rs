@@ -14,6 +14,7 @@
 
 use crate::StartedComponents;
 use anyhow::Context;
+use poem::listener::{Acceptor, Listener};
 use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
 use poem::{Route, Server};
@@ -22,12 +23,12 @@ use tokio::task::JoinSet;
 use tracing::info;
 use tracing::Instrument;
 
-pub fn start_router(
+pub async fn start_router(
     listener_addr: &str,
     listener_port: u16,
     started_components: StartedComponents,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<(), anyhow::Error> {
+) -> Result<u16, anyhow::Error> {
     use std::net::SocketAddrV4;
     use std::sync::Arc;
 
@@ -43,6 +44,11 @@ pub fn start_router(
     let listener_socket_addr = SocketAddrV4::new(ipv4_addr, listener_port);
 
     let listener = TcpListener::bind(listener_socket_addr);
+    let acceptor = listener.into_acceptor().await?;
+    let port = acceptor.local_addr()[0]
+        .as_socket_addr()
+        .expect("socket address")
+        .port();
 
     let metrics = PrometheusExporter::new(started_components.prometheus_registry.clone());
 
@@ -137,8 +143,14 @@ pub fn start_router(
     // for now just use the one from component service.
 
     join_set.spawn(
-        async move { Server::new(listener).run(app).await.map_err(|e| e.into()) }.in_current_span(),
+        async move {
+            Server::new_with_acceptor(acceptor)
+                .run(app)
+                .await
+                .map_err(|e| e.into())
+        }
+        .in_current_span(),
     );
 
-    Ok(())
+    Ok(port)
 }

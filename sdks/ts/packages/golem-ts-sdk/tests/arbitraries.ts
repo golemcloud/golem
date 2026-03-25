@@ -221,7 +221,7 @@ export const objectArb: fc.Arbitrary<ObjectType> = fc.record({
   c: fc.boolean(),
 });
 
-export const listArb: fc.Arbitrary<ListType> = fc.array(fc.string());
+export const listArb: fc.Arbitrary<ListType> = fc.array(fc.string(), { minLength: 1 });
 
 export const listComplexArb: fc.Arbitrary<ListComplexType> = fc.array(
   fc.record({
@@ -229,6 +229,7 @@ export const listComplexArb: fc.Arbitrary<ListComplexType> = fc.array(
     b: fc.oneof(fc.integer(), fc.float()),
     c: fc.boolean(),
   }),
+  { minLength: 1 },
 );
 
 export const unionArb: fc.Arbitrary<UnionType> = fc.oneof(

@@ -529,8 +529,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let initial_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-    let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
-
     let registry_service = Arc::new(GrpcRegistryService::new(&golem_config.registry_service));
 
     let component_service = bootstrap.create_component_service(
@@ -626,6 +624,11 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     };
 
     let active_workers = bootstrap.create_active_workers(&golem_config);
+
+    let file_loader = Arc::new(FileLoader::new(
+        initial_files_service.clone(),
+        Some(active_workers.filesystem_storage_semaphore()),
+    )?);
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
         active_workers.clone(),

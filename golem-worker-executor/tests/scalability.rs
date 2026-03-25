@@ -318,6 +318,7 @@ async fn initial_large_memory_allocation(
         None,
         None,
         None,
+        None,
     )
     .await?;
     let component = executor
@@ -375,6 +376,7 @@ async fn dynamic_large_memory_allocation(
         deps,
         &context,
         Some(768 * 1024 * 1024),
+        None,
         None,
         None,
         None,

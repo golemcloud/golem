@@ -17,18 +17,19 @@ import { Symbol } from './symbol';
 export type ConfigProperty = { path: string[]; secret: boolean; type: Type };
 
 export type Type =
-  | { kind: 'boolean'; name?: string; optional: boolean }
-  | { kind: 'number'; name?: string; optional: boolean }
-  | { kind: 'string'; name?: string; optional: boolean }
-  | { kind: 'bigint'; name?: string; optional: boolean }
-  | { kind: 'null'; name?: string; optional: boolean }
-  | { kind: 'undefined'; name?: string; optional: boolean }
-  | { kind: 'array'; name?: string; element: Type; optional: boolean }
-  | { kind: 'null'; name?: string; element: Type; optional: boolean }
-  | { kind: 'tuple'; name?: string; elements: Type[]; optional: boolean }
+  | { kind: 'boolean'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'number'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'string'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'bigint'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'null'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'undefined'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'array'; name?: string; owner?: string; element: Type; optional: boolean }
+  | { kind: 'null'; name?: string; owner?: string; element: Type; optional: boolean }
+  | { kind: 'tuple'; name?: string; owner?: string; elements: Type[]; optional: boolean }
   | {
       kind: 'union';
       name?: string;
+      owner?: string;
       unionTypes: Type[];
       typeParams: Type[];
       optional: boolean;
@@ -37,28 +38,37 @@ export type Type =
   | {
       kind: 'object';
       name?: string;
+      owner?: string;
       properties: Symbol[];
       typeParams: Type[];
       optional: boolean;
     }
-  | { kind: 'class'; name?: string; properties: Symbol[]; optional: boolean }
+  | { kind: 'class'; name?: string; owner?: string; properties: Symbol[]; optional: boolean }
   | {
       kind: 'interface';
       name?: string;
+      owner?: string;
       properties: Symbol[];
       typeParams: Type[];
       optional: boolean;
     }
-  | { kind: 'promise'; name?: string; element: Type; optional: boolean }
-  | { kind: 'map'; name?: string; key: Type; value: Type; optional: boolean }
-  | { kind: 'literal'; name?: string; literalValue?: string; optional: boolean }
-  | { kind: 'alias'; name?: string; aliasSymbol: Symbol; optional: boolean }
-  | { kind: 'void'; name?: string; optional: boolean }
-  | { kind: 'others'; name?: string; optional: boolean; recursive: boolean }
-  | { kind: 'config'; name?: string; optional: boolean; properties: ConfigProperty[] }
+  | { kind: 'promise'; name?: string; owner?: string; element: Type; optional: boolean }
+  | { kind: 'map'; name?: string; owner?: string; key: Type; value: Type; optional: boolean }
+  | { kind: 'literal'; name?: string; owner?: string; literalValue?: string; optional: boolean }
+  | { kind: 'alias'; name?: string; owner?: string; aliasSymbol: Symbol; optional: boolean }
+  | { kind: 'void'; name?: string; owner?: string; optional: boolean }
+  | { kind: 'others'; name?: string; owner?: string; optional: boolean; recursive: boolean }
+  | {
+      kind: 'config';
+      name?: string;
+      owner?: string;
+      optional: boolean;
+      properties: ConfigProperty[];
+    }
   | {
       kind: 'unresolved-type';
       name?: string;
+      owner?: string;
       optional: boolean;
       text: string;
       error: string;

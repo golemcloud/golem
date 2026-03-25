@@ -2,39 +2,76 @@
 
 componentTemplates:
   ts:
-    build:
-    - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
-      sources:
-      - "{{ componentDir }}/src"
-      - "{{ componentDir }}/tsconfig.json"
-      targets:
-      - "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
-    - command: npx --no golem-typegen "{{ componentDir }}/tsconfig.json" --files "{{ componentDir }}/src/**/*.ts"
-      dir: "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
-      sources:
-      - "{{ componentDir }}/src"
-      - "{{ componentDir }}/tsconfig.json"
-      targets:
-      - .metadata
-    - command: npx --no rollup -- -c "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
-      dir: "{{ componentDir }}"
-      env:
-        GOLEM_APP_ROOT: "{{ appRootDir }}"
-        GOLEM_TEMP: "{{ golemTempDir }}"
-        GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
-      sources:
-      - "{{ componentDir }}/src"
-      - "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
-      - "{{ componentDir }}/tsconfig.json"
-      - "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
-      targets:
-      - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
-    - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
-      module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
-      moduleWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.module.wasm"
-      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
-    componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
-    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+    presets:
+      optimized:
+        default: true
+        build:
+        - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/tsconfig.json"
+          targets:
+          - "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+        - command: npx --no golem-typegen "{{ componentDir }}/tsconfig.json" --files "{{ componentDir }}/src/**/*.ts"
+          dir: "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/tsconfig.json"
+          targets:
+          - .metadata
+        - command: npx --no rollup -- -c "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
+          dir: "{{ componentDir }}"
+          env:
+            GOLEM_APP_ROOT: "{{ appRootDir }}"
+            GOLEM_TEMP: "{{ golemTempDir }}"
+            GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
+          - "{{ componentDir }}/tsconfig.json"
+          - "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
+          targets:
+          - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
+          module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+      quick:
+        build:
+        - command: npx tsc --project "{{ componentDir }}" --noEmit false --emitDeclarationOnly --declaration --outFile "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/tsconfig.json"
+          targets:
+          - "{{ golemTempDir }}/ts-check/{{ component_name | to_kebab_case }}/main.d.ts"
+        - command: npx --no golem-typegen "{{ componentDir }}/tsconfig.json" --files "{{ componentDir }}/src/**/*.ts"
+          dir: "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/tsconfig.json"
+          targets:
+          - .metadata
+        - command: npx --no rollup -- -c "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
+          dir: "{{ componentDir }}"
+          env:
+            GOLEM_APP_ROOT: "{{ appRootDir }}"
+            GOLEM_TEMP: "{{ golemTempDir }}"
+            GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ golemTempDir }}/common/ts/rollup.config.component.mjs"
+          - "{{ componentDir }}/tsconfig.json"
+          - "{{ golemTempDir }}/ts-metadata/{{ component_name | to_kebab_case }}"
+          targets:
+          - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+        - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
+          module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
 customCommands:
   ts-npm-install:
   - command: npm install
