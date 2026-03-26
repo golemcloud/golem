@@ -10,6 +10,12 @@ description: "Building a Golem application with PostgreSQL database integration.
 Assume the `golem` or `golem-cli` binary exists and is added to PATH.
 Try `golem --version` to check if it exists. If not, try `golem-cli --version`.
 
+**Critical rules:**
+- Do NOT modify SDK versions in `package.json`. The SDK is resolved automatically via local paths. Changing versions to npm-published ones will break the build.
+- Do NOT remove or modify `@agent`, `@endpoint`, `@prompt`, or `@description` decorators. They are valid and required.
+- Do NOT run `npm install` after `golem new` — dependencies are already set up correctly.
+- Use `ls` (shell command) to check SDK types in `node_modules/`, not `read_file` — some tools block reading inside `node_modules`.
+
 ## Step 1: Create the Project
 
 ```shell

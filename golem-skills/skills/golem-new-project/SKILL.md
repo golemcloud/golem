@@ -10,6 +10,12 @@ description: "Creating a new Golem application project. Use when scaffolding a n
 Assume the `golem` or `golem-cli` binary exists and is added to PATH.
 Try `golem --version` to check if it exists. If not, try `golem-cli --version`. Every command below works for `golem` and `golem-cli`
 
+**Critical rules:**
+- Do NOT modify SDK versions in `package.json`. The SDK is resolved automatically via local paths. Changing versions to npm-published ones will break the build.
+- Do NOT remove or modify `@agent`, `@endpoint`, `@prompt`, or `@description` decorators in generated code. They are valid and required.
+- Do NOT run `npm install` after `golem new` — dependencies are already set up correctly.
+- If `golem build` fails, read the error carefully. Do NOT try to "fix" it by changing SDK versions or removing decorators.
+
 ## Step 1: Run `golem new`
 
 ```shell
