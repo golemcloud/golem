@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod oplog_macro;
 pub mod multipart;
+mod oplog_macro;
 pub(crate) mod public_types;
 
 use crate::base_model::account::AccountId;

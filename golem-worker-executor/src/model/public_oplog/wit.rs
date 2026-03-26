@@ -31,10 +31,9 @@ use golem_common::model::oplog::public_oplog_entry::{
     WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
-    AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData,
-    MultipartPartData, MultipartSnapshotData, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotBasedUpdateParameters,
+    AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, MultipartPartData,
+    MultipartSnapshotData, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::{Empty, Timestamp};
 use std::time::Duration;
@@ -1117,17 +1116,21 @@ fn multipart_to_raw(multipart: MultipartSnapshotData) -> (Vec<u8>, String) {
     let mut output = Vec::new();
     for part in &multipart.parts {
         output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        output.extend_from_slice(format!("Content-Type: {}\r\n", part.content_type).as_bytes());
         output.extend_from_slice(
-            format!("Content-Type: {}\r\n", part.content_type).as_bytes(),
-        );
-        output.extend_from_slice(
-            format!("Content-Disposition: attachment; name=\"{}\"\r\n", part.name).as_bytes(),
+            format!(
+                "Content-Disposition: attachment; name=\"{}\"\r\n",
+                part.name
+            )
+            .as_bytes(),
         );
         output.extend_from_slice(b"\r\n");
         match &part.data {
             MultipartPartData::Json(json) => {
                 output.extend_from_slice(
-                    serde_json::to_vec(&json.data).unwrap_or_default().as_slice(),
+                    serde_json::to_vec(&json.data)
+                        .unwrap_or_default()
+                        .as_slice(),
                 );
             }
             MultipartPartData::Raw(raw) => {

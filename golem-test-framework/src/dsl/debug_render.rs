@@ -429,11 +429,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 PublicSnapshotData::Multipart(data) => {
                     use golem_common::base_model::oplog::MultipartPartData;
 
-                    let _ = writeln!(
-                        result,
-                        "{pad}MIME type:         {}",
-                        data.mime_type
-                    );
+                    let _ = writeln!(result, "{pad}MIME type:         {}", data.mime_type);
                     for part in &data.parts {
                         let data_summary = match &part.data {
                             MultipartPartData::Json(json) => {

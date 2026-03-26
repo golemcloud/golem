@@ -47,10 +47,7 @@ pub fn extract_boundary(content_type: &str) -> Option<&str> {
 ///
 /// The `boundary` should be extracted from the Content-Type header using `extract_boundary`.
 /// Returns `None` if the body cannot be parsed.
-pub fn parse_multipart_mixed<'a>(
-    boundary: &str,
-    data: &'a [u8],
-) -> Option<Vec<MultipartPart<'a>>> {
+pub fn parse_multipart_mixed<'a>(boundary: &str, data: &'a [u8]) -> Option<Vec<MultipartPart<'a>>> {
     let delimiter = format!("--{boundary}");
     let close_delimiter = format!("--{boundary}--");
 
@@ -175,7 +172,7 @@ fn skip_empty_line(data: &[u8], pos: usize) -> usize {
 fn strip_trailing_line_ending(data: &[u8], body_start: usize, body_end: usize) -> usize {
     if body_end >= body_start + 2 && data[body_end - 2] == b'\r' && data[body_end - 1] == b'\n' {
         body_end - 2
-    } else if body_end >= body_start + 1 && data[body_end - 1] == b'\n' {
+    } else if body_end > body_start && data[body_end - 1] == b'\n' {
         body_end - 1
     } else {
         body_end

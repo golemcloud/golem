@@ -501,10 +501,7 @@ impl golem_wasm::FromValue for JsonSnapshotData {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
-#[cfg_attr(
-    feature = "full",
-    oai(discriminator_name = "type", one_of = true)
-)]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum MultipartPartData {
     Json(JsonSnapshotData),
@@ -605,8 +602,7 @@ impl golem_wasm::FromValue for MultipartSnapshotPart {
         match value {
             golem_wasm::Value::Record(mut fields) if fields.len() == 3 => {
                 let data = MultipartPartData::from_value(fields.remove(2))?;
-                let content_type =
-                    <String as golem_wasm::FromValue>::from_value(fields.remove(1))?;
+                let content_type = <String as golem_wasm::FromValue>::from_value(fields.remove(1))?;
                 let name = <String as golem_wasm::FromValue>::from_value(fields.remove(0))?;
                 Ok(MultipartSnapshotPart {
                     name,
@@ -636,9 +632,7 @@ impl golem_wasm::IntoValue for MultipartSnapshotData {
     fn into_value(self) -> golem_wasm::Value {
         golem_wasm::Value::Record(vec![
             golem_wasm::Value::String(self.mime_type),
-            golem_wasm::Value::List(
-                self.parts.into_iter().map(|p| p.into_value()).collect(),
-            ),
+            golem_wasm::Value::List(self.parts.into_iter().map(|p| p.into_value()).collect()),
         ])
     }
 
@@ -666,12 +660,9 @@ impl golem_wasm::FromValue for MultipartSnapshotData {
                         .into_iter()
                         .map(MultipartSnapshotPart::from_value)
                         .collect::<Result<Vec<_>, String>>()?,
-                    other => {
-                        return Err(format!("Expected List for parts, got {:?}", other))
-                    }
+                    other => return Err(format!("Expected List for parts, got {:?}", other)),
                 };
-                let mime_type =
-                    <String as golem_wasm::FromValue>::from_value(fields.remove(0))?;
+                let mime_type = <String as golem_wasm::FromValue>::from_value(fields.remove(0))?;
                 Ok(MultipartSnapshotData { mime_type, parts })
             }
             _ => Err(format!(
@@ -715,7 +706,10 @@ impl golem_wasm::IntoValue for PublicSnapshotData {
         golem_wasm::analysis::analysed_type::variant(vec![
             golem_wasm::analysis::analysed_type::case("Raw", RawSnapshotData::get_type()),
             golem_wasm::analysis::analysed_type::case("Json", JsonSnapshotData::get_type()),
-            golem_wasm::analysis::analysed_type::case("Multipart", MultipartSnapshotData::get_type()),
+            golem_wasm::analysis::analysed_type::case(
+                "Multipart",
+                MultipartSnapshotData::get_type(),
+            ),
         ])
     }
 }
