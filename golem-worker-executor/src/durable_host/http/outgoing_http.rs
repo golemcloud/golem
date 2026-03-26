@@ -86,10 +86,8 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
     let old = std::mem::replace(future_res, HostFutureIncomingResponse::Consumed);
     let wrapped = if let HostFutureIncomingResponse::Pending(orig_handle) = old {
         let named_retry_policies = {
-            let policies = crate::durable_host::durability::collect_named_retry_policies(
-                &ctx.state.agent_config,
-            );
-            (!policies.is_empty()).then_some(policies)
+            let policies = ctx.state.named_retry_policies();
+            (!policies.is_empty()).then_some(policies.to_vec())
         };
         let retry_properties =
             RetryContext::http(&state.request.method.to_string(), &state.request.uri);

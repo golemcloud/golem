@@ -63,6 +63,7 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
 use crate::wasi_host;
+use crate::durable_host::durability::collect_named_retry_policies;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
@@ -100,6 +101,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
+use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::{RetryConfig, RetryPolicyState};
 use golem_common::model::TransactionId;
 use golem_common::model::{
@@ -773,7 +775,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn get_recovery_decision_on_trap_with_semantic(
-        &self,
+        &mut self,
         retry_config: &RetryConfig,
         retry_state_with_current_attempt: &HashMap<OplogIndex, RetryPolicyState>,
         trap_type: &TrapType,
@@ -1884,6 +1886,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             validate_agent_config(&updated_agent_config, &agent_type)?;
 
             self.state.agent_config = updated_agent_config;
+            self.state.cached_named_retry_policies = None;
         };
 
         self.state.component_metadata = new_metadata;
@@ -3486,6 +3489,10 @@ struct PrivateDurableWorkerState {
     /// The current local agent config of the worker, taking the component revision into account
     agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
 
+    /// Cached named retry policies derived from `agent_config`. Lazily populated and
+    /// invalidated whenever `agent_config` is reassigned.
+    cached_named_retry_policies: Option<Vec<NamedRetryPolicy>>,
+
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
     promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
     // Map from resource_id to the dyn_pollables that wrap it
@@ -3640,6 +3647,7 @@ impl PrivateDurableWorkerState {
             config_vars,
             initial_agent_config,
             agent_config,
+            cached_named_retry_policies: None,
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
@@ -3650,6 +3658,21 @@ impl PrivateDurableWorkerState {
             last_snapshot_index,
             resource_limit_entry,
         }
+    }
+
+    /// Returns the named retry policies derived from agent config, caching the result.
+    pub fn named_retry_policies(&mut self) -> &[NamedRetryPolicy] {
+        if self.cached_named_retry_policies.is_none() {
+            let raw = collect_named_retry_policies(&self.agent_config);
+            let mut deduped = std::collections::BTreeMap::new();
+            for policy in raw {
+                deduped.insert(policy.name.clone(), policy);
+            }
+            let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
+            policies.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.name.cmp(&b.name)));
+            self.cached_named_retry_policies = Some(policies);
+        }
+        self.cached_named_retry_policies.as_deref().unwrap()
     }
 
     /// Returns whether the outermost active atomic region has side effects

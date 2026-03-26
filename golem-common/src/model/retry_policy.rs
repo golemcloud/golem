@@ -474,6 +474,13 @@ impl RetryContext {
         props
     }
 
+    /// Builds retry properties for a custom operation with a verb and noun URI.
+    pub fn custom(verb: &str, noun_uri: &str) -> RetryProperties {
+        let mut props = Self::base(verb, noun_uri);
+        decompose_uri(&mut props, noun_uri);
+        props
+    }
+
     fn base(verb: &str, noun_uri: &str) -> RetryProperties {
         let mut props = RetryProperties::new();
         props
@@ -484,7 +491,7 @@ impl RetryContext {
 }
 
 /// Flattens an agent's invocation parameters into retry properties using dot-separated keys.
-pub fn flatten_agent_params(props: &mut RetryProperties, prefix: &str, value: &DataValue) {
+fn flatten_agent_params(props: &mut RetryProperties, prefix: &str, value: &DataValue) {
     match value {
         DataValue::Tuple(elements) => {
             for (index, element) in elements.elements.iter().enumerate() {
@@ -505,7 +512,7 @@ pub fn flatten_agent_params(props: &mut RetryProperties, prefix: &str, value: &D
 }
 
 /// Parses a URI and adds its scheme, host, port, and path as individual retry properties.
-pub fn decompose_uri(props: &mut RetryProperties, uri: &str) {
+fn decompose_uri(props: &mut RetryProperties, uri: &str) {
     if let Ok(parsed) = url::Url::parse(uri) {
         props.set(
             "uri-scheme",

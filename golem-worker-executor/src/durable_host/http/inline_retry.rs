@@ -911,10 +911,8 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     let new_future = if request_state.retry.has_background_retry {
         if let HostFutureIncomingResponse::Pending(handle) = rebuilt.future {
             let named_retry_policies = {
-                let policies = crate::durable_host::durability::collect_named_retry_policies(
-                    &ctx.state.agent_config,
-                );
-                (!policies.is_empty()).then_some(policies)
+                let policies = ctx.state.named_retry_policies();
+                (!policies.is_empty()).then_some(policies.to_vec())
             };
             let retry_properties = golem_common::model::RetryContext::http(
                 &request_state.request.method.to_string(),

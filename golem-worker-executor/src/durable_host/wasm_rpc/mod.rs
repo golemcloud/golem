@@ -474,10 +474,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let named_retry_policies = if in_atomic_region {
                 None
             } else {
-                let policies = crate::durable_host::durability::collect_named_retry_policies(
-                    &self.state.agent_config,
-                );
-                (!policies.is_empty()).then_some(policies)
+                let policies = self.state.named_retry_policies();
+                (!policies.is_empty()).then_some(policies.to_vec())
             };
             let retry_properties =
                 RetryContext::rpc("invoke-and-await", &remote_agent_id, &method_name);
@@ -710,10 +708,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             let named_retry_policies = if in_atomic_region {
                 None
             } else {
-                let policies = crate::durable_host::durability::collect_named_retry_policies(
-                    &self.state.agent_config,
-                );
-                (!policies.is_empty()).then_some(policies)
+                let policies = self.state.named_retry_policies();
+                (!policies.is_empty()).then_some(policies.to_vec())
             };
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
             let worker = self.public_state.worker();

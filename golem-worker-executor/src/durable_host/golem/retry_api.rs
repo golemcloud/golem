@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem_api_1_x::retry::{
     AddDelayConfig, ClampConfig, CountBoxConfig, ExponentialConfig, FibonacciConfig,
@@ -22,15 +21,14 @@ use crate::preview2::golem_api_1_x::retry::{
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::model::retry_policy::{
-    decompose_uri, duration_to_nanos, NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy,
-    RetryProperties,
+    duration_to_nanos, NamedRetryPolicy, Predicate, PredicateValue, RetryContext, RetryPolicy,
 };
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_retry_policies(&mut self) -> anyhow::Result<Vec<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policies");
-        let policies = collect_and_normalize(&self.state.agent_config);
-        Ok(policies.into_iter().map(|p| p.into()).collect())
+        let policies = self.state.named_retry_policies();
+        Ok(policies.iter().cloned().map(|p| p.into()).collect())
     }
 
     async fn get_retry_policy_by_name(
@@ -38,8 +36,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: String,
     ) -> anyhow::Result<Option<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policy_by_name");
-        let policies = collect_and_normalize(&self.state.agent_config);
-        Ok(policies.into_iter().find(|p| p.name == name).map(|p| p.into()))
+        let policies = self.state.named_retry_policies();
+        Ok(policies.iter().find(|p| p.name == name).cloned().map(|p| p.into()))
     }
 
     async fn resolve_retry_policy(
@@ -49,17 +47,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         properties: Vec<(String, WitPredicateValue)>,
     ) -> anyhow::Result<Option<WitRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "resolve_retry_policy");
-        let policies = collect_and_normalize(&self.state.agent_config);
 
-        let mut props = RetryProperties::new();
-        props.set("verb", PredicateValue::Text(verb));
-        props.set("noun-uri", PredicateValue::Text(noun_uri.clone()));
-        decompose_uri(&mut props, &noun_uri);
+        let mut props = RetryContext::custom(&verb, &noun_uri);
         for (key, value) in properties {
             props.set(key, wit_predicate_value_to_model(value));
         }
 
-        match NamedRetryPolicy::resolve(&policies, &props) {
+        let policies = self.state.named_retry_policies();
+        match NamedRetryPolicy::resolve(policies, &props) {
             Ok(Some(matched)) => Ok(Some(matched.policy.clone().into())),
             Ok(None) => Ok(None),
             Err(err) => Err(anyhow::anyhow!("Retry policy resolution error: {err}")),
@@ -86,21 +81,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             "remove-retry-policy is not yet implemented; named policies are currently read-only and configured via agent config"
         ))
     }
-}
-
-/// Collect named retry policies from agent config, deduplicate by name
-/// (last wins), and sort by descending priority.
-fn collect_and_normalize(
-    agent_config: &std::collections::HashMap<Vec<String>, golem_wasm::ValueAndType>,
-) -> Vec<NamedRetryPolicy> {
-    let raw = collect_named_retry_policies(agent_config);
-    let mut deduped = std::collections::BTreeMap::new();
-    for policy in raw {
-        deduped.insert(policy.name.clone(), policy);
-    }
-    let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
-    policies.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.name.cmp(&b.name)));
-    policies
 }
 
 fn wit_predicate_value_to_model(v: WitPredicateValue) -> PredicateValue {

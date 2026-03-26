@@ -129,7 +129,7 @@ pub trait InFunctionRetryHost {
     ///
     /// Returning `None` means semantic policy resolution is unavailable and callers
     /// should use the legacy `RetryConfig`-based fallback.
-    fn named_retry_policies(&self) -> Option<Vec<NamedRetryPolicy>> {
+    fn named_retry_policies(&mut self) -> Option<Vec<NamedRetryPolicy>> {
         None
     }
 
@@ -626,9 +626,9 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             .clone()
     }
 
-    fn named_retry_policies(&self) -> Option<Vec<NamedRetryPolicy>> {
-        let policies = collect_named_retry_policies(&self.state.agent_config);
-        (!policies.is_empty()).then_some(policies)
+    fn named_retry_policies(&mut self) -> Option<Vec<NamedRetryPolicy>> {
+        let policies = self.state.named_retry_policies();
+        (!policies.is_empty()).then_some(policies.to_vec())
     }
 
     async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState> {
@@ -1143,7 +1143,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         self.retry_config.clone()
     }
 
-    fn named_retry_policies(&self) -> Option<Vec<NamedRetryPolicy>> {
+    fn named_retry_policies(&mut self) -> Option<Vec<NamedRetryPolicy>> {
         self.named_retry_policies.clone()
     }
 
@@ -1357,7 +1357,7 @@ mod tests {
             self.retry_config.clone()
         }
 
-        fn named_retry_policies(&self) -> Option<Vec<NamedRetryPolicy>> {
+        fn named_retry_policies(&mut self) -> Option<Vec<NamedRetryPolicy>> {
             self.named_retry_policies.clone()
         }
 
