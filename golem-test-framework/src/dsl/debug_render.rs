@@ -426,6 +426,31 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     let _ = writeln!(result, "{pad}MIME type:         application/json");
                     let _ = writeln!(result, "{pad}JSON:              {}", data.data);
                 }
+                PublicSnapshotData::Multipart(data) => {
+                    use golem_common::base_model::oplog::MultipartPartData;
+
+                    let _ = writeln!(
+                        result,
+                        "{pad}MIME type:         {}",
+                        data.mime_type
+                    );
+                    for part in &data.parts {
+                        let data_summary = match &part.data {
+                            MultipartPartData::Json(json) => {
+                                serde_json::to_string_pretty(&json.data)
+                                    .unwrap_or_else(|_| format!("{:?}", json.data))
+                            }
+                            MultipartPartData::Raw(raw) => {
+                                format!("({} bytes)", raw.data.len())
+                            }
+                        };
+                        let _ = writeln!(
+                            result,
+                            "{pad}part:              {} [{}]: {}",
+                            part.name, part.content_type, data_summary
+                        );
+                    }
+                }
             }
         }
         PublicOplogEntry::OplogProcessorCheckpoint(params) => {

@@ -21,6 +21,7 @@ import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegist
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
+import { encodeMultipart, decodeMultipart } from './internal/multipart';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -125,7 +126,34 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
   const { data: agentSnapshot, mimeType } = await resolvedAgent.saveSnapshot();
   const principal = initializationPrincipal ?? { tag: 'anonymous' };
 
-  if (mimeType === 'application/json') {
+  if (mimeType.startsWith('multipart/mixed')) {
+    // Multipart snapshot: the state JSON part already contains agent properties.
+    // We need to inject version and principal into the state part.
+    const boundaryMatch = mimeType.match(/boundary=([^\s;]+)/);
+    if (!boundaryMatch) {
+      throw new Error('multipart/mixed snapshot missing boundary parameter');
+    }
+    const boundary = boundaryMatch[1];
+    const parts = decodeMultipart(agentSnapshot, boundary);
+
+    const stateIdx = parts.findIndex((p) => p.name === 'state');
+    if (stateIdx === -1) {
+      throw new Error('multipart snapshot missing "state" part');
+    }
+
+    const stateJson = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
+    const envelope = { version: 1, principal, state: stateJson };
+    parts[stateIdx] = {
+      ...parts[stateIdx],
+      body: new TextEncoder().encode(JSON.stringify(envelope)),
+    };
+
+    const { data, boundary: newBoundary } = encodeMultipart(parts);
+    return {
+      data,
+      mimeType: `multipart/mixed; boundary=${newBoundary}`,
+    };
+  } else if (mimeType === 'application/json') {
     // JSON snapshot: wrap in envelope { version, principal, state }
     const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
     const envelope = { version: 1, principal, state };
@@ -158,9 +186,41 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
   }
 
   let agentSnapshot: Uint8Array;
+  let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
 
-  if (snapshot.mimeType === 'application/json') {
+  if (snapshot.mimeType.startsWith('multipart/mixed')) {
+    // Multipart snapshot: extract principal from the state JSON part
+    const boundaryMatch = snapshot.mimeType.match(/boundary=([^\s;]+)/);
+    if (!boundaryMatch) {
+      throw 'multipart/mixed snapshot missing boundary parameter';
+    }
+    const boundary = boundaryMatch[1];
+    const parts = decodeMultipart(bytes, boundary);
+
+    const stateIdx = parts.findIndex((p) => p.name === 'state');
+    if (stateIdx === -1) {
+      throw 'multipart snapshot missing "state" part';
+    }
+
+    const envelope = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
+    principal = envelope.principal ?? initializationPrincipal ?? { tag: 'anonymous' };
+
+    if (envelope.state === undefined) {
+      throw `multipart state part missing 'state' field`;
+    }
+
+    // Replace the state part body with just the agent properties (strip version/principal)
+    parts[stateIdx] = {
+      ...parts[stateIdx],
+      body: new TextEncoder().encode(JSON.stringify(envelope.state)),
+    };
+
+    // Re-encode the parts for loadSnapshot
+    const { data: reencoded, boundary: newBoundary } = encodeMultipart(parts);
+    agentSnapshot = reencoded;
+    agentSnapshotMimeType = `multipart/mixed; boundary=${newBoundary}`;
+  } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state }
     const envelope = JSON.parse(new TextDecoder().decode(bytes));
     principal = envelope.principal ?? initializationPrincipal ?? { tag: 'anonymous' };
@@ -168,6 +228,7 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
       throw `JSON snapshot missing 'state' field`;
     }
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
+    agentSnapshotMimeType = 'application/json';
   } else {
     // Custom binary snapshot with version envelope
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -200,7 +261,7 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;
-    await agent.loadSnapshot(agentSnapshot);
+    await agent.loadSnapshot(agentSnapshot, agentSnapshotMimeType);
 
     resolvedAgent = agent;
   } else {

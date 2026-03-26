@@ -30,7 +30,8 @@ use crate::model::oplog::public_oplog_entry::{
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel, PersistenceLevel,
+    AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, PersistenceLevel,
     PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
     PublicOplogEntry, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
@@ -831,6 +832,36 @@ fn snapshot_json_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         data: PublicSnapshotData::Json(JsonSnapshotData {
             data: serde_json::json!({"key": "value", "count": 42}),
+        }),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn snapshot_multipart_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: PublicSnapshotData::Multipart(MultipartSnapshotData {
+            mime_type: "multipart/mixed; boundary=test-boundary".to_string(),
+            parts: vec![
+                MultipartSnapshotPart {
+                    name: "state".to_string(),
+                    content_type: "application/json".to_string(),
+                    data: MultipartPartData::Json(JsonSnapshotData {
+                        data: serde_json::json!({"version": 1, "properties": {"counter": 42}}),
+                    }),
+                },
+                MultipartSnapshotPart {
+                    name: "db:main".to_string(),
+                    content_type: "application/x-sqlite3".to_string(),
+                    data: MultipartPartData::Raw(RawSnapshotData {
+                        data: vec![0x53, 0x51, 0x4C, 0x69, 0x74, 0x65],
+                        mime_type: "application/x-sqlite3".to_string(),
+                    }),
+                },
+            ],
         }),
     });
     let serialized = entry.to_json_string();

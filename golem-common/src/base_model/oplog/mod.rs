@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod oplog_macro;
+pub mod multipart;
 pub(crate) mod public_types;
 
 use crate::base_model::account::AccountId;
