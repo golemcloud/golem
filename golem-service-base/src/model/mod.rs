@@ -17,6 +17,7 @@ pub mod auth;
 pub mod component;
 pub mod environment;
 pub mod plugin_registration;
+pub mod quota_lease;
 
 use derive_more::Display;
 use desert_rust::BinaryCodec;

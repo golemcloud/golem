@@ -15555,9 +15555,14 @@ components:
           format: uint64
         period:
           $ref: '#/components/schemas/TimePeriod'
+        max:
+          description: Maximum burst capacity. Defaults to `value` if not specified.
+          type: integer
+          format: uint64
       required:
       - value
       - period
+      - max
     SecuritySchemeAgentSecurity:
       title: SecuritySchemeAgentSecurity
       description: |-
