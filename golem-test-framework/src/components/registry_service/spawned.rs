@@ -41,6 +41,8 @@ pub struct SpawnedRegistryService {
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
     low_disk_space_plan_id: PlanId,
+    low_http_calls_plan_id: PlanId,
+    low_rpc_calls_plan_id: PlanId,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
@@ -71,6 +73,8 @@ impl SpawnedRegistryService {
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
         let low_fuel_plan_id = PlanId(uuid!("301fd75c-dcc5-48e3-967e-e7c33df52493"));
         let low_disk_space_plan_id = PlanId(uuid!("a2f3b4c5-d6e7-8901-abcd-ef0123456789"));
+        let low_http_calls_plan_id = PlanId(uuid!("b3c4d5e6-f7a8-9012-bcde-f01234567890"));
+        let low_rpc_calls_plan_id = PlanId(uuid!("c4d5e6f7-a8b9-0123-cdef-012345678901"));
 
         let otlp_wasm = working_directory.join("../plugins/otlp-exporter.wasm");
         let otlp_wasm_path = if otlp_wasm.exists() {
@@ -96,6 +100,8 @@ impl SpawnedRegistryService {
                     &default_plan_id,
                     &low_fuel_plan_id,
                     &low_disk_space_plan_id,
+                    &low_http_calls_plan_id,
+                    &low_rpc_calls_plan_id,
                     otlp,
                     otlp_wasm_path,
                 )
@@ -134,6 +140,8 @@ impl SpawnedRegistryService {
             default_plan_id,
             low_fuel_plan_id,
             low_disk_space_plan_id,
+            low_http_calls_plan_id,
+            low_rpc_calls_plan_id,
             base_http_client: OnceCell::new(),
         }
     }
@@ -174,6 +182,14 @@ impl RegistryService for SpawnedRegistryService {
 
     fn low_disk_space_plan(&self) -> PlanId {
         self.low_disk_space_plan_id
+    }
+
+    fn low_http_calls_plan(&self) -> PlanId {
+        self.low_http_calls_plan_id
+    }
+
+    fn low_rpc_calls_plan(&self) -> PlanId {
+        self.low_rpc_calls_plan_id
     }
 
     async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {

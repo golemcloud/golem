@@ -110,12 +110,16 @@ impl CallCountManagement for DebugContext {
         self.durable_ctx.reset_invocation_call_counts();
     }
 
-    fn record_monthly_http_call(&mut self) -> bool {
-        true
+    fn record_monthly_http_call(&mut self) {}
+
+    fn record_monthly_rpc_call(&mut self) {}
+
+    fn remaining_monthly_http_calls(&self) -> u64 {
+        u64::MAX
     }
 
-    fn record_monthly_rpc_call(&mut self) -> bool {
-        true
+    fn remaining_monthly_rpc_calls(&self) -> u64 {
+        u64::MAX
     }
 }
 

@@ -20,8 +20,7 @@ use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
 use golem_common::model::IdempotencyKey;
-use golem_common::model::Timestamp;
-use golem_service_base::error::worker_executor::InterruptKind;
+
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
@@ -47,11 +46,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
 
         // Record against the monthly account-level HTTP call quota.
-        // Only in live mode (is_live is checked inside record_monthly_http_call).
-        if self.state.is_live() && !self.record_monthly_http_call() {
-            return Err(HttpError::trap(wasmtime::Error::from(
-                InterruptKind::Suspend(Timestamp::now_utc()),
-            )));
+        // Only in live mode; if the budget is exhausted, a flag is set and the
+        // epoch callback will suspend the worker at the next tick.
+        if self.state.is_live() {
+            self.record_monthly_http_call();
         }
 
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future

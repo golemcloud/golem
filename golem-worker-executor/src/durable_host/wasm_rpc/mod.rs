@@ -43,12 +43,11 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::Timestamp;
 use golem_common::model::{
     AgentId, AgentInvocation, IdempotencyKey, OplogIndex, OwnedAgentId, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
-use golem_service_base::error::worker_executor::InterruptKind;
+
 use golem_wasm::{
     CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, ValueAndType, WasmRpcEntry,
 };
@@ -158,10 +157,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map_err(wasmtime::Error::from)?;
 
         // Record against the monthly account-level RPC call quota.
-        if self.state.is_live() && !self.record_monthly_rpc_call() {
-            return Err(anyhow::Error::from(wasmtime::Error::from(
-                InterruptKind::Suspend(Timestamp::now_utc()),
-            )));
+        // Record against the monthly account-level RPC call quota.
+        // Only in live mode; if the budget is exhausted, a flag is set and the
+        // epoch callback will suspend the worker at the next tick.
+        if self.state.is_live() {
+            self.record_monthly_rpc_call();
         }
 
         let current_idempotency_key = self
@@ -288,10 +288,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map_err(wasmtime::Error::from)?;
 
         // Record against the monthly account-level RPC call quota.
-        if self.state.is_live() && !self.record_monthly_rpc_call() {
-            return Err(anyhow::Error::from(wasmtime::Error::from(
-                InterruptKind::Suspend(Timestamp::now_utc()),
-            )));
+        // Record against the monthly account-level RPC call quota.
+        // Only in live mode; if the budget is exhausted, a flag is set and the
+        // epoch callback will suspend the worker at the next tick.
+        if self.state.is_live() {
+            self.record_monthly_rpc_call();
         }
 
         let current_idempotency_key = self
@@ -394,10 +395,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map_err(wasmtime::Error::from)?;
 
         // Record against the monthly account-level RPC call quota.
-        if self.state.is_live() && !self.record_monthly_rpc_call() {
-            return Err(anyhow::Error::from(wasmtime::Error::from(
-                InterruptKind::Suspend(Timestamp::now_utc()),
-            )));
+        // Record against the monthly account-level RPC call quota.
+        // Only in live mode; if the budget is exhausted, a flag is set and the
+        // epoch callback will suspend the worker at the next tick.
+        if self.state.is_live() {
+            self.record_monthly_rpc_call();
         }
 
         let current_idempotency_key = self

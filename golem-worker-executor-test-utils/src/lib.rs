@@ -623,12 +623,16 @@ impl CallCountManagement for TestWorkerCtx {
         self.durable_ctx.reset_invocation_call_counts();
     }
 
-    fn record_monthly_http_call(&mut self) -> bool {
-        true
+    fn record_monthly_http_call(&mut self) {}
+
+    fn record_monthly_rpc_call(&mut self) {}
+
+    fn remaining_monthly_http_calls(&self) -> u64 {
+        u64::MAX
     }
 
-    fn record_monthly_rpc_call(&mut self) -> bool {
-        true
+    fn remaining_monthly_rpc_calls(&self) -> u64 {
+        u64::MAX
     }
 }
 
@@ -1875,6 +1879,59 @@ pub async fn start_with_invocation_limits(
             per_invocation_rpc_limit,
         }),
         "Timeout waiting for invocation-limit server to start",
+    )
+    .await
+}
+
+/// A `ResourceLimits` implementation that enforces fixed monthly account-level
+/// HTTP and RPC call budgets while keeping everything else unlimited.
+struct FixedMonthlyCallLimitResourceLimits {
+    monthly_http_calls: u64,
+    monthly_rpc_calls: u64,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedMonthlyCallLimitResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new_with_all_limits(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            self.monthly_http_calls,
+            self.monthly_rpc_calls,
+        )))
+    }
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// with specific monthly account-level HTTP and RPC call budgets enforced.
+///
+/// When the budget is exhausted the worker is suspended (not trapped) — the same
+/// mechanism as fuel exhaustion. Per-invocation limits, fuel, memory, and disk
+/// remain unlimited.
+pub async fn start_with_monthly_call_limits(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    monthly_http_calls: u64,
+    monthly_rpc_calls: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedMonthlyCallLimitResourceLimits {
+            monthly_http_calls,
+            monthly_rpc_calls,
+        }),
+        "Timeout waiting for monthly-call-limit server to start",
     )
     .await
 }

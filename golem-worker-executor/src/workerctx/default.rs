@@ -239,12 +239,24 @@ impl CallCountManagement for Context {
         self.durable_ctx.reset_invocation_call_counts();
     }
 
-    fn record_monthly_http_call(&mut self) -> bool {
+    fn record_monthly_http_call(&mut self) {
         self.durable_ctx.record_monthly_http_call()
     }
 
-    fn record_monthly_rpc_call(&mut self) -> bool {
+    fn record_monthly_rpc_call(&mut self) {
         self.durable_ctx.record_monthly_rpc_call()
+    }
+
+    fn remaining_monthly_http_calls(&self) -> u64 {
+        self.durable_ctx
+            .resource_limit_entry()
+            .remaining_http_calls()
+    }
+
+    fn remaining_monthly_rpc_calls(&self) -> u64 {
+        self.durable_ctx
+            .resource_limit_entry()
+            .remaining_rpc_calls()
     }
 }
 

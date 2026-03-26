@@ -356,16 +356,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     /// Records one outgoing HTTP call against the monthly account quota.
     ///
-    /// Returns `false` when the monthly budget is exhausted.
-    pub fn record_monthly_http_call(&mut self) -> bool {
-        self.state.resource_limit_entry.record_http_call()
+    /// The actual budget enforcement (suspension) happens in the epoch callback,
+    /// which checks `remaining_http_calls()` on the next tick.
+    pub fn record_monthly_http_call(&mut self) {
+        self.state.resource_limit_entry.record_http_call();
     }
 
     /// Records one outgoing RPC call against the monthly account quota.
     ///
-    /// Returns `false` when the monthly budget is exhausted.
-    pub fn record_monthly_rpc_call(&mut self) -> bool {
-        self.state.resource_limit_entry.record_rpc_call()
+    /// The actual budget enforcement (suspension) happens in the epoch callback.
+    pub fn record_monthly_rpc_call(&mut self) {
+        self.state.resource_limit_entry.record_rpc_call();
+    }
+
+    /// Returns the shared resource limit entry for this worker, used by the
+    /// epoch callback to check remaining monthly HTTP/RPC call budgets.
+    pub fn resource_limit_entry(&self) -> &Arc<AtomicResourceEntry> {
+        &self.state.resource_limit_entry
     }
 
     fn check_if_file_is_readonly(
@@ -3163,7 +3170,8 @@ struct PrivateDurableWorkerState {
     /// Per-invocation RPC call limit from the account's Plan. u64::MAX means unlimited.
     per_invocation_rpc_limit: u64,
 
-    /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption.
+    /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
+    /// and to check remaining budgets from the epoch callback.
     resource_limit_entry: Arc<AtomicResourceEntry>,
 }
 

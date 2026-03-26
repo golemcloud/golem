@@ -231,15 +231,17 @@ pub trait CallCountManagement {
     fn reset_invocation_call_counts(&mut self);
 
     /// Records one outgoing HTTP call against the monthly account quota.
-    ///
-    /// Returns `false` when the monthly budget is exhausted, signalling that
-    /// the caller should suspend the worker.
-    fn record_monthly_http_call(&mut self) -> bool;
+    fn record_monthly_http_call(&mut self);
 
     /// Records one outgoing RPC call against the monthly account quota.
-    ///
-    /// Returns `false` when the monthly budget is exhausted.
-    fn record_monthly_rpc_call(&mut self) -> bool;
+    fn record_monthly_rpc_call(&mut self);
+
+    /// Returns the number of HTTP calls remaining in this billing period.
+    /// Used by the epoch callback to detect budget exhaustion.
+    fn remaining_monthly_http_calls(&self) -> u64;
+
+    /// Returns the number of RPC calls remaining in this billing period.
+    fn remaining_monthly_rpc_calls(&self) -> u64;
 }
 
 /// The invocation management interface of a worker context is responsible for connecting

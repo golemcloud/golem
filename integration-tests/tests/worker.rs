@@ -1936,3 +1936,169 @@ async fn agent_write_within_per_plan_disk_space_quota_succeeds(
 
     Ok(())
 }
+
+/// A worker making HTTP calls is suspended when the account's monthly HTTP
+/// call limit is exhausted. The batch sync eventually reports the consumption
+/// to the registry, which computes `available_http_calls = 0` and the executor
+/// suspends the worker on the next epoch tick.
+///
+/// Uses the `low_http_calls` plan (monthly HTTP limit = 1): one call succeeds,
+/// the second exhausts the budget and the worker is suspended.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn worker_suspends_when_monthly_http_call_limit_exhausted(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+
+    let user = deps.user().await?;
+
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_http_calls_plan(),
+            },
+        )
+        .await?;
+
+    let (_, env) = user.app_and_env().await?;
+
+    let received_http_posts = Arc::new(AtomicU64::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server_task = tokio::spawn({
+        let received_http_posts = received_http_posts.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                post(async move || {
+                    received_http_posts.fetch_add(1, Ordering::AcqRel);
+                    "ok"
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = user
+        .component(&env.id, "golem_it_http_tests_release")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("PORT".to_string(), host_http_port.to_string());
+
+    let http_agent_id = agent_id!("HttpClient");
+    let agent_id = user
+        .start_agent_with(
+            &component.id,
+            http_agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // Keep invoking `run` — the first call succeeds, subsequent ones exhaust the budget.
+    let invoker_task = tokio::spawn({
+        let user = user.clone();
+        let component = component.clone();
+        let agent_id = http_agent_id.clone();
+        async move {
+            loop {
+                let _ = user
+                    .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+                    .await;
+            }
+        }
+    });
+
+    user.wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(30))
+        .await?;
+
+    // The monthly limit is 1 so at most 1 HTTP call should have reached the server.
+    let http_count = received_http_posts.load(Ordering::Acquire);
+    assert!(
+        http_count <= 1,
+        "expected at most 1 HTTP call before suspension, got {http_count}"
+    );
+
+    invoker_task.abort();
+    http_server_task.abort();
+
+    Ok(())
+}
+
+/// A worker making RPC calls is suspended when the account's monthly RPC call
+/// limit is exhausted. Mirrors the HTTP test above but for RPC.
+///
+/// Uses the `low_rpc_calls` plan (monthly RPC limit = 1).
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn worker_suspends_when_monthly_rpc_call_limit_exhausted(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+
+    let user = deps.user().await?;
+
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_rpc_calls_plan(),
+            },
+        )
+        .await?;
+
+    let (_, env) = user.app_and_env().await?;
+
+    // The agent-rpc-rust component contains both parent and child agent types.
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .name("golem-it:agent-rpc-rust")
+        .store()
+        .await?;
+
+    let caller_id = agent_id!("RustParent", "rpc_monthly_limit_test");
+    let agent_id = user.start_agent(&component.id, caller_id.clone()).await?;
+
+    // Keep invoking `spawn_child` — each call makes one RPC call.
+    // With limit = 1, the second invocation exhausts the budget and suspends.
+    let invoker_task = tokio::spawn({
+        let user = user.clone();
+        let component = component.clone();
+        let agent_id = caller_id.clone();
+        async move {
+            loop {
+                let _ = user
+                    .invoke_and_await_agent(
+                        &component,
+                        &agent_id,
+                        "spawn_child",
+                        data_value!("test"),
+                    )
+                    .await;
+            }
+        }
+    });
+
+    user.wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(30))
+        .await?;
+
+    invoker_task.abort();
+
+    Ok(())
+}
