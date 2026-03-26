@@ -24,9 +24,7 @@ members = [
 
 exclude = [
     "cli/desktop-app/src-tauri",
-    "test-components/host-api-tests",
-    "test-components/http-tests",
-    "test-components/oplog-processor",
+    "test-components",
     "sdks/golem-rust"
 ]
 
@@ -164,7 +162,7 @@ miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 minijinja = "2.7.0"
-moonbit-component-generator = { version = "0.0.10", features = ["get-script"] }
+
 nanoid = "0.4.0"
 native-tls = "=0.2.13"
 nom = "7.1.3"
@@ -210,7 +208,7 @@ reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "quer
 reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_30"] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
-rmcp = {version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
 rsa = "0.9.7"
 
 rustc-hash = "2.1.1"
@@ -271,6 +269,11 @@ tracing-opentelemetry = "0.31.0"
 tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
+tree-sitter = "0.26.5"
+tree-sitter-json = "0.24.8"
+tree-sitter-rust = "0.24.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-yaml = "0.7.2"
 tower = "0.5.2"
 try_match = "0.4.2"
 tryhard = "0.5.1"
@@ -285,7 +288,7 @@ walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.244.0"
 wasm-metadata = { version = "0.244.0", features = ["oci"] }
-wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", branch = "web_socket" }
+wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs", branch = "web_socket", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.244"
 wasmparser = "0.244.0"
 wasmprinter = "0.244.0"

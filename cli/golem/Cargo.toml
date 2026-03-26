@@ -38,6 +38,8 @@ poem = { workspace = true }
 prometheus = { workspace = true }
 rlimit = { workspace = true }
 rustls = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

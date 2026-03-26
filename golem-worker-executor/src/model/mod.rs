@@ -66,6 +66,7 @@ impl ShardAssignmentCheck for ShardAssignment {
 pub struct AgentConfig {
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
+    pub current_filesystem_storage_usage: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub initial_config_vars: BTreeMap<String, String>,
@@ -77,6 +78,7 @@ impl AgentConfig {
     pub fn new(
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
+        current_filesystem_storage_usage: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         initial_config_vars: BTreeMap<String, String>,
@@ -86,6 +88,7 @@ impl AgentConfig {
         AgentConfig {
             deleted_regions,
             total_linear_memory_size,
+            current_filesystem_storage_usage,
             component_revision_for_replay,
             created_by,
             initial_config_vars,
@@ -274,6 +277,18 @@ impl TrapType {
                             error: AgentError::ExceededTableLimit,
                             retry_from,
                         },
+                        Some(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage) => {
+                            TrapType::Error {
+                                error: AgentError::NodeOutOfFilesystemStorage,
+                                retry_from,
+                            }
+                        }
+                        Some(GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit) => {
+                            TrapType::Error {
+                                error: AgentError::AgentExceededFilesystemStorageLimit,
+                                retry_from,
+                            }
+                        }
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {

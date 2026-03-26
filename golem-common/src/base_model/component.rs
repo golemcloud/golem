@@ -220,6 +220,7 @@ declare_structs! {
         pub content_hash: ComponentFileContentHash,
         pub path: ComponentFilePath,
         pub permissions: ComponentFilePermissions,
+        pub size: u64,
     }
 }
 

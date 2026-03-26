@@ -235,14 +235,6 @@ impl Repl {
     }
 
     fn run_interactive(&self, outputs: EvalContextOutputs) -> anyhow::Result<()> {
-        let mut editor = Self::build_editor(self.command_context.clone(), self.cli_repl.clone())?;
-
-        let history_path = PathBuf::from(&self.config.base_config.history_file);
-        editor.load_history(&history_path)?;
-
-        let buffered_output = BufferedEvalOutput::start(outputs.stdout, outputs.stderr);
-        let mut printer = editor.create_external_printer()?;
-
         let prompt = {
             if self.config.script_mode() {
                 "".to_string()
@@ -257,6 +249,14 @@ impl Repl {
                 format!("{name}{app}{env}{arrow} ")
             }
         };
+
+        let mut editor = Self::build_editor(self.command_context.clone(), self.cli_repl.clone())?;
+
+        let history_path = PathBuf::from(&self.config.base_config.history_file);
+        editor.load_history(&history_path)?;
+
+        let buffered_output = BufferedEvalOutput::start(outputs.stdout, outputs.stderr);
+        let mut printer = editor.create_external_printer()?;
 
         let mut interrupted = false;
         loop {
@@ -644,12 +644,9 @@ impl Completer for ReplRustyLineEditorHelper {
             return Ok((result.start, pairs));
         }
 
-        let completions = {
-            let _spinner = SpinnerGuard::start_stdout("Completing...", true);
-            match self.context.borrow_mut().completions(line, pos) {
-                Ok(completions) => completions,
-                Err(_) => return Ok((pos, Vec::new())),
-            }
+        let completions = match self.context.borrow_mut().completions(line, pos) {
+            Ok(completions) => completions,
+            Err(_) => return Ok((pos, Vec::new())),
         };
 
         let mut candidates = Vec::with_capacity(completions.completions.len());

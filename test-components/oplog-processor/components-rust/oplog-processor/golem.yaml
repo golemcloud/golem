@@ -1,3 +1,0 @@
-components:
-  oplog:processor:
-    templates: rust, rust-test-component

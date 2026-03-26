@@ -67,5 +67,5 @@ export function handleInterface(
     );
   }
 
-  return Either.right(record(type.name, interfaceFields));
+  return Either.right(record(type.name, interfaceFields, type.owner));
 }

@@ -26,6 +26,7 @@ sequential_suite!(app);
 tag_suite!(plugins, group1);
 sequential_suite!(plugins);
 
+tag_suite!(build_and_deploy_all, group2);
 sequential_suite!(build_and_deploy_all);
 
 tag_suite!(agents, group3);
@@ -37,12 +38,15 @@ use crate::{crate_path, workspace_path, Tracing};
 use anyhow::Context;
 use colored::Colorize;
 use expectrl::Expect;
-use golem_cli::fs::{read_to_string, write_str};
+use golem_cli::app::edit;
+use golem_cli::fs;
 use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -70,6 +74,7 @@ mod cmd {
     pub static GET: &str = "get";
     pub static INVOKE: &str = "invoke";
     pub static LIST: &str = "list";
+    pub static LIST_AGENT_TYPES: &str = "list-agent-types";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
@@ -79,11 +84,13 @@ mod cmd {
 
 mod flag {
     pub static AGENT_TYPE_NAME: &str = "--agent-type-name";
+    pub static COMPONENT_NAME: &str = "--component-name";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
     pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static TEMPLATE: &str = "--template";
     pub static YES: &str = "--yes";
 }
 
@@ -99,7 +106,16 @@ enum CommandOutput {
     Stderr(String),
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupPorts {
+    router_port: u16,
+    custom_request_port: u16,
+    mcp_port: u16,
+}
+
 pub struct Output {
+    quiet: bool,
     status: ExitStatus,
     output: Vec<CommandOutput>,
 }
@@ -158,6 +174,7 @@ impl Output {
         }
 
         Ok(Self {
+            quiet,
             status: child.wait().await?,
             output,
         })
@@ -168,6 +185,20 @@ impl Output {
             CommandOutput::Stdout(line) => Some(line.as_str()),
             CommandOutput::Stderr(_) => None,
         })
+    }
+
+    fn stdout_json<T: DeserializeOwned>(&self) -> Vec<T> {
+        self.output
+            .iter()
+            .filter_map(|output| match output {
+                CommandOutput::Stdout(line) => {
+                    Some(serde_json::from_str::<T>(line).unwrap_or_else(|err| {
+                        panic!("Failed to parse line as JSON: {err}, input line:\n{}", line)
+                    }))
+                }
+                CommandOutput::Stderr(_) => None,
+            })
+            .collect()
     }
 
     fn stderr(&self) -> impl Iterator<Item = &str> {
@@ -185,7 +216,7 @@ impl Output {
     #[must_use]
     fn success_or_dump(&self) -> bool {
         let success = self.status.success();
-        if !success {
+        if !success && self.quiet {
             self.dump();
         }
         success
@@ -270,7 +301,9 @@ struct TestContext {
     _test_dir: TempDir,
     config_dir: TempDir,
     data_dir: TempDir,
+    ports_file: PathBuf,
     working_dir: PathBuf,
+    startup_ports: Option<StartupPorts>,
     server_process: Option<Child>,
     env: HashMap<String, String>,
 }
@@ -330,7 +363,9 @@ impl TestContext {
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),
+            ports_file: working_dir.join("golem-server-ports.json"),
             working_dir,
+            startup_ports: None,
             server_process: None,
             env,
         };
@@ -353,12 +388,44 @@ impl TestContext {
         self.env_mut().insert(key.into(), value.into());
     }
 
+    fn custom_request_port(&self) -> u16 {
+        self.startup_ports
+            .as_ref()
+            .map(|ports| ports.custom_request_port)
+            .unwrap_or(9006)
+    }
+
+    fn rewrite_local_http_domain_ports(&self) {
+        let Some(startup_ports) = self.startup_ports.as_ref() else {
+            return;
+        };
+
+        if startup_ports.custom_request_port == 9006 {
+            return;
+        }
+
+        for path in find_manifest_files(&self.working_dir) {
+            if let Err(err) = replace_string_in_file(
+                &path,
+                "localhost:9006",
+                &format!("localhost:{}", startup_ports.custom_request_port),
+            ) {
+                panic!(
+                    "Failed to rewrite local http deployment domain in {}: {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+
     #[must_use]
     async fn cli<I, S>(&self, args: I) -> Output
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.rewrite_local_http_domain_ports();
+
         let args = {
             let mut all_args = vec![
                 "--config-dir".to_string(),
@@ -399,6 +466,8 @@ impl TestContext {
         S: AsRef<OsStr>,
         F: FnOnce(&mut dyn InteractiveSession) -> anyhow::Result<()> + Send + 'static,
     {
+        self.rewrite_local_http_domain_ports();
+
         let args = {
             let mut all_args = vec![
                 "--config-dir".to_string(),
@@ -458,6 +527,15 @@ impl TestContext {
             self.data_dir.path().display()
         );
 
+        if self.ports_file.exists() {
+            std::fs::remove_file(&self.ports_file).unwrap_or_else(|err| {
+                panic!(
+                    "Failed to remove stale ports file {}: {err}",
+                    self.ports_file.display()
+                )
+            });
+        }
+
         let mut args = vec![
             "server",
             "run",
@@ -465,6 +543,14 @@ impl TestContext {
             self.config_dir.path().to_str().unwrap(),
             "--data-dir",
             self.data_dir.path().to_str().unwrap(),
+            "--router-port",
+            "0",
+            "--custom-request-port",
+            "0",
+            "--mcp-port",
+            "0",
+            "--ports-file",
+            self.ports_file.to_str().unwrap(),
         ];
 
         if self.quiet {
@@ -481,43 +567,98 @@ impl TestContext {
 
         {
             let start = Instant::now();
-            let client = golem_client::api::HealthCheckClientLive {
-                context: golem_client::Context {
-                    client: reqwest_middleware::ClientBuilder::new(
-                        reqwest::ClientBuilder::new()
-                            .danger_accept_invalid_certs(true)
-                            .build()
-                            .expect("Failed to build reqwest client"),
-                    )
-                    .build(),
-                    base_url: Url::from_str("http://localhost:9881").unwrap(),
-                    security_token: Security::Empty,
-                },
-            };
             let timeout = Duration::from_secs(10);
             let sleep_interval = Duration::from_millis(100);
             loop {
-                match client.healthcheck().await {
-                    Ok(_) => {
-                        println!("> server healthcheck {}", "ok".green());
-                        break;
-                    }
-                    Err(err) => {
-                        if start.elapsed() > timeout {
-                            println!(
-                                "> server healthcheck failed: {}, stopping",
-                                format!("{}", err).red()
-                            );
-                            panic!("Server is still not running, stopping");
-                        } else {
-                            println!(
-                                "> server healthcheck failed: {}, retrying",
-                                format!("{}", err).red()
-                            );
-                            tokio::time::sleep(sleep_interval).await;
+                let server_process = self
+                    .server_process
+                    .as_mut()
+                    .expect("server process should be running while waiting for startup");
+
+                if let Some(exit_status) = server_process.try_wait().unwrap_or_else(|err| {
+                    panic!("Failed to check golem server process status: {err}")
+                }) {
+                    panic!(
+                        "Golem server exited before startup completed: {}",
+                        exit_status
+                    );
+                }
+
+                if self.startup_ports.is_none() && self.ports_file.exists() {
+                    let ports = fs::read_to_string(&self.ports_file)
+                        .and_then(|content| {
+                            serde_json::from_str::<StartupPorts>(&content)
+                                .map_err(anyhow::Error::from)
+                        })
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "Failed to parse ports file {}: {err}",
+                                self.ports_file.display()
+                            )
+                        });
+
+                    println!(
+                        "{} router={}, custom-request={}, mcp={}",
+                        "> discovered server ports:".bold(),
+                        ports.router_port,
+                        ports.custom_request_port,
+                        ports.mcp_port
+                    );
+                    self.add_env_var(
+                        "GOLEM_BUILTIN_LOCAL_URL",
+                        format!("http://localhost:{}", ports.router_port),
+                    );
+                    self.startup_ports = Some(ports);
+                }
+
+                match self.startup_ports.as_ref() {
+                    Some(ports) => {
+                        let client = golem_client::api::HealthCheckClientLive {
+                            context: golem_client::Context {
+                                client: reqwest_middleware::ClientBuilder::new(
+                                    reqwest::ClientBuilder::new()
+                                        .danger_accept_invalid_certs(true)
+                                        .build()
+                                        .expect("Failed to build reqwest client"),
+                                )
+                                .build(),
+                                base_url: Url::from_str(&format!(
+                                    "http://localhost:{}",
+                                    ports.router_port
+                                ))
+                                .expect("Failed to parse healthcheck URL"),
+                                security_token: Security::Empty,
+                            },
+                        };
+
+                        match client.healthcheck().await {
+                            Ok(_) => {
+                                println!("{} {}", "> server healthcheck".bold(), "ok".green());
+                                break;
+                            }
+                            Err(err) => {
+                                if start.elapsed() > timeout {
+                                    println!(
+                                        "{} {}, stopping",
+                                        "> server healthcheck failed:".bold(),
+                                        format!("{}", err).red()
+                                    );
+                                    panic!("Server is still not running, stopping");
+                                }
+                            }
                         }
                     }
-                };
+                    None => {
+                        if start.elapsed() > timeout {
+                            panic!(
+                                "Timed out waiting for golem server startup ports file: {}",
+                                self.ports_file.display()
+                            );
+                        }
+                    }
+                }
+
+                tokio::time::sleep(sleep_interval).await;
             }
         }
     }
@@ -606,15 +747,52 @@ pub fn replace_strings_in_file(
     replace: &[(&str, &str)],
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
-    let mut content = read_to_string(path)?;
+    let mut content = fs::read_to_string(path)?;
     for (from, to) in replace {
         content = content.replace(from, to);
     }
-    write_str(path, content)
+    fs::write_str(path, content)
 }
 
 pub fn replace_string_in_file(path: impl AsRef<Path>, from: &str, to: &str) -> anyhow::Result<()> {
     replace_strings_in_file(path, &[(from, to)])
+}
+
+fn find_manifest_files(root: &Path) -> Vec<PathBuf> {
+    fn recurse(current: &Path, manifests: &mut Vec<PathBuf>) {
+        if !current.is_dir() {
+            return;
+        }
+
+        let entries = std::fs::read_dir(current)
+            .unwrap_or_else(|err| panic!("Failed to read directory {}: {err}", current.display()));
+
+        for entry in entries {
+            let entry = entry.unwrap_or_else(|err| {
+                panic!(
+                    "Failed to read directory entry under {}: {err}",
+                    current.display()
+                )
+            });
+            let path = entry.path();
+
+            if path.is_dir() {
+                if matches!(
+                    path.file_name().and_then(|name| name.to_str()),
+                    Some(".git") | Some("node_modules") | Some("target") | Some("golem-temp")
+                ) {
+                    continue;
+                }
+                recurse(&path, manifests);
+            } else if path.file_name().and_then(|name| name.to_str()) == Some("golem.yaml") {
+                manifests.push(path);
+            }
+        }
+    }
+
+    let mut manifests = vec![];
+    recurse(root, &mut manifests);
+    manifests
 }
 
 pub trait InteractiveSession {
@@ -690,4 +868,11 @@ where
             .with_context(|| format!("failed to match regex: {expected}"))?;
         Ok(())
     }
+}
+
+fn merge_into_manifest(path: &Path, update: &str) -> anyhow::Result<()> {
+    let manifest = fs::read_to_string(path)?;
+    let updated_manifest = edit::golem_yaml::merge_documents(&manifest, update)?;
+    fs::write_str(path, updated_manifest)?;
+    Ok(())
 }

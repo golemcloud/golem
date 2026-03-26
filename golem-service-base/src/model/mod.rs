@@ -17,6 +17,7 @@ pub mod auth;
 pub mod component;
 pub mod environment;
 pub mod plugin_registration;
+pub mod quota_lease;
 
 use derive_more::Display;
 use desert_rust::BinaryCodec;
@@ -143,6 +144,7 @@ pub struct ResourceLimits {
     pub available_fuel: u64,
     pub max_memory_per_worker: u64,
     pub max_table_elements_per_worker: u64,
+    pub max_disk_space_per_worker: u64,
 }
 
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
@@ -151,6 +153,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
+            max_disk_space_per_worker: value.max_disk_space_per_worker,
         }
     }
 }
@@ -161,6 +164,7 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
+            max_disk_space_per_worker: value.max_disk_space_per_worker,
         }
     }
 }

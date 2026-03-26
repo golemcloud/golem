@@ -77,6 +77,7 @@ impl DebugConfig {
             scheduler: self.scheduler,
             public_worker_api: self.public_worker_api,
             memory: self.memory,
+            filesystem_storage: Default::default(),
             rdbms: self.rdbms,
             resource_limits: self.resource_limits,
             component_cache: self.component_cache,

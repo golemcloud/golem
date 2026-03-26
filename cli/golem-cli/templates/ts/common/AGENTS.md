@@ -1,3 +1,6 @@
+<!-- golem-managed:guide:ts:start -->
+<!-- Golem manages this section. Do not edit manually. -->
+
 # Golem Application Development Guide (TypeScript)
 
 ## Overview
@@ -20,20 +23,33 @@ Key concepts:
 ## Project Structure
 
 ```
-golem.yaml                        # Root application manifest
-package.json                      # Root package.json (npm workspaces)
-components-ts/                    # Component directories (each becomes a WASM component)
-  <component-name>/
-    src/main.ts                   # Agent definitions and implementations
-    package.json                  # Component-level package.json
-    rollup.config.mjs             # Rollup config (imports shared base config)
-    tsconfig.json                 # TypeScript config (extends shared base)
-    golem.yaml                    # Component-level manifest (templates, env, dependencies)
-common-ts/                        # Shared TypeScript Golem templates and configuration
-  golem.yaml                      # Build templates for all TS components
-  rollup.config.component.mjs     # Shared Rollup configuration
-  tsconfig.component.json         # Shared TypeScript configuration
-golem-temp/                       # Build artifacts (gitignored)
+# Single-component app
+golem.yaml                            # Golem Application Manifest (contains components.<name>.dir = ".")
+package.json                          # Root npm dependencies
+tsconfig.json                         # Component TypeScript config
+src/
+  main.ts                             # Module entry point; re-exports of agents
+  <agent_name>.ts                     # Agent definitions and implementations
+
+# Multi-component app
+golem.yaml                            # Golem Application Manifest (components map with explicit dir per component)
+package.json                          # NPM dependencies (shared for all components)
+<component-a>/
+  tsconfig.json                       # Component TypeScript config
+  src/
+    main.ts                           # Module entry point; re-exports of agents
+    <agent_name>.ts                   # Agent definitions and implementations
+<component-b>/
+  tsconfig.json                       # Component TypeScript config
+  src/
+    main.ts                           # Module entry point; re-exports of agents
+    <agent_name>.ts                   # Agent definitions and implementations
+
+golem-temp/                           # Build artifacts (gitignored)
+  common/                             # Shared Golem templates and configuration (generated on-demand)
+    ts/                               # Shared TypeScript Golem templates and configuration
+      golem.yaml                      # Build templates for all TS components
+      rollup.config.component.mjs     # Shared Rollup configuration
 ```
 
 ## Prerequisites
@@ -256,8 +272,6 @@ class WeatherAgent extends BaseAgent {
 }
 ```
 
-Shared types can be placed in `common-ts/src/` and imported as `common/lib` across components.
-
 ### Method annotations
 
 ```typescript
@@ -371,21 +385,90 @@ const result2 = infallibleTransaction((tx) => {
 });
 ```
 
-## Adding New Components
+## Using `golem new`
+
+Use `golem new` to create new applications and to add new components or agents to existing applications.
+
+### Create a new application
 
 ```shell
-golem component new ts my:new-component
+golem new my-app --template ts
 ```
 
-This creates a new directory under `components-ts/` with the standard structure.
+This creates a new application directory, initializes `golem.yaml`, and creates the first TypeScript component with a default agent template.
+
+You can also run `golem new .` in an empty directory to initialize the current folder as a new application.
+
+If the folder name is not a valid Golem application name (lowercase kebab-case), specify one explicitly:
+
+```shell
+golem new . --application-name my-app --template ts
+```
+
+### Add to an existing application
+
+From inside an existing application, use `.` as the path:
+
+```shell
+golem new . --template ts
+```
+
+By default this applies the TypeScript template to a matching TypeScript component, or creates one if needed.
+
+### Create or target a specific component
+
+```shell
+golem new . --template ts --component-name my-app:billing
+```
+
+- If `my-app:billing` exists and is TypeScript, the template is applied there.
+- If it does not exist, `golem new` creates the component and applies the template.
+
+### Applying multiple templates
+
+You can apply multiple templates to the same component in one command:
+
+```shell
+golem new . --template ts --template my:agent-template --component-name my-app:billing
+```
+
+You can also apply templates incrementally by running `golem new` multiple times for the same component.
+
+If multiple templates affect the same files, `golem new` merges the changes and shows the planned updates before applying them.
+
+### Component directory behavior
+
+- If the application has exactly one component, its `dir` in `golem.yaml` is `.`.
+- If the application has multiple components, each component has an explicit `dir` in `golem.yaml`.
+- When needed, `golem new` can promote an existing root component layout into explicit per-component directories.
+
+### Choosing one vs multiple components
+
+In most cases, prefer a single component with multiple agents.
+
+Use multiple components only when you have a technical reason, for example:
+- using different guest languages in the same application (for example Rust + TypeScript)
+- separating components with distinct operational or ownership constraints
+
+### Useful flags
+
+- `--template <name>`: can be used multiple times to apply and merge several templates into one component (in non-interactive mode, at least one template is required)
+- `--component-name <namespace:name>`: target or create a specific component
+- `--application-name <name>`: set the application name when creating a new application
+
+To discover available templates:
+
+```shell
+golem templates
+```
 
 ## Application Manifest (golem.yaml)
 
-- Root `golem.yaml`: app name, includes, environments
-- `common-ts/golem.yaml`: build templates (TypeScript compilation, Rollup bundling, WASM composition) shared by all TS components
-- `components-ts/<name>/golem.yaml`: component-specific config (templates reference, env vars, dependencies)
+- Root `golem.yaml`: app name, includes, environments, and `components` entries
+- `golem-temp/common/ts/golem.yaml`: generated on-demand build templates (TypeScript compilation, Rollup bundling, WASM composition) shared by all TS components
 
-Key fields in component manifest:
+Key fields in each `components.<name>` entry:
+- `dir`: component directory (`"."` for single-component apps)
 - `templates`: references a template from common golem.yaml (e.g., `ts`)
 - `env`: environment variables passed to agents at runtime
 - `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
@@ -421,7 +504,6 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 - TypeScript **enums are not supported** — use string literal unions instead
 - All agent classes must extend `BaseAgent` and be decorated with `@agent()`
 - Constructor parameters define agent identity — they must be serializable types
-- Do not modify `rollup.config.mjs` or `common-ts/rollup.config.component.mjs` — they are pre-configured for Golem's build pipeline
 - Do not manually edit files in `golem-temp/` — they are auto-generated build artifacts
 - The build pipeline uses `golem-typegen` to extract type metadata from TypeScript via decorators; ensure `experimentalDecorators` and `emitDecoratorMetadata` are enabled in `tsconfig.json`
 
@@ -431,3 +513,5 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 - Name mapping: https://learn.golem.cloud/name-mapping
 - Type mapping: https://learn.golem.cloud/type-mapping
 - Full docs: https://learn.golem.cloud
+
+<!-- golem-managed:guide:ts:end -->

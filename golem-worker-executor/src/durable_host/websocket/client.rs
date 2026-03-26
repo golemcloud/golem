@@ -35,6 +35,11 @@ pub struct WebSocketConnectionEntry {
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
+#[async_trait::async_trait]
+impl wasmtime_wasi::p2::Pollable for WebSocketConnectionEntry {
+    async fn ready(&mut self) {}
+}
+
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
@@ -175,9 +180,10 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
 
     async fn subscribe(
         &mut self,
-        _self_: Resource<WebSocketConnectionEntry>,
+        self_: Resource<WebSocketConnectionEntry>,
     ) -> anyhow::Result<Resource<wasmtime_wasi::p2::bindings::io::poll::Pollable>> {
-        anyhow::bail!("golem:websocket/client.websocket-connection.subscribe is not yet supported")
+        self.observe_function_call("golem:websocket/client", "subscribe");
+        Ok(wasmtime_wasi::subscribe(self.table(), self_, None)?)
     }
 
     async fn drop(&mut self, rep: Resource<WebSocketConnectionEntry>) -> anyhow::Result<()> {

@@ -25,7 +25,6 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::ComponentId;
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::grpc::proto_component_id_string;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -60,7 +59,7 @@ impl GrpcCompilationServer for CompileGrpcService {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "enqueue_compilation",
-            component_id = proto_component_id_string(&request.component_id),
+            component_id = ComponentId::render_proto(request.component_id),
         );
 
         let component_service_port = request.component_service_port;
