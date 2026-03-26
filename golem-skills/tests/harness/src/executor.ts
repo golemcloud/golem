@@ -656,8 +656,8 @@ export class ScenarioExecutor {
     activatedSkills: string[];
     isFirstPrompt: boolean;
   }> {
-    let stepSuccess = true;
-    const stepErrors: string[] = [];
+    const errors: string[] = [];
+    let success = true;
     const stepTimeoutSeconds =
       step.timeout ??
       spec.settings?.timeout_per_subprompt ??
@@ -665,248 +665,217 @@ export class ScenarioExecutor {
       DEFAULT_STEP_TIMEOUT_SECONDS;
     const stepBaseline = this.watcher.markBaseline();
     await this.watcher.snapshotAtimes();
-    console.log(
-      `Step ${step.id ?? "(unnamed)"}: starting (timeout=${stepTimeoutSeconds}s)`,
+    const stepLabel = step.id ?? "(unnamed)";
+    console.log(`Step ${stepLabel}: starting (timeout=${stepTimeoutSeconds}s)`);
+
+    const fail = (msg: string) => {
+      success = false;
+      errors.push(msg);
+    };
+
+    // Dispatch action
+    if (step.sleep !== undefined) {
+      await this.executeSleep(stepLabel, step.sleep);
+    } else if (step.create_agent) {
+      await this.executeCreateAgent(stepLabel, step.create_agent, stepTimeoutSeconds, commandEnv, fail);
+    } else if (step.delete_agent) {
+      await this.executeDeleteAgent(stepLabel, step.delete_agent, stepTimeoutSeconds, commandEnv, fail);
+    } else if (step.shell) {
+      await this.executeShell(stepLabel, step.shell, step.expect, stepTimeoutSeconds, commandEnv, fail);
+    } else if (step.trigger) {
+      this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
+    } else if (step.prompt) {
+      isFirstPrompt = await this.executePrompt(stepLabel, step.prompt, step.continue_session, isFirstPrompt, stepTimeoutSeconds, fail);
+    } else if (step.invoke) {
+      await this.executeInvoke(stepLabel, step.invoke, step.expect, stepTimeoutSeconds, commandEnv, fail);
+    } else if (step.http) {
+      await this.executeHttp(stepLabel, step.http, step.expect, fail);
+    }
+
+    // Verify skills activation
+    const activatedSkills = await this.verifySkillActivation(stepLabel, step, stepBaseline, fail);
+
+    // Build/deploy verification
+    if (step.verify?.build || step.verify?.deploy) {
+      await this.executeVerification(stepLabel, step.verify, commandEnv, success, fail);
+      success = errors.length === 0;
+    }
+
+    return { success, errors, activatedSkills, isFirstPrompt };
+  }
+
+  // --- Action handlers ---
+
+  private async executeSleep(stepLabel: string, seconds: number): Promise<void> {
+    console.log(`Step ${stepLabel}: sleeping for ${seconds}s`);
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  }
+
+  private async executeCreateAgent(
+    stepLabel: string,
+    spec: CreateAgentSpec,
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    console.log(`Step ${stepLabel}: creating agent "${spec.name}"`);
+    const result = await this.runLocalCommand(
+      "golem", ["agent", "new", spec.name], timeout, this.workspace, commandEnv,
+    );
+    if (!result.success) fail(`CREATE_AGENT_FAILED: ${result.output}`);
+  }
+
+  private async executeDeleteAgent(
+    stepLabel: string,
+    spec: DeleteAgentSpec,
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    console.log(`Step ${stepLabel}: deleting agent "${spec.name}"`);
+    const result = await this.runLocalCommand(
+      "golem", ["agent", "delete", spec.name], timeout, this.workspace, commandEnv,
+    );
+    if (!result.success) fail(`DELETE_AGENT_FAILED: ${result.output}`);
+  }
+
+  private async executeShell(
+    stepLabel: string,
+    shell: ShellSpec,
+    expect: StepCommon["expect"],
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    console.log(`Step ${stepLabel}: running shell command "${shell.command}"`);
+    const shellCwd = shell.cwd
+      ? path.resolve(this.workspace, shell.cwd)
+      : this.workspace;
+    const result = await this.runLocalCommand(
+      shell.command, shell.args ?? [], timeout, shellCwd, commandEnv,
     );
 
-    // Sleep action
-    if (step.sleep !== undefined) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: sleeping for ${step.sleep}s`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, step.sleep! * 1000));
+    if (expect) {
+      this.evaluateAssertions({ stdout: result.output, stderr: "", exitCode: result.exitCode }, expect, fail);
+    } else if (!result.success) {
+      fail(`SHELL_FAILED: ${result.output}`);
     }
+  }
 
-    // Create agent action
-    if (step.create_agent) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: creating agent "${step.create_agent.name}"`,
-      );
-      const createResult = await this.runLocalCommand(
-        "golem",
-        ["agent", "new", step.create_agent.name],
-        stepTimeoutSeconds,
-        this.workspace,
-        commandEnv,
-      );
-      if (!createResult.success) {
-        stepSuccess = false;
-        stepErrors.push(`CREATE_AGENT_FAILED: ${createResult.output}`);
-      }
+  private executeTrigger(
+    stepLabel: string,
+    trigger: TriggerSpec,
+    timeout: number,
+    commandEnv: Record<string, string>,
+  ): void {
+    console.log(`Step ${stepLabel}: triggering ${trigger.agent}.${trigger.function}`);
+    const args = ["agent", "invoke", trigger.agent, trigger.function, "--trigger"];
+    if (trigger.args) args.push(trigger.args);
+    this.runLocalCommand("golem", args, timeout, this.workspace, commandEnv)
+      .catch(() => { /* fire and forget */ });
+  }
+
+  private async executePrompt(
+    stepLabel: string,
+    prompt: string,
+    continueSession: boolean | undefined,
+    isFirstPrompt: boolean,
+    timeout: number,
+    fail: (msg: string) => void,
+  ): Promise<boolean> {
+    const useContinueSession = continueSession !== false && !isFirstPrompt;
+    if (useContinueSession) {
+      console.log(`Step ${stepLabel}: sending followup prompt`);
+      const result = await this.driver.sendFollowup(prompt, timeout);
+      if (!result.success) fail(`Agent failed: ${result.output}`);
+    } else {
+      console.log(`Step ${stepLabel}: sending prompt`);
+      const result = await this.driver.sendPrompt(prompt, timeout);
+      if (!result.success) fail(`Agent failed: ${result.output}`);
     }
+    return false; // isFirstPrompt = false after any prompt
+  }
 
-    // Delete agent action
-    if (step.delete_agent) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: deleting agent "${step.delete_agent.name}"`,
+  private async executeInvoke(
+    stepLabel: string,
+    invoke: InvokeSpec,
+    expect: StepCommon["expect"],
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    console.log(`Step ${stepLabel}: invoking ${invoke.agent}.${invoke.function}`);
+    const args = ["agent", "invoke", invoke.agent, invoke.function];
+    if (invoke.args) args.push(invoke.args);
+    const result = await this.runLocalCommand(
+      "golem", args, timeout, this.workspace, commandEnv,
+    );
+
+    if (expect) {
+      let resultJson: unknown;
+      try { resultJson = JSON.parse(result.output); } catch { /* not JSON */ }
+      this.evaluateAssertions(
+        { stdout: result.output, stderr: "", exitCode: result.exitCode, resultJson },
+        expect, fail,
       );
-      const deleteResult = await this.runLocalCommand(
-        "golem",
-        ["agent", "delete", step.delete_agent.name],
-        stepTimeoutSeconds,
-        this.workspace,
-        commandEnv,
-      );
-      if (!deleteResult.success) {
-        stepSuccess = false;
-        stepErrors.push(`DELETE_AGENT_FAILED: ${deleteResult.output}`);
-      }
+    } else if (!result.success) {
+      fail(`INVOKE_FAILED: ${result.output}`);
     }
+  }
 
-    // Shell action
-    if (step.shell) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: running shell command "${step.shell.command}"`,
-      );
-      const shellCwd = step.shell.cwd
-        ? path.resolve(this.workspace, step.shell.cwd)
-        : this.workspace;
-      const shellResult = await this.runLocalCommand(
-        step.shell.command,
-        step.shell.args ?? [],
-        stepTimeoutSeconds,
-        shellCwd,
-        commandEnv,
-      );
-
-      if (step.expect) {
-        const ctx: AssertionContext = {
-          stdout: shellResult.output,
-          stderr: "",
-          exitCode: shellResult.exitCode,
-        };
-        const assertionResults = evaluate(ctx, step.expect);
-        for (const ar of assertionResults) {
-          if (!ar.passed) {
-            stepSuccess = false;
-            stepErrors.push(
-              `ASSERTION_FAILED (${ar.assertion}): ${ar.message}`,
-            );
-          }
-        }
-      } else if (!shellResult.success) {
-        stepSuccess = false;
-        stepErrors.push(`SHELL_FAILED: ${shellResult.output}`);
-      }
-    }
-
-    // Trigger action — fire-and-forget
-    if (step.trigger) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: triggering ${step.trigger.agent}.${step.trigger.function}`,
-      );
-      const triggerArgs = [
-        "agent",
-        "invoke",
-        step.trigger.agent,
-        step.trigger.function,
-        "--trigger",
-      ];
-      if (step.trigger.args) triggerArgs.push(step.trigger.args);
-      // Fire and forget — don't await completion
-      this.runLocalCommand(
-        "golem",
-        triggerArgs,
-        stepTimeoutSeconds,
-        this.workspace,
-        commandEnv,
-      ).catch(() => {
-        /* fire and forget */
+  private async executeHttp(
+    stepLabel: string,
+    http: HttpSpec,
+    expect: StepCommon["expect"],
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    console.log(`Step ${stepLabel}: HTTP ${http.method ?? "GET"} ${http.url}`);
+    try {
+      const response = await fetch(http.url, {
+        method: http.method ?? "GET",
+        body: http.body,
+        headers: http.headers,
       });
-    }
+      const body = await response.text();
 
-    // Execute prompt if present
-    if (step.prompt) {
-      const useContinueSession =
-        step.continue_session !== false && !isFirstPrompt;
-      if (useContinueSession) {
-        console.log(`Step ${step.id ?? "(unnamed)"}: sending followup prompt`);
-        const agentResult = await this.driver.sendFollowup(
-          step.prompt,
-          stepTimeoutSeconds,
+      if (expect) {
+        this.evaluateAssertions(
+          { stdout: body, stderr: "", exitCode: response.ok ? 0 : 1, body, status: response.status },
+          expect, fail,
         );
-        if (!agentResult.success) {
-          stepSuccess = false;
-          stepErrors.push(`Agent failed: ${agentResult.output}`);
-        }
-      } else {
-        console.log(`Step ${step.id ?? "(unnamed)"}: sending prompt`);
-        const agentResult = await this.driver.sendPrompt(
-          step.prompt,
-          stepTimeoutSeconds,
-        );
-        if (!agentResult.success) {
-          stepSuccess = false;
-          stepErrors.push(`Agent failed: ${agentResult.output}`);
-        }
+      } else if (!response.ok) {
+        fail(`HTTP_FAILED: ${response.status} ${body.slice(0, 500)}`);
       }
-      isFirstPrompt = false;
+    } catch (err) {
+      fail(`HTTP_FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
 
-    // Invoke action
-    if (step.invoke) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: invoking ${step.invoke.agent}.${step.invoke.function}`,
-      );
-      const invokeArgs = [
-        "agent",
-        "invoke",
-        step.invoke.agent,
-        step.invoke.function,
-      ];
-      if (step.invoke.args) invokeArgs.push(step.invoke.args);
-      const invokeResult = await this.runLocalCommand(
-        "golem",
-        invokeArgs,
-        stepTimeoutSeconds,
-        this.workspace,
-        commandEnv,
-      );
+  // --- Shared helpers ---
 
-      if (step.expect) {
-        let resultJson: unknown = undefined;
-        try {
-          resultJson = JSON.parse(invokeResult.output);
-        } catch {
-          // Not JSON — that's fine
-        }
-        const ctx: AssertionContext = {
-          stdout: invokeResult.output,
-          stderr: "",
-          exitCode: invokeResult.exitCode,
-          resultJson,
-        };
-        const assertionResults = evaluate(ctx, step.expect);
-        for (const ar of assertionResults) {
-          if (!ar.passed) {
-            stepSuccess = false;
-            stepErrors.push(
-              `ASSERTION_FAILED (${ar.assertion}): ${ar.message}`,
-            );
-          }
-        }
-      } else if (!invokeResult.success) {
-        stepSuccess = false;
-        stepErrors.push(`INVOKE_FAILED: ${invokeResult.output}`);
-      }
+  private evaluateAssertions(
+    ctx: AssertionContext,
+    expect: z.infer<typeof ExpectSchema>,
+    fail: (msg: string) => void,
+  ): void {
+    for (const ar of evaluate(ctx, expect)) {
+      if (!ar.passed) fail(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
     }
+  }
 
-    // HTTP behavioral check
-    if (step.http) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: HTTP ${step.http.method ?? "GET"} ${step.http.url}`,
-      );
-      try {
-        const response = await fetch(step.http.url, {
-          method: step.http.method ?? "GET",
-          body: step.http.body,
-          headers: step.http.headers,
-        });
-        const body = await response.text();
-
-        if (step.expect) {
-          const ctx: AssertionContext = {
-            stdout: body,
-            stderr: "",
-            exitCode: response.ok ? 0 : 1,
-            body,
-            status: response.status,
-          };
-          const assertionResults = evaluate(ctx, step.expect);
-          for (const ar of assertionResults) {
-            if (!ar.passed) {
-              stepSuccess = false;
-              stepErrors.push(
-                `ASSERTION_FAILED (${ar.assertion}): ${ar.message}`,
-              );
-            }
-          }
-        } else if (!response.ok) {
-          stepSuccess = false;
-          stepErrors.push(
-            `HTTP_FAILED: ${response.status} ${body.slice(0, 500)}`,
-          );
-        }
-      } catch (err) {
-        stepSuccess = false;
-        stepErrors.push(
-          `HTTP_FAILED: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    // Verify skills activation — merge fswatch events + atime changes
-    const watcherEvents = this.watcher.getActivatedEventsSince(stepBaseline);
+  private async verifySkillActivation(
+    stepLabel: string,
+    step: StepSpec,
+    baseline: ReturnType<SkillWatcher["markBaseline"]>,
+    fail: (msg: string) => void,
+  ): Promise<string[]> {
+    const watcherEvents = this.watcher.getActivatedEventsSince(baseline);
     const atimeResults = await this.watcher.getSkillsWithChangedAtime();
     for (const evt of watcherEvents) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: fswatch detected "${evt.skillName}" via ${evt.path}`,
-      );
+      console.log(`Step ${stepLabel}: fswatch detected "${evt.skillName}" via ${evt.path}`);
     }
     for (const res of atimeResults) {
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: atime detected "${res.skillName}" via ${res.path}`,
-      );
+      console.log(`Step ${stepLabel}: atime detected "${res.skillName}" via ${res.path}`);
     }
     const activatedSkills = Array.from(
       new Set([
@@ -914,84 +883,46 @@ export class ScenarioExecutor {
         ...atimeResults.map((r) => r.skillName),
       ]),
     );
-    console.log(
-      `Step ${step.id ?? "(unnamed)"}: activated skills [${activatedSkills.join(", ")}]`,
-    );
-    const assertionError = this.assertSkillActivation(step, activatedSkills);
-    if (assertionError) {
-      stepSuccess = false;
-      stepErrors.push(assertionError);
+    console.log(`Step ${stepLabel}: activated skills [${activatedSkills.join(", ")}]`);
+    const error = this.assertSkillActivation(step, activatedSkills);
+    if (error) fail(error);
+    return activatedSkills;
+  }
+
+  private async executeVerification(
+    stepLabel: string,
+    verify: { build?: boolean; deploy?: boolean },
+    commandEnv: Record<string, string>,
+    currentSuccess: boolean,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    const projectDir = await this.findGolemProjectDir();
+
+    if (verify.build) {
+      console.log(`Step ${stepLabel}: running golem build in ${projectDir}`);
+      const result = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
+      if (!result.success) fail(`BUILD_FAILED: ${result.output}`);
     }
 
-    // Build verification
-    if (step.verify?.build) {
-      const buildDir = await this.findGolemProjectDir();
-      console.log(
-        `Step ${step.id ?? "(unnamed)"}: running golem build in ${buildDir}`,
-      );
-      const buildResult = await this.runLocalCommand(
-        "golem",
-        ["build"],
-        600,
-        buildDir,
-        commandEnv,
-      );
-      if (!buildResult.success) {
-        stepSuccess = false;
-        stepErrors.push(`BUILD_FAILED: ${buildResult.output}`);
-      }
-    }
-
-    // Deploy verification
-    if (step.verify?.deploy) {
+    if (verify.deploy) {
       // Deploy implies build — run build first if not already run
-      if (!step.verify?.build) {
-        const buildDir = await this.findGolemProjectDir();
-        // Clean golem-temp to force a fresh build — the agent may have built
-        // with different SDK paths, leaving stale cached artifacts
-        const golemTempDir = path.join(buildDir, "golem-temp");
+      if (!verify.build) {
+        const golemTempDir = path.join(projectDir, "golem-temp");
         await fs.rm(golemTempDir, { recursive: true, force: true });
-        console.log(
-          `Step ${step.id ?? "(unnamed)"}: running implicit golem build before deploy in ${buildDir}`,
-        );
-        const buildResult = await this.runLocalCommand(
-          "golem",
-          ["build"],
-          600,
-          buildDir,
-          commandEnv,
-        );
+        console.log(`Step ${stepLabel}: running implicit golem build before deploy in ${projectDir}`);
+        const buildResult = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
         if (!buildResult.success) {
-          stepSuccess = false;
-          stepErrors.push(`BUILD_FAILED: ${buildResult.output}`);
+          fail(`BUILD_FAILED: ${buildResult.output}`);
+          return;
         }
       }
 
-      if (stepSuccess) {
-        const deployDir = await this.findGolemProjectDir();
-        console.log(
-          `Step ${step.id ?? "(unnamed)"}: running golem deploy in ${deployDir}`,
-        );
-        const deployResult = await this.runLocalCommand(
-          "golem",
-          ["deploy", "--yes"],
-          600,
-          deployDir,
-          commandEnv,
-        );
-        if (!deployResult.success) {
-          stepSuccess = false;
-          stepErrors.push(`DEPLOY_FAILED: ${deployResult.output}`);
-        }
+      if (currentSuccess) {
+        console.log(`Step ${stepLabel}: running golem deploy in ${projectDir}`);
+        const deployResult = await this.runLocalCommand("golem", ["deploy", "--yes"], 600, projectDir, commandEnv);
+        if (!deployResult.success) fail(`DEPLOY_FAILED: ${deployResult.output}`);
       }
     }
-
-    return {
-      success: stepSuccess,
-      errors: stepErrors,
-      activatedSkills,
-      isFirstPrompt,
-    };
   }
 
   private assertSkillActivation(
