@@ -28,14 +28,16 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
     GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
-    GetResourceLimitsRequest, ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest,
-    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
+    ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
+    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
+    batch_update_fuel_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_current_environment_state_response,
-    get_deployed_component_metadata_response, get_resource_limits_response,
+    get_deployed_component_metadata_response, get_resource_definition_by_id_response,
+    get_resource_definition_by_name_response, get_resource_limits_response,
     resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
     resolve_component_response, resolve_latest_agent_type_by_names_response,
     update_worker_connection_limit_response, update_worker_limit_response,
@@ -50,6 +52,9 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::resource_definition::{
+    ResourceDefinition, ResourceDefinitionId, ResourceName,
+};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -195,6 +200,17 @@ pub trait RegistryService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<EnvironmentState, RegistryServiceError>;
+
+    async fn get_resource_definition_by_id(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<ResourceDefinition, RegistryServiceError>;
+
+    async fn get_resource_definition_by_name(
+        &self,
+        environment_id: EnvironmentId,
+        resource_name: ResourceName,
+    ) -> Result<ResourceDefinition, RegistryServiceError>;
 
     async fn subscribe_registry_invalidations(
         &self,
@@ -895,6 +911,66 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
+    async fn get_resource_definition_by_id(
+        &self,
+        resource_definition_id: ResourceDefinitionId,
+    ) -> Result<ResourceDefinition, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_resource_definition_by_id", move |client| {
+                let request = GetResourceDefinitionByIdRequest {
+                    resource_definition_id: Some(resource_definition_id.into()),
+                };
+                Box::pin(client.get_resource_definition_by_id(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_resource_definition_by_id_response::Result::Success(payload)) => {
+                let converted = payload
+                    .resource_definition
+                    .ok_or("missing resource_definition field")?
+                    .try_into()?;
+                Ok(converted)
+            }
+            Some(get_resource_definition_by_id_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_resource_definition_by_name(
+        &self,
+        environment_id: EnvironmentId,
+        resource_name: ResourceName,
+    ) -> Result<ResourceDefinition, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_resource_definition_by_name", move |client| {
+                let request = GetResourceDefinitionByNameRequest {
+                    environment_id: Some(environment_id.into()),
+                    name: resource_name.0.clone(),
+                };
+                Box::pin(client.get_resource_definition_by_name(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_resource_definition_by_name_response::Result::Success(payload)) => {
+                let converted = payload
+                    .resource_definition
+                    .ok_or("missing resource_definition field")?
+                    .try_into()?;
+                Ok(converted)
+            }
+            Some(get_resource_definition_by_name_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+        }
+    }
+
     async fn subscribe_registry_invalidations(
         &self,
         last_seen_event_id: Option<u64>,
@@ -1036,6 +1112,36 @@ fn proto_registry_event_to_model(
                 golem_common::model::agent::RegistryInvalidationEvent::SecuritySchemeChanged {
                     event_id,
                     environment_id,
+                },
+            )
+        }
+        Some(Payload::ResourceDefinitionChanged(rdc)) => {
+            let environment_id = rdc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in ResourceDefinitionChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let resource_definition_id = rdc
+                .resource_definition_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing resource_definition_id in ResourceDefinitionChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::ResourceDefinitionChanged {
+                    event_id,
+                    environment_id,
+                    resource_definition_id,
+                    resource_name: golem_common::model::resource_definition::ResourceName(
+                        rdc.resource_name,
+                    ),
                 },
             )
         }

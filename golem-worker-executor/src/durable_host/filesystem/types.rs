@@ -30,7 +30,9 @@ use wasmtime_wasi::p2::FsError;
 use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::runtime::spawn_blocking;
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{
+    Durability, DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
@@ -59,15 +61,38 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Resource<OutputStream>, FsError> {
         self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
-        HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)
+        let descriptor_rep = fd.rep();
+        let stream =
+            HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)?;
+        self.state.open_filesystem_output_streams.insert(
+            stream.rep(),
+            FilesystemOutputStreamState {
+                descriptor_rep,
+                position: Some(offset),
+                pending_reservation: None,
+            },
+        );
+        Ok(stream)
     }
 
     fn append_via_stream(
         &mut self,
         self_: Resource<Descriptor>,
     ) -> Result<Resource<OutputStream>, FsError> {
+        self.fail_if_read_only(&self_)?;
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
-        HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)
+        let descriptor_rep = self_.rep();
+        let stream =
+            HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)?;
+        self.state.open_filesystem_output_streams.insert(
+            stream.rep(),
+            FilesystemOutputStreamState {
+                descriptor_rep,
+                position: None,
+                pending_reservation: None,
+            },
+        );
+        Ok(stream)
     }
 
     async fn advise(
@@ -111,10 +136,45 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
 
+        // Determine whether this is a growth and charge the delta.
+        // We borrow fd to stat before consuming it in set_size.
+        let current_size = {
+            let fd_borrow = Resource::new_borrow(fd.rep());
+            let mut view = self.as_wasi_view();
+            match HostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
+                Ok(s) => s.size,
+                Err(_) => 0, // if we can't stat, treat current as 0 (conservative: charges full size)
+            }
+        };
+
+        if size > current_size {
+            let delta = size - current_size;
+            self.reserve_filesystem_storage(delta)
+                .await
+                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
+        }
+        // size == current_size: no-op
+
         self.observe_function_call("filesystem::types::descriptor", "set_size");
 
-        let mut view = self.as_wasi_view();
-        HostDescriptor::set_size(&mut view.filesystem(), fd, size).await
+        let result = {
+            let mut view = self.as_wasi_view();
+            HostDescriptor::set_size(&mut view.filesystem(), fd, size).await
+        };
+
+        if size > current_size {
+            // Growth path: release permits if the operation failed.
+            let delta = size - current_size;
+            if result.is_err() {
+                self.release_filesystem_storage_space(delta).await;
+            }
+        } else if result.is_ok() && size < current_size {
+            // Shrink path: release permits for the freed space on success.
+            self.release_filesystem_storage_space(current_size - size)
+                .await;
+        }
+
+        result
     }
 
     async fn set_times(
@@ -156,9 +216,49 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Filesize, FsError> {
         self.fail_if_read_only(&fd)?;
 
+        let current_size = {
+            let fd_borrow = Resource::new_borrow(fd.rep());
+            let mut view = self.as_wasi_view();
+            match HostDescriptor::stat(&mut view.filesystem(), fd_borrow).await {
+                Ok(s) => s.size,
+                Err(_) => 0,
+            }
+        };
+
+        let requested_end = offset.saturating_add(buffer.len() as u64);
+        let requested_growth = requested_end.saturating_sub(current_size);
+        if requested_growth > 0 {
+            self.reserve_filesystem_storage(requested_growth)
+                .await
+                .map_err(|e| FsError::trap(wasmtime::Error::from_anyhow(e)))?;
+        }
+
         self.observe_function_call("filesystem::types::descriptor", "write");
-        let mut view = self.as_wasi_view();
-        HostDescriptor::write(&mut view.filesystem(), fd, buffer, offset).await
+        let result = {
+            let mut view = self.as_wasi_view();
+            HostDescriptor::write(&mut view.filesystem(), fd, buffer, offset).await
+        };
+
+        if requested_growth > 0 {
+            match result {
+                Ok(written) => {
+                    let actual_end = offset.saturating_add(written);
+                    let actual_growth = actual_end.saturating_sub(current_size);
+                    let over_reserved = requested_growth.saturating_sub(actual_growth);
+                    if over_reserved > 0 {
+                        self.release_filesystem_storage_space(over_reserved).await;
+                    }
+                    Ok(written)
+                }
+                Err(err) => {
+                    self.release_filesystem_storage_space(requested_growth)
+                        .await;
+                    Err(err)
+                }
+            }
+        } else {
+            result
+        }
     }
 
     async fn read_directory(
@@ -408,17 +508,43 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
+        let truncated_size = if open_flags.contains(OpenFlags::TRUNCATE) {
+            let fd_borrow = Resource::new_borrow(self_.rep());
+            let mut view = self.as_wasi_view();
+            match HostDescriptor::stat_at(
+                &mut view.filesystem(),
+                fd_borrow,
+                path_flags,
+                path.clone(),
+            )
+            .await
+            {
+                Ok(s) => s.size,
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
         self.observe_function_call("filesystem::types::descriptor", "open_at");
-        let mut view = self.as_wasi_view();
-        HostDescriptor::open_at(
-            &mut view.filesystem(),
-            self_,
-            path_flags,
-            path,
-            open_flags,
-            flags,
-        )
-        .await
+        let result = {
+            let mut view = self.as_wasi_view();
+            HostDescriptor::open_at(
+                &mut view.filesystem(),
+                self_,
+                path_flags,
+                path,
+                open_flags,
+                flags,
+            )
+            .await
+        };
+
+        if result.is_ok() && truncated_size > 0 {
+            self.release_filesystem_storage_space(truncated_size).await;
+        }
+
+        result
     }
 
     async fn readlink_at(
@@ -483,9 +609,36 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
 
+        // Stat the target file before unlinking to know how many bytes to release.
+        // Use the upstream (non-durable) stat_at to avoid oplog side effects.
+        let file_size = {
+            let fd_borrow = Resource::new_borrow(fd.rep());
+            let mut view = self.as_wasi_view();
+            match HostDescriptor::stat_at(
+                &mut view.filesystem(),
+                fd_borrow,
+                PathFlags::empty(),
+                path.clone(),
+            )
+            .await
+            {
+                Ok(s) => s.size,
+                Err(_) => 0,
+            }
+        };
+
         self.observe_function_call("filesystem::types::descriptor", "unlink_file_at");
-        let mut view = self.as_wasi_view();
-        HostDescriptor::unlink_file_at(&mut view.filesystem(), fd, path.clone()).await
+        let result = {
+            let mut view = self.as_wasi_view();
+            HostDescriptor::unlink_file_at(&mut view.filesystem(), fd, path.clone()).await
+        };
+
+        // Only release permits if the unlink actually succeeded.
+        if result.is_ok() {
+            self.release_filesystem_storage_space(file_size).await;
+        }
+
+        result
     }
 
     async fn is_same_object(

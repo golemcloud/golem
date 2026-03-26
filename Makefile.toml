@@ -1179,6 +1179,14 @@ cd test-components
 ./build-components.sh rebuild
 '''
 
+[tasks.build-benchmark-components]
+description = "Builds only the benchmark test WASM components"
+dependencies = ["build", "build-sdk-ts"]
+script = '''
+cd test-components
+./build-components.sh benchmarks
+'''
+
 [tasks.clean-test-components]
 description = "Cleans all test WASM components"
 script = '''
@@ -1187,19 +1195,4 @@ cd test-components
 '''
 
 ## Cleanup
-[tasks.clear-v8]
-description = "Removes the v8 crate from the target directories"
-script_runner = "@duckscript"
-script = '''
-handle = glob_array ./target/**/build/v8*
 
-for path in ${handle}
-    rm -r ${path}
-end
-
-handle = glob_array ./target/**/deps/libv8*
-
-for path in ${handle}
-    rm -r ${path}
-end
-'''

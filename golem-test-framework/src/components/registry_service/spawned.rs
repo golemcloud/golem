@@ -40,6 +40,7 @@ pub struct SpawnedRegistryService {
     admin_account_token: TokenSecret,
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
+    low_disk_space_plan_id: PlanId,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
@@ -69,6 +70,7 @@ impl SpawnedRegistryService {
             TokenSecret::trusted("lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string());
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
         let low_fuel_plan_id = PlanId(uuid!("301fd75c-dcc5-48e3-967e-e7c33df52493"));
+        let low_disk_space_plan_id = PlanId(uuid!("a2f3b4c5-d6e7-8901-abcd-ef0123456789"));
 
         let otlp_wasm = working_directory.join("../plugins/otlp-exporter.wasm");
         let otlp_wasm_path = if otlp_wasm.exists() {
@@ -93,6 +95,7 @@ impl SpawnedRegistryService {
                     &admin_account_token,
                     &default_plan_id,
                     &low_fuel_plan_id,
+                    &low_disk_space_plan_id,
                     otlp,
                     otlp_wasm_path,
                 )
@@ -130,6 +133,7 @@ impl SpawnedRegistryService {
             admin_account_token,
             default_plan_id,
             low_fuel_plan_id,
+            low_disk_space_plan_id,
             base_http_client: OnceCell::new(),
         }
     }
@@ -166,6 +170,10 @@ impl RegistryService for SpawnedRegistryService {
     }
     fn low_fuel_plan(&self) -> PlanId {
         self.low_fuel_plan_id
+    }
+
+    fn low_disk_space_plan(&self) -> PlanId {
+        self.low_disk_space_plan_id
     }
 
     async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {

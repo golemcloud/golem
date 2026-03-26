@@ -115,6 +115,7 @@ impl TestDsl for TestWorkerExecutor {
         for entry in files {
             let full_source_path = component_directory.join(entry.source_path);
             let data = tokio::fs::read(full_source_path).await?;
+            let size = data.len() as u64;
             let content_hash = self
                 .deps
                 .initial_component_files_service
@@ -128,6 +129,7 @@ impl TestDsl for TestWorkerExecutor {
                 content_hash,
                 path: entry.target_path,
                 permissions: entry.permissions,
+                size,
             });
         }
 
@@ -251,6 +253,7 @@ impl TestDsl for TestWorkerExecutor {
         for entry in new_files {
             let full_source_path = component_dir.join(entry.source_path);
             let data = tokio::fs::read(full_source_path).await?;
+            let size = data.len() as u64;
             let content_hash = self
                 .deps
                 .initial_component_files_service
@@ -264,6 +267,7 @@ impl TestDsl for TestWorkerExecutor {
                 content_hash,
                 path: entry.target_path,
                 permissions: entry.permissions,
+                size,
             });
         }
 

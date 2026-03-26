@@ -56,6 +56,7 @@ impl Hashable for ResourceDefinition {
 pub struct ResourceLimit {
     pub value: u64,
     pub period: Option<TimePeriod>,
+    pub max: Option<u64>,
 }
 
 impl From<crate::model::resource_definition::ResourceLimit> for ResourceLimit {
@@ -66,14 +67,17 @@ impl From<crate::model::resource_definition::ResourceLimit> for ResourceLimit {
             DomainResourceLimit::Rate(inner) => ResourceLimit {
                 value: inner.value,
                 period: Some(inner.period),
+                max: Some(inner.max),
             },
             DomainResourceLimit::Capacity(inner) => ResourceLimit {
                 value: inner.value,
                 period: None,
+                max: None,
             },
             DomainResourceLimit::Concurrency(inner) => ResourceLimit {
                 value: inner.value,
                 period: None,
+                max: None,
             },
         }
     }

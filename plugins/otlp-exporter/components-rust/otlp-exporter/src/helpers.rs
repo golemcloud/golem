@@ -1,5 +1,5 @@
 use golem_rust::bindings::golem::api::context::AttributeValue;
-use golem_rust::bindings::golem::api::oplog::{Timestamp, WrappedFunctionType, WorkerError};
+use golem_rust::bindings::golem::api::oplog::{Timestamp, WorkerError, WrappedFunctionType};
 use golem_rust::golem_wasm::golem_core_1_5_x::types::{AgentId, ComponentId};
 use golem_rust::wasip2::clocks::wall_clock::Datetime;
 use std::collections::HashMap;
@@ -34,8 +34,7 @@ pub(crate) fn infer_span_kind(name: &str, attributes: &HashMap<String, String>) 
         "invoke-exported-function" => 2, // SERVER
         "rpc-connection" | "rpc-invocation" | "outgoing-http-request" => 3, // CLIENT
         _ => {
-            if attributes.contains_key("request.method") && attributes.contains_key("request.uri")
-            {
+            if attributes.contains_key("request.method") && attributes.contains_key("request.uri") {
                 2 // SERVER — HTTP gateway root span
             } else {
                 1 // INTERNAL
@@ -74,5 +73,8 @@ pub(crate) fn worker_error_to_string(e: &WorkerError) -> String {
         WorkerError::OutOfMemory => "out of memory".to_string(),
         WorkerError::ExceededMemoryLimit => "exceeded memory limit".to_string(),
         WorkerError::InternalError(s) => format!("internal error: {s}"),
+        WorkerError::ExceededTableLimit => todo!(),
+        WorkerError::NodeOutOfFilesystemStorage => todo!(),
+        WorkerError::AgentExceededFilesystemStorageLimit => todo!(),
     }
 }

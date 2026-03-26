@@ -10,6 +10,8 @@ message AgentError {
     UnknownError unknown_error = 4;
     ExceededMemoryLimit exceeded_memory_limit = 5;
     ExceededTableLimit exceeded_table_limit = 6;
+    NodeOutOfFilesystemStorage node_out_of_filesystem_storage = 7;
+    AgentExceededFilesystemStorageLimit agent_exceeded_filesystem_storage_limit = 8;
   }
 }
 
@@ -28,3 +30,7 @@ message UnknownError {
 message ExceededMemoryLimit {}
 
 message ExceededTableLimit {}
+
+message NodeOutOfFilesystemStorage {}
+
+message AgentExceededFilesystemStorageLimit {}
