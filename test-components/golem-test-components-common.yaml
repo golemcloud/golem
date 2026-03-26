@@ -4,12 +4,12 @@ componentTemplates:
       debug:
         customCommands:
           copy:
-          - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm ../../..
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_debug.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_debug.wasm"
       release:
         customCommands:
           copy:
-          - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm ../../..
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
   ts-test-component:
     customCommands:
       copy:
-      - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm ../../../{{ component_name | to_snake_case }}.wasm
+      - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"

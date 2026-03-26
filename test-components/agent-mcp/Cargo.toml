@@ -1,22 +1,19 @@
-[workspace]
-resolver = "2"
-members = ["components-rust/*"]
+[package]
+name = "golem_it_mcp"
+version = "0.0.1"
+edition = "2021"
 
 [profile.release]
 opt-level = "s"
 lto = true
 
-[workspace.dependencies]
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
 
-golem-rust = { path = "../../sdks/rust/golem-rust", features = [
-    "export_golem_agentic",
-] }
-
-# Advanced HTTP client, alternative of wstd::http
-# golem-wasi-http = { version = "0.1.0", features = ["json"] }
-
+[dependencies]
 log = { version = "0.4.29", features = ["kv"] }
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1.15.1", features = ["v4"] }
-wstd = {version = "=0.5.4", features = ["default", "json"] }
+wstd = { version = "=0.6.5", features = ["default", "json"] }

@@ -1,0 +1,7 @@
+components:
+  otlp:exporter:
+    templates: rust
+
+customCommands:
+  copy:
+    - command: cp ../../golem-temp/agents/otlp_exporter_release.wasm ../../../otlp-exporter.wasm

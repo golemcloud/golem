@@ -1495,4 +1495,43 @@ mod tests {
         let recovered = Result::<String, u32>::from_element_value(ev).unwrap();
         assert_eq!(recovered, err_val);
     }
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    enum EnumCasePayloadNames {
+        Unit,
+        NamedRecord { name: String, value: bool },
+        MultiTuple(u32, u64),
+    }
+
+    #[test]
+    fn enum_case_payload_type_name_uses_case_name() {
+        let typ = <EnumCasePayloadNames as IntoValue>::get_type();
+        let root = typ.nodes.first().expect("missing root type node");
+
+        let golem_wasm::WitTypeNode::VariantType(cases) = &root.type_ else {
+            panic!("expected variant root node");
+        };
+
+        let named_record_idx = cases
+            .iter()
+            .find_map(|(name, idx)| (name == "NamedRecord").then_some(*idx))
+            .flatten()
+            .expect("missing NamedRecord case payload type");
+        let named_record_node = typ
+            .nodes
+            .get(named_record_idx as usize)
+            .expect("missing NamedRecord payload node");
+        assert_eq!(named_record_node.name.as_deref(), Some("NamedRecord"));
+
+        let multi_tuple_idx = cases
+            .iter()
+            .find_map(|(name, idx)| (name == "MultiTuple").then_some(*idx))
+            .flatten()
+            .expect("missing MultiTuple case payload type");
+        let multi_tuple_node = typ
+            .nodes
+            .get(multi_tuple_idx as usize)
+            .expect("missing MultiTuple payload node");
+        assert_eq!(multi_tuple_node.name.as_deref(), Some("MultiTuple"));
+    }
 }

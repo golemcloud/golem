@@ -9,13 +9,20 @@
 app: agent-rpc
 
 includes:
-- components-*/*/golem.yaml
 - ../golem-test-components-common.yaml
+
+components:
+  golem-it:agent-rpc-rust:
+    dir: "golem-it-agent-rpc-rust"
+    templates: rust, rust-test-component
+  golem-it:agent-rpc:
+    dir: "golem-it-agent-rpc"
+    templates: ts, ts-test-component
 
 environments:
   local:
     server: local
-    componentPresets: debug
+    componentPresets: release
   cloud:
     server: cloud
     componentPresets: release

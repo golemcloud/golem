@@ -29,6 +29,7 @@ tags:
 - name: Plugin
 - name: RegistryService
 - name: Reports
+- name: Resources
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
@@ -6560,6 +6561,676 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_account_count_report
+  /v1/envs/{environment_id}/resources:
+    post:
+      tags:
+      - RegistryService
+      - Resources
+      - Environment
+      summary: Create a new resource in the environment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ResourceDefinitionCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResourceDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_resource
+    get:
+      tags:
+      - RegistryService
+      - Resources
+      - Environment
+      summary: Get all resources defined in the environment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_ResourceDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_environment_resources
+  /v1/envs/{environment_id}/resources/{resource_name}:
+    get:
+      tags:
+      - RegistryService
+      - Resources
+      - Environment
+      summary: Get a resource in the environment by name
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: resource_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResourceDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_environment_resource
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/resources:
+    get:
+      tags:
+      - RegistryService
+      - Resources
+      - Environment
+      - Deployment
+      summary: Get all resources in a specific deployment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_ResourceDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_deployment_resources
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/resources/{resource_name}:
+    get:
+      tags:
+      - RegistryService
+      - Resources
+      - Environment
+      - Deployment
+      summary: Get resource in a deployment by name
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: resource_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResourceDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_deployment_resource
+  /v1/resources/{resource_id}:
+    get:
+      tags:
+      - RegistryService
+      - Resources
+      summary: Get a resource by id
+      parameters:
+      - name: resource_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResourceDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_resource
+    patch:
+      tags:
+      - RegistryService
+      - Resources
+      summary: Update a resource
+      parameters:
+      - name: resource_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ResourceDefinitionUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResourceDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: update_resource
+    delete:
+      tags:
+      - RegistryService
+      - Resources
+      summary: Delete a resource
+      parameters:
+      - name: resource_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: current_revision
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_resource
+  /v1/resources/{resource_id}/revisions/{revision}:
+    get:
+      tags:
+      - RegistryService
+      - Resources
+      summary: Get specific revision of a resource
+      parameters:
+      - name: resource_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: revision
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ResourceDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_resource_revision
   /v1/envs/{environment_id}/security-schemes:
     post:
       tags:
@@ -7118,6 +7789,7 @@ components:
       enum:
       - admin
       - marketing-admin
+      - builtin-plugin-owner
     AccountSetPlan:
       type: object
       title: AccountSetPlan
@@ -8199,6 +8871,7 @@ components:
       - expectedDeploymentHash
       - version
       - agentSecretDefaults
+      - quotaResourceDefaults
       properties:
         currentRevision:
           type: integer
@@ -8212,6 +8885,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentAgentSecretDefault'
+        quotaResourceDefaults:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceDefinitionCreation'
     DeploymentPlan:
       type: object
       title: DeploymentPlan
@@ -8417,6 +9094,12 @@ components:
     Empty:
       type: object
       title: Empty
+    EnforcementAction:
+      type: string
+      enum:
+      - reject
+      - throttle
+      - terminate
     Environment:
       type: object
       title: Environment
@@ -8940,6 +9623,7 @@ components:
       - contentHash
       - path
       - permissions
+      - size
       properties:
         contentHash:
           type: string
@@ -8952,6 +9636,9 @@ components:
           description: Path inside a component filesystem. Must be absolute.
         permissions:
           $ref: '#/components/schemas/ComponentFilePermissions'
+        size:
+          type: integer
+          format: uint64
     InstalledPlugin:
       type: object
       title: InstalledPlugin
@@ -9343,6 +10030,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginRegistrationDto'
+    Page_ResourceDefinition:
+      type: object
+      title: Page_ResourceDefinition
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceDefinition'
     Page_SecuritySchemeDto:
       type: object
       title: Page_SecuritySchemeDto
@@ -9437,6 +10134,7 @@ components:
       - monthlyUploadLimit
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
+      - maxDiskSpacePerWorker
       properties:
         planId:
           type: string
@@ -9471,6 +10169,9 @@ components:
           type: integer
           format: uint64
         maxTableElementsPerWorker:
+          type: integer
+          format: uint64
+        maxDiskSpacePerWorker:
           type: integer
           format: uint64
     PluginInstallation:
@@ -9703,6 +10404,164 @@ components:
         componentRevision:
           type: integer
           format: uint64
+    ResourceCapacityLimit:
+      type: object
+      title: ResourceCapacityLimit
+      required:
+      - value
+      properties:
+        value:
+          type: integer
+          format: uint64
+    ResourceConcurrencyLimit:
+      type: object
+      title: ResourceConcurrencyLimit
+      required:
+      - value
+      properties:
+        value:
+          type: integer
+          format: uint64
+    ResourceDefinition:
+      type: object
+      title: ResourceDefinition
+      required:
+      - id
+      - revision
+      - environmentId
+      - name
+      - limit
+      - enforcementAction
+      - unit
+      - units
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        environmentId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        limit:
+          $ref: '#/components/schemas/ResourceLimit'
+        enforcementAction:
+          $ref: '#/components/schemas/EnforcementAction'
+        unit:
+          type: string
+          description: single unit of measurement (e.g., token, request)
+        units:
+          type: string
+          description: multiple units of measurement (e.g., tokens, requests)
+    ResourceDefinitionCreation:
+      type: object
+      title: ResourceDefinitionCreation
+      required:
+      - name
+      - limit
+      - enforcementAction
+      - unit
+      - units
+      properties:
+        name:
+          type: string
+        limit:
+          $ref: '#/components/schemas/ResourceLimit'
+        enforcementAction:
+          $ref: '#/components/schemas/EnforcementAction'
+        unit:
+          type: string
+          description: single unit of measurement (e.g., token, request)
+        units:
+          type: string
+          description: multiple units of measurement (e.g., tokens, requests)
+    ResourceDefinitionUpdate:
+      type: object
+      title: ResourceDefinitionUpdate
+      required:
+      - currentRevision
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        limit:
+          $ref: '#/components/schemas/ResourceLimit'
+        enforcementAction:
+          $ref: '#/components/schemas/EnforcementAction'
+        unit:
+          type: string
+          description: single unit of measurement (e.g., token, request)
+        units:
+          type: string
+          description: multiple units of measurement (e.g., tokens, requests)
+    ResourceLimit:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ResourceLimit_ResourceRateLimit'
+      - $ref: '#/components/schemas/ResourceLimit_ResourceCapacityLimit'
+      - $ref: '#/components/schemas/ResourceLimit_ResourceConcurrencyLimit'
+      discriminator:
+        propertyName: type
+        mapping:
+          Rate: '#/components/schemas/ResourceLimit_ResourceRateLimit'
+          Capacity: '#/components/schemas/ResourceLimit_ResourceCapacityLimit'
+          Concurrency: '#/components/schemas/ResourceLimit_ResourceConcurrencyLimit'
+    ResourceLimit_ResourceCapacityLimit:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Capacity
+            example: Capacity
+      - $ref: '#/components/schemas/ResourceCapacityLimit'
+    ResourceLimit_ResourceConcurrencyLimit:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Concurrency
+            example: Concurrency
+      - $ref: '#/components/schemas/ResourceConcurrencyLimit'
+    ResourceLimit_ResourceRateLimit:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Rate
+            example: Rate
+      - $ref: '#/components/schemas/ResourceRateLimit'
+    ResourceRateLimit:
+      type: object
+      title: ResourceRateLimit
+      required:
+      - value
+      - period
+      - max
+      properties:
+        value:
+          type: integer
+          format: uint64
+        period:
+          $ref: '#/components/schemas/TimePeriod'
+        max:
+          type: integer
+          format: uint64
+          description: Maximum burst capacity. Defaults to `value` if not specified.
     SecuritySchemeAgentSecurity:
       type: object
       title: SecuritySchemeAgentSecurity
@@ -9934,6 +10793,15 @@ components:
       properties:
         languageCode:
           type: string
+    TimePeriod:
+      type: string
+      enum:
+      - second
+      - minute
+      - hour
+      - day
+      - month
+      - year
     Token:
       type: object
       title: Token

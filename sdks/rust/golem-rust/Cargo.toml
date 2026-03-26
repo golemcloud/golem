@@ -51,6 +51,7 @@ rust_decimal = { version = "1.39.0", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1.0.145", optional = true }
 url = { version = "2.5.7", optional = true }
+unicode-segmentation = ">=1.0, <1.13"
 uuid = { version = "1.19.0", features = ["v4"] }
 wasip2 = { version = "1.0.2" }
 wstd = { version = "=0.6.5" }

@@ -61,13 +61,12 @@ async fn agent_reads_secret_created_from_default(
         .store()
         .await?;
 
-    user.deploy_environment_with(
-        env.id,
-        vec![DeploymentAgentSecretDefault {
+    user.deploy_environment_with(env.id, |d| {
+        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
             path: AgentSecretPath(vec!["secret".into()]),
             secret_value: json!("foo"),
-        }],
-    )
+        }];
+    })
     .await?;
 
     let agent_id = agent_id!("SharedConfigAgent", "test-agent");
@@ -127,13 +126,12 @@ async fn agent_reads_secret_updated_from_default(
         )
         .await?;
 
-    user.deploy_environment_with(
-        env.id,
-        vec![DeploymentAgentSecretDefault {
+    user.deploy_environment_with(env.id, |d| {
+        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
             path: AgentSecretPath(vec!["secret".into()]),
             secret_value: json!("foo"),
-        }],
-    )
+        }];
+    })
     .await?;
 
     let agent_id = agent_id!("SharedConfigAgent", "test-agent");
@@ -184,13 +182,12 @@ async fn agent_reads_updated_environment_secret(
 
     let secret_path = vec!["secret".to_string()];
 
-    user.deploy_environment_with(
-        env.id,
-        vec![DeploymentAgentSecretDefault {
+    user.deploy_environment_with(env.id, |d| {
+        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
             path: AgentSecretPath(secret_path.clone()),
             secret_value: json!("foo"),
-        }],
-    )
+        }];
+    })
     .await?;
 
     let agent_id = agent_id!("SharedConfigAgent", "test-agent");
@@ -300,13 +297,12 @@ async fn agent_fails_on_deleted_environment_secret(
 
     let secret_path = vec!["secret".to_string()];
 
-    user.deploy_environment_with(
-        env.id,
-        vec![DeploymentAgentSecretDefault {
+    user.deploy_environment_with(env.id, |d| {
+        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
             path: AgentSecretPath(secret_path.clone()),
             secret_value: json!("foo"),
-        }],
-    )
+        }];
+    })
     .await?;
 
     let agent_id = agent_id!("SharedConfigAgent", "test-agent");
@@ -381,13 +377,12 @@ async fn agent_reads_recreated_environment_secret(
 
     let secret_path = vec!["secret".to_string()];
 
-    user.deploy_environment_with(
-        env.id,
-        vec![DeploymentAgentSecretDefault {
+    user.deploy_environment_with(env.id, |d| {
+        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
             path: AgentSecretPath(secret_path.clone()),
             secret_value: json!("foo"),
-        }],
-    )
+        }];
+    })
     .await?;
 
     let agent_id = agent_id!("SharedConfigAgent", "test-agent");
@@ -456,13 +451,12 @@ async fn agent_reads_secret_with_different_casing(
         .store()
         .await?;
 
-    user.deploy_environment_with(
-        env.id,
-        vec![DeploymentAgentSecretDefault {
+    user.deploy_environment_with(env.id, |d| {
+        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
             path: AgentSecretPath(vec!["secret_path".into()]),
             secret_value: json!("foo"),
-        }],
-    )
+        }];
+    })
     .await?;
 
     let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");
@@ -510,13 +504,12 @@ async fn agent_reads_secret_with_mixed_case_path(
         .store()
         .await?;
 
-    user.deploy_environment_with(
-        env.id,
-        vec![DeploymentAgentSecretDefault {
+    user.deploy_environment_with(env.id, |d| {
+        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
             path: AgentSecretPath(vec!["SecretPath".into()]),
             secret_value: json!("foo"),
-        }],
-    )
+        }];
+    })
     .await?;
 
     let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");
@@ -567,13 +560,12 @@ async fn agent_reads_secret_after_canonicalized_update(
 
     let secret_path = vec!["secret_path".to_string()];
 
-    user.deploy_environment_with(
-        env.id,
-        vec![DeploymentAgentSecretDefault {
+    user.deploy_environment_with(env.id, |d| {
+        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
             path: AgentSecretPath(secret_path.clone()),
             secret_value: json!("foo"),
-        }],
-    )
+        }];
+    })
     .await?;
 
     let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");

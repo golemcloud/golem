@@ -1,8 +1,5 @@
 {
   "name": "app",
-  "workspaces": [
-    "components-ts/*/*"
-  ],
   "dependencies": {
     "@golemcloud/golem-ts-sdk": "GOLEM_TS_SDK_VERSION_OR_PATH"
   },

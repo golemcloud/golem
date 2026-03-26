@@ -1,12 +1,17 @@
-[workspace]
-resolver = "2"
-members = ["components-rust/*"]
+[package]
+name = "it_agent_counters"
+version = "0.0.1"
+edition = "2021"
 
 [profile.release]
 opt-level = "s"
 lto = true
 
-[workspace.dependencies]
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
 async-trait = {version = "0.1.89"}
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_load_snapshot", "export_save_snapshot", "export_golem_agentic"] }
 golem-wasi-http = { version = "0.2.0", features = ["json"] }

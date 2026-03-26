@@ -24,7 +24,7 @@ impl TypeLocation {
     pub fn to_type_naming_segments(&self) -> Vec<Vec<&str>> {
         match &self.root {
             TypeLocationRoot::AgentConstructorInput { input_name } => {
-                let mut segments = vec![vec!["ConstructorInput", input_name.as_str()]];
+                let mut segments = vec![vec!["AgentParam", input_name.as_str()]];
                 if let Some(path) = &self.path {
                     segments.extend(path.to_type_naming_segments());
                 }
@@ -34,7 +34,7 @@ impl TypeLocation {
                 method_name,
                 input_name,
             } => {
-                let mut segments = vec![vec![method_name.as_str(), "Input", input_name.as_str()]];
+                let mut segments = vec![vec![method_name.as_str(), "In", input_name.as_str()]];
                 if let Some(path) = &self.path {
                     segments.extend(path.to_type_naming_segments());
                 }
@@ -44,7 +44,7 @@ impl TypeLocation {
                 method_name,
                 output_name,
             } => {
-                let mut segments = vec![vec![method_name.as_str(), "Output", output_name.as_str()]];
+                let mut segments = vec![vec![method_name.as_str(), "Out", output_name.as_str()]];
                 if let Some(path) = &self.path {
                     segments.extend(path.to_type_naming_segments());
                 }
@@ -183,6 +183,7 @@ impl TypeLocationPath {
                     if let Some(name) = name {
                         subsegments.push(name.as_str());
                     }
+                    subsegments.push("Ok");
                     segments.push(subsegments);
                     if let Some(inner) = inner {
                         collect(segments, inner.as_ref());
@@ -196,6 +197,7 @@ impl TypeLocationPath {
                     if let Some(name) = name {
                         subsegments.push(name.as_str());
                     }
+                    subsegments.push("Err");
                     segments.push(subsegments);
                     if let Some(inner) = inner {
                         collect(segments, inner.as_ref());
@@ -368,5 +370,92 @@ impl Display for TypeLocationPath {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TypeLocation, TypeLocationPath, TypeLocationRoot};
+    use test_r::test;
+
+    #[test]
+    fn root_segments_use_short_in_out_suffixes() {
+        let constructor_in = TypeLocation {
+            root: TypeLocationRoot::AgentConstructorInput {
+                input_name: "payload".to_string(),
+            },
+            path: None,
+        };
+        assert_eq!(
+            constructor_in.to_type_naming_segments(),
+            vec![vec!["AgentParam", "payload"]]
+        );
+
+        let method_in = TypeLocation {
+            root: TypeLocationRoot::AgentMethodInput {
+                method_name: "run".to_string(),
+                input_name: "request".to_string(),
+            },
+            path: None,
+        };
+        assert_eq!(
+            method_in.to_type_naming_segments(),
+            vec![vec!["run", "In", "request"]]
+        );
+
+        let method_out = TypeLocation {
+            root: TypeLocationRoot::AgentMethodOutput {
+                method_name: "run".to_string(),
+                output_name: "response".to_string(),
+            },
+            path: None,
+        };
+        assert_eq!(
+            method_out.to_type_naming_segments(),
+            vec![vec!["run", "Out", "response"]]
+        );
+    }
+
+    #[test]
+    fn result_path_segments_include_ok_and_err_markers() {
+        let ok_location = TypeLocation {
+            root: TypeLocationRoot::AgentMethodOutput {
+                method_name: "run".to_string(),
+                output_name: "response".to_string(),
+            },
+            path: Some(TypeLocationPath::ResultOk {
+                name: Some("result".to_string()),
+                owner: Some("my-owner".to_string()),
+                inner: None,
+            }),
+        };
+
+        assert_eq!(
+            ok_location.to_type_naming_segments(),
+            vec![
+                vec!["run", "Out", "response"],
+                vec!["my-owner", "result", "Ok"]
+            ]
+        );
+
+        let err_location = TypeLocation {
+            root: TypeLocationRoot::AgentMethodOutput {
+                method_name: "run".to_string(),
+                output_name: "response".to_string(),
+            },
+            path: Some(TypeLocationPath::ResultErr {
+                name: Some("result".to_string()),
+                owner: Some("my-owner".to_string()),
+                inner: None,
+            }),
+        };
+
+        assert_eq!(
+            err_location.to_type_naming_segments(),
+            vec![
+                vec!["run", "Out", "response"],
+                vec!["my-owner", "result", "Err"]
+            ]
+        );
     }
 }

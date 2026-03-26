@@ -1,3 +1,5 @@
+import { ImportedSourceOrderedUnion } from './importedTypes';
+
 interface SimpleInterfaceType {
   n: number;
 }
@@ -160,6 +162,7 @@ class MyAgent {
     objectWithTypeParameter: ObjectWithTypeParameter<['en', 'de']>,
     unionWithTypeParameter: UnionWithTypeParameter<['en', 'de']>,
     multimodal: MultimodalType<string | boolean>,
+    importedSourceOrderedUnion: ImportedSourceOrderedUnion,
   ): PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

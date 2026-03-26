@@ -1,0 +1,33 @@
+name: 'Restore Build Binaries'
+description: 'Install cargo-test-r, restore binary cache, and apply archive'
+inputs:
+  run-id:
+    description: 'GitHub run ID for cache key'
+    required: true
+  copy-to-target:
+    description: 'Whether to copy binaries to target/debug'
+    default: 'false'
+  fail-on-cache-miss:
+    description: 'Whether to fail if cache is not found'
+    default: 'false'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install cargo-test-r
+      shell: bash
+      run: cargo binstall --force --locked cargo-test-r@2.2.4
+    - name: Restore packaged binaries from cache
+      uses: actions/cache/restore@v4
+      with:
+        path: tmp/golem-binaries
+        key: golem-binaries-${{ inputs.run-id }}
+        fail-on-cache-miss: ${{ inputs.fail-on-cache-miss }}
+    - name: Apply binary archive
+      shell: bash
+      run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
+    - name: Copy binaries to target/debug
+      if: inputs.copy-to-target == 'true'
+      shell: bash
+      run: |
+        mkdir -pv target/debug
+        find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/

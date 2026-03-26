@@ -147,5 +147,6 @@ async fn dispatch_event(
                 .invalidate_domains_for_environment(*environment_id)
                 .await;
         }
+        RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {}
     }
 }

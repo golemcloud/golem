@@ -899,6 +899,8 @@ pub enum GolemSpecificWasmTrap {
     WorkerOutOfMemory,
     WorkerExceededMemoryLimit,
     WorkerExceededTableLimit,
+    NodeOutOfFilesystemStorage,
+    WorkerAgentExceededFilesystemStorageLimit,
 }
 
 impl Display for GolemSpecificWasmTrap {
@@ -908,6 +910,12 @@ impl Display for GolemSpecificWasmTrap {
             Self::WorkerExceededMemoryLimit => write!(f, "Worker exceeded plan memory limits"),
             Self::WorkerExceededTableLimit => {
                 write!(f, "Worker exceeded plan function table limits")
+            }
+            Self::NodeOutOfFilesystemStorage => {
+                write!(f, "Worker cannot acquire more storage space")
+            }
+            Self::WorkerAgentExceededFilesystemStorageLimit => {
+                write!(f, "Worker exceeded plan storage limits")
             }
         }
     }

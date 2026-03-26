@@ -129,6 +129,10 @@ wit-parser = { workspace = true, optional = true }
 wasm-wave = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 
+[[test]]
+name = "agent_extraction"
+harness = false
+
 [[bench]]
 name = "structural_format"
 harness = false

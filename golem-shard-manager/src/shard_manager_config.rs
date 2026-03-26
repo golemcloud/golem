@@ -20,6 +20,7 @@ use golem_common::config::{
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,9 @@ pub struct ShardManagerConfig {
     pub grpc: GrpcApiConfig,
     pub number_of_shards: usize,
     pub rebalance_threshold: f64,
+    pub registry_service: GrpcRegistryServiceConfig,
+    pub resource_definition_fetcher: ResourceDefinitionFetcherConfig,
+    pub quota: QuotaServiceConfig,
 }
 
 impl SafeDisplay for ShardManagerConfig {
@@ -73,6 +77,20 @@ impl SafeDisplay for ShardManagerConfig {
             "rebalance threshold: {}",
             self.rebalance_threshold
         );
+        let _ = writeln!(&mut result, "registry service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.registry_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "resource definition fetcher:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.resource_definition_fetcher.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "quota:");
+        let _ = writeln!(&mut result, "{}", self.quota.to_safe_string_indented());
         result
     }
 }
@@ -88,6 +106,9 @@ impl Default for ShardManagerConfig {
             grpc: GrpcApiConfig::default(),
             number_of_shards: 1024,
             rebalance_threshold: 0.1,
+            registry_service: GrpcRegistryServiceConfig::default(),
+            resource_definition_fetcher: ResourceDefinitionFetcherConfig::default(),
+            quota: QuotaServiceConfig::default(),
         }
     }
 }
@@ -107,6 +128,87 @@ impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
                 ..Self::default()
             },
         )]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResourceDefinitionFetcherConfig {
+    pub cache_max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub cache_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub cache_eviction_period: Duration,
+}
+
+impl SafeDisplay for ResourceDefinitionFetcherConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "cache max capacity: {}",
+            self.cache_max_capacity
+        );
+        let _ = writeln!(&mut result, "cache ttl: {:?}", self.cache_ttl);
+        let _ = writeln!(
+            &mut result,
+            "cache eviction period: {:?}",
+            self.cache_eviction_period
+        );
+        result
+    }
+}
+
+impl Default for ResourceDefinitionFetcherConfig {
+    fn default() -> Self {
+        Self {
+            cache_max_capacity: 1024,
+            cache_ttl: Duration::from_secs(5 * 60),
+            cache_eviction_period: Duration::from_secs(60),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QuotaServiceConfig {
+    #[serde(with = "humantime_serde")]
+    pub lease_duration: Duration,
+    #[serde(with = "humantime_serde")]
+    pub definition_staleness_ttl: Duration,
+    /// Minimum number of executors to plan for when dividing budget.
+    /// Prevents the first executor from taking the entire quota.
+    pub min_executors: u64,
+    /// Suggested retry delay when no capacity is available.
+    #[serde(with = "humantime_serde")]
+    pub exhausted_retry_after: Duration,
+}
+
+impl SafeDisplay for QuotaServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "lease duration: {:?}", self.lease_duration);
+        let _ = writeln!(
+            &mut result,
+            "definition staleness ttl: {:?}",
+            self.definition_staleness_ttl
+        );
+        let _ = writeln!(&mut result, "min executors: {}", self.min_executors);
+        let _ = writeln!(
+            &mut result,
+            "exhausted retry after: {:?}",
+            self.exhausted_retry_after
+        );
+        result
+    }
+}
+
+impl Default for QuotaServiceConfig {
+    fn default() -> Self {
+        Self {
+            lease_duration: Duration::from_secs(60),
+            definition_staleness_ttl: Duration::from_secs(5 * 60),
+            min_executors: 2,
+            exhausted_retry_after: Duration::from_secs(30),
+        }
     }
 }
 

@@ -131,6 +131,7 @@ fn role_bit(role: &AccountRole) -> i32 {
     match role {
         AccountRole::Admin => 1,
         AccountRole::MarketingAdmin => 1 << 1,
+        AccountRole::BuiltinPluginOwner => 1 << 2,
     }
 }
 

@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package golem.common;
+
+import "golem/common/uuid.proto";
+import "golem/component/agent.proto";
+import "golem/component/component_id.proto";
+import "golem/common/environment.proto";
+import "golem/shardmanager/pod.proto";
+import "wasm/rpc/type.proto";
+import "wasm/rpc/val.proto";
+
+message ResourceDefinitionId {
+  golem.common.UUID value = 1;
+}
+
+enum EnforcementAction {
+  ENFORCEMENT_ACTION_UNKNOWN = 0;
+  ENFORCEMENT_ACTION_REJECT = 1;
+  ENFORCEMENT_ACTION_THROTTLE = 2;
+  ENFORCEMENT_ACTION_TERMINATE = 3;
+}
+
+enum TimePeriod {
+  TIME_PERIOD_UNKNOWN = 0;
+  TIME_PERIOD_SECOND = 1;
+  TIME_PERIOD_MINUTE = 2;
+  TIME_PERIOD_HOUR = 3;
+  TIME_PERIOD_DAY = 4;
+  TIME_PERIOD_MONTH = 5;
+  TIME_PERIOD_YEAR = 6;
+}
+
+message ResourceLimit {
+  oneof kind {
+    Rate rate = 1;
+    Capacity capacity = 2;
+    Concurrency concurrency = 3;
+  }
+
+  message Rate {
+    uint64 value = 1;
+    TimePeriod period = 2;
+    uint64 max = 3;
+  }
+
+  message Capacity {
+    uint64 value = 1;
+  }
+
+  message Concurrency {
+    uint64 value = 1;
+  }
+}
+
+message ResourceDefinition {
+  ResourceDefinitionId resource_definition_id = 1;
+  uint64 revision = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  string name = 4;
+
+  EnforcementAction enforcement_action = 5;
+  ResourceLimit resource_limit = 6;
+
+  string unit = 7;
+  string units = 8;
+}
+
+message QuotaAllocation {
+  oneof kind {
+    Budget budget = 1;
+    Exhausted exhausted = 2;
+  }
+
+  message Budget {
+    uint64 amount = 1;
+  }
+
+  message Exhausted {
+    uint64 retry_after_nanos = 1;
+  }
+}
+
+message QuotaLease {
+  oneof kind {
+    Bounded bounded = 1;
+    Unlimited unlimited = 2;
+  }
+
+  message Bounded {
+    ResourceDefinitionId resource_definition_id = 1;
+    golem.shardmanager.Pod pod = 2;
+    uint64 epoch = 3;
+    QuotaAllocation allocation = 4;
+    uint64 expires_after_nanos = 5;
+    ResourceLimit resource_limit = 6;
+    EnforcementAction enforcement_action = 7;
+  }
+
+  message Unlimited {
+    golem.shardmanager.Pod pod = 1;
+    uint64 expires_after_nanos = 2;
+  }
+}

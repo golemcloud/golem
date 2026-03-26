@@ -10,6 +10,9 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
+[builtin_plugins]
+enabled = false
+
 [component_compilation]
 type = "Enabled"
 
@@ -55,6 +58,14 @@ type = "Disabled"
 
 [grpc.tls.config]
 
+[initial_accounts.builtin-plugin-owner]
+email = "builtin-plugin-owner@golem.cloud"
+id = "adb2694f-cd9f-425d-905d-ca2888c9c5de"
+name = "Builtin Plugin Owner"
+plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
+role = "builtin-plugin-owner"
+token = "32d6072d-64e9-4a4a-b8f9-fadf68bb446b"
+
 [initial_accounts.marketing]
 email = "marketing@user"
 id = "0e8a0431-94b9-4644-89ca-fbf403edb6e7"
@@ -75,6 +86,7 @@ token = "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28"
 app_limit = 10
 component_limit = 100
 env_limit = 40
+max_disk_space_per_worker = 1073741824
 max_memory_per_worker = 1073741824
 max_table_elements_per_worker = 16384
 monthly_gas_limit = 1000000000000000000

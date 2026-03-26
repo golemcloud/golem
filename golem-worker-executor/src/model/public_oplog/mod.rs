@@ -29,12 +29,12 @@ use golem_common::model::oplog::public_oplog_entry::{
     CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostCallParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
+    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -42,10 +42,11 @@ use golem_common::model::oplog::{
     AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
     JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, OplogEntry, OplogIndex,
-    PluginInstallationDescription, ProcessOplogEntriesParameters, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotBasedUpdateParameters, UpdateDescription,
+    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
@@ -536,6 +537,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     delta,
                 }))
             }
+            OplogEntry::FilesystemStorageUsageUpdate { timestamp, delta } => {
+                Ok(PublicOplogEntry::FilesystemStorageUsageUpdate(
+                    FilesystemStorageUsageUpdateParams { timestamp, delta },
+                ))
+            }
             OplogEntry::CreateResource {
                 timestamp,
                 id,
@@ -987,9 +993,11 @@ async fn agent_invocation_result_to_public(
                 snapshot: raw_snapshot_to_public(snapshot),
             }),
         ),
-        AgentInvocationResult::ProcessOplogEntries { error } => Ok(
-            PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters { error }),
-        ),
+        AgentInvocationResult::ProcessOplogEntries { error } => {
+            Ok(PublicAgentInvocationResult::ProcessOplogEntries(
+                ProcessOplogEntriesResultParameters { error },
+            ))
+        }
     }
 }
 

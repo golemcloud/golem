@@ -26,12 +26,10 @@ use golem_common::model::component::{ComponentName, InitialComponentFile};
 
 use crate::agent_id_display::render_type_for_language;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::trim_date::TrimDateTime;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fmt::Display;
 use std::path::PathBuf;
 
 pub enum ComponentRevisionSelection<'a> {
@@ -61,34 +59,6 @@ pub enum ComponentNameMatchKind {
 pub struct SelectedComponents {
     pub environment: ResolvedEnvironmentIdentity,
     pub component_names: Vec<ComponentName>,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[derive(Default)]
-pub enum AppComponentType {
-    /// Durable Golem component
-    #[default]
-    Agent,
-    /// Library component, to be used in composition (not deployable)
-    Library,
-}
-
-impl AppComponentType {
-    pub fn is_deployable(&self) -> bool {
-        match self {
-            AppComponentType::Agent => true,
-            AppComponentType::Library => false,
-        }
-    }
-}
-impl Display for AppComponentType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AppComponentType::Agent => write!(f, "Agent"),
-            AppComponentType::Library => write!(f, "Library"),
-        }
-    }
 }
 
 pub enum ComponentUpsertResult {
@@ -173,15 +143,6 @@ pub struct ComponentDeployProperties {
     pub env: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
     pub agent_config: Vec<AgentConfigEntry>,
-}
-
-impl TrimDateTime for ComponentView {
-    fn trim_date_time_ms(self) -> Self {
-        Self {
-            created_at: self.created_at.trim_date_time_ms(),
-            ..self
-        }
-    }
 }
 
 pub fn show_exported_agents(

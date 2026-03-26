@@ -1,5 +1,5 @@
 {
-  "type": "component",
+  "type": "agent",
   "description": "LLM chat with durable history",
   "devOnly": true
 }

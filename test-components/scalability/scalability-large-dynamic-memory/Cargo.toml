@@ -1,0 +1,22 @@
+[package]
+name = "scalability_large_dynamic_memory"
+version = "0.0.1"
+edition = "2021"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+# To use common shared agent definitions, place them in common_lib and uncomment the line below
+# common-lib = { path = "../../common-rust/common-lib" }
+
+log = { version = "0.4.29", features = ["kv"] }
+golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wstd = { version = "=0.6.5", features = ["default", "json"] }

@@ -27,9 +27,6 @@ pub(crate) mod analyzed_type_ext;
 mod builder;
 mod type_location;
 
-#[cfg(test)]
-pub(crate) mod tests;
-
 pub trait TypeName: Debug + Display + Clone + PartialEq + Eq + Hash {
     // This is intended to be used for custom or special mappings. If this method returns some
     // result for a type, then no further type naming will be attempted.
@@ -79,10 +76,21 @@ pub struct TypeNaming<TN: TypeName> {
 
 impl<TN: TypeName> TypeNaming<TN> {
     pub fn new(agent_type: &AgentType, same_language: bool) -> anyhow::Result<Self> {
+        Self::new_with_reserved_names(agent_type, same_language, std::iter::empty::<TN>())
+    }
+
+    pub fn new_with_reserved_names(
+        agent_type: &AgentType,
+        same_language: bool,
+        reserved_names: impl IntoIterator<Item = TN>,
+    ) -> anyhow::Result<Self> {
+        let mut type_names = HashSet::new();
+        type_names.extend(reserved_names);
+
         let mut type_naming = Self {
             named_type_locations: Default::default(),
             anonymous_type_locations: Default::default(),
-            type_names: HashSet::new(),
+            type_names,
             types: HashMap::new(),
             same_language,
         };

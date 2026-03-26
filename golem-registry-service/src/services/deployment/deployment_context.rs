@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::DeployValidationError;
 use super::DeploymentWriteError;
 use super::http_parameter_conversion::build_http_agent_constructor_parameters;
-use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
-use crate::model::api_definition::UnboundCompiledRoute;
-use crate::services::deployment::ok_or_continue;
-use crate::services::deployment::route_compilation::{
+use super::ok_or_continue;
+use super::route_compilation::{
     add_agent_method_http_routes, add_cors_preflight_http_routes, add_openapi_spec_routes,
     add_webhook_callback_routes, build_agent_http_api_deployment_details,
     make_invalid_agent_mount_error_maker,
 };
-use crate::services::deployment::write::DeployValidationError;
+use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
+use crate::model::api_definition::UnboundCompiledRoute;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
@@ -35,6 +35,9 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::resource_definition::{
+    ResourceDefinition, ResourceDefinitionCreation, ResourceName,
+};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -437,6 +440,37 @@ impl DeploymentContext {
         }
 
         (creations, updates)
+    }
+
+    pub fn deployment_resource_definition_creations(
+        &self,
+        resource_definitions_in_environment: Vec<ResourceDefinition>,
+        resource_definition_defaults_in_deployment: Vec<ResourceDefinitionCreation>,
+        errors: &mut Vec<DeployValidationError>,
+    ) -> Vec<ResourceDefinitionCreation> {
+        let resources_existing_in_env: HashSet<&ResourceName> = resource_definitions_in_environment
+            .iter()
+            .map(|s| &s.name)
+            .collect();
+
+        let mut creations = Vec::new();
+        let mut seen_resources = HashSet::new();
+
+        for resource_default in resource_definition_defaults_in_deployment {
+            if !seen_resources.insert(resource_default.name.clone()) {
+                ok_or_continue!(
+                    Err(DeployValidationError::ConflictingResourceDefinitions {
+                        name: resource_default.name.clone()
+                    }),
+                    errors
+                );
+            }
+
+            if !resources_existing_in_env.contains(&resource_default.name) {
+                creations.push(resource_default);
+            }
+        }
+        creations
     }
 }
 

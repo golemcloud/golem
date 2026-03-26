@@ -154,6 +154,8 @@ pub enum TestMode {
         registry_service_default_plan_id: Uuid,
         #[arg(long)]
         registry_service_low_fuel_plan_id: Uuid,
+        #[arg(long, default_value = "a2f3b4c5-d6e7-8901-abcd-ef0123456789")]
+        registry_service_low_disk_space_plan_id: Uuid,
         #[arg(long, default_value = "localhost")]
         component_compilation_service_host: String,
         #[arg(long, default_value = "9092")]
@@ -430,6 +432,7 @@ impl BenchmarkTestDependencies {
                 registry_service_admin_account_token,
                 registry_service_default_plan_id,
                 registry_service_low_fuel_plan_id,
+                registry_service_low_disk_space_plan_id,
                 component_compilation_service_host,
                 component_compilation_service_grpc_port,
                 worker_service_host,
@@ -473,6 +476,7 @@ impl BenchmarkTestDependencies {
                         TokenSecret::trusted(registry_service_admin_account_token.clone()),
                         PlanId(*registry_service_default_plan_id),
                         PlanId(*registry_service_low_fuel_plan_id),
+                        PlanId(*registry_service_low_disk_space_plan_id),
                     )
                     .await,
                 );

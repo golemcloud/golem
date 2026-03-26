@@ -14,6 +14,3 @@
 
 pub mod extraction;
 pub mod view;
-
-#[cfg(test)]
-pub mod test;
