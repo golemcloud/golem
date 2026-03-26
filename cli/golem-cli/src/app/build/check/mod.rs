@@ -304,6 +304,9 @@ fn plan_rust_cargo_fix_steps(
                     warnings.push(format!("{} ({})", message, cargo_toml_path.display()));
                 }
                 DependencySpecCompliance::NeedsUpdate => {
+                    if found.is_none() && !requirement.required {
+                        continue;
+                    }
                     let update_spec =
                         build_cargo_update_spec(found, requirement, cargo_toml_path.parent());
                     working = edit::cargo_toml::upsert_dependency_auto(
@@ -350,6 +353,9 @@ fn plan_rust_cargo_fix_steps(
                     warnings.push(format!("{} ({})", message, workspace_cargo_toml_path.display()));
                 }
                 DependencySpecCompliance::NeedsUpdate => {
+                    if found.is_none() && !requirement.required {
+                        continue;
+                    }
                     let update_spec = build_cargo_update_spec(
                         found,
                         requirement,
@@ -403,7 +409,7 @@ fn rust_dependency_requirements(
         },
     };
 
-    let mut requirements = vec![
+        let mut requirements = vec![
         CargoDependencyRequirement {
             name: "log",
             expected_spec: DependencySpec::Version {
@@ -411,6 +417,7 @@ fn rust_dependency_requirements(
                 features: vec!["kv".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
+            required: false,
         },
         CargoDependencyRequirement {
             name: "serde",
@@ -419,6 +426,7 @@ fn rust_dependency_requirements(
                 features: vec!["derive".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
+            required: false,
         },
         CargoDependencyRequirement {
             name: "serde_json",
@@ -427,6 +435,7 @@ fn rust_dependency_requirements(
                 features: Vec::new(),
             },
             matcher: CargoDependencyMatcher::Exact,
+            required: false,
         },
         CargoDependencyRequirement {
             name: "wstd",
@@ -435,6 +444,7 @@ fn rust_dependency_requirements(
                 features: vec!["default".to_string(), "json".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
+            required: false,
         },
     ];
 
@@ -458,6 +468,7 @@ fn rust_dependency_requirements(
             expected: golem_rust_expected,
             semantics: DependencyMatcherSemantics::Rust,
         },
+        required: true,
     });
 
     requirements
@@ -482,6 +493,7 @@ struct CargoDependencyRequirement {
     name: &'static str,
     expected_spec: DependencySpec,
     matcher: CargoDependencyMatcher,
+    required: bool,
 }
 
 fn build_cargo_update_spec(
@@ -659,7 +671,11 @@ fn evaluate_cargo_dependency_compliance(
     base_dir: Option<&Path>,
 ) -> DependencySpecCompliance {
     let Some(found) = found else {
-        return DependencySpecCompliance::NeedsUpdate;
+        return if requirement.required {
+            DependencySpecCompliance::NeedsUpdate
+        } else {
+            DependencySpecCompliance::Compatible
+        };
     };
 
     if !has_required_features(found, &requirement.expected_spec) {
@@ -1382,5 +1398,21 @@ mod test {
         assert!(template_source.contains("target/wasm32-wasip2/debug"));
         assert!(template_source.contains("target/wasm32-wasip2/release"));
         assert!(!template_source.contains("CARGO_TARGET_DIR"));
+    }
+
+    #[test]
+    fn optional_rust_dependency_absent_is_accepted() {
+        let requirement = CargoDependencyRequirement {
+            name: "serde",
+            expected_spec: DependencySpec::Version {
+                version: "1".to_string(),
+                features: vec!["derive".to_string()],
+            },
+            matcher: CargoDependencyMatcher::Exact,
+            required: false,
+        };
+
+        let compliance = evaluate_cargo_dependency_compliance(None, &requirement, None);
+        assert_eq!(compliance, DependencySpecCompliance::Compatible);
     }
 }
