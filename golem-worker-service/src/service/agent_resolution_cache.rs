@@ -315,23 +315,12 @@ mod tests {
         ) -> Result<(), RegistryServiceError> {
             unimplemented!()
         }
-        async fn batch_update_fuel_usage(
+        async fn batch_update_resource_usage(
             &self,
-            _: std::collections::HashMap<AccountId, i64>,
-        ) -> Result<golem_service_base::model::AccountResourceLimits, RegistryServiceError>
-        {
-            unimplemented!()
-        }
-        async fn batch_update_http_call_count(
-            &self,
-            _: std::collections::HashMap<AccountId, i64>,
-        ) -> Result<golem_service_base::model::AccountResourceLimits, RegistryServiceError>
-        {
-            unimplemented!()
-        }
-        async fn batch_update_rpc_call_count(
-            &self,
-            _: std::collections::HashMap<AccountId, i64>,
+            _: std::collections::HashMap<
+                AccountId,
+                golem_service_base::clients::registry::ResourceUsageUpdate,
+            >,
         ) -> Result<golem_service_base::model::AccountResourceLimits, RegistryServiceError>
         {
             unimplemented!()

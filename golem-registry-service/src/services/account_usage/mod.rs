@@ -25,6 +25,13 @@ use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy)]
+pub struct ResourceUsageUpdate {
+    pub fuel_delta: i64,
+    pub http_call_count_delta: u64,
+    pub rpc_call_count_delta: u64,
+}
+
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
 }
@@ -166,25 +173,33 @@ impl AccountUsageService {
         Ok(())
     }
 
-    pub async fn record_fuel_consumption(
+    pub async fn update_resource_usage(
         &self,
-        updates: HashMap<AccountId, i64>,
+        updates: HashMap<AccountId, ResourceUsageUpdate>,
         auth: &AuthCtx,
     ) -> Result<AccountResourceLimits, AccountUsageError> {
         let mut limits_of_updates_accounts = HashMap::new();
         for (account_id, update) in updates {
             auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-            match self
-                .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
-                .await
-            {
+            match self.get_account_usage(account_id, None).await {
                 Ok(mut account_usage) => {
-                    // fuel usage is allowed to exceeded the montly limit slightly.
-                    // The worker executor will stop the worker at the next opportunity.
-                    account_usage.add_change(UsageType::MonthlyGasLimit, update);
+                    // Usage can slightly exceed the monthly limit. The worker executor
+                    // will suspend the worker at the next opportunity.
+                    account_usage.add_change(UsageType::MonthlyGasLimit, update.fuel_delta);
+                    account_usage.add_change(
+                        UsageType::MonthlyHttpCalls,
+                        i64::try_from(update.http_call_count_delta).unwrap_or(i64::MAX),
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyRpcCalls,
+                        i64::try_from(update.rpc_call_count_delta).unwrap_or(i64::MAX),
+                    );
 
                     tracing::debug!(
-                        "Updating monthly fuel consumption for account {account_id}: {update}"
+                        "Updating usage for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                        update.fuel_delta,
+                        update.http_call_count_delta,
+                        update.rpc_call_count_delta,
                     );
 
                     self.account_usage_repo.add(&account_usage).await?;
@@ -193,68 +208,6 @@ impl AccountUsageService {
                 Err(AccountUsageError::AccountNotfound(_)) => {
                     // we received an update for a deleted account
                     // return an empty set of limits to fence the executor more quickly
-                    limits_of_updates_accounts.insert(
-                        account_id,
-                        ResourceLimits {
-                            available_fuel: 0,
-                            max_memory_per_worker: 0,
-                            max_table_elements_per_worker: 0,
-                            max_disk_space_per_worker: 0,
-                            per_invocation_http_call_limit: 0,
-                            per_invocation_rpc_call_limit: 0,
-                            available_http_calls: 0,
-                            available_rpc_calls: 0,
-                        },
-                    );
-                }
-                Err(other) => return Err(other),
-            };
-        }
-        Ok(AccountResourceLimits(limits_of_updates_accounts))
-    }
-
-    pub async fn update_http_call_counts(
-        &self,
-        updates: HashMap<AccountId, i64>,
-        auth: &AuthCtx,
-    ) -> Result<AccountResourceLimits, AccountUsageError> {
-        self.update_call_counts(updates, auth, UsageType::MonthlyHttpCalls, "HTTP")
-            .await
-    }
-
-    pub async fn update_rpc_call_counts(
-        &self,
-        updates: HashMap<AccountId, i64>,
-        auth: &AuthCtx,
-    ) -> Result<AccountResourceLimits, AccountUsageError> {
-        self.update_call_counts(updates, auth, UsageType::MonthlyRpcCalls, "RPC")
-            .await
-    }
-
-    async fn update_call_counts(
-        &self,
-        updates: HashMap<AccountId, i64>,
-        auth: &AuthCtx,
-        usage_type: UsageType,
-        call_type: &str,
-    ) -> Result<AccountResourceLimits, AccountUsageError> {
-        let mut limits_of_updates_accounts = HashMap::new();
-        for (account_id, update) in updates {
-            auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-            match self.get_account_usage(account_id, Some(usage_type)).await {
-                Ok(mut account_usage) => {
-                    // Call counts are allowed to slightly exceed the monthly limit.
-                    // The worker executor will suspend the worker at the next opportunity.
-                    account_usage.add_change(usage_type, update);
-
-                    tracing::debug!(
-                        "Updating monthly {call_type} call count for account {account_id}: {update}"
-                    );
-
-                    self.account_usage_repo.add(&account_usage).await?;
-                    limits_of_updates_accounts.insert(account_id, account_usage.resource_limits());
-                }
-                Err(AccountUsageError::AccountNotfound(_)) => {
                     limits_of_updates_accounts.insert(
                         account_id,
                         ResourceLimits {

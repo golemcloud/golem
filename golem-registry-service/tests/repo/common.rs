@@ -2012,6 +2012,7 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
 
 pub async fn test_update_http_call_counts(deps: &Deps) {
     use golem_common::model::account::AccountId;
+    use golem_registry_service::services::account_usage::ResourceUsageUpdate;
     use golem_service_base::model::auth::AuthCtx;
     use std::collections::HashMap;
 
@@ -2021,16 +2022,26 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
 
     // Empty updates → no accounts in the response.
     let initial = svc
-        .update_http_call_counts(HashMap::new(), &AuthCtx::System)
+        .update_resource_usage(
+            HashMap::<AccountId, ResourceUsageUpdate>::new(),
+            &AuthCtx::System,
+        )
         .await
         .unwrap();
     assert!(initial.0.is_empty());
 
     // Recording 10 HTTP calls reduces available by 10.
     let mut updates = HashMap::new();
-    updates.insert(account_id, 10_i64);
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 10,
+            rpc_call_count_delta: 0,
+        },
+    );
     let result = svc
-        .update_http_call_counts(updates, &AuthCtx::System)
+        .update_resource_usage(updates, &AuthCtx::System)
         .await
         .unwrap();
     let limits = result
@@ -2051,9 +2062,16 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
 
     // Exactly reaching the limit returns 0.
     let mut updates = HashMap::new();
-    updates.insert(account_id, 4990_i64);
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 4990,
+            rpc_call_count_delta: 0,
+        },
+    );
     let result = svc
-        .update_http_call_counts(updates, &AuthCtx::System)
+        .update_resource_usage(updates, &AuthCtx::System)
         .await
         .unwrap();
     let limits = result.0.get(&account_id).unwrap();
@@ -2065,9 +2083,16 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
 
     // Slightly exceeding the limit is allowed (optimistic) — saturates at 0, not an error.
     let mut updates = HashMap::new();
-    updates.insert(account_id, 1_i64);
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 1,
+            rpc_call_count_delta: 0,
+        },
+    );
     let result = svc
-        .update_http_call_counts(updates, &AuthCtx::System)
+        .update_resource_usage(updates, &AuthCtx::System)
         .await
         .unwrap();
     let limits = result.0.get(&account_id).unwrap();
@@ -2080,6 +2105,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
 
 pub async fn test_update_rpc_call_counts(deps: &Deps) {
     use golem_common::model::account::AccountId;
+    use golem_registry_service::services::account_usage::ResourceUsageUpdate;
     use golem_service_base::model::auth::AuthCtx;
     use std::collections::HashMap;
 
@@ -2089,16 +2115,26 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
 
     // Empty updates → no accounts in the response.
     let initial = svc
-        .update_rpc_call_counts(HashMap::new(), &AuthCtx::System)
+        .update_resource_usage(
+            HashMap::<AccountId, ResourceUsageUpdate>::new(),
+            &AuthCtx::System,
+        )
         .await
         .unwrap();
     assert!(initial.0.is_empty());
 
     // Recording 100 RPC calls reduces available by 100.
     let mut updates = HashMap::new();
-    updates.insert(account_id, 100_i64);
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 100,
+        },
+    );
     let result = svc
-        .update_rpc_call_counts(updates, &AuthCtx::System)
+        .update_resource_usage(updates, &AuthCtx::System)
         .await
         .unwrap();
     let limits = result
@@ -2119,9 +2155,16 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
 
     // Exactly reaching the limit returns 0.
     let mut updates = HashMap::new();
-    updates.insert(account_id, 4900_i64);
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 4900,
+        },
+    );
     let result = svc
-        .update_rpc_call_counts(updates, &AuthCtx::System)
+        .update_resource_usage(updates, &AuthCtx::System)
         .await
         .unwrap();
     let limits = result.0.get(&account_id).unwrap();
@@ -2133,9 +2176,16 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
 
     // Slightly exceeding the limit is allowed (optimistic) — saturates at 0, not an error.
     let mut updates = HashMap::new();
-    updates.insert(account_id, 1_i64);
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 1,
+        },
+    );
     let result = svc
-        .update_rpc_call_counts(updates, &AuthCtx::System)
+        .update_resource_usage(updates, &AuthCtx::System)
         .await
         .unwrap();
     let limits = result.0.get(&account_id).unwrap();
@@ -2148,6 +2198,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
 
 pub async fn test_update_call_counts_batch(deps: &Deps) {
     use golem_common::model::account::AccountId;
+    use golem_registry_service::services::account_usage::ResourceUsageUpdate;
     use golem_service_base::model::auth::AuthCtx;
     use std::collections::HashMap;
 
@@ -2159,10 +2210,24 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
 
     // HTTP batch — multiple accounts in one call.
     let mut http_updates = HashMap::new();
-    http_updates.insert(a1, 50_i64);
-    http_updates.insert(a2, 200_i64);
+    http_updates.insert(
+        a1,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 50,
+            rpc_call_count_delta: 0,
+        },
+    );
+    http_updates.insert(
+        a2,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 200,
+            rpc_call_count_delta: 0,
+        },
+    );
     let result = svc
-        .update_http_call_counts(http_updates, &AuthCtx::System)
+        .update_resource_usage(http_updates, &AuthCtx::System)
         .await
         .unwrap();
     check!(
@@ -2181,10 +2246,24 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
 
     // RPC batch — different accounts, same call.
     let mut rpc_updates = HashMap::new();
-    rpc_updates.insert(a3, 300_i64);
-    rpc_updates.insert(a4, 1000_i64);
+    rpc_updates.insert(
+        a3,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 300,
+        },
+    );
+    rpc_updates.insert(
+        a4,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 1000,
+        },
+    );
     let result = svc
-        .update_rpc_call_counts(rpc_updates, &AuthCtx::System)
+        .update_resource_usage(rpc_updates, &AuthCtx::System)
         .await
         .unwrap();
     check!(

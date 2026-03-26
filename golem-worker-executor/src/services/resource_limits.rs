@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::account::AccountId;
 use golem_common::SafeDisplay;
-use golem_service_base::clients::registry::RegistryService;
+use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
@@ -372,13 +372,8 @@ impl ResourceLimitsGrpc {
     /// double-counted next cycle; stale idle accounts are retried next tick.
     async fn send_batch(&self, refresh_threshold_secs: i64) {
         // Collect active updates (non-zero delta) and move delta → in_flight.
-        // We track three separate delta maps: one for fuel, one for HTTP calls,
-        // one for RPC calls. An account is included in `updates` (the union) if
-        // it has any non-zero delta OR has gone stale. The three call-type maps
-        // contain only accounts with non-zero deltas for that type.
-        let mut updates: HashMap<AccountId, i64> = HashMap::new();
-        let mut http_updates: HashMap<AccountId, i64> = HashMap::new();
-        let mut rpc_updates: HashMap<AccountId, i64> = HashMap::new();
+        // An account is included if it has any non-zero delta OR has gone stale.
+        let mut updates: HashMap<AccountId, ResourceUsageUpdate> = HashMap::new();
 
         self.entries
             .iter_async(|k, cell| {
@@ -388,35 +383,32 @@ impl ResourceLimitsGrpc {
                     let http_count = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
                     let rpc_count = entry.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
 
-                    if fuel_delta != 0 {
+                    if fuel_delta != 0 || http_count > 0 || rpc_count > 0 {
                         entry
                             .in_flight_delta
                             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
                                 Some(d.saturating_add(fuel_delta))
                             })
                             .ok();
-                        updates.insert(*k, fuel_delta);
+                        updates.insert(
+                            *k,
+                            ResourceUsageUpdate {
+                                fuel_delta,
+                                http_call_count_delta: http_count,
+                                rpc_call_count_delta: rpc_count,
+                            },
+                        );
                     } else if entry.secs_since_last_refresh() >= refresh_threshold_secs {
                         // Stale idle account: include with zero delta to fetch
                         // updated limits without reporting any consumption.
-                        updates.insert(*k, 0);
-                    }
-
-                    if http_count > 0 {
-                        entry
-                            .syncing_http_calls
-                            .fetch_add(http_count, Ordering::AcqRel);
-                        http_updates.insert(*k, http_count as i64);
-                        // Ensure account is in `updates` so update_last_known_limits is called
-                        updates.entry(*k).or_insert(0);
-                    }
-
-                    if rpc_count > 0 {
-                        entry
-                            .syncing_rpc_calls
-                            .fetch_add(rpc_count, Ordering::AcqRel);
-                        rpc_updates.insert(*k, rpc_count as i64);
-                        updates.entry(*k).or_insert(0);
+                        updates.insert(
+                            *k,
+                            ResourceUsageUpdate {
+                                fuel_delta: 0,
+                                http_call_count_delta: 0,
+                                rpc_call_count_delta: 0,
+                            },
+                        );
                     }
                 }
                 true
@@ -429,16 +421,31 @@ impl ResourceLimitsGrpc {
 
         tracing::debug!(
             "Sending batch: {} fuel, {} http, {} rpc, {} stale idle account(s)",
-            updates.values().filter(|&&d| d != 0).count(),
-            http_updates.len(),
-            rpc_updates.len(),
-            updates.values().filter(|&&d| d == 0).count(),
+            updates.values().filter(|u| u.fuel_delta != 0).count(),
+            updates
+                .values()
+                .filter(|u| u.http_call_count_delta > 0)
+                .count(),
+            updates
+                .values()
+                .filter(|u| u.rpc_call_count_delta > 0)
+                .count(),
+            updates
+                .values()
+                .filter(|u| {
+                    u.fuel_delta == 0 && u.http_call_count_delta == 0 && u.rpc_call_count_delta == 0
+                })
+                .count(),
         );
 
-        // Send fuel batch. The response refreshes all account limits (fuel, memory, disk,
-        // per-invocation caps, and monthly call budgets) for every account in `updates`,
-        // including those present only due to HTTP/RPC call deltas or staleness.
-        match self.client.batch_update_fuel_usage(updates.clone()).await {
+        // Send resource usage batch. The response refreshes all account limits
+        // (fuel, memory, disk, per-invocation caps, and monthly call budgets)
+        // for every account in `updates`.
+        match self
+            .client
+            .batch_update_resource_usage(updates.clone())
+            .await
+        {
             Ok(updated_limits) => {
                 for (account_id, resource_limits) in updated_limits.0 {
                     self.update_last_known_limits(account_id, resource_limits)
@@ -446,69 +453,19 @@ impl ResourceLimitsGrpc {
                 }
             }
             Err(err) => {
-                error!("Failed to send batched fuel usage updates: {}", err);
-                for (account_id, delta) in &updates {
-                    if *delta != 0 {
-                        error!("Lost fuel updates for account {account_id}: {delta}");
+                error!("Failed to send batched resource usage updates: {}", err);
+                for (account_id, update) in &updates {
+                    if update.fuel_delta != 0
+                        || update.http_call_count_delta > 0
+                        || update.rpc_call_count_delta > 0
+                    {
+                        error!(
+                            "Lost resource usage updates for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                            update.fuel_delta,
+                            update.http_call_count_delta,
+                            update.rpc_call_count_delta,
+                        );
                         self.reset_in_flight_delta(*account_id).await;
-                    }
-                }
-            }
-        }
-
-        // Send HTTP call usage batch
-        if !http_updates.is_empty() {
-            match self
-                .client
-                .batch_update_http_call_count(http_updates.clone())
-                .await
-            {
-                Ok(updated_limits) => {
-                    for (account_id, resource_limits) in updated_limits.0 {
-                        self.update_last_known_limits(account_id, resource_limits)
-                            .await;
-                    }
-                }
-                Err(err) => {
-                    error!("Failed to send batched HTTP call count updates: {}", err);
-                    for account_id in http_updates.keys() {
-                        error!("Lost HTTP call count updates for account {account_id}");
-                        if let Some(cell) =
-                            self.entries.read_async(account_id, |_, e| e.clone()).await
-                        {
-                            if let Some(entry) = cell.get() {
-                                entry.syncing_http_calls.store(0, Ordering::Release);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Send RPC call usage batch
-        if !rpc_updates.is_empty() {
-            match self
-                .client
-                .batch_update_rpc_call_count(rpc_updates.clone())
-                .await
-            {
-                Ok(updated_limits) => {
-                    for (account_id, resource_limits) in updated_limits.0 {
-                        self.update_last_known_limits(account_id, resource_limits)
-                            .await;
-                    }
-                }
-                Err(err) => {
-                    error!("Failed to send batched RPC call count updates: {}", err);
-                    for account_id in rpc_updates.keys() {
-                        error!("Lost RPC call count updates for account {account_id}");
-                        if let Some(cell) =
-                            self.entries.read_async(account_id, |_, e| e.clone()).await
-                        {
-                            if let Some(entry) = cell.get() {
-                                entry.syncing_rpc_calls.store(0, Ordering::Release);
-                            }
-                        }
                     }
                 }
             }
@@ -567,8 +524,8 @@ impl ResourceLimitsGrpc {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await {
             if let Some(entry) = cell.get() {
                 entry.in_flight_delta.swap(0, Ordering::AcqRel);
-                // HTTP/RPC syncing counts are cleared separately per-endpoint
-                // in the HTTP/RPC failure handlers above, not here.
+                entry.syncing_http_calls.store(0, Ordering::Release);
+                entry.syncing_rpc_calls.store(0, Ordering::Release);
             }
         }
     }
@@ -1067,9 +1024,8 @@ mod tests {
 
     #[test]
     async fn batch_failure_clears_http_rpc_in_flight_without_double_counting() {
-        // On batch failure the in_flight deltas must be cleared so the next
-        // tick doesn't double-count them. The calls are effectively lost (same
-        // as fuel on batch failure), which is acceptable.
+        // On batch failure the in-flight deltas must be cleared so the next
+        // tick doesn't double-count them.
         let id = account_id();
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         mock.set_get_limits_response(ServiceResourceLimits {
@@ -1082,7 +1038,6 @@ mod tests {
             available_http_calls: 10,
             available_rpc_calls: 10,
         });
-        // Fuel batch succeeds (needed to trigger HTTP/RPC batch paths)
         let mut updated = HashMap::new();
         updated.insert(
             id,
@@ -1098,8 +1053,7 @@ mod tests {
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
-        // But make the HTTP/RPC batch fail
-        mock.set_call_batch_update_error();
+        mock.set_batch_update_error();
 
         let svc = make_grpc(mock.clone());
         let entry: Arc<AtomicResourceEntry> = svc.initialize_account(id).await.unwrap();
@@ -1138,8 +1092,6 @@ mod tests {
     struct MockRegistryService {
         get_limits_result: Mutex<Result<ServiceResourceLimits, RegistryServiceError>>,
         batch_update_result: Mutex<Result<AccountResourceLimits, RegistryServiceError>>,
-        http_batch_update_result: Mutex<Result<AccountResourceLimits, RegistryServiceError>>,
-        rpc_batch_update_result: Mutex<Result<AccountResourceLimits, RegistryServiceError>>,
     }
 
     impl MockRegistryService {
@@ -1156,8 +1108,6 @@ mod tests {
                     available_rpc_calls: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
-                http_batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
-                rpc_batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
             }
         }
 
@@ -1178,17 +1128,6 @@ mod tests {
         fn set_batch_update_error(&self) {
             *self.batch_update_result.lock().unwrap() = Err(
                 RegistryServiceError::InternalServerError("mock batch error".into()),
-            );
-        }
-
-        /// Makes the HTTP and RPC call batch update endpoints return errors,
-        /// while leaving the fuel batch update as-is.
-        fn set_call_batch_update_error(&self) {
-            *self.http_batch_update_result.lock().unwrap() = Err(
-                RegistryServiceError::InternalServerError("mock http batch error".into()),
-            );
-            *self.rpc_batch_update_result.lock().unwrap() = Err(
-                RegistryServiceError::InternalServerError("mock rpc batch error".into()),
             );
         }
     }
@@ -1240,33 +1179,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn batch_update_fuel_usage(
+        async fn batch_update_resource_usage(
             &self,
-            _updates: HashMap<AccountId, i64>,
+            _updates: HashMap<AccountId, ResourceUsageUpdate>,
         ) -> Result<AccountResourceLimits, RegistryServiceError> {
             self.batch_update_result
-                .lock()
-                .unwrap()
-                .clone()
-                .map_err(|e| RegistryServiceError::InternalServerError(e.to_string()))
-        }
-
-        async fn batch_update_http_call_count(
-            &self,
-            _updates: HashMap<AccountId, i64>,
-        ) -> Result<AccountResourceLimits, RegistryServiceError> {
-            self.http_batch_update_result
-                .lock()
-                .unwrap()
-                .clone()
-                .map_err(|e| RegistryServiceError::InternalServerError(e.to_string()))
-        }
-
-        async fn batch_update_rpc_call_count(
-            &self,
-            _updates: HashMap<AccountId, i64>,
-        ) -> Result<AccountResourceLimits, RegistryServiceError> {
-            self.rpc_batch_update_result
                 .lock()
                 .unwrap()
                 .clone()
