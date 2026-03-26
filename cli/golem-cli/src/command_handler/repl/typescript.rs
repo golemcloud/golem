@@ -136,10 +136,7 @@ impl TypeScriptRepl {
                         &repl_ts_path,
                     )?;
 
-                    // TODO: agent: inline
-                    let npm_path = resolve_program_for_spawn("npm")?;
-
-                    Command::new(&npm_path)
+                    Command::new(resolve_program_for_spawn("npm")?)
                         .arg("install")
                         .current_dir(&args.repl_root_dir)
                         .stream_and_wait_for_status("npm")
@@ -339,9 +336,7 @@ impl TypeScriptRepl {
     }
 
     async fn prepare_command(&self, args: &BridgeReplArgs) -> anyhow::Result<Command> {
-        // TODO: agent: inline
-        let npx_path = resolve_program_for_spawn("npx")?;
-        let mut command = Command::new(&npx_path);
+        let mut command = Command::new(resolve_program_for_spawn("npx")?);
 
         command
             .current_dir(&args.repl_root_dir)

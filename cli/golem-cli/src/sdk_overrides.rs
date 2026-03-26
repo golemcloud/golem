@@ -88,7 +88,6 @@ impl SdkOverrides {
     pub fn ts_package_dep(&self, package_name: &str) -> String {
         match &self.ts_packages_path {
             Some(ts_packages_path) => {
-                // TODO: agent: are we sure on this one? i though npm overrides should work simply by unix style paths too
                 let package_path = Path::new(ts_packages_path)
                     .join(package_name)
                     .to_string_lossy()
@@ -435,23 +434,13 @@ mod tests {
     #[test]
     fn golem_path_sets_default_sdk_paths() {
         let overrides = SdkOverrides::from_values(map(&[(GOLEM_PATH, "/repo")]), HashMap::new());
-        // TODO: agent: never use to_string_lossy, we have a function for this in out fs module, also inline
-        let expected_rust = Path::new("/repo")
-            .join("sdks/rust/golem-rust")
-            .to_string_lossy()
-            .to_string();
-        let expected_ts = Path::new("/repo")
-            .join("sdks/ts/packages")
-            .to_string_lossy()
-            .to_string();
-
         assert_eq!(
-            overrides.golem_rust_path.as_deref(),
-            Some(expected_rust.as_str())
+            overrides.golem_rust_path,
+            Some(join_path("/repo", "sdks/rust/golem-rust"))
         );
         assert_eq!(
-            overrides.ts_packages_path.as_deref(),
-            Some(expected_ts.as_str())
+            overrides.ts_packages_path,
+            Some(join_path("/repo", "sdks/ts/packages"))
         );
     }
 

@@ -700,9 +700,7 @@ struct CollectedSources {
 fn collect_sources_and_switch_to_app_root(
     root_manifest: Option<&Path>,
 ) -> Option<ValidatedResult<CollectedSources>> {
-    // TODO: agent: just unwrap, the error has enough info
-    let calling_working_dir =
-        fs::current_dir_lexical().expect("Failed to get current working directory");
+    let calling_working_dir = fs::current_dir_lexical().unwrap();
 
     log_action("Collecting", "application manifests");
     let _indent = LogIndent::new();
@@ -738,7 +736,7 @@ fn collect_sources_and_switch_to_app_root(
             Some(source) => collect_by_main_source(&source),
             None => None,
         },
-        Some(source) => match fs::absolute_lexical_from_current_dir(source) {
+        Some(source) => match fs::absolute_lexical_path(source) {
             Ok(source) => collect_by_main_source(&source),
             Err(err) => Some(ValidatedResult::from_error(format!(
                 "Cannot resolve requested application manifest source {}: {}",

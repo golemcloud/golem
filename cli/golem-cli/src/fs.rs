@@ -66,8 +66,7 @@ pub fn current_dir_lexical() -> anyhow::Result<PathBuf> {
         .map_err(|err| anyhow!("Failed to get current working directory: {}", err))
 }
 
-// TODO: agent: path should be in the function name, and this should have the "longer name", not the current dir version, also review the other function names for missing path
-pub fn absolute_lexical(path: &Path, base_dir: &Path) -> PathBuf {
+pub fn absolute_lexical_path_from_base_dir(path: &Path, base_dir: &Path) -> PathBuf {
     let combined = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -77,9 +76,8 @@ pub fn absolute_lexical(path: &Path, base_dir: &Path) -> PathBuf {
     normalize_path_lexically(&combined)
 }
 
-
-pub fn absolute_lexical_from_current_dir(path: &Path) -> anyhow::Result<PathBuf> {
-    current_dir_lexical().map(|base_dir| absolute_lexical(path, &base_dir))
+pub fn absolute_lexical_path(path: &Path) -> anyhow::Result<PathBuf> {
+    current_dir_lexical().map(|base_dir| absolute_lexical_path_from_base_dir(path, &base_dir))
 }
 
 pub fn normalize_for_comparison(path: &Path) -> PathBuf {
@@ -823,23 +821,23 @@ mod test {
             (base_dir.clone(), "".to_string())
         );
 
-        // TODO: agent: what happened here?
-        let assert_resolved = |glob: &str, expected_base: PathBuf, expected_pattern: &str| {
-            let resolved = fs::resolve_relative_glob(&base_dir, glob).unwrap();
-            assert_eq!(
-                fs::path_to_unix_str(&resolved.0)
-                    .unwrap()
-                    .trim_end_matches('/'),
-                fs::path_to_unix_str(&expected_base)
-                    .unwrap()
-                    .trim_end_matches('/')
-            );
-            assert_eq!(resolved.1.replace('\\', "/"), expected_pattern);
-        };
+        let assert_resolved_relative_glob =
+            |glob: &str, expected_base: PathBuf, expected_pattern: &str| {
+                let resolved = fs::resolve_relative_glob(&base_dir, glob).unwrap();
+                assert_eq!(
+                    fs::path_to_unix_str(&resolved.0)
+                        .unwrap()
+                        .trim_end_matches('/'),
+                    fs::path_to_unix_str(&expected_base)
+                        .unwrap()
+                        .trim_end_matches('/')
+                );
+                assert_eq!(resolved.1.replace('\\', "/"), expected_pattern);
+            };
 
-        assert_resolved("somepath/a/b/c", base_dir.clone(), "somepath/a/b/c");
-        assert_resolved("../../target", base_dir.join("../.."), "target");
-        assert_resolved(
+        assert_resolved_relative_glob("somepath/a/b/c", base_dir.clone(), "somepath/a/b/c");
+        assert_resolved_relative_glob("../../target", base_dir.join("../.."), "target");
+        assert_resolved_relative_glob(
             "./.././../../target/a/b/../././c/d/.././..",
             base_dir.join("../../../"),
             "target/a",
@@ -867,7 +865,7 @@ mod test {
     fn absolute_lexical_keeps_absolute_paths_and_normalizes_segments() {
         let base_dir = PathBuf::from("base");
         assert_eq!(
-            fs::absolute_lexical(Path::new("/tmp/golem/./a/../b"), &base_dir),
+            fs::absolute_lexical_path_from_base_dir(Path::new("/tmp/golem/./a/../b"), &base_dir),
             PathBuf::from("/tmp/golem/b")
         );
     }
@@ -877,7 +875,7 @@ mod test {
     fn absolute_lexical_resolves_relative_paths_against_base_dir() {
         let base_dir = PathBuf::from("/tmp/golem/work");
         assert_eq!(
-            fs::absolute_lexical(Path::new("../src/./main.rs"), &base_dir),
+            fs::absolute_lexical_path_from_base_dir(Path::new("../src/./main.rs"), &base_dir),
             PathBuf::from("/tmp/golem/src/main.rs")
         );
     }

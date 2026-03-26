@@ -375,9 +375,7 @@ pub async fn execute_external_command(
                 )
                 .await?;
 
-                // TODO: agent: inline
-                let resolved_program = resolve_program_for_spawn(command_tokens[0].as_str())?;
-                let mut cmd = Command::new(&resolved_program);
+                let mut cmd = Command::new(resolve_program_for_spawn(command_tokens[0].as_str())?);
                 cmd.args(command_tokens.iter().skip(1))
                     .current_dir(&build_dir)
                     .envs(&command.env)
@@ -415,10 +413,7 @@ pub async fn ensure_common_deps_for_tool(
                     ),
                 );
 
-                // TODO: agent: inline
-                let npm_path = resolve_program_for_spawn("npm")?;
-
-                Command::new(&npm_path)
+                Command::new(resolve_program_for_spawn("npm")?)
                     .args(["install"])
                     .stream_and_run("npm")
                     .await

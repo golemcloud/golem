@@ -39,7 +39,6 @@ struct ProgramLookupCacheKey {
 static PROGRAM_LOOKUP_CACHE: LazyLock<Mutex<HashMap<ProgramLookupCacheKey, Option<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-// TODO: agent: do we have to do this for every platform? maybe we shoul just only apply all this lookup for windows?
 pub fn resolve_program_for_spawn(program: &str) -> anyhow::Result<PathBuf> {
     let Some(path_var) = env::var_os("PATH") else {
         return Err(anyhow!(

@@ -61,7 +61,7 @@ impl ReplHandler {
                 Some(ReplScriptSource::Inline(script))
             } else if let Some(script_path) = script_file {
                 Some(ReplScriptSource::FromFile(
-                    fs::absolute_lexical_from_current_dir(&script_path)?,
+                    fs::absolute_lexical_path(&script_path)?,
                 ))
             } else {
                 None
@@ -126,7 +126,7 @@ impl ReplHandler {
 
             let repl_root_dir = app_ctx.application().repl_root_dir(language);
             fs::create_dir_all(&repl_root_dir)?;
-            let repl_root_dir = fs::absolute_lexical_from_current_dir(&repl_root_dir)?;
+            let repl_root_dir = fs::absolute_lexical_path(&repl_root_dir)?;
 
             let repl_bridge_sdk_target = app_ctx.new_repl_bridge_sdk_target(language);
             let repl_root_bridge_sdk_dir = repl_bridge_sdk_target
@@ -135,25 +135,25 @@ impl ReplHandler {
                 .expect("Missing target dir");
             fs::create_dir_all(&repl_root_bridge_sdk_dir)?;
             let repl_root_bridge_sdk_dir =
-                fs::absolute_lexical_from_current_dir(&repl_root_bridge_sdk_dir)?;
+                fs::absolute_lexical_path(&repl_root_bridge_sdk_dir)?;
 
             let repl_history_file_path = app_ctx.application().repl_history_file(language.into());
             if !repl_history_file_path.exists() {
                 fs::write(&repl_history_file_path, "")?;
             }
             let repl_history_file_path =
-                fs::absolute_lexical_from_current_dir(&repl_history_file_path)?;
+                fs::absolute_lexical_path(&repl_history_file_path)?;
 
             let repl_cli_commands_metadata_json_path = app_ctx
                 .application()
                 .repl_cli_commands_metadata_json(language);
-            let repl_cli_commands_metadata_json_path = fs::absolute_lexical_from_current_dir(
+            let repl_cli_commands_metadata_json_path = fs::absolute_lexical_path(
                 &repl_cli_commands_metadata_json_path,
             )?;
 
             let repl_metadata_json_path = app_ctx.application().repl_metadata_json(language);
             let repl_metadata_json_path =
-                fs::absolute_lexical_from_current_dir(&repl_metadata_json_path)?;
+                fs::absolute_lexical_path(&repl_metadata_json_path)?;
 
             let component_names = app_ctx.application().component_names().cloned().collect();
 

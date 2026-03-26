@@ -398,8 +398,7 @@ impl TestContext {
             );
             all_args
         };
-        // TODO: agent: this was canonicalized originally, let's use our new absolute_lex.. function
-        let working_dir = &self.working_dir;
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
 
         println!(
             "{} {}",
@@ -411,7 +410,7 @@ impl TestContext {
         let mut child = Command::new(&self.golem_cli_path)
             .args(args)
             .envs(&self.env)
-            .current_dir(working_dir)
+            .current_dir(&working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -439,8 +438,7 @@ impl TestContext {
             );
             all_args
         };
-        // TODO: agent: this was canonicalized originally, let's use our new absolute_lex.. function
-        let working_dir = self.working_dir.clone();
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
 
         println!(
             "{} {}",
