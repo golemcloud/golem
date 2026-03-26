@@ -35,6 +35,21 @@ pub struct WebSocketConnectionEntry {
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
+#[async_trait::async_trait]
+impl wasmtime_wasi::p2::Pollable for WebSocketConnectionEntry {
+    async fn ready(&mut self) {
+        // For WebSocket connections, we consider them "ready" when it's possible
+        // to attempt a receive operation. Since our receive operations are async
+        // and handle waiting internally, we can consider the socket always ready.
+        //
+        // This is similar to how other stream implementations in the codebase work
+        // (e.g., IncomingValueEntryStream, OutgoingValueEntryStream) which have
+        // empty ready() implementations.
+        //
+        // The actual blocking/waiting happens in the receive() method itself.
+    }
+}
+
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
@@ -175,9 +190,10 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
 
     async fn subscribe(
         &mut self,
-        _self_: Resource<WebSocketConnectionEntry>,
+        self_: Resource<WebSocketConnectionEntry>,
     ) -> anyhow::Result<Resource<wasmtime_wasi::p2::bindings::io::poll::Pollable>> {
-        anyhow::bail!("golem:websocket/client.websocket-connection.subscribe is not yet supported")
+        self.observe_function_call("golem:websocket/client", "subscribe");
+        Ok(wasmtime_wasi::subscribe(self.table(), self_, None)?)
     }
 
     async fn drop(&mut self, rep: Resource<WebSocketConnectionEntry>) -> anyhow::Result<()> {
