@@ -33,9 +33,13 @@ const RETRY_WIT_OWNER: &str = "golem:api@1.5.0/retry";
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 #[wit(name = "predicate-value", owner = "golem:api@1.5.0/retry")]
+/// A typed value used in retry predicate comparisons.
 pub enum PredicateValue {
+    /// A UTF-8 string value.
     Text(String),
+    /// A 64-bit signed integer value.
     Integer(i64),
+    /// A boolean value.
     Boolean(bool),
 }
 
@@ -64,97 +68,131 @@ impl PredicateValue {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
+/// A boolean predicate evaluated against [`RetryProperties`] to decide whether a
+/// semantic retry policy applies to a given error context.
 pub enum Predicate {
+    /// True when the property equals the given value.
     PropEq {
         property: String,
         value: PredicateValue,
     },
+    /// True when the property does not equal the given value.
     PropNeq {
         property: String,
         value: PredicateValue,
     },
+    /// True when the property is strictly greater than the given value.
     PropGt {
         property: String,
         value: PredicateValue,
     },
+    /// True when the property is greater than or equal to the given value.
     PropGte {
         property: String,
         value: PredicateValue,
     },
+    /// True when the property is strictly less than the given value.
     PropLt {
         property: String,
         value: PredicateValue,
     },
+    /// True when the property is less than or equal to the given value.
     PropLte {
         property: String,
         value: PredicateValue,
     },
+    /// True when the named property exists in the retry context.
     PropExists(String),
+    /// True when the property's value is contained in the given set.
     PropIn {
         property: String,
         values: Vec<PredicateValue>,
     },
+    /// True when the property's text representation matches the glob pattern.
     PropMatches {
         property: String,
         pattern: String,
     },
+    /// True when the property's text representation starts with the given prefix.
     PropStartsWith {
         property: String,
         prefix: String,
     },
+    /// True when the property's text representation contains the given substring.
     PropContains {
         property: String,
         substring: String,
     },
+    /// Logical conjunction of two predicates.
     And(Box<Predicate>, Box<Predicate>),
+    /// Logical disjunction of two predicates.
     Or(Box<Predicate>, Box<Predicate>),
+    /// Logical negation of a predicate.
     Not(Box<Predicate>),
+    /// A predicate that always evaluates to true.
     True,
+    /// A predicate that always evaluates to false.
     False,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
+/// A composable semantic retry policy that determines delay schedules and
+/// termination conditions for in-function and background-task retries.
 pub enum RetryPolicy {
+    /// Retries with a fixed delay between each attempt.
     Periodic(Duration),
+    /// Retries with exponentially growing delays: `base_delay * factor^attempt`.
     Exponential {
         base_delay: Duration,
         factor: f64,
     },
+    /// Retries following the Fibonacci sequence of delays starting from `first` and `second`.
     Fibonacci {
         first: Duration,
         second: Duration,
     },
+    /// Retries immediately with zero delay.
     Immediate,
+    /// Never retries; gives up on the first failure.
     Never,
+    /// Limits the total number of retry attempts, delegating delay calculation to `inner`.
     CountBox {
         max_retries: u32,
         inner: Box<RetryPolicy>,
     },
+    /// Limits retries to a wall-clock duration, delegating delay calculation to `inner`.
     TimeBox {
         limit: Duration,
         inner: Box<RetryPolicy>,
     },
+    /// Clamps the delay produced by `inner` to the `[min_delay, max_delay]` range.
     Clamp {
         min_delay: Duration,
         max_delay: Duration,
         inner: Box<RetryPolicy>,
     },
+    /// Adds a constant delay on top of whatever `inner` produces.
     AddDelay {
         delay: Duration,
         inner: Box<RetryPolicy>,
     },
+    /// Adds random jitter (up to `factor` fraction of the base delay) to `inner`'s delay.
     Jitter {
         factor: f64,
         inner: Box<RetryPolicy>,
     },
+    /// Applies `inner` only when `predicate` matches the error context; otherwise gives up.
     FilteredOn {
         predicate: Predicate,
         inner: Box<RetryPolicy>,
     },
+    /// Runs the first policy until it gives up, then continues with the second.
     AndThen(Box<RetryPolicy>, Box<RetryPolicy>),
+    /// Retries as long as *either* sub-policy wants to retry, picking the shorter delay.
     Union(Box<RetryPolicy>, Box<RetryPolicy>),
+    /// Retries only while *both* sub-policies want to retry, picking the longer delay.
     Intersect(Box<RetryPolicy>, Box<RetryPolicy>),
 }
 
@@ -162,28 +200,45 @@ pub enum RetryPolicy {
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 #[wit(name = "named-retry-policy", owner = "golem:api@1.5.0/retry")]
+/// A retry policy paired with a name, priority, and a predicate that determines
+/// when it applies. The highest-priority matching policy is selected at retry time.
 pub struct NamedRetryPolicy {
+    /// Human-readable identifier for this policy.
     pub name: String,
+    /// Selection priority — higher values are evaluated first.
     pub priority: u32,
+    /// Predicate evaluated against the error context to decide if this policy applies.
     pub predicate: Predicate,
+    /// The retry policy to use when the predicate matches.
     pub policy: RetryPolicy,
 }
 
+/// Persistent state of a [`RetryPolicy`] across retry attempts.
+///
+/// Each variant mirrors the structure of the corresponding [`RetryPolicy`] variant
+/// and carries the mutable counters / sub-states needed to compute the next delay.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 pub enum RetryPolicyState {
+    /// Tracks the number of attempts for counter-based policies (e.g. `Periodic`, `Exponential`).
     Counter(u32),
+    /// Indicates the policy has permanently given up.
     Terminal,
+    /// Wraps the inner state of a decorator policy (e.g. `TimeBox`, `Clamp`, `Jitter`).
     Wrapper(Box<RetryPolicyState>),
+    /// Tracks both an attempt count and the inner state for [`RetryPolicy::CountBox`].
     CountBox {
         attempts: u32,
         inner: Box<RetryPolicyState>,
     },
+    /// Tracks left/right sub-states and whether execution has moved to the right policy
+    /// for [`RetryPolicy::AndThen`].
     AndThen {
         left: Box<RetryPolicyState>,
         right: Box<RetryPolicyState>,
         on_right: bool,
     },
+    /// Tracks two independent sub-states for [`RetryPolicy::Union`] and [`RetryPolicy::Intersect`].
     Pair(Box<RetryPolicyState>, Box<RetryPolicyState>),
 }
 
@@ -211,52 +266,68 @@ impl RetryPolicyState {
     }
 }
 
+/// A bag of key-value properties describing the error context (HTTP status, verb, URI, etc.)
+/// that retry predicates are evaluated against.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RetryProperties {
     entries: BTreeMap<String, PredicateValue>,
 }
 
 impl RetryProperties {
+    /// Creates an empty property bag.
     pub fn new() -> Self {
         Self {
             entries: BTreeMap::new(),
         }
     }
 
+    /// Inserts or updates a property. Returns `&mut Self` for chaining.
     pub fn set(&mut self, key: impl Into<String>, value: PredicateValue) -> &mut Self {
         self.entries.insert(key.into(), value);
         self
     }
 
+    /// Returns the value associated with the given key, if present.
     pub fn get(&self, key: &str) -> Option<&PredicateValue> {
         self.entries.get(key)
     }
 
+    /// Returns `true` if the property bag contains the given key.
     pub fn contains(&self, key: &str) -> bool {
         self.entries.contains_key(key)
     }
 
+    /// Iterates over all key-value pairs in the property bag.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &PredicateValue)> {
         self.entries.iter()
     }
 }
 
+/// The outcome of a single [`RetryPolicy::step`] evaluation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RetryVerdict {
+    /// The policy decided to retry after the given delay.
     Retry(Duration),
+    /// The policy decided to give up (retries exhausted or not applicable).
     GiveUp,
+    /// An error occurred while evaluating the policy (e.g. missing property).
     Error(RetryEvaluationError),
 }
 
+/// Discriminant for [`PredicateValue`] types, used in coercion error messages.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 pub enum PredicateValueType {
+    /// Corresponds to [`PredicateValue::Text`].
     Text,
+    /// Corresponds to [`PredicateValue::Integer`].
     Integer,
+    /// Corresponds to [`PredicateValue::Boolean`].
     Boolean,
 }
 
+/// Errors that can occur while evaluating a [`Predicate`] or stepping a [`RetryPolicy`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, thiserror::Error)]
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
@@ -273,10 +344,13 @@ pub enum RetryEvaluationError {
     InvalidState { details: String },
 }
 
+/// Source of randomness used by [`RetryPolicy::Jitter`] to add random noise to delays.
 pub trait RngSource: Send {
+    /// Returns a random `f64` within the given range.
     fn random_f64(&mut self, range: Range<f64>) -> f64;
 }
 
+/// [`RngSource`] backed by the thread-local random number generator.
 pub struct ThreadRng;
 
 impl RngSource for ThreadRng {
@@ -285,6 +359,7 @@ impl RngSource for ThreadRng {
     }
 }
 
+/// A deterministic [`RngSource`] that always returns a fixed value. Useful for testing.
 pub struct FixedRng(pub f64);
 
 impl RngSource for FixedRng {
@@ -293,15 +368,18 @@ impl RngSource for FixedRng {
     }
 }
 
+/// Factory for building [`RetryProperties`] for various operation types (HTTP, RPC, KV, etc.).
 pub struct RetryContext;
 
 impl RetryContext {
+    /// Builds retry properties for an outgoing HTTP request.
     pub fn http(method: &str, uri: &str) -> RetryProperties {
         let mut props = Self::base(method, uri);
         decompose_uri(&mut props, uri);
         props
     }
 
+    /// Builds retry properties for an HTTP request that received a response or error.
     pub fn http_with_response(
         method: &str,
         uri: &str,
@@ -316,6 +394,7 @@ impl RetryContext {
         props
     }
 
+    /// Builds retry properties for a worker-to-worker RPC call.
     pub fn rpc(verb: &str, target: &OwnedAgentId, function: &str) -> RetryProperties {
         let noun_uri = format!("worker://{}/{}", target.component_id(), target.agent_name());
         let mut props = Self::base(verb, &noun_uri);
@@ -337,6 +416,7 @@ impl RetryContext {
         props
     }
 
+    /// Builds retry properties for a key-value store operation.
     pub fn kv(verb: &str, bucket: &str) -> RetryProperties {
         let noun_uri = format!("kv://{bucket}");
         let mut props = Self::base(verb, &noun_uri);
@@ -344,6 +424,7 @@ impl RetryContext {
         props
     }
 
+    /// Builds retry properties for a blob storage operation.
     pub fn blobstore(verb: &str, container: &str) -> RetryProperties {
         let noun_uri = format!("blobstore://{container}");
         let mut props = Self::base(verb, &noun_uri);
@@ -351,6 +432,7 @@ impl RetryContext {
         props
     }
 
+    /// Builds retry properties for an RDBMS operation.
     pub fn rdbms(verb: &str, pool_key: &RdbmsPoolKey) -> RetryProperties {
         let noun_uri = pool_key.masked_address();
         let mut props = Self::base(verb, &noun_uri);
@@ -366,6 +448,7 @@ impl RetryContext {
         props
     }
 
+    /// Builds retry properties for a DNS resolution attempt.
     pub fn dns(hostname: &str) -> RetryProperties {
         let noun_uri = format!("dns://{hostname}");
         let mut props = Self::base("resolve", &noun_uri);
@@ -373,6 +456,7 @@ impl RetryContext {
         props
     }
 
+    /// Builds retry properties for a Golem platform API call.
     pub fn golem_api(verb: &str) -> RetryProperties {
         let noun_uri = "golem://api";
         let mut props = Self::base(verb, noun_uri);
@@ -380,6 +464,7 @@ impl RetryContext {
         props
     }
 
+    /// Builds retry properties for a WASM trap (deterministic or transient).
     pub fn trap(trap_type: &str, function: Option<&str>) -> RetryProperties {
         let function = function.unwrap_or("unknown");
         let noun_uri = format!("wasm://{function}");
@@ -398,6 +483,7 @@ impl RetryContext {
     }
 }
 
+/// Flattens an agent's invocation parameters into retry properties using dot-separated keys.
 pub fn flatten_agent_params(props: &mut RetryProperties, prefix: &str, value: &DataValue) {
     match value {
         DataValue::Tuple(elements) => {
@@ -418,6 +504,7 @@ pub fn flatten_agent_params(props: &mut RetryProperties, prefix: &str, value: &D
     }
 }
 
+/// Parses a URI and adds its scheme, host, port, and path as individual retry properties.
 pub fn decompose_uri(props: &mut RetryProperties, uri: &str) {
     if let Ok(parsed) = url::Url::parse(uri) {
         props.set(
@@ -435,6 +522,7 @@ pub fn decompose_uri(props: &mut RetryProperties, uri: &str) {
 }
 
 impl Predicate {
+    /// Evaluates this predicate against the given retry properties, returning `true` if matched.
     pub fn matches(&self, props: &RetryProperties) -> Result<bool, RetryEvaluationError> {
         match self {
             Predicate::PropEq { property, value } => {
@@ -512,6 +600,7 @@ impl Predicate {
 }
 
 impl RetryPolicy {
+    /// Returns the initial [`RetryPolicyState`] for this policy (zero attempts, not yet started).
     pub fn initial_state(&self) -> RetryPolicyState {
         match self {
             RetryPolicy::Periodic(_)
@@ -544,6 +633,8 @@ impl RetryPolicy {
         }
     }
 
+    /// Advances the policy by one retry attempt, returning the updated state and a verdict
+    /// indicating whether to retry (and after what delay) or give up.
     pub fn step(
         &self,
         state: &RetryPolicyState,
@@ -799,6 +890,9 @@ impl RetryPolicy {
         }
     }
 
+    /// Rebuilds a [`RetryPolicyState`] by replaying `count` steps from the initial state.
+    ///
+    /// Used when migrating from a legacy retry counter to the semantic retry model.
     pub fn reconstruct_state_from_count(
         &self,
         count: u32,
@@ -821,6 +915,9 @@ impl RetryPolicy {
 }
 
 impl NamedRetryPolicy {
+    /// Selects the highest-priority named policy whose predicate matches the given properties.
+    ///
+    /// Returns `None` if no policy matches.
     pub fn resolve<'a>(
         policies: &'a [NamedRetryPolicy],
         properties: &RetryProperties,

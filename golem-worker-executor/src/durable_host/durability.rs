@@ -1103,21 +1103,28 @@ pub async fn count_oplog_errors_for(
     count
 }
 
-/// Implementation of `InFunctionRetryHost` for spawned background tasks (async RPC, HTTP).
+/// Implementation of [`InFunctionRetryHost`] for spawned background tasks (async RPC, HTTP).
 ///
-/// Unlike `DurableWorkerCtx`, this does NOT read retry counts from worker status
-/// (which is invocation-scoped and can panic if detached). Instead it uses an
-/// oplog-based `base_retry_count` snapshot taken at spawn time via `count_oplog_errors_for`.
+/// Unlike `DurableWorkerCtx`, this does NOT read retry state from worker status
+/// (which is invocation-scoped and can panic if detached). Instead it captures
+/// the current retry policy state at spawn time from the worker's last known status.
 ///
 /// Error entries are written through `Worker::add_and_commit_oplog` so that the
 /// worker status tracker is properly updated (unlike raw `oplog.add_and_commit`).
 pub struct TaskRetryContext<Ctx: WorkerCtx> {
+    /// The oplog index that error entries reference as their `retry_from` point.
     pub retry_point: OplogIndex,
+    /// The legacy retry configuration used as a fallback when no semantic policy matches.
     pub retry_config: RetryConfig,
+    /// Optional list of semantic retry policies to evaluate before falling back to `retry_config`.
     pub named_retry_policies: Option<Vec<NamedRetryPolicy>>,
+    /// Maximum delay for in-function retries; delays exceeding this fall back to trap+replay.
     pub max_in_function_retry_delay: Duration,
+    /// The current semantic retry policy state, if a named policy was previously selected.
     pub current_retry_policy_state: Option<RetryPolicyState>,
+    /// Properties describing the error context (verb, URI, status code, etc.) for predicate evaluation.
     pub retry_properties: RetryProperties,
+    /// Reference to the worker that owns this task.
     pub worker: Arc<crate::worker::Worker<Ctx>>,
 }
 
