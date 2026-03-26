@@ -481,6 +481,32 @@ golem-rust = "2.0.0"
 }
 
 #[test]
+fn cargo_toml_upsert_dependency_auto_writes_inline_path_table_with_features() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = "2.0.0"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_auto(
+        source,
+        "golem-rust",
+        &DependencySpec::Path {
+            path: "/tmp/sdks/rust/golem-rust".to_string(),
+            features: vec!["export_golem_agentic".to_string()],
+        },
+        DependencyTable::Dependencies,
+    )
+    .unwrap();
+
+    assert!(updated.contains(
+        "golem-rust = { path = \"/tmp/sdks/rust/golem-rust\", features = [\"export_golem_agentic\"] }"
+    ));
+    assert!(!updated.contains("[dependencies.golem-rust"));
+}
+
+#[test]
 fn cargo_toml_resolve_dependency_location_detects_workspace_reference() {
     let source = r#"[package]
 name = "demo"

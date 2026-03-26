@@ -100,11 +100,7 @@ impl BuildConfig {
 
     pub fn should_run_step(&self, step: AppBuildStep) -> bool {
         if self.steps_filter.is_empty() {
-            if matches!(step, AppBuildStep::Check) && self.skip_check {
-                false
-            } else {
-                true
-            }
+            !(matches!(step, AppBuildStep::Check) && self.skip_check)
         } else {
             self.steps_filter.contains(&step)
         }

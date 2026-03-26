@@ -14,7 +14,7 @@
 
 use anyhow::anyhow;
 use std::collections::BTreeMap;
-use toml_edit::{value, Array, DocumentMut, Item, Table};
+use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DependencySpec {
@@ -381,20 +381,10 @@ fn dependency_spec_to_item(spec: &DependencySpec) -> anyhow::Result<Item> {
             if features.is_empty() {
                 Ok(value(version.as_str()))
             } else {
-                let mut table = Table::default();
-                table["version"] = value(version.as_str());
-                table["features"] = value(features_to_array(features.clone()));
-                Ok(Item::Table(table))
+                Ok(inline_version_dep(version, features))
             }
         }
-        DependencySpec::Path { path, features } => {
-            let mut table = Table::default();
-            table["path"] = value(path.as_str());
-            if !features.is_empty() {
-                table["features"] = value(features_to_array(features.clone()));
-            }
-            Ok(Item::Table(table))
-        }
+        DependencySpec::Path { path, features } => Ok(inline_path_dep(path, features)),
         DependencySpec::Unsupported(spec) => {
             Err(anyhow!("Unsupported dependency spec for update: {spec}"))
         }
@@ -492,10 +482,7 @@ impl VersionSpec {
         if self.features.is_empty() {
             value(self.version.as_str())
         } else {
-            let mut table = Table::default();
-            table["version"] = value(self.version.as_str());
-            table["features"] = value(features_to_array(self.features.clone()));
-            Item::Table(table)
+            inline_version_dep(self.version.as_str(), &self.features)
         }
     }
 
@@ -520,4 +507,28 @@ fn features_to_array(features: Vec<String>) -> Array {
         array.push(feature);
     }
     array
+}
+
+fn inline_version_dep(version: &str, features: &[String]) -> Item {
+    let mut entry = InlineTable::new();
+    entry.insert("version", Value::from(version));
+    if !features.is_empty() {
+        entry.insert(
+            "features",
+            Value::Array(features_to_array(features.to_vec())),
+        );
+    }
+    Item::Value(Value::InlineTable(entry))
+}
+
+fn inline_path_dep(path: &str, features: &[String]) -> Item {
+    let mut entry = InlineTable::new();
+    entry.insert("path", Value::from(path));
+    if !features.is_empty() {
+        entry.insert(
+            "features",
+            Value::Array(features_to_array(features.to_vec())),
+        );
+    }
+    Item::Value(Value::InlineTable(entry))
 }
