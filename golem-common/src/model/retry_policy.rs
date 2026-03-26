@@ -2607,6 +2607,550 @@ mod tests {
         assert_eq!(policy_roundtrip, policy);
     }
 
+    fn assert_predicate_roundtrip(predicate: Predicate) {
+        let roundtrip = Predicate::from_value(predicate.clone().into_value())
+            .expect("predicate should roundtrip through value conversion");
+        assert_eq!(roundtrip, predicate);
+    }
+
+    fn assert_policy_roundtrip(policy: RetryPolicy) {
+        let roundtrip = RetryPolicy::from_value(policy.clone().into_value())
+            .expect("policy should roundtrip through value conversion");
+        assert_eq!(roundtrip, policy);
+    }
+
+    fn retry_wit_resolver() -> golem_wasm::analysis::wit_parser::AnalysedTypeResolve {
+        let wit_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("wit");
+        golem_wasm::analysis::wit_parser::AnalysedTypeResolve::from_wit_directory(&wit_dir)
+            .expect("Failed to parse WIT directory")
+    }
+
+    fn assert_type_matches_wit(
+        rust_type: AnalysedType,
+        interface: &str,
+        type_name: &str,
+        resolver: &mut golem_wasm::analysis::wit_parser::AnalysedTypeResolve,
+    ) {
+        use golem_wasm::analysis::wit_parser::{TypeName, TypeOwner};
+
+        let wit_type = resolver
+            .analysed_type(&TypeName {
+                package: Some("golem:api@1.5.0".to_string()),
+                owner: TypeOwner::Interface(interface.to_string()),
+                name: Some(type_name.to_string()),
+            })
+            .unwrap_or_else(|e| panic!("Failed to find {type_name} in WIT: {e}"));
+
+        assert_eq!(
+            rust_type, wit_type,
+            "get_type() for {type_name} does not match the WIT definition"
+        );
+    }
+
+    #[test]
+    fn predicate_value_type_matches_wit() {
+        let mut resolver = retry_wit_resolver();
+        assert_type_matches_wit(PredicateValue::get_type(), "retry", "predicate-value", &mut resolver);
+    }
+
+    #[test]
+    fn predicate_type_matches_wit() {
+        let mut resolver = retry_wit_resolver();
+        assert_type_matches_wit(Predicate::get_type(), "retry", "retry-predicate", &mut resolver);
+    }
+
+    #[test]
+    fn retry_policy_type_matches_wit() {
+        let mut resolver = retry_wit_resolver();
+        assert_type_matches_wit(RetryPolicy::get_type(), "retry", "retry-policy", &mut resolver);
+    }
+
+    #[test]
+    fn named_retry_policy_type_matches_wit() {
+        let mut resolver = retry_wit_resolver();
+        assert_type_matches_wit(NamedRetryPolicy::get_type(), "retry", "named-retry-policy", &mut resolver);
+    }
+
+    #[test]
+    fn predicate_value_text_roundtrip() {
+        let value = PredicateValue::Text("hello".to_string());
+        let roundtrip = PredicateValue::from_value(value.clone().into_value())
+            .expect("predicate value should roundtrip");
+        assert_eq!(roundtrip, value);
+    }
+
+    #[test]
+    fn predicate_value_integer_roundtrip() {
+        let value = PredicateValue::Integer(42);
+        let roundtrip = PredicateValue::from_value(value.clone().into_value())
+            .expect("predicate value should roundtrip");
+        assert_eq!(roundtrip, value);
+    }
+
+    #[test]
+    fn predicate_value_boolean_roundtrip() {
+        let value = PredicateValue::Boolean(true);
+        let roundtrip = PredicateValue::from_value(value.clone().into_value())
+            .expect("predicate value should roundtrip");
+        assert_eq!(roundtrip, value);
+    }
+
+    #[test]
+    fn predicate_prop_eq_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropEq {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(503),
+        });
+    }
+
+    #[test]
+    fn predicate_prop_neq_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropNeq {
+            property: "verb".to_string(),
+            value: PredicateValue::Text("DELETE".to_string()),
+        });
+    }
+
+    #[test]
+    fn predicate_prop_gt_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropGt {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(499),
+        });
+    }
+
+    #[test]
+    fn predicate_prop_gte_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropGte {
+            property: "status-code".to_string(),
+            value: PredicateValue::Integer(500),
+        });
+    }
+
+    #[test]
+    fn predicate_prop_lt_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropLt {
+            property: "attempt".to_string(),
+            value: PredicateValue::Integer(10),
+        });
+    }
+
+    #[test]
+    fn predicate_prop_lte_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropLte {
+            property: "attempt".to_string(),
+            value: PredicateValue::Integer(5),
+        });
+    }
+
+    #[test]
+    fn predicate_prop_exists_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropExists("error-type".to_string()));
+    }
+
+    #[test]
+    fn predicate_prop_in_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropIn {
+            property: "status-code".to_string(),
+            values: vec![
+                PredicateValue::Integer(502),
+                PredicateValue::Integer(503),
+                PredicateValue::Integer(504),
+            ],
+        });
+    }
+
+    #[test]
+    fn predicate_prop_matches_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropMatches {
+            property: "uri-path".to_string(),
+            pattern: "^/api/.*".to_string(),
+        });
+    }
+
+    #[test]
+    fn predicate_prop_starts_with_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropStartsWith {
+            property: "uri-path".to_string(),
+            prefix: "/api/".to_string(),
+        });
+    }
+
+    #[test]
+    fn predicate_prop_contains_roundtrip() {
+        assert_predicate_roundtrip(Predicate::PropContains {
+            property: "error-type".to_string(),
+            substring: "timeout".to_string(),
+        });
+    }
+
+    #[test]
+    fn predicate_and_roundtrip() {
+        assert_predicate_roundtrip(Predicate::And(
+            Box::new(Predicate::PropExists("verb".to_string())),
+            Box::new(Predicate::PropGt {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(499),
+            }),
+        ));
+    }
+
+    #[test]
+    fn predicate_or_roundtrip() {
+        assert_predicate_roundtrip(Predicate::Or(
+            Box::new(Predicate::PropEq {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(429),
+            }),
+            Box::new(Predicate::PropGte {
+                property: "status-code".to_string(),
+                value: PredicateValue::Integer(500),
+            }),
+        ));
+    }
+
+    #[test]
+    fn predicate_not_roundtrip() {
+        assert_predicate_roundtrip(Predicate::Not(Box::new(Predicate::PropEq {
+            property: "verb".to_string(),
+            value: PredicateValue::Text("GET".to_string()),
+        })));
+    }
+
+    #[test]
+    fn predicate_true_roundtrip() {
+        assert_predicate_roundtrip(Predicate::True);
+    }
+
+    #[test]
+    fn predicate_false_roundtrip() {
+        assert_predicate_roundtrip(Predicate::False);
+    }
+
+    #[test]
+    fn predicate_deeply_nested_roundtrip() {
+        assert_predicate_roundtrip(Predicate::And(
+            Box::new(Predicate::Or(
+                Box::new(Predicate::Not(Box::new(Predicate::PropExists(
+                    "a".to_string(),
+                )))),
+                Box::new(Predicate::PropIn {
+                    property: "b".to_string(),
+                    values: vec![
+                        PredicateValue::Text("x".to_string()),
+                        PredicateValue::Integer(1),
+                    ],
+                }),
+            )),
+            Box::new(Predicate::And(
+                Box::new(Predicate::PropMatches {
+                    property: "c".to_string(),
+                    pattern: ".*".to_string(),
+                }),
+                Box::new(Predicate::True),
+            )),
+        ));
+    }
+
+    #[test]
+    fn policy_periodic_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Periodic(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn policy_exponential_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Exponential {
+            base_delay: Duration::from_millis(100),
+            factor: 2.5,
+        });
+    }
+
+    #[test]
+    fn policy_fibonacci_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Fibonacci {
+            first: Duration::from_millis(100),
+            second: Duration::from_millis(200),
+        });
+    }
+
+    #[test]
+    fn policy_immediate_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Immediate);
+    }
+
+    #[test]
+    fn policy_never_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Never);
+    }
+
+    #[test]
+    fn policy_count_box_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::CountBox {
+            max_retries: 5,
+            inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(100))),
+        });
+    }
+
+    #[test]
+    fn policy_time_box_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::TimeBox {
+            limit: Duration::from_secs(60),
+            inner: Box::new(RetryPolicy::Exponential {
+                base_delay: Duration::from_millis(50),
+                factor: 2.0,
+            }),
+        });
+    }
+
+    #[test]
+    fn policy_clamp_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Clamp {
+            min_delay: Duration::from_millis(10),
+            max_delay: Duration::from_secs(5),
+            inner: Box::new(RetryPolicy::Exponential {
+                base_delay: Duration::from_millis(100),
+                factor: 3.0,
+            }),
+        });
+    }
+
+    #[test]
+    fn policy_add_delay_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::AddDelay {
+            delay: Duration::from_millis(250),
+            inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(100))),
+        });
+    }
+
+    #[test]
+    fn policy_jitter_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Jitter {
+            factor: 0.25,
+            inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(1))),
+        });
+    }
+
+    #[test]
+    fn policy_filtered_on_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::FilteredOn {
+            predicate: Predicate::PropEq {
+                property: "error-type".to_string(),
+                value: PredicateValue::Text("transient".to_string()),
+            },
+            inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(200))),
+        });
+    }
+
+    #[test]
+    fn policy_and_then_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::AndThen(
+            Box::new(RetryPolicy::CountBox {
+                max_retries: 3,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(100))),
+            }),
+            Box::new(RetryPolicy::CountBox {
+                max_retries: 5,
+                inner: Box::new(RetryPolicy::Exponential {
+                    base_delay: Duration::from_millis(500),
+                    factor: 2.0,
+                }),
+            }),
+        ));
+    }
+
+    #[test]
+    fn policy_union_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Union(
+            Box::new(RetryPolicy::Periodic(Duration::from_millis(100))),
+            Box::new(RetryPolicy::Immediate),
+        ));
+    }
+
+    #[test]
+    fn policy_intersect_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Intersect(
+            Box::new(RetryPolicy::CountBox {
+                max_retries: 10,
+                inner: Box::new(RetryPolicy::Immediate),
+            }),
+            Box::new(RetryPolicy::TimeBox {
+                limit: Duration::from_secs(30),
+                inner: Box::new(RetryPolicy::Immediate),
+            }),
+        ));
+    }
+
+    #[test]
+    fn policy_deeply_nested_roundtrip() {
+        assert_policy_roundtrip(RetryPolicy::Union(
+            Box::new(RetryPolicy::Intersect(
+                Box::new(RetryPolicy::CountBox {
+                    max_retries: 3,
+                    inner: Box::new(RetryPolicy::Jitter {
+                        factor: 0.1,
+                        inner: Box::new(RetryPolicy::Clamp {
+                            min_delay: Duration::from_millis(10),
+                            max_delay: Duration::from_secs(5),
+                            inner: Box::new(RetryPolicy::Exponential {
+                                base_delay: Duration::from_millis(50),
+                                factor: 2.0,
+                            }),
+                        }),
+                    }),
+                }),
+                Box::new(RetryPolicy::TimeBox {
+                    limit: Duration::from_secs(120),
+                    inner: Box::new(RetryPolicy::Immediate),
+                }),
+            )),
+            Box::new(RetryPolicy::FilteredOn {
+                predicate: Predicate::And(
+                    Box::new(Predicate::PropExists("error-type".to_string())),
+                    Box::new(Predicate::Not(Box::new(Predicate::PropEq {
+                        property: "error-type".to_string(),
+                        value: PredicateValue::Text("permanent".to_string()),
+                    }))),
+                ),
+                inner: Box::new(RetryPolicy::AndThen(
+                    Box::new(RetryPolicy::CountBox {
+                        max_retries: 2,
+                        inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(100))),
+                    }),
+                    Box::new(RetryPolicy::AddDelay {
+                        delay: Duration::from_secs(1),
+                        inner: Box::new(RetryPolicy::Fibonacci {
+                            first: Duration::from_millis(100),
+                            second: Duration::from_millis(200),
+                        }),
+                    }),
+                )),
+            }),
+        ));
+    }
+
+    #[test]
+    fn named_retry_policy_roundtrip_through_wit_flattening() {
+        let named = NamedRetryPolicy {
+            name: "rpc-transient".to_string(),
+            priority: 42,
+            predicate: Predicate::And(
+                Box::new(Predicate::PropEq {
+                    property: "error-type".to_string(),
+                    value: PredicateValue::Text("transient".to_string()),
+                }),
+                Box::new(Predicate::PropGte {
+                    property: "status-code".to_string(),
+                    value: PredicateValue::Integer(500),
+                }),
+            ),
+            policy: RetryPolicy::CountBox {
+                max_retries: 5,
+                inner: Box::new(RetryPolicy::Clamp {
+                    min_delay: Duration::from_millis(100),
+                    max_delay: Duration::from_secs(10),
+                    inner: Box::new(RetryPolicy::Exponential {
+                        base_delay: Duration::from_millis(200),
+                        factor: 2.0,
+                    }),
+                }),
+            },
+        };
+
+        let roundtrip = NamedRetryPolicy::from_value(named.clone().into_value())
+            .expect("named retry policy should roundtrip through value conversion");
+        assert_eq!(roundtrip, named);
+    }
+
+    #[test]
+    fn retry_policy_state_counter_roundtrip() {
+        let state = RetryPolicyState::Counter(7);
+        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
+            .expect("retry policy state should roundtrip");
+        assert_eq!(roundtrip, state);
+    }
+
+    #[test]
+    fn retry_policy_state_terminal_roundtrip() {
+        let state = RetryPolicyState::Terminal;
+        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
+            .expect("retry policy state should roundtrip");
+        assert_eq!(roundtrip, state);
+    }
+
+    #[test]
+    fn retry_policy_state_wrapper_roundtrip() {
+        let state = RetryPolicyState::Wrapper(Box::new(RetryPolicyState::Counter(3)));
+        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
+            .expect("retry policy state should roundtrip");
+        assert_eq!(roundtrip, state);
+    }
+
+    #[test]
+    fn retry_policy_state_count_box_roundtrip() {
+        let state = RetryPolicyState::CountBox {
+            attempts: 5,
+            inner: Box::new(RetryPolicyState::Counter(5)),
+        };
+        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
+            .expect("retry policy state should roundtrip");
+        assert_eq!(roundtrip, state);
+    }
+
+    #[test]
+    fn retry_policy_state_time_box_roundtrip() {
+        let state = RetryPolicyState::TimeBox(Box::new(RetryPolicyState::Counter(2)));
+        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
+            .expect("retry policy state should roundtrip");
+        assert_eq!(roundtrip, state);
+    }
+
+    #[test]
+    fn retry_policy_state_and_then_roundtrip() {
+        let state = RetryPolicyState::AndThen {
+            left: Box::new(RetryPolicyState::Counter(3)),
+            right: Box::new(RetryPolicyState::Counter(0)),
+            on_right: false,
+        };
+        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
+            .expect("retry policy state should roundtrip");
+        assert_eq!(roundtrip, state);
+    }
+
+    #[test]
+    fn retry_policy_state_pair_roundtrip() {
+        let state = RetryPolicyState::Pair(
+            Box::new(RetryPolicyState::Counter(1)),
+            Box::new(RetryPolicyState::Terminal),
+        );
+        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
+            .expect("retry policy state should roundtrip");
+        assert_eq!(roundtrip, state);
+    }
+
+    #[test]
+    fn retry_policy_state_deeply_nested_roundtrip() {
+        let state = RetryPolicyState::Pair(
+            Box::new(RetryPolicyState::CountBox {
+                attempts: 2,
+                inner: Box::new(RetryPolicyState::Wrapper(Box::new(
+                    RetryPolicyState::Counter(2),
+                ))),
+            }),
+            Box::new(RetryPolicyState::AndThen {
+                left: Box::new(RetryPolicyState::Terminal),
+                right: Box::new(RetryPolicyState::TimeBox(Box::new(
+                    RetryPolicyState::Counter(4),
+                ))),
+                on_right: true,
+            }),
+        );
+        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
+            .expect("retry policy state should roundtrip");
+        assert_eq!(roundtrip, state);
+    }
+
     #[cfg(feature = "full")]
     #[test]
     fn predicate_and_policy_roundtrip_through_protobuf() {
