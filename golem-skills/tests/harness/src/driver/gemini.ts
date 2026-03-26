@@ -2,6 +2,7 @@ import { BaseAgentDriver, AgentResult } from "./base.js";
 
 export class GeminiAgentDriver extends BaseAgentDriver {
   protected readonly skillDirs = [".gemini/skills"];
+  protected readonly skillLinkMode = "copy" as const;
 
   async sendPrompt(prompt: string, timeout: number): Promise<AgentResult> {
     return this.runCommand(

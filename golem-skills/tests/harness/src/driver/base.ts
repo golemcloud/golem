@@ -19,6 +19,7 @@ export interface AgentDriver {
 export abstract class BaseAgentDriver implements AgentDriver {
   protected workspace: string = ".";
   protected skillsDir: string = "";
+  protected readonly skillLinkMode: "symlink" | "copy" = "symlink";
 
   /** Directories relative to workspace where skills should be symlinked (e.g. ['.claude/skills']) */
   protected abstract readonly skillDirs: string[];
@@ -48,9 +49,12 @@ export abstract class BaseAgentDriver implements AgentDriver {
         }
         const destDir = path.join(absTargetDir, dirent.name);
         await fs.mkdir(destDir, { recursive: true });
-        await fs
-          .symlink(sourceFile, path.join(destDir, "SKILL.md"))
-          .catch(() => {});
+        const destFile = path.join(destDir, "SKILL.md");
+        if (this.skillLinkMode === "copy") {
+          await fs.copyFile(sourceFile, destFile).catch(() => {});
+        } else {
+          await fs.symlink(sourceFile, destFile).catch(() => {});
+        }
       }
     }
   }
