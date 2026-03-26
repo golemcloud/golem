@@ -179,7 +179,6 @@ pub enum RetryPolicyState {
         attempts: u32,
         inner: Box<RetryPolicyState>,
     },
-    TimeBox(Box<RetryPolicyState>),
     AndThen {
         left: Box<RetryPolicyState>,
         right: Box<RetryPolicyState>,
@@ -196,7 +195,6 @@ impl RetryPolicyState {
             RetryPolicyState::Terminal => 0,
             RetryPolicyState::Wrapper(inner) => inner.retry_count(),
             RetryPolicyState::CountBox { attempts, .. } => *attempts,
-            RetryPolicyState::TimeBox(inner) => inner.retry_count(),
             RetryPolicyState::AndThen {
                 left,
                 right,
@@ -525,10 +523,8 @@ impl RetryPolicy {
                 attempts: 0,
                 inner: Box::new(inner.initial_state()),
             },
-            RetryPolicy::TimeBox { inner, .. } => {
-                RetryPolicyState::TimeBox(Box::new(inner.initial_state()))
-            }
-            RetryPolicy::Clamp { inner, .. }
+            RetryPolicy::TimeBox { inner, .. }
+            | RetryPolicy::Clamp { inner, .. }
             | RetryPolicy::AddDelay { inner, .. }
             | RetryPolicy::Jitter { inner, .. }
             | RetryPolicy::FilteredOn { inner, .. } => {
@@ -613,16 +609,16 @@ impl RetryPolicy {
             }
             (
                 RetryPolicy::TimeBox { limit, inner },
-                RetryPolicyState::TimeBox(inner_state),
+                RetryPolicyState::Wrapper(inner_state),
             ) => {
                 if elapsed >= *limit {
                     (
-                        RetryPolicyState::TimeBox(inner_state.clone()),
+                        RetryPolicyState::Wrapper(inner_state.clone()),
                         RetryVerdict::GiveUp,
                     )
                 } else {
                     let (new_inner, verdict) = inner.step(inner_state, elapsed, properties, rng);
-                    (RetryPolicyState::TimeBox(Box::new(new_inner)), verdict)
+                    (RetryPolicyState::Wrapper(Box::new(new_inner)), verdict)
                 }
             }
             (
@@ -3099,14 +3095,6 @@ mod tests {
     }
 
     #[test]
-    fn retry_policy_state_time_box_roundtrip() {
-        let state = RetryPolicyState::TimeBox(Box::new(RetryPolicyState::Counter(2)));
-        let roundtrip = RetryPolicyState::from_value(state.clone().into_value())
-            .expect("retry policy state should roundtrip");
-        assert_eq!(roundtrip, state);
-    }
-
-    #[test]
     fn retry_policy_state_and_then_roundtrip() {
         let state = RetryPolicyState::AndThen {
             left: Box::new(RetryPolicyState::Counter(3)),
@@ -3140,7 +3128,7 @@ mod tests {
             }),
             Box::new(RetryPolicyState::AndThen {
                 left: Box::new(RetryPolicyState::Terminal),
-                right: Box::new(RetryPolicyState::TimeBox(Box::new(
+                right: Box::new(RetryPolicyState::Wrapper(Box::new(
                     RetryPolicyState::Counter(4),
                 ))),
                 on_right: true,

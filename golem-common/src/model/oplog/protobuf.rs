@@ -1993,7 +1993,7 @@ impl From<PublicRetryPolicyState>
         use golem_api_grpc::proto::golem::worker::retry_policy_state::State;
         use golem_api_grpc::proto::golem::worker::{
             RetryPolicyStateAndThen, RetryPolicyStateCountBox, RetryPolicyStatePair,
-            RetryPolicyStateTimeBox, RetryPolicyStateWrapper,
+            RetryPolicyStateWrapper,
         };
 
         let state = match value {
@@ -2010,11 +2010,6 @@ impl From<PublicRetryPolicyState>
                 State::CountBox(Box::new(RetryPolicyStateCountBox {
                     attempts: cb.attempts,
                     inner: Some(Box::new((*cb.inner).into())),
-                }))
-            }
-            PublicRetryPolicyState::TimeBox(tb) => {
-                State::TimeBox(Box::new(RetryPolicyStateTimeBox {
-                    inner: Some(Box::new((*tb.inner).into())),
                 }))
             }
             PublicRetryPolicyState::AndThen(at) => {
@@ -2076,8 +2071,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicyState>
                 let inner = tb
                     .inner
                     .ok_or("Missing inner in TimeBox")?;
-                Ok(PublicRetryPolicyState::TimeBox(
-                    super::PublicRetryPolicyStateTimeBox {
+                Ok(PublicRetryPolicyState::Wrapper(
+                    super::PublicRetryPolicyStateWrapper {
                         inner: Box::new((*inner).try_into()?),
                     },
                 ))

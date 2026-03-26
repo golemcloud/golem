@@ -778,13 +778,6 @@ pub struct PublicRetryPolicyStateCountBox {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
 #[serde(rename_all = "camelCase")]
-pub struct PublicRetryPolicyStateTimeBox {
-    pub inner: Box<PublicRetryPolicyState>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
-#[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateAndThen {
     pub left: Box<PublicRetryPolicyState>,
     pub right: Box<PublicRetryPolicyState>,
@@ -808,7 +801,6 @@ pub enum PublicRetryPolicyState {
     Terminal(Empty),
     Wrapper(PublicRetryPolicyStateWrapper),
     CountBox(PublicRetryPolicyStateCountBox),
-    TimeBox(PublicRetryPolicyStateTimeBox),
     AndThen(PublicRetryPolicyStateAndThen),
     Pair(PublicRetryPolicyStatePair),
 }
@@ -830,11 +822,6 @@ impl From<crate::model::retry_policy::RetryPolicyState> for PublicRetryPolicySta
             RetryPolicyState::CountBox { attempts, inner } => {
                 PublicRetryPolicyState::CountBox(PublicRetryPolicyStateCountBox {
                     attempts,
-                    inner: Box::new((*inner).into()),
-                })
-            }
-            RetryPolicyState::TimeBox(inner) => {
-                PublicRetryPolicyState::TimeBox(PublicRetryPolicyStateTimeBox {
                     inner: Box::new((*inner).into()),
                 })
             }
@@ -871,9 +858,6 @@ impl From<PublicRetryPolicyState> for crate::model::retry_policy::RetryPolicySta
                 attempts: cb.attempts,
                 inner: Box::new((*cb.inner).into()),
             },
-            PublicRetryPolicyState::TimeBox(tb) => {
-                RetryPolicyState::TimeBox(Box::new((*tb.inner).into()))
-            }
             PublicRetryPolicyState::AndThen(at) => RetryPolicyState::AndThen {
                 left: Box::new((*at.left).into()),
                 right: Box::new((*at.right).into()),
