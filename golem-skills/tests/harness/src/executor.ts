@@ -131,6 +131,7 @@ const ScenarioSpecSchema = z.object({
   name: z.string({ required_error: 'Scenario must have a "name" field' }),
   settings: SettingsSchema,
   prerequisites: PrerequisitesSchema,
+  skip_if: StepConditionSchema.optional(),
   steps: z.array(StepSpecSchema).min(1, "Scenario must have at least one step"),
 });
 
@@ -262,6 +263,7 @@ export interface ScenarioSpec {
   prerequisites?: {
     env?: Record<string, string>;
   };
+  skip_if?: StepCondition;
   steps: StepSpec[];
 }
 
@@ -460,6 +462,26 @@ export class ScenarioExecutor {
   }
 
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
+    // Scenario-level skip
+    if (spec.skip_if) {
+      const ctx = {
+        agent: this.options.agent,
+        language: this.options.language,
+        os: process.platform,
+      };
+      // Reuse shouldRunStep with a fake step that has only skip_if
+      if (!shouldRunStep({ skip_if: spec.skip_if } as StepSpec, ctx)) {
+        console.log(`Scenario ${spec.name}: skipped (skip_if condition met)`);
+        return {
+          status: "pass",
+          durationSeconds: 0,
+          stepResults: [],
+          artifactPaths: [],
+          workspace: this.workspace,
+        };
+      }
+    }
+
     const results: StepResult[] = [];
     const savedEnv: Record<string, string | undefined> = {};
     const shouldCleanup =

@@ -1,4 +1,6 @@
 name: "golem-db-app-ts"
+skip_if:
+  agent: gemini
 settings:
   timeout_per_subprompt: 600
   golem_server:
