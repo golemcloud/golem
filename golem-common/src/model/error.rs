@@ -13,6 +13,43 @@
 // limitations under the License.
 
 pub use crate::base_model::error::*;
+use std::fmt::{Debug, Display};
+use std::sync::Arc;
+
+#[derive(Clone)]
+/// Cloneable erased error
+pub struct SharedError(Arc<anyhow::Error>);
+
+impl SharedError {
+    pub fn new(e: impl Into<anyhow::Error>) -> Self {
+        Self(Arc::new(e.into()))
+    }
+}
+
+impl Display for SharedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        Display::fmt(&*self.0, f)
+    }
+}
+
+impl Debug for SharedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(&*self.0, f)
+    }
+}
+
+impl std::error::Error for SharedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+    // TODO: this is missing the nightly only trait for proper backtrace propagation
+}
+
+impl From<anyhow::Error> for SharedError {
+    fn from(e: anyhow::Error) -> Self {
+        SharedError::new(e)
+    }
+}
 
 mod protobuf {
 

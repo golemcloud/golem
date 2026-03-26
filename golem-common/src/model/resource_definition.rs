@@ -33,7 +33,7 @@ mod protobuf {
         ResourceLimit, ResourceName, ResourceRateLimit, TimePeriod,
     };
 
-    impl From<TimePeriod> for golem_api_grpc::proto::golem::registry::TimePeriod {
+    impl From<TimePeriod> for golem_api_grpc::proto::golem::common::TimePeriod {
         fn from(value: TimePeriod) -> Self {
             match value {
                 TimePeriod::Second => Self::Second,
@@ -46,13 +46,13 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::registry::TimePeriod> for TimePeriod {
+    impl TryFrom<golem_api_grpc::proto::golem::common::TimePeriod> for TimePeriod {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::registry::TimePeriod,
+            value: golem_api_grpc::proto::golem::common::TimePeriod,
         ) -> Result<Self, Self::Error> {
-            use golem_api_grpc::proto::golem::registry::TimePeriod as GrpcTimePeriod;
+            use golem_api_grpc::proto::golem::common::TimePeriod as GrpcTimePeriod;
 
             match value {
                 GrpcTimePeriod::Second => Ok(Self::Second),
@@ -66,17 +66,18 @@ mod protobuf {
         }
     }
 
-    impl From<ResourceLimit> for golem_api_grpc::proto::golem::registry::ResourceLimit {
+    impl From<ResourceLimit> for golem_api_grpc::proto::golem::common::ResourceLimit {
         fn from(value: ResourceLimit) -> Self {
-            use golem_api_grpc::proto::golem::registry::resource_limit as grpc;
+            use golem_api_grpc::proto::golem::common::resource_limit as grpc;
             match value {
                 ResourceLimit::Rate(inner) => Self {
                     kind: Some(grpc::Kind::Rate(grpc::Rate {
                         value: inner.value,
-                        period: golem_api_grpc::proto::golem::registry::TimePeriod::from(
+                        period: golem_api_grpc::proto::golem::common::TimePeriod::from(
                             inner.period,
                         )
                         .into(),
+                        max: inner.max,
                     })),
                 },
                 ResourceLimit::Capacity(inner) => Self {
@@ -91,19 +92,20 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::registry::ResourceLimit> for ResourceLimit {
+    impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimit> for ResourceLimit {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::registry::ResourceLimit,
+            value: golem_api_grpc::proto::golem::common::ResourceLimit,
         ) -> Result<Self, Self::Error> {
-            use golem_api_grpc::proto::golem::registry::resource_limit as grpc_resource_limit;
+            use golem_api_grpc::proto::golem::common::resource_limit as grpc_resource_limit;
 
             match value.kind.ok_or("ResourceLimit.kind missing")? {
                 grpc_resource_limit::Kind::Rate(inner) => {
                     Ok(ResourceLimit::Rate(ResourceRateLimit {
                         value: inner.value,
                         period: inner.period().try_into()?,
+                        max: inner.max,
                     }))
                 }
                 grpc_resource_limit::Kind::Capacity(inner) => {
@@ -120,7 +122,7 @@ mod protobuf {
         }
     }
 
-    impl From<EnforcementAction> for golem_api_grpc::proto::golem::registry::EnforcementAction {
+    impl From<EnforcementAction> for golem_api_grpc::proto::golem::common::EnforcementAction {
         fn from(value: EnforcementAction) -> Self {
             match value {
                 EnforcementAction::Reject => Self::Reject,
@@ -130,13 +132,13 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::registry::EnforcementAction> for EnforcementAction {
+    impl TryFrom<golem_api_grpc::proto::golem::common::EnforcementAction> for EnforcementAction {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::registry::EnforcementAction,
+            value: golem_api_grpc::proto::golem::common::EnforcementAction,
         ) -> Result<Self, Self::Error> {
-            use golem_api_grpc::proto::golem::registry::EnforcementAction as GrpcEnforcementAction;
+            use golem_api_grpc::proto::golem::common::EnforcementAction as GrpcEnforcementAction;
 
             match value {
                 GrpcEnforcementAction::Reject => Ok(Self::Reject),
@@ -147,7 +149,7 @@ mod protobuf {
         }
     }
 
-    impl From<ResourceDefinition> for golem_api_grpc::proto::golem::registry::ResourceDefinition {
+    impl From<ResourceDefinition> for golem_api_grpc::proto::golem::common::ResourceDefinition {
         fn from(value: ResourceDefinition) -> Self {
             Self {
                 resource_definition_id: Some(value.id.into()),
@@ -156,11 +158,10 @@ mod protobuf {
                 name: value.name.0,
 
                 resource_limit: Some(value.limit.into()),
-                enforcement_action:
-                    golem_api_grpc::proto::golem::registry::EnforcementAction::from(
-                        value.enforcement_action,
-                    )
-                    .into(),
+                enforcement_action: golem_api_grpc::proto::golem::common::EnforcementAction::from(
+                    value.enforcement_action,
+                )
+                .into(),
 
                 unit: value.unit,
                 units: value.units,
@@ -168,11 +169,11 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::registry::ResourceDefinition> for ResourceDefinition {
+    impl TryFrom<golem_api_grpc::proto::golem::common::ResourceDefinition> for ResourceDefinition {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::registry::ResourceDefinition,
+            value: golem_api_grpc::proto::golem::common::ResourceDefinition,
         ) -> Result<Self, Self::Error> {
             let enforcement_action = value.enforcement_action().try_into()?;
 
