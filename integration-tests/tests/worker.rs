@@ -1938,9 +1938,9 @@ async fn agent_write_within_per_plan_disk_space_quota_succeeds(
 }
 
 /// A worker making HTTP calls is suspended when the account's monthly HTTP
-/// call limit is exhausted. The batch sync eventually reports the consumption
-/// to the registry, which computes `available_http_calls = 0` and the executor
-/// suspends the worker on the next epoch tick.
+/// call limit is exhausted. When `remaining_http_calls() == 0`, the host function
+/// `handle()` raises `WorkerMonthlyHttpCallBudgetExhausted` which maps to
+/// `TryStop` — suspending the worker before the HTTP call is even made.
 ///
 /// Uses the `low_http_calls` plan (monthly HTTP limit = 1): one call succeeds,
 /// the second exhausts the budget and the worker is suspended.
@@ -2011,8 +2011,9 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
     user.invoke_and_await_agent(&component, &http_agent_id, "run", data_value!())
         .await?;
 
-    // Fire-and-forget a second `run`. The epoch will detect remaining_http_calls == 0
-    // and suspend the worker mid-invocation. We don't await — it will never complete.
+    // Fire-and-forget a second `run`. When the worker processes it in live mode,
+    // `record_monthly_http_call()` traps immediately (before the HTTP call is made)
+    // with WorkerMonthlyHttpCallBudgetExhausted → TryStop → Suspended.
     user.invoke_agent(&component, &http_agent_id, "run", data_value!())
         .await?;
 
@@ -2020,12 +2021,11 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
         .await?;
 
     let http_count = received_http_posts.load(Ordering::Acquire);
-    // The limit is 1; the worker should have made at most a small number of HTTP calls
-    // before being suspended. Allow 2 in case the second `run` gets one call in before
-    // the epoch fires.
+    // The trap fires before handle() is called, so only the first run's HTTP call
+    // should have reached the server.
     assert!(
-        http_count <= 2,
-        "expected at most 2 HTTP calls before suspension, got {http_count}"
+        http_count <= 1,
+        "expected at most 1 HTTP call before suspension, got {http_count}"
     );
 
     http_server_task.abort();
@@ -2034,7 +2034,8 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
 }
 
 /// A worker making RPC calls is suspended when the account's monthly RPC call
-/// limit is exhausted. Mirrors the HTTP test above but for RPC.
+/// limit is exhausted. The RPC host functions raise `WorkerMonthlyRpcCallBudgetExhausted`
+/// → `TryStop` → `Suspended` before the RPC call is made.
 ///
 /// Uses the `low_rpc_calls` plan (monthly RPC limit = 1).
 #[test]
@@ -2075,8 +2076,9 @@ async fn worker_suspends_when_monthly_rpc_call_limit_exhausted(
     user.invoke_and_await_agent(&component, &caller_id, "spawn_child", data_value!("first"))
         .await?;
 
-    // Fire-and-forget a second `spawn_child`. The epoch will detect remaining_rpc_calls == 0
-    // and suspend the worker mid-invocation.
+    // Fire-and-forget a second `spawn_child`. When the worker processes it in live mode,
+    // `record_monthly_rpc_call()` traps immediately (before the RPC call is made)
+    // with WorkerMonthlyRpcCallBudgetExhausted → TryStop → Suspended.
     user.invoke_agent(&component, &caller_id, "spawn_child", data_value!("second"))
         .await?;
 

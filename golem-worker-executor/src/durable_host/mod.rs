@@ -356,17 +356,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     /// Records one outgoing HTTP call against the monthly account quota.
     ///
-    /// The actual budget enforcement (suspension) happens in the epoch callback,
-    /// which checks `remaining_http_calls()` on the next tick.
-    pub fn record_monthly_http_call(&mut self) {
-        self.state.resource_limit_entry.record_http_call();
+    /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
+    /// is exhausted. This trap maps to `RetryDecision::TryStop` — the worker is
+    /// suspended (same as filesystem `NodeOutOfFilesystemStorage` → `ReacquirePermits`),
+    /// and will be resumed when the registry replenishes the budget.
+    pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Records one outgoing RPC call against the monthly account quota.
     ///
-    /// The actual budget enforcement (suspension) happens in the epoch callback.
-    pub fn record_monthly_rpc_call(&mut self) {
-        self.state.resource_limit_entry.record_rpc_call();
+    /// Returns `Err(WorkerMonthlyRpcCallBudgetExhausted)` if the monthly budget
+    /// is exhausted.
+    pub fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        if self.state.is_live() && !self.state.resource_limit_entry.record_rpc_call() {
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Returns the shared resource limit entry for this worker, used by the

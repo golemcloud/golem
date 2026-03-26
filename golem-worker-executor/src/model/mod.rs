@@ -301,6 +301,15 @@ impl TrapType {
                                 retry_from,
                             }
                         }
+                        // Monthly budget exhausted → suspend and retry when replenished.
+                        // Maps to TryStop which writes a Suspend oplog entry and transitions
+                        // the worker to Suspended status.
+                        Some(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted) => {
+                            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()))
+                        }
+                        Some(GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted) => {
+                            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()))
+                        }
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {

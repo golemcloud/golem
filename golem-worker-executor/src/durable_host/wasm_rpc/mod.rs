@@ -158,11 +158,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         // Record against the monthly account-level RPC call quota.
         // Record against the monthly account-level RPC call quota.
-        // Only in live mode; if the budget is exhausted, a flag is set and the
-        // epoch callback will suspend the worker at the next tick.
-        if self.state.is_live() {
-            self.record_monthly_rpc_call();
-        }
+        // Record against the monthly account-level RPC call quota (live mode only).
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -288,12 +287,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map_err(wasmtime::Error::from)?;
 
         // Record against the monthly account-level RPC call quota.
-        // Record against the monthly account-level RPC call quota.
-        // Only in live mode; if the budget is exhausted, a flag is set and the
-        // epoch callback will suspend the worker at the next tick.
-        if self.state.is_live() {
-            self.record_monthly_rpc_call();
-        }
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -396,11 +392,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         // Record against the monthly account-level RPC call quota.
         // Record against the monthly account-level RPC call quota.
-        // Only in live mode; if the budget is exhausted, a flag is set and the
-        // epoch callback will suspend the worker at the next tick.
-        if self.state.is_live() {
-            self.record_monthly_rpc_call();
-        }
+        // Record against the monthly account-level RPC call quota (live mode only).
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()

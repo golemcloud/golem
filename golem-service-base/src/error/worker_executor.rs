@@ -899,10 +899,16 @@ pub enum GolemSpecificWasmTrap {
     WorkerOutOfMemory,
     WorkerExceededMemoryLimit,
     WorkerExceededTableLimit,
+    /// Per-invocation hard limit — permanent failure, not retryable.
     WorkerExceededHttpCallLimit,
+    /// Per-invocation hard limit — permanent failure, not retryable.
     WorkerExceededRpcCallLimit,
     NodeOutOfFilesystemStorage,
     WorkerAgentExceededFilesystemStorageLimit,
+    /// Monthly account-level HTTP call budget exhausted — suspend and retry when replenished.
+    WorkerMonthlyHttpCallBudgetExhausted,
+    /// Monthly account-level RPC call budget exhausted — suspend and retry when replenished.
+    WorkerMonthlyRpcCallBudgetExhausted,
 }
 
 impl Display for GolemSpecificWasmTrap {
@@ -924,6 +930,12 @@ impl Display for GolemSpecificWasmTrap {
             }
             Self::WorkerAgentExceededFilesystemStorageLimit => {
                 write!(f, "Worker exceeded plan storage limits")
+            }
+            Self::WorkerMonthlyHttpCallBudgetExhausted => {
+                write!(f, "Worker exhausted monthly HTTP call budget")
+            }
+            Self::WorkerMonthlyRpcCallBudgetExhausted => {
+                write!(f, "Worker exhausted monthly RPC call budget")
             }
         }
     }

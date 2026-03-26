@@ -2555,30 +2555,6 @@ impl RunningWorker {
                 return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }
 
-            // Only check monthly call budgets during live execution.
-            //
-            // It is safe to skip this check during replay because:
-            // - `record_monthly_http_call` / `record_monthly_rpc_call` at the call sites
-            //   are also gated on `is_live()`, so `unsynced_*` stays 0 during replay.
-            // - The oplog always contains the complete HTTP/RPC call + response before
-            //   the epoch can fire (the epoch only fires at WASM instruction boundaries,
-            //   and the host function writes the oplog entry before returning to the guest).
-            // - Therefore, during replay `remaining_*` reflects the server's last-known
-            //   available count. Once the budget is replenished (month rollover or plan
-            //   upgrade), replay proceeds past the suspended point into live execution
-            //   where the check fires again.
-            if data_mut.is_live() {
-                if data_mut.remaining_monthly_http_calls() == 0 {
-                    warn!("Monthly HTTP call budget exhausted, suspending");
-                    return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
-                }
-
-                if data_mut.remaining_monthly_rpc_calls() == 0 {
-                    warn!("Monthly RPC call budget exhausted, suspending");
-                    return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
-                }
-            }
-
             match data_mut.check_interrupt() {
                 Some(kind) => Err(kind.into()),
                 None => Ok(UpdateDeadline::YieldCustom(
