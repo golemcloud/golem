@@ -285,11 +285,8 @@ fn plan_rust_cargo_fix_steps(
 
         for requirement in &requirements {
             let found = specs.get(requirement.name).and_then(|spec| spec.as_ref());
-            let compliance = evaluate_cargo_dependency_compliance(
-                found,
-                requirement,
-                cargo_toml_path.parent(),
-            );
+            let compliance =
+                evaluate_cargo_dependency_compliance(found, requirement, cargo_toml_path.parent());
 
             match compliance {
                 DependencySpecCompliance::Compatible => {}
@@ -297,11 +294,8 @@ fn plan_rust_cargo_fix_steps(
                     warnings.push(format!("{} ({})", message, cargo_toml_path.display()));
                 }
                 DependencySpecCompliance::NeedsUpdate => {
-                    let update_spec = build_cargo_update_spec(
-                        found,
-                        requirement,
-                        cargo_toml_path.parent(),
-                    );
+                    let update_spec =
+                        build_cargo_update_spec(found, requirement, cargo_toml_path.parent());
                     working = edit::cargo_toml::upsert_dependency_auto(
                         &working,
                         requirement.name,
@@ -375,14 +369,14 @@ fn rust_dependency_requirements(
     let golem_rust_expected_spec = match &golem_rust_expected {
         ExpectedDependencyKind::ExactPath(path) => DependencySpec::Path {
             path: path.clone(),
-            features: vec!["export_golem_agentic".to_string()],
+            features: vec![],
         },
         ExpectedDependencyKind::SemanticCompatibleVersion {
             base_version,
             use_version_hint: _,
         } => DependencySpec::Version {
             version: base_version.clone(),
-            features: vec!["export_golem_agentic".to_string()],
+            features: vec![],
         },
     };
     requirements.push(CargoDependencyRequirement {
@@ -1063,9 +1057,9 @@ mod test {
     use super::{
         build_cargo_update_spec, evaluate_cargo_dependency_compliance,
         evaluate_dependency_spec_compliance, rust_dependency_requirements,
-        typescript_sdk_requirements, verify_semantic_version_compatibility,
-        CargoDependencyMatcher, CargoDependencyRequirement, DependencyMatcherSemantics,
-        DependencySpecCompliance, ExpectedDependencyKind, PackageJsonSection,
+        typescript_sdk_requirements, verify_semantic_version_compatibility, CargoDependencyMatcher,
+        CargoDependencyRequirement, DependencyMatcherSemantics, DependencySpecCompliance,
+        ExpectedDependencyKind, PackageJsonSection,
     };
     use crate::app::edit::cargo_toml::DependencySpec;
     use crate::sdk_overrides::sdk_overrides;
@@ -1196,7 +1190,9 @@ mod test {
         let compliance = evaluate_cargo_dependency_compliance(
             Some(&found),
             &requirement,
-            Some(std::path::Path::new("/repo/test-components/oplog-processor")),
+            Some(std::path::Path::new(
+                "/repo/test-components/oplog-processor",
+            )),
         );
 
         assert_eq!(compliance, DependencySpecCompliance::Compatible);
