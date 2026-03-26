@@ -68,7 +68,6 @@ itertools = { workspace = true }
 jsonschema = { workspace = true }
 lenient_bool = { workspace = true }
 minijinja = { workspace = true }
-moonbit-component-generator = { workspace = true }
 native-tls = { workspace = true }
 phf = { workspace = true }
 prettyplease = { workspace = true }

@@ -35,6 +35,7 @@ pub enum RegistryEventType {
     EnvironmentPermissionsChanged = 2,
     DomainRegistrationChanged = 3,
     SecuritySchemeChanged = 4,
+    ResourceDefinitionChanged = 5,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -47,6 +48,7 @@ impl TryFrom<i16> for RegistryEventType {
             2 => Ok(RegistryEventType::EnvironmentPermissionsChanged),
             3 => Ok(RegistryEventType::DomainRegistrationChanged),
             4 => Ok(RegistryEventType::SecuritySchemeChanged),
+            5 => Ok(RegistryEventType::ResourceDefinitionChanged),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -86,6 +88,12 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         environment_id: Uuid,
     },
+    ResourceDefinitionChanged {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+        resource_definition_id: Uuid,
+        resource_name: String,
+    },
 }
 
 impl RegistryChangeEvent {
@@ -96,6 +104,7 @@ impl RegistryChangeEvent {
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
             Self::DomainRegistrationChanged { event_id, .. } => *event_id,
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
+            Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
         }
     }
 }
@@ -109,6 +118,8 @@ struct RegistryChangeEventRow {
     account_id: Option<Uuid>,
     grantee_account_id: Option<Uuid>,
     domains: Vec<String>,
+    resource_definition_id: Option<Uuid>,
+    resource_name: Option<String>,
 }
 
 impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
@@ -184,6 +195,29 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                     environment_id,
                 })
             }
+            RegistryEventType::ResourceDefinitionChanged => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ResourceDefinitionChanged event missing environment_id"
+                    ))
+                })?;
+                let resource_definition_id = row.resource_definition_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ResourceDefinitionChanged event missing resource_definition_id"
+                    ))
+                })?;
+                let resource_name = row.resource_name.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ResourceDefinitionChanged event missing resource_name"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::ResourceDefinitionChanged {
+                    event_id: row.event_id,
+                    environment_id,
+                    resource_definition_id,
+                    resource_name,
+                })
+            }
         }
     }
 }
@@ -197,6 +231,8 @@ pub struct NewRegistryChangeEvent {
     pub account_id: Option<Uuid>,
     pub grantee_account_id: Option<Uuid>,
     pub domains: Vec<String>,
+    pub resource_definition_id: Option<Uuid>,
+    pub resource_name: Option<String>,
 }
 
 impl NewRegistryChangeEvent {
@@ -208,6 +244,8 @@ impl NewRegistryChangeEvent {
             account_id: None,
             grantee_account_id: None,
             domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
         }
     }
 
@@ -219,6 +257,8 @@ impl NewRegistryChangeEvent {
             account_id: None,
             grantee_account_id: None,
             domains,
+            resource_definition_id: None,
+            resource_name: None,
         }
     }
 
@@ -230,6 +270,8 @@ impl NewRegistryChangeEvent {
             account_id: Some(account_id),
             grantee_account_id: None,
             domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
         }
     }
 
@@ -241,6 +283,8 @@ impl NewRegistryChangeEvent {
             account_id: None,
             grantee_account_id: Some(grantee_account_id),
             domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
         }
     }
 
@@ -252,6 +296,25 @@ impl NewRegistryChangeEvent {
             account_id: None,
             grantee_account_id: None,
             domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+        }
+    }
+
+    pub fn resource_definition_changed(
+        environment_id: Uuid,
+        resource_definition_id: Uuid,
+        resource_name: String,
+    ) -> Self {
+        Self {
+            event_type: RegistryEventType::ResourceDefinitionChanged,
+            environment_id: Some(environment_id),
+            deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: Some(resource_definition_id),
+            resource_name: Some(resource_name),
         }
     }
 }
@@ -313,8 +376,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                 sqlx::query(indoc! { r#"
                     INSERT INTO registry_change_events
                         (event_type, environment_id, deployment_revision_id,
-                         account_id, grantee_account_id, domains)
-                    VALUES ($1, $2, $3, $4, $5, $6::text[])
+                         account_id, grantee_account_id, domains,
+                         resource_definition_id, resource_name)
+                    VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -322,7 +386,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                 .bind(event.deployment_revision_id)
                 .bind(event.account_id)
                 .bind(event.grantee_account_id)
-                .bind(domains),
+                .bind(domains)
+                .bind(event.resource_definition_id)
+                .bind(&event.resource_name),
             )
             .await?;
 
@@ -346,7 +412,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                 sqlx::query(indoc! { r#"
                     SELECT event_id, event_type, environment_id,
                            deployment_revision_id, account_id,
-                           grantee_account_id, domains
+                           grantee_account_id, domains,
+                           resource_definition_id, resource_name
                     FROM registry_change_events
                     WHERE event_id > $1
                     ORDER BY event_id ASC
@@ -372,6 +439,10 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                         .try_get("grantee_account_id")
                         .map_err(RepoError::from)?,
                     domains: domains.unwrap_or_default(),
+                    resource_definition_id: row
+                        .try_get("resource_definition_id")
+                        .map_err(RepoError::from)?,
+                    resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
                 }
                 .try_into()
             })
@@ -434,8 +505,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                 sqlx::query(indoc! { r#"
                     INSERT INTO registry_change_events
                         (event_type, environment_id, deployment_revision_id,
-                         account_id, grantee_account_id, domains)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                         account_id, grantee_account_id, domains,
+                         resource_definition_id, resource_name)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -443,7 +515,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                 .bind(event.deployment_revision_id)
                 .bind(event.account_id)
                 .bind(event.grantee_account_id)
-                .bind(&domains_json),
+                .bind(&domains_json)
+                .bind(event.resource_definition_id)
+                .bind(&event.resource_name),
             )
             .await?;
 
@@ -461,7 +535,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                 sqlx::query(indoc! { r#"
                     SELECT event_id, event_type, environment_id,
                            deployment_revision_id, account_id,
-                           grantee_account_id, domains
+                           grantee_account_id, domains,
+                           resource_definition_id, resource_name
                     FROM registry_change_events
                     WHERE event_id > $1
                     ORDER BY event_id ASC
@@ -495,6 +570,10 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                         .try_get("grantee_account_id")
                         .map_err(RepoError::from)?,
                     domains,
+                    resource_definition_id: row
+                        .try_get("resource_definition_id")
+                        .map_err(RepoError::from)?,
+                    resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
                 }
                 .try_into()
             })
@@ -555,8 +634,9 @@ impl DbRegistryChangeRepo<PostgresPool> {
                 sqlx::query(indoc! { r#"
                     INSERT INTO registry_change_events
                         (event_type, environment_id, deployment_revision_id,
-                         account_id, grantee_account_id, domains)
-                    VALUES ($1, $2, $3, $4, $5, $6::text[])
+                         account_id, grantee_account_id, domains,
+                         resource_definition_id, resource_name)
+                    VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -564,7 +644,9 @@ impl DbRegistryChangeRepo<PostgresPool> {
                 .bind(event.deployment_revision_id)
                 .bind(event.account_id)
                 .bind(event.grantee_account_id)
-                .bind(domains),
+                .bind(domains)
+                .bind(event.resource_definition_id)
+                .bind(&event.resource_name),
             )
             .await?;
 
@@ -592,8 +674,9 @@ impl DbRegistryChangeRepo<SqlitePool> {
                 sqlx::query(indoc! { r#"
                     INSERT INTO registry_change_events
                         (event_type, environment_id, deployment_revision_id,
-                         account_id, grantee_account_id, domains)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                         account_id, grantee_account_id, domains,
+                         resource_definition_id, resource_name)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -601,7 +684,9 @@ impl DbRegistryChangeRepo<SqlitePool> {
                 .bind(event.deployment_revision_id)
                 .bind(event.account_id)
                 .bind(event.grantee_account_id)
-                .bind(&domains_json),
+                .bind(&domains_json)
+                .bind(event.resource_definition_id)
+                .bind(&event.resource_name),
             )
             .await?;
 

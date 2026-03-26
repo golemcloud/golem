@@ -47,12 +47,13 @@ use golem_worker_service::config::{
 use golem_worker_service::WorkerService;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tracing::Instrument;
+use tracing::{info, Instrument};
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
@@ -63,7 +64,16 @@ pub struct LaunchArgs {
     pub router_port: u16,
     pub custom_request_port: u16,
     pub mcp_port: u16,
+    pub ports_file: Option<PathBuf>,
     pub data_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupPorts {
+    router_port: u16,
+    custom_request_port: u16,
+    mcp_port: u16,
 }
 
 pub async fn launch_golem_services(
@@ -96,15 +106,41 @@ pub async fn launch_golem_services(
         })?;
 
     let started_components = start_components(args, &mut join_set).await?;
+    let custom_request_port = started_components.worker_service.custom_request_port;
+    let mcp_port = started_components.worker_service.mcp_port;
 
-    start_router(
+    let router_port = start_router(
         &args.router_addr,
         args.router_port,
         started_components,
         &mut join_set,
-    )?;
+    )
+    .await?;
+
+    if let Some(ports_file) = args.ports_file.as_ref() {
+        let startup_ports = StartupPorts {
+            router_port,
+            custom_request_port,
+            mcp_port,
+        };
+        write_startup_ports_file(ports_file, &startup_ports).await?;
+    }
+
+    info!(
+        router_port,
+        custom_request_port, mcp_port, "Started Golem services"
+    );
 
     Ok(join_set)
+}
+
+async fn write_startup_ports_file(path: &PathBuf, ports: &StartupPorts) -> anyhow::Result<()> {
+    let temp_path = path.with_extension("tmp");
+    let content = serde_json::to_vec_pretty(ports)?;
+    tokio::fs::write(&temp_path, content).await?;
+    tokio::fs::rename(&temp_path, path).await?;
+    info!(path = %path.display(), "Wrote startup ports file");
+    Ok(())
 }
 
 async fn start_components(
@@ -199,6 +235,7 @@ fn registry_service_config(
                     monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,
                     max_table_elements_per_worker: u64::MAX,
+                    max_disk_space_per_worker: u64::MAX,
                 },
             );
             plans
@@ -229,7 +266,7 @@ fn registry_service_config(
             );
             accounts
         },
-        builtin_plugins: BuiltinPluginsConfig { enabled: true },
+        builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
         ..Default::default()
     }
 }

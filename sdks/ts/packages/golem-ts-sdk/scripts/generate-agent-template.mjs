@@ -13,7 +13,7 @@ const result = spawnSync(
     '--js-modules',
     '@golemcloud/golem-ts-sdk=dist/index.mjs',
     '--js-modules',
-    'user=@composition',
+    'user=@slot',
   ],
   {
     stdio: 'inherit',

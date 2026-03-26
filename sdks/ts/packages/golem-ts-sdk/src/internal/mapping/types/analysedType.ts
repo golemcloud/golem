@@ -288,6 +288,7 @@ export function list(
   typedArrayKind: TypedArray | undefined,
   mapType: { keyType: AnalysedType; valueType: AnalysedType } | undefined,
   inner: AnalysedType,
+  owner?: string,
 ): AnalysedType {
   return {
     kind: 'list',
@@ -295,7 +296,7 @@ export function list(
     mapType,
     value: {
       name,
-      owner: undefined,
+      owner,
       inner,
     },
   };
@@ -305,13 +306,14 @@ export function option(
   name: string | undefined,
   emptyType: EmptyType,
   inner: AnalysedType,
+  owner?: string,
 ): AnalysedType {
   return {
     kind: 'option',
     emptyType,
     value: {
       name,
-      owner: undefined,
+      owner,
       inner,
     },
   };
@@ -321,46 +323,51 @@ export function tuple(
   name: string | undefined,
   emptyType: EmptyType | undefined,
   items: AnalysedType[],
+  owner?: string,
 ): AnalysedType {
   return {
     kind: 'tuple',
     emptyType,
     value: {
       name,
-      owner: undefined,
+      owner,
       items,
     },
   };
 }
 
-export function record(name: string | undefined, fields: NameTypePair[]): AnalysedType {
+export function record(
+  name: string | undefined,
+  fields: NameTypePair[],
+  owner?: string,
+): AnalysedType {
   return {
     kind: 'record',
     value: {
       name,
-      owner: undefined,
+      owner,
       fields,
     },
   };
 }
 
-export function flags(name: string | undefined, names: string[]): AnalysedType {
+export function flags(name: string | undefined, names: string[], owner?: string): AnalysedType {
   return {
     kind: 'flags',
     value: {
       name,
-      owner: undefined,
+      owner,
       names,
     },
   };
 }
 
-export function enum_(name: string | undefined, cases: string[]): AnalysedType {
+export function enum_(name: string | undefined, cases: string[], owner?: string): AnalysedType {
   return {
     kind: 'enum',
     value: {
       name,
-      owner: undefined,
+      owner,
       cases,
     },
   };
@@ -370,13 +377,14 @@ export function variant(
   name: string | undefined,
   taggedTypes: TaggedTypeMetadata[],
   cases: NameOptionTypePair[],
+  owner?: string,
 ): AnalysedType {
   return {
     kind: 'variant',
     taggedTypes,
     value: {
       name,
-      owner: undefined,
+      owner,
       cases,
     },
   };
@@ -387,13 +395,14 @@ export function result(
   resultType: CustomOrInbuilt,
   ok: AnalysedType | undefined,
   err: AnalysedType | undefined,
+  owner?: string,
 ): AnalysedType {
   return {
     kind: 'result',
     resultType,
     value: {
       name,
-      owner: undefined,
+      owner,
       ok,
       err,
     },
@@ -404,12 +413,13 @@ export function handle(
   name: string | undefined,
   resourceId: AnalysedResourceId,
   mode: AnalysedResourceMode,
+  owner?: string,
 ): AnalysedType {
   return {
     kind: 'handle',
     value: {
       name,
-      owner: undefined,
+      owner,
       resourceId,
       mode,
     },

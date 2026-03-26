@@ -145,5 +145,18 @@ async fn dispatch_event(
                 "Received security scheme changed event, ignoring"
             );
         }
+        RegistryInvalidationEvent::ResourceDefinitionChanged {
+            environment_id,
+            resource_definition_id,
+            resource_name,
+            ..
+        } => {
+            debug!(
+                environment_id = %environment_id,
+                resource_definition_id = %resource_definition_id,
+                resource_name = %resource_name,
+                "Received resource definition changed event, ignoring"
+            );
+        }
     }
 }

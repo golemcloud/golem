@@ -96,7 +96,7 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(
             &mut result,
             "builtin plugins: enabled={}",
-            self.builtin_plugins.enabled,
+            self.builtin_plugins.enabled(),
         );
 
         let _ = writeln!(&mut result, "deployment events:");
@@ -172,6 +172,7 @@ impl Default for RegistryServiceConfig {
                 monthly_upload_limit: 1000000000,
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
                 max_table_elements_per_worker: 16_384,
+                max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
             },
         );
 
@@ -393,9 +394,23 @@ impl ComponentCompilationEnabledConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct BuiltinPluginsConfig {
-    pub enabled: bool,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum BuiltinPluginsConfig {
+    Enabled(Empty),
+    Disabled(Empty),
+}
+
+impl Default for BuiltinPluginsConfig {
+    fn default() -> Self {
+        Self::Disabled(Empty {})
+    }
+}
+
+impl BuiltinPluginsConfig {
+    pub fn enabled(&self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -442,10 +457,16 @@ pub struct PrecreatedPlan {
     pub max_memory_per_worker: u64,
     #[serde(default = "default_max_table_elements_per_worker")]
     pub max_table_elements_per_worker: u64,
+    #[serde(default = "default_max_disk_space_per_worker")]
+    pub max_disk_space_per_worker: u64,
 }
 
 fn default_max_table_elements_per_worker() -> u64 {
     16_384
+}
+
+fn default_max_disk_space_per_worker() -> u64 {
+    1024 * 1024 * 1024 // 1 GB
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

@@ -648,7 +648,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             r#"{a: {tag: "case1", value: "foo"}}"#,
             r#"{a: "foo"}"#,
             r#""foo""#,
-            r#"{tag: "case3", value: "foo"}"#,
+            r#"{tag: "UnionType2", value: "foo"}"#,
         ],
     )
     .await;
@@ -660,7 +660,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     // function with a very complex object
     let argument = r#"
-      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}
+      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}
     "#;
 
     run_and_assert(&ctx, "funObjectComplexType", &[argument]).await;
@@ -669,7 +669,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(
         &ctx,
         "funUnionType",
-        &[r#"{tag: "UnionType1", value: "foo"}"#],
+        &[r#"{tag: "UnionType2", value: "foo"}"#],
     )
     .await;
 
@@ -677,7 +677,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(
         &ctx,
         "funUnionComplexType",
-        &[r#"{tag: "UnionComplexType1", value: "foo"}"#],
+        &[r#"{tag: "UnionComplexType2", value: "foo"}"#],
     )
     .await;
 
@@ -794,9 +794,9 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         &ctx,
         "funAll",
         &[
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType1", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}"#,
-            r#"{tag: "UnionType1", value: "foo"}"#,
-            r#"{tag: "UnionComplexType1", value: "foo"}"#,
+            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: {tag: "UnionType2", value: "foo"}, f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ["foo", 42, true], i: ["foo", 42, {a: "foo", b: 42, c: true}], j: [["foo", 42], ["foo", 42], ["foo", 42]], k: {n: 42}}"#,
+            r#"{tag: "UnionType2", value: "foo"}"#,
+            r#"{tag: "UnionComplexType2", value: "foo"}"#,
             r#"42"#,
             r#""foo""#,
             r#"true"#,
@@ -813,7 +813,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             r#"{a: {tag: "case1", value: "foo"}}"#,
             r#"{a: "foo"}"#,
             r#""foo""#,
-            r#"{tag: "case3", value: "foo"}"#,
+            r#"{tag: "UnionType2", value: "foo"}"#,
             r#"{tag: "a", value: "foo"}"#
         ],
     )
@@ -1000,12 +1000,12 @@ async fn test_http_api_merging() {
     let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert!(!outputs.success());
     assert!(!outputs.stdout_contains("error"));
-    assert!(outputs.stderr_contains_ordered([
+    assert!(outputs.stderr_contains_ordered(vec![
         "Application API definitions:",
         "  def-a@0.0.1",
         "  def-b@0.0.2",
         "Application API deployments for environment local:",
-        "  http_api_merging.localhost:9006",
+        &format!("http_api_merging.localhost:{}", ctx.custom_request_port()),
         "    def-a",
         "    def-b",
     ]));
@@ -1043,9 +1043,10 @@ async fn test_http_api_merging() {
 
     let outputs = ctx.cli(cmd::NO_ARGS).await;
     assert!(!outputs.success());
-    assert!(outputs.stderr_contains(
-        "error: HTTP API Deployment local - http_api_merging.localhost:9006 - def-a is defined in multiple sources"
-    ));
+    assert!(outputs.stderr_contains(format!(
+        "error: HTTP API Deployment local - http_api_merging.localhost:{} - def-a is defined in multiple sources",
+        ctx.custom_request_port()
+    )));
 
     // Let's switch back to the good config and deploy, then call the exposed APIs
     fs::write_str(
@@ -1081,15 +1082,21 @@ async fn test_http_api_merging() {
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains_ordered([
+    assert!(outputs.stdout_contains_ordered(vec![
         "+httpApiDeployments:",
-        "+  http_api_merging.localhost:9006:",
+        &format!(
+            "+  http_api_merging.localhost:{}:",
+            ctx.custom_request_port()
+        ),
         "+    apis:",
         "+    - def-a",
-        "+  test_http_api_merging.localhost:9006:",
+        &format!(
+            "+  test_http_api_merging.localhost:{}:",
+            ctx.custom_request_port()
+        ),
         "+    apis:",
         "+    - def-b",
-        "Deployed all changes"
+        "Deployed all changes",
     ]));
 }
 
