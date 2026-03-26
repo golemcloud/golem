@@ -93,6 +93,7 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        current_deployment_revision_id: i64,
     },
     AccountTokensInvalidated {
         event_id: ChangeEventId,
@@ -139,6 +140,7 @@ struct RegistryChangeEventRow {
     event_type: RegistryEventType,
     environment_id: Option<Uuid>,
     deployment_revision_id: Option<i64>,
+    current_deployment_revision_id: Option<i64>,
     account_id: Option<Uuid>,
     grantee_account_id: Option<Uuid>,
     domains: Vec<String>,
@@ -162,10 +164,17 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                         "DeploymentChanged event missing deployment_revision_id"
                     ))
                 })?;
+                let current_deployment_revision_id =
+                    row.current_deployment_revision_id.ok_or_else(|| {
+                        RepoError::InternalError(anyhow::anyhow!(
+                            "DeploymentChanged event missing current_deployment_revision_id"
+                        ))
+                    })?;
                 Ok(RegistryChangeEvent::DeploymentChanged {
                     event_id: row.event_id,
                     environment_id,
                     deployment_revision_id,
+                    current_deployment_revision_id,
                 })
             }
             RegistryEventType::AccountTokensInvalidated => {
@@ -252,6 +261,7 @@ pub struct NewRegistryChangeEvent {
     pub event_type: RegistryEventType,
     pub environment_id: Option<Uuid>,
     pub deployment_revision_id: Option<i64>,
+    pub current_deployment_revision_id: Option<i64>,
     pub account_id: Option<Uuid>,
     pub grantee_account_id: Option<Uuid>,
     pub domains: Vec<String>,
@@ -260,11 +270,16 @@ pub struct NewRegistryChangeEvent {
 }
 
 impl NewRegistryChangeEvent {
-    pub fn deployment_changed(environment_id: Uuid, deployment_revision_id: i64) -> Self {
+    pub fn deployment_changed(
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        current_deployment_revision_id: i64,
+    ) -> Self {
         Self {
             event_type: RegistryEventType::DeploymentChanged,
             environment_id: Some(environment_id),
             deployment_revision_id: Some(deployment_revision_id),
+            current_deployment_revision_id: Some(current_deployment_revision_id),
             account_id: None,
             grantee_account_id: None,
             domains: Vec::new(),
@@ -278,6 +293,7 @@ impl NewRegistryChangeEvent {
             event_type: RegistryEventType::DomainRegistrationChanged,
             environment_id: Some(environment_id),
             deployment_revision_id: None,
+            current_deployment_revision_id: None,
             account_id: None,
             grantee_account_id: None,
             domains,
@@ -291,6 +307,7 @@ impl NewRegistryChangeEvent {
             event_type: RegistryEventType::AccountTokensInvalidated,
             environment_id: None,
             deployment_revision_id: None,
+            current_deployment_revision_id: None,
             account_id: Some(account_id),
             grantee_account_id: None,
             domains: Vec::new(),
@@ -304,6 +321,7 @@ impl NewRegistryChangeEvent {
             event_type: RegistryEventType::EnvironmentPermissionsChanged,
             environment_id: Some(environment_id),
             deployment_revision_id: None,
+            current_deployment_revision_id: None,
             account_id: None,
             grantee_account_id: Some(grantee_account_id),
             domains: Vec::new(),
@@ -317,6 +335,7 @@ impl NewRegistryChangeEvent {
             event_type: RegistryEventType::SecuritySchemeChanged,
             environment_id: Some(environment_id),
             deployment_revision_id: None,
+            current_deployment_revision_id: None,
             account_id: None,
             grantee_account_id: None,
             domains: Vec::new(),
@@ -334,6 +353,7 @@ impl NewRegistryChangeEvent {
             event_type: RegistryEventType::ResourceDefinitionChanged,
             environment_id: Some(environment_id),
             deployment_revision_id: None,
+            current_deployment_revision_id: None,
             account_id: None,
             grantee_account_id: None,
             domains: Vec::new(),
@@ -391,7 +411,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
             .fetch_all(
                 sqlx::query(indoc! { r#"
                     SELECT event_id, event_type, environment_id,
-                           deployment_revision_id, account_id,
+                           deployment_revision_id, current_deployment_revision_id, account_id,
                            grantee_account_id, domains,
                            resource_definition_id, resource_name
                     FROM registry_change_events
@@ -413,6 +433,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                     environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
                     deployment_revision_id: row
                         .try_get("deployment_revision_id")
+                        .map_err(RepoError::from)?,
+                    current_deployment_revision_id: row
+                        .try_get("current_deployment_revision_id")
                         .map_err(RepoError::from)?,
                     account_id: row.try_get("account_id").map_err(RepoError::from)?,
                     grantee_account_id: row
@@ -476,7 +499,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
             .fetch_all(
                 sqlx::query(indoc! { r#"
                     SELECT event_id, event_type, environment_id,
-                           deployment_revision_id, account_id,
+                           deployment_revision_id, current_deployment_revision_id, account_id,
                            grantee_account_id, domains,
                            resource_definition_id, resource_name
                     FROM registry_change_events
@@ -506,6 +529,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                     environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
                     deployment_revision_id: row
                         .try_get("deployment_revision_id")
+                        .map_err(RepoError::from)?,
+                    current_deployment_revision_id: row
+                        .try_get("current_deployment_revision_id")
                         .map_err(RepoError::from)?,
                     account_id: row.try_get("account_id").map_err(RepoError::from)?,
                     grantee_account_id: row
@@ -586,15 +612,16 @@ impl DbRegistryChangeRepo<PostgresPool> {
             .fetch_one(
                 sqlx::query(indoc! { r#"
                     INSERT INTO registry_change_events
-                        (event_type, environment_id, deployment_revision_id,
+                        (event_type, environment_id, deployment_revision_id, current_deployment_revision_id,
                          account_id, grantee_account_id, domains,
                          resource_definition_id, resource_name)
-                    VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
                 .bind(event.environment_id)
                 .bind(event.deployment_revision_id)
+                .bind(event.current_deployment_revision_id)
                 .bind(event.account_id)
                 .bind(event.grantee_account_id)
                 .bind(domains)
@@ -629,15 +656,16 @@ impl DbRegistryChangeRepo<SqlitePool> {
             .fetch_one(
                 sqlx::query(indoc! { r#"
                     INSERT INTO registry_change_events
-                        (event_type, environment_id, deployment_revision_id,
+                        (event_type, environment_id, deployment_revision_id, current_deployment_revision_id,
                          account_id, grantee_account_id, domains,
                          resource_definition_id, resource_name)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
                 .bind(event.environment_id)
                 .bind(event.deployment_revision_id)
+                .bind(event.current_deployment_revision_id)
                 .bind(event.account_id)
                 .bind(event.grantee_account_id)
                 .bind(&domains_json)

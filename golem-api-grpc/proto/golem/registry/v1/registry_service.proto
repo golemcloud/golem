@@ -428,6 +428,7 @@ message CursorExpiredEvent {}
 message DeploymentChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
   uint64 deployment_revision = 2;
+  uint64 current_deployment_revision = 3;
 }
 
 // Sent when domain registrations change (create/delete).

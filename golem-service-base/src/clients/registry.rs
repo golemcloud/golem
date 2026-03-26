@@ -1033,6 +1033,7 @@ fn proto_registry_event_to_model(
                     event_id,
                     environment_id,
                     deployment_revision: dc.deployment_revision,
+                    current_deployment_revision: dc.current_deployment_revision,
                 },
             )
         }

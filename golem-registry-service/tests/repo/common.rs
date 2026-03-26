@@ -1696,19 +1696,19 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
 
     // Record first event
     let id1 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id1, 1))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id1, 1, 1))
         .await;
     assert!(id1 > baseline);
 
     // Record second event
     let id2 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id2, 2))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id2, 2, 2))
         .await;
     assert!(id2 > id1);
 
     // Record third event for same environment
     let id3 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id1, 3))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id1, 3, 3))
         .await;
     assert!(id3 > id2);
 
@@ -1770,10 +1770,10 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
 
     // Insert some events in the DB (simulating past deployments)
     let id1 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 10))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 10, 10))
         .await;
     let id2 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 20))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 20, 20))
         .await;
 
     // Simulate replay from cursor: get_events_since(id1 - 1) should include id1 and id2
@@ -1807,7 +1807,7 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
 
     // Simulate a new deployment: record in DB and notify
     let id3 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 30))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 30, 30))
         .await;
     notifier.signal_new_events_available();
 
@@ -1840,10 +1840,10 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
 
     // Insert events
     let id1 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 10))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 10, 10))
         .await;
     let id2 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 20))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 20, 20))
         .await;
 
     // Normal case: events exist after cursor, so no cursor_expired
@@ -1901,7 +1901,7 @@ pub async fn test_registry_change_cleanup(deps: &Deps) {
 
     // Record an event
     let id = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 1))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 1, 1))
         .await;
 
     // Cleanup with large retention should not delete the freshly created event
@@ -1938,7 +1938,7 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
 
     // Record deployment changed event
     let id1 = deps
-        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 1))
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 1, 1))
         .await;
 
     // Record account tokens invalidated event

@@ -300,11 +300,13 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
             event_id,
             environment_id,
             deployment_revision_id,
+            current_deployment_revision_id,
         } => (
             *event_id,
             Payload::DeploymentChanged(DeploymentChangedEvent {
                 environment_id: Some(EnvironmentId(*environment_id).into()),
                 deployment_revision: *deployment_revision_id as u64,
+                current_deployment_revision: *current_deployment_revision_id as u64,
             }),
         ),
         RegistryChangeEvent::DomainRegistrationChanged {
@@ -491,6 +493,7 @@ mod tests {
             event_id: ChangeEventId(id),
             environment_id: Uuid::new_v4(),
             deployment_revision_id: id * 10,
+            current_deployment_revision_id: id,
         }
     }
 
@@ -507,6 +510,7 @@ mod tests {
             event_id: ChangeEventId(1),
             environment_id: env_id,
             deployment_revision_id: 42,
+            current_deployment_revision_id: 1,
         });
         notifier.signal_new_events_available();
 
@@ -537,6 +541,7 @@ mod tests {
             event_id: ChangeEventId(5),
             environment_id: env_id,
             deployment_revision_id: 99,
+            current_deployment_revision_id: 5,
         });
         notifier.signal_new_events_available();
 
@@ -821,6 +826,7 @@ mod tests {
                 event_id: ChangeEventId(i),
                 environment_id: Uuid::new_v4(),
                 deployment_revision_id: i * 10,
+                current_deployment_revision_id: i,
             });
             notifier.signal_new_events_available();
         }

@@ -828,6 +828,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     let change_event = NewRegistryChangeEvent::deployment_changed(
                         environment_id,
                         deployment_revision_id,
+                        revision.revision_id,
                     );
                     DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
                         tx,
@@ -1253,6 +1254,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     let change_event = NewRegistryChangeEvent::deployment_changed(
                         environment_id,
                         deployment_revision_id,
+                        revision.revision_id,
                     );
                     DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
                         tx,

@@ -15,7 +15,7 @@
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::{AgentTypeName, ResolvedAgentType};
 use golem_common::model::application::ApplicationName;
-use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
@@ -39,11 +39,16 @@ struct PinnedAgentResolutionCacheKey {
     owner_account_email: Option<String>,
 }
 
+struct LatestDeploymentRevisions {
+    deployment_revision: DeploymentRevision,
+    current_deployment_revision: CurrentDeploymentRevision,
+}
+
 pub struct AgentResolutionCache {
     cache: Cache<AgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
     pinned_cache: Cache<PinnedAgentResolutionCacheKey, (), ResolvedAgentType, RegistryServiceError>,
     registry_service: Arc<dyn RegistryService>,
-    latest_revisions: scc::HashMap<EnvironmentId, DeploymentRevision>,
+    latest_revisions: scc::HashMap<EnvironmentId, LatestDeploymentRevisions>,
 }
 
 impl AgentResolutionCache {
@@ -172,19 +177,27 @@ impl AgentResolutionCache {
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
+        current_deployment_revision: CurrentDeploymentRevision,
     ) {
         let updated = self
             .latest_revisions
             .update_sync(&environment_id, |_, existing| {
-                if deployment_revision > *existing {
-                    *existing = deployment_revision;
+                if current_deployment_revision > existing.current_deployment_revision {
+                    *existing = LatestDeploymentRevisions {
+                        deployment_revision,
+                        current_deployment_revision,
+                    }
                 }
             })
             .is_some();
         if !updated {
-            let _ = self
-                .latest_revisions
-                .insert_sync(environment_id, deployment_revision);
+            let _ = self.latest_revisions.insert_sync(
+                environment_id,
+                LatestDeploymentRevisions {
+                    deployment_revision,
+                    current_deployment_revision,
+                },
+            );
         }
     }
 
@@ -192,8 +205,13 @@ impl AgentResolutionCache {
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
+        current_deployment_revision: CurrentDeploymentRevision,
     ) {
-        self.advance_latest_revision(environment_id, deployment_revision);
+        self.advance_latest_revision(
+            environment_id,
+            deployment_revision,
+            current_deployment_revision,
+        );
     }
 
     pub async fn clear(&self) {
