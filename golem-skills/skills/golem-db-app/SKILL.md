@@ -145,7 +145,7 @@ In `golem.yaml`, add the database URL under the component's `env` section:
 components:
   <app-name>:ts-main:
     env:
-      DB_POSTGRES_URL: "postgres://golem:golem@localhost:5432/golem_test"
+      DB_POSTGRES_URL: "postgres://postgres:postgres@localhost:5432/golem_test"
 ```
 
 The component name follows the pattern `<app-name>:ts-main` for single-component TypeScript apps.
