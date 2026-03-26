@@ -44,6 +44,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
+use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryConfig, RetryProperties};
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
@@ -678,6 +679,8 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     _connection_pool: Option<HttpConnectionPool>,
     worker: Arc<crate::worker::Worker<Ctx>>,
     retry_config: RetryConfig,
+    named_retry_policies: Option<Vec<NamedRetryPolicy>>,
+    retry_properties: RetryProperties,
     max_delay: Duration,
     begin_index: OplogIndex,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
@@ -710,6 +713,12 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                 // Transient HTTP error: enter retry loop
                 Ok(Err(initial_error)) => {
                     let oplog = worker.oplog();
+                    let current_retry_policy_state = worker
+                        .get_non_detached_last_known_status()
+                        .await
+                        .current_retry_policy_state
+                        .get(&begin_index)
+                        .cloned();
                     let mut base_retry_count =
                         crate::durable_host::durability::count_oplog_errors_for(
                             &oplog,
@@ -719,8 +728,11 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                     let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: begin_index,
                         retry_config,
+                        named_retry_policies,
                         max_in_function_retry_delay: max_delay,
                         base_retry_count,
+                        current_retry_policy_state,
+                        retry_properties,
                         worker,
                     };
 
@@ -728,8 +740,15 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                     // so retry metrics/oplog entries include it as part of in-function
                     // retry budgeting (matching host-call retry semantics).
                     let mut initial_retry_state = InFunctionRetryState::new();
+                    let mut initial_retry_properties = task_ctx.retry_properties.clone();
+                    initial_retry_properties
+                        .set("error-type", PredicateValue::Text("transient".to_string()));
                     match initial_retry_state
-                        .decide_retry(&mut task_ctx, "in-task")
+                        .decide_retry_with_properties(
+                            &mut task_ctx,
+                            "in-task",
+                            &initial_retry_properties,
+                        )
                         .await
                     {
                         AsyncRetryDecision::RetryAfterDelay(delay) => {
@@ -900,6 +919,16 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     // original request had it, so that transient errors at get() are still handled.
     let new_future = if request_state.retry.has_background_retry {
         if let HostFutureIncomingResponse::Pending(handle) = rebuilt.future {
+            let named_retry_policies = {
+                let policies = crate::durable_host::durability::collect_named_retry_policies(
+                    &ctx.state.agent_config,
+                );
+                (!policies.is_empty()).then_some(policies)
+            };
+            let retry_properties = golem_common::model::RetryContext::http(
+                &request_state.request.method.to_string(),
+                &request_state.request.uri,
+            );
             let retry_handle = spawn_http_request_with_retry(
                 handle,
                 request_state.request.clone(),
@@ -907,6 +936,8 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 ctx.wasi_http.connection_pool.clone(),
                 ctx.public_state.worker(),
                 ctx.retry_config(),
+                named_retry_policies,
+                retry_properties,
                 exec_state.max_in_function_retry_delay,
                 request_state.begin_index,
                 ctx.execution_status.clone(),
@@ -1423,6 +1454,7 @@ mod tests {
     fn test_body_not_finished_disqualifies_awaiting_response_only() {
         let exec = make_exec_state();
         let mut req = make_request_state();
+        req.output_stream_rep = Some(1);
         req.retry.body_finished = false;
         req.output_stream_rep = Some(1);
         // AwaitingResponse should be disqualified

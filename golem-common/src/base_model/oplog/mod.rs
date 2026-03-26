@@ -38,6 +38,7 @@ mod raw_imports {
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::AttributeMap;
     pub use crate::model::oplog::raw_types::*;
+    pub use crate::model::retry_policy::RetryPolicyState;
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult, RetryConfig};
     pub use golem_wasm::wasmtime::ResourceTypeId;
 
@@ -164,11 +165,15 @@ oplog_entry! {
             /// Whether the error occurred inside an active atomic region that has already performed side effects.
             /// This affects retry decisions for deterministic traps.
             inside_atomic_region: bool,
+            /// Optional semantic retry state. When present, this allows exact reconstruction
+            /// of semantic retry policies without count-based replay.
+            retry_policy_state: Option<RetryPolicyState>,
         }
         public {
             error: String,
             retry_from: OplogIndex,
             inside_atomic_region: bool,
+            retry_policy_state: Option<PublicRetryPolicyState>,
         }
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior

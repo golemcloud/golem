@@ -752,3 +752,137 @@ impl golem_wasm::FromValue for PublicSnapshotData {
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateCounter {
+    pub count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateWrapper {
+    pub inner: Box<PublicRetryPolicyState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateCountBox {
+    pub attempts: u32,
+    pub inner: Box<PublicRetryPolicyState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateTimeBox {
+    pub inner: Box<PublicRetryPolicyState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateAndThen {
+    pub left: Box<PublicRetryPolicyState>,
+    pub right: Box<PublicRetryPolicyState>,
+    pub on_right: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStatePair {
+    pub first: Box<PublicRetryPolicyState>,
+    pub second: Box<PublicRetryPolicyState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union, golem_wasm_derive::IntoValue))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum PublicRetryPolicyState {
+    Counter(PublicRetryPolicyStateCounter),
+    Terminal(Empty),
+    Wrapper(PublicRetryPolicyStateWrapper),
+    CountBox(PublicRetryPolicyStateCountBox),
+    TimeBox(PublicRetryPolicyStateTimeBox),
+    AndThen(PublicRetryPolicyStateAndThen),
+    Pair(PublicRetryPolicyStatePair),
+}
+
+#[cfg(feature = "full")]
+impl From<crate::model::retry_policy::RetryPolicyState> for PublicRetryPolicyState {
+    fn from(value: crate::model::retry_policy::RetryPolicyState) -> Self {
+        use crate::model::retry_policy::RetryPolicyState;
+        match value {
+            RetryPolicyState::Counter(n) => {
+                PublicRetryPolicyState::Counter(PublicRetryPolicyStateCounter { count: n })
+            }
+            RetryPolicyState::Terminal => PublicRetryPolicyState::Terminal(Empty {}),
+            RetryPolicyState::Wrapper(inner) => {
+                PublicRetryPolicyState::Wrapper(PublicRetryPolicyStateWrapper {
+                    inner: Box::new((*inner).into()),
+                })
+            }
+            RetryPolicyState::CountBox { attempts, inner } => {
+                PublicRetryPolicyState::CountBox(PublicRetryPolicyStateCountBox {
+                    attempts,
+                    inner: Box::new((*inner).into()),
+                })
+            }
+            RetryPolicyState::TimeBox(inner) => {
+                PublicRetryPolicyState::TimeBox(PublicRetryPolicyStateTimeBox {
+                    inner: Box::new((*inner).into()),
+                })
+            }
+            RetryPolicyState::AndThen {
+                left,
+                right,
+                on_right,
+            } => PublicRetryPolicyState::AndThen(PublicRetryPolicyStateAndThen {
+                left: Box::new((*left).into()),
+                right: Box::new((*right).into()),
+                on_right,
+            }),
+            RetryPolicyState::Pair(first, second) => {
+                PublicRetryPolicyState::Pair(PublicRetryPolicyStatePair {
+                    first: Box::new((*first).into()),
+                    second: Box::new((*second).into()),
+                })
+            }
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl From<PublicRetryPolicyState> for crate::model::retry_policy::RetryPolicyState {
+    fn from(value: PublicRetryPolicyState) -> Self {
+        use crate::model::retry_policy::RetryPolicyState;
+        match value {
+            PublicRetryPolicyState::Counter(c) => RetryPolicyState::Counter(c.count),
+            PublicRetryPolicyState::Terminal(_) => RetryPolicyState::Terminal,
+            PublicRetryPolicyState::Wrapper(w) => {
+                RetryPolicyState::Wrapper(Box::new((*w.inner).into()))
+            }
+            PublicRetryPolicyState::CountBox(cb) => RetryPolicyState::CountBox {
+                attempts: cb.attempts,
+                inner: Box::new((*cb.inner).into()),
+            },
+            PublicRetryPolicyState::TimeBox(tb) => {
+                RetryPolicyState::TimeBox(Box::new((*tb.inner).into()))
+            }
+            PublicRetryPolicyState::AndThen(at) => RetryPolicyState::AndThen {
+                left: Box::new((*at.left).into()),
+                right: Box::new((*at.right).into()),
+                on_right: at.on_right,
+            },
+            PublicRetryPolicyState::Pair(p) => RetryPolicyState::Pair(
+                Box::new((*p.first).into()),
+                Box::new((*p.second).into()),
+            ),
+        }
+    }
+}

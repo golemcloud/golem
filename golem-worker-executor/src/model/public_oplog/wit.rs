@@ -117,11 +117,15 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 error,
                 retry_from,
-                inside_atomic_region: _,
+                inside_atomic_region,
+                retry_policy_state,
             }) => Self::Error(oplog::ErrorParameters {
                 timestamp: timestamp.into(),
                 error: error.to_string(),
                 retry_from: retry_from.into(),
+                inside_atomic_region,
+                retry_policy_state: retry_policy_state
+                    .and_then(|s| serde_json::to_vec(&s).ok()),
             }),
             PublicOplogEntry::NoOp(NoOpParams { timestamp }) => Self::NoOp(timestamp.into()),
             PublicOplogEntry::Jump(JumpParams { timestamp, jump }) => {
@@ -858,7 +862,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 error: params.error.into(),
                 retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
-                inside_atomic_region: false,
+                inside_atomic_region: params.inside_atomic_region,
+                retry_policy_state: params
+                    .retry_policy_state
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok()),
             }),
             oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
                 timestamp: timestamp_from_datetime(ts.timestamp),

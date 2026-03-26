@@ -11,6 +11,7 @@ import "golem/component/plugin.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
+import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
@@ -185,10 +186,48 @@ message SnapshotData {
   }
 }
 
+message RetryPolicyState {
+  oneof state {
+    uint32 counter = 1;
+    golem.common.Empty terminal = 2;
+    RetryPolicyStateWrapper wrapper = 3;
+    RetryPolicyStateCountBox count_box = 4;
+    RetryPolicyStateTimeBox time_box = 5;
+    RetryPolicyStateAndThen and_then = 6;
+    RetryPolicyStatePair pair = 7;
+  }
+}
+
+message RetryPolicyStateWrapper {
+  RetryPolicyState inner = 1;
+}
+
+message RetryPolicyStateCountBox {
+  uint32 attempts = 1;
+  RetryPolicyState inner = 2;
+}
+
+message RetryPolicyStateTimeBox {
+  RetryPolicyState inner = 1;
+}
+
+message RetryPolicyStateAndThen {
+  RetryPolicyState left = 1;
+  RetryPolicyState right = 2;
+  bool on_right = 3;
+}
+
+message RetryPolicyStatePair {
+  RetryPolicyState first = 1;
+  RetryPolicyState second = 2;
+}
+
 message ErrorParameters {
   google.protobuf.Timestamp timestamp = 1;
   string error = 2;
   uint64 retry_from = 3;
+  bool inside_atomic_region = 4;
+  optional RetryPolicyState retry_policy_state = 5;
 }
 
 message JumpParameters {

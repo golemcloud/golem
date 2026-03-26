@@ -27,16 +27,20 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
-use golem_common::model::{RetryConfig, Timestamp};
+use golem_common::model::{
+    NamedRetryPolicy, PredicateValue, RetryConfig, RetryEvaluationError, RetryPolicy,
+    RetryPolicyState, RetryProperties, RetryVerdict, ThreadRng, Timestamp,
+};
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm::IntoValueAndType;
+use golem_wasm::{FromValue, IntoValueAndType};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use wasmtime::component::Resource;
 use wasmtime_wasi::{DynPollable, DynamicPollable, Pollable, dynamic_subscribe};
 
@@ -121,14 +125,101 @@ pub trait InFunctionRetryHost {
     /// Returns the current retry configuration (overridden or default).
     fn retry_config(&self) -> RetryConfig;
 
+    /// Returns available semantic retry policies for the current worker context.
+    ///
+    /// Returning `None` means semantic policy resolution is unavailable and callers
+    /// should use the legacy `RetryConfig`-based fallback.
+    fn named_retry_policies(&self) -> Option<Vec<NamedRetryPolicy>> {
+        None
+    }
+
     /// Returns the number of prior retry attempts for the given retry point.
     async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32;
+
+    /// Returns the latest persisted semantic retry state for the given retry point, if available.
+    async fn current_retry_policy_state_for(
+        &self,
+        _retry_from: OplogIndex,
+    ) -> Option<RetryPolicyState> {
+        None
+    }
 
     /// Returns the current durable execution state.
     fn durable_execution_state(&self) -> DurableExecutionState;
 
     /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
-    async fn append_retry_error_entry(&mut self, retry_from: OplogIndex);
+    async fn append_retry_error_entry(
+        &mut self,
+        retry_from: OplogIndex,
+        retry_policy_state: Option<RetryPolicyState>,
+    );
+}
+
+pub(crate) fn collect_named_retry_policies(
+    agent_config: &HashMap<Vec<String>, golem_wasm::ValueAndType>,
+) -> Vec<NamedRetryPolicy> {
+    let mut policies = Vec::new();
+
+    for value_and_type in agent_config.values() {
+        if let Ok(mut parsed) = Vec::<NamedRetryPolicy>::from_value(value_and_type.value.clone()) {
+            policies.append(&mut parsed);
+            continue;
+        }
+
+        if let Ok(parsed) = NamedRetryPolicy::from_value(value_and_type.value.clone()) {
+            policies.push(parsed);
+        }
+    }
+
+    policies
+}
+
+pub(crate) fn evaluate_named_policy_step(
+    named_policy: &NamedRetryPolicy,
+    total_attempts: u32,
+    properties: &RetryProperties,
+    current_state: Option<&RetryPolicyState>,
+) -> Result<(RetryPolicyState, RetryVerdict), RetryEvaluationError> {
+    let mut rng = ThreadRng;
+    let state = match current_state {
+        Some(state) => state.clone(),
+        None => named_policy.policy.reconstruct_state_from_count(
+            total_attempts,
+            Duration::ZERO,
+            properties,
+            &mut rng,
+        )?,
+    };
+
+    let (new_state, verdict) =
+        named_policy
+            .policy
+            .step(&state, Duration::ZERO, properties, &mut rng);
+
+    Ok((new_state, verdict))
+}
+
+
+
+pub(crate) fn policy_uses_elapsed_time(policy: &RetryPolicy) -> bool {
+    match policy {
+        RetryPolicy::TimeBox { .. } => true,
+        RetryPolicy::CountBox { inner, .. }
+        | RetryPolicy::Clamp { inner, .. }
+        | RetryPolicy::AddDelay { inner, .. }
+        | RetryPolicy::Jitter { inner, .. }
+        | RetryPolicy::FilteredOn { inner, .. } => policy_uses_elapsed_time(inner),
+        RetryPolicy::AndThen(left, right)
+        | RetryPolicy::Union(left, right)
+        | RetryPolicy::Intersect(left, right) => {
+            policy_uses_elapsed_time(left) || policy_uses_elapsed_time(right)
+        }
+        RetryPolicy::Periodic(_)
+        | RetryPolicy::Exponential { .. }
+        | RetryPolicy::Fibonacci { .. }
+        | RetryPolicy::Immediate
+        | RetryPolicy::Never => false,
+    }
 }
 
 /// Encapsulates in-function retry state for a single durable function invocation.
@@ -164,8 +255,18 @@ impl InFunctionRetryState {
     /// emits a debug log, and records the metric.
     pub async fn decide_retry(
         &mut self,
-        ctx: &mut impl InFunctionRetryHost,
+        ctx: &mut (impl InFunctionRetryHost + Sync),
         function_label: &str,
+    ) -> AsyncRetryDecision {
+        self.decide_retry_with_properties(ctx, function_label, &RetryProperties::new())
+            .await
+    }
+
+    pub async fn decide_retry_with_properties(
+        &mut self,
+        ctx: &mut (impl InFunctionRetryHost + Sync),
+        function_label: &str,
+        properties: &RetryProperties,
     ) -> AsyncRetryDecision {
         if ctx.in_atomic_region() {
             return AsyncRetryDecision::FallBackToTrap;
@@ -175,12 +276,73 @@ impl InFunctionRetryState {
         let retry_config = ctx.retry_config();
         let oplog_retry_count = ctx.current_retry_count_for(retry_point).await;
         let total_attempts = self.retry_count + oplog_retry_count;
+        let mut retry_policy_state: Option<RetryPolicyState> = None;
 
-        let delay = match get_delay(&retry_config, total_attempts) {
-            Some(delay) => delay,
-            None => {
-                return AsyncRetryDecision::Exhausted;
+        let semantic_delay = if let Some(policies) = ctx.named_retry_policies() {
+            match NamedRetryPolicy::resolve(&policies, properties) {
+                Ok(Some(named_policy)) => {
+                    if policy_uses_elapsed_time(&named_policy.policy) {
+                        warn!(
+                            function = function_label,
+                            retry_policy = %named_policy.name,
+                            total_attempts,
+                            "Semantic retry policy uses elapsed-time operators that are not supported in inline retry reconstruction; falling back to legacy retry config"
+                        );
+                        get_delay(&retry_config, total_attempts)
+                    } else {
+                        let current_state = ctx.current_retry_policy_state_for(retry_point).await;
+                        match evaluate_named_policy_step(
+                            named_policy,
+                            total_attempts,
+                            properties,
+                            current_state.as_ref(),
+                        ) {
+                            Ok((new_state, RetryVerdict::Retry(delay))) => {
+                                retry_policy_state = Some(new_state);
+                                Some(delay)
+                            }
+                            Ok((_new_state, RetryVerdict::GiveUp)) => None,
+                            Ok((_new_state, RetryVerdict::Error(error))) => {
+                                warn!(
+                                    function = function_label,
+                                    retry_policy = %named_policy.name,
+                                    total_attempts,
+                                    ?error,
+                                    "Semantic retry policy evaluation returned error verdict, falling back to legacy retry config"
+                                );
+                                get_delay(&retry_config, total_attempts)
+                            }
+                            Err(error) => {
+                                warn!(
+                                    function = function_label,
+                                    retry_policy = %named_policy.name,
+                                    total_attempts,
+                                    ?error,
+                                    "Failed evaluating semantic retry policy, falling back to legacy retry config"
+                                );
+                                get_delay(&retry_config, total_attempts)
+                            }
+                        }
+                    }
+                }
+                Ok(None) => get_delay(&retry_config, total_attempts),
+                Err(error) => {
+                    warn!(
+                        function = function_label,
+                        total_attempts,
+                        ?error,
+                        "Failed resolving semantic retry policy, falling back to legacy retry config"
+                    );
+                    get_delay(&retry_config, total_attempts)
+                }
             }
+        } else {
+            get_delay(&retry_config, total_attempts)
+        };
+
+        let delay = match semantic_delay {
+            Some(delay) => delay,
+            None => return AsyncRetryDecision::Exhausted,
         };
 
         let state = ctx.durable_execution_state();
@@ -188,7 +350,8 @@ impl InFunctionRetryState {
             return AsyncRetryDecision::FallBackToTrap;
         }
 
-        ctx.append_retry_error_entry(retry_point).await;
+        ctx.append_retry_error_entry(retry_point, retry_policy_state)
+            .await;
         self.retry_count += 1;
 
         debug!(
@@ -471,6 +634,11 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             .clone()
     }
 
+    fn named_retry_policies(&self) -> Option<Vec<NamedRetryPolicy>> {
+        let policies = collect_named_retry_policies(&self.state.agent_config);
+        (!policies.is_empty()).then_some(policies)
+    }
+
     async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32 {
         let latest_status = self
             .public_state
@@ -484,6 +652,21 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             .unwrap_or(0)
     }
 
+    async fn current_retry_policy_state_for(
+        &self,
+        retry_from: OplogIndex,
+    ) -> Option<RetryPolicyState> {
+        let latest_status = self
+            .public_state
+            .worker()
+            .get_non_detached_last_known_status()
+            .await;
+        latest_status
+            .current_retry_policy_state
+            .get(&retry_from)
+            .cloned()
+    }
+
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
             is_live: self.state.is_live(),
@@ -494,13 +677,18 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn append_retry_error_entry(&mut self, retry_from: OplogIndex) {
+    async fn append_retry_error_entry(
+        &mut self,
+        retry_from: OplogIndex,
+        retry_policy_state: Option<RetryPolicyState>,
+    ) {
         use golem_common::model::oplog::AgentError;
         let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             inside_atomic_region,
+            retry_policy_state,
         );
         self.public_state.worker().add_and_commit_oplog(entry).await;
     }
@@ -710,6 +898,17 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
     ) -> anyhow::Result<()> {
+        self.try_trigger_retry_with_properties(ctx, result, classify, RetryProperties::new())
+            .await
+    }
+
+    pub async fn try_trigger_retry_with_properties<Ok, Err: Display>(
+        &self,
+        ctx: &mut impl DurabilityHost,
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+        _properties: RetryProperties,
+    ) -> anyhow::Result<()> {
         if let Err(err) = result {
             let kind = classify(err);
             match kind {
@@ -736,9 +935,25 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
     /// - `Err(...)` — propagated trap (fallback to oplog replay, or interrupt)
     pub async fn try_trigger_retry_or_loop<Ok, Err: Display>(
         &mut self,
-        ctx: &mut impl DurabilityHost,
+        ctx: &mut (impl DurabilityHost + Sync),
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
+    ) -> anyhow::Result<InternalRetryResult> {
+        self.try_trigger_retry_or_loop_with_properties(
+            ctx,
+            result,
+            classify,
+            RetryProperties::new(),
+        )
+        .await
+    }
+
+    pub async fn try_trigger_retry_or_loop_with_properties<Ok, Err: Display>(
+        &mut self,
+        ctx: &mut (impl DurabilityHost + Sync),
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+        properties: RetryProperties,
     ) -> anyhow::Result<InternalRetryResult> {
         let err = match result {
             Ok(_) => return Ok(InternalRetryResult::Persist),
@@ -746,6 +961,16 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         };
 
         let kind = classify(err);
+
+        let mut properties = properties;
+        properties.set(
+            "error-type",
+            PredicateValue::Text(match kind {
+                HostFailureKind::Transient => "transient".to_string(),
+                HostFailureKind::Permanent => "permanent".to_string(),
+            }),
+        );
+
         if kind == HostFailureKind::Permanent {
             return Ok(InternalRetryResult::Persist);
         }
@@ -757,7 +982,10 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
             return Ok(InternalRetryResult::Persist);
         }
 
-        let decision = self.retry_state.decide_retry(ctx, Pair::FQFN).await;
+        let decision = self
+            .retry_state
+            .decide_retry_with_properties(ctx, Pair::FQFN, &properties)
+            .await;
 
         match decision {
             AsyncRetryDecision::RetryAfterDelay(delay) => {
@@ -910,8 +1138,11 @@ pub async fn count_oplog_errors_for(
 pub struct TaskRetryContext<Ctx: WorkerCtx> {
     pub retry_point: OplogIndex,
     pub retry_config: RetryConfig,
+    pub named_retry_policies: Option<Vec<NamedRetryPolicy>>,
     pub max_in_function_retry_delay: Duration,
     pub base_retry_count: u32,
+    pub current_retry_policy_state: Option<RetryPolicyState>,
+    pub retry_properties: RetryProperties,
     pub worker: Arc<crate::worker::Worker<Ctx>>,
 }
 
@@ -930,8 +1161,19 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         self.retry_config.clone()
     }
 
+    fn named_retry_policies(&self) -> Option<Vec<NamedRetryPolicy>> {
+        self.named_retry_policies.clone()
+    }
+
     async fn current_retry_count_for(&self, _retry_from: OplogIndex) -> u32 {
         self.base_retry_count
+    }
+
+    async fn current_retry_policy_state_for(
+        &self,
+        _retry_from: OplogIndex,
+    ) -> Option<RetryPolicyState> {
+        self.current_retry_policy_state.clone()
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
@@ -944,14 +1186,21 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         }
     }
 
-    async fn append_retry_error_entry(&mut self, retry_from: OplogIndex) {
+    async fn append_retry_error_entry(
+        &mut self,
+        retry_from: OplogIndex,
+        retry_policy_state: Option<RetryPolicyState>,
+    ) {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
             false, // spawned tasks are never inside atomic regions
+            retry_policy_state.clone(),
         );
         self.worker.add_and_commit_oplog(entry).await;
+
+        self.current_retry_policy_state = retry_policy_state;
     }
 }
 
@@ -989,11 +1238,18 @@ where
     loop {
         match operation().await {
             Ok(value) => return Ok(value),
-            Err(err) if classify(&err) == HostFailureKind::Permanent => {
-                return Err(err);
-            }
             Err(err) => {
-                let decision = retry_state.decide_retry(&mut task_ctx, "in-task").await;
+                let error_kind = classify(&err);
+                if error_kind == HostFailureKind::Permanent {
+                    return Err(err);
+                }
+
+                let mut retry_properties = task_ctx.retry_properties.clone();
+                retry_properties.set("error-type", PredicateValue::Text("transient".to_string()));
+
+                let decision = retry_state
+                    .decide_retry_with_properties(&mut task_ctx, "in-task", &retry_properties)
+                    .await;
 
                 match decision {
                     AsyncRetryDecision::RetryAfterDelay(delay) => {
@@ -1055,6 +1311,7 @@ mod tests {
     use golem_common::model::RetryConfig;
     use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::oplog::host_functions::KeyvalueEventualGet;
+    use golem_common::model::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
@@ -1065,6 +1322,7 @@ mod tests {
         assume_idempotence: bool,
         max_in_function_retry_delay: Duration,
         retry_config: RetryConfig,
+        named_retry_policies: Option<Vec<NamedRetryPolicy>>,
         oplog_retry_count: u32,
         /// Tracks how many times `append_retry_error_entry` was called.
         retry_entries_appended: u32,
@@ -1090,6 +1348,7 @@ mod tests {
                     multiplier: 1.0,
                     max_jitter_factor: None,
                 },
+                named_retry_policies: None,
                 oplog_retry_count: 0,
                 retry_entries_appended: 0,
                 trap_triggered_count: 0,
@@ -1123,6 +1382,10 @@ mod tests {
             self.retry_config.clone()
         }
 
+        fn named_retry_policies(&self) -> Option<Vec<NamedRetryPolicy>> {
+            self.named_retry_policies.clone()
+        }
+
         async fn current_retry_count_for(&self, _retry_from: OplogIndex) -> u32 {
             self.oplog_retry_count
         }
@@ -1131,7 +1394,11 @@ mod tests {
             MockDurabilityHost::durable_execution_state(self)
         }
 
-        async fn append_retry_error_entry(&mut self, _retry_from: OplogIndex) {
+        async fn append_retry_error_entry(
+            &mut self,
+            _retry_from: OplogIndex,
+            _retry_policy_state: Option<RetryPolicyState>,
+        ) {
             self.retry_entries_appended += 1;
         }
     }
@@ -1216,7 +1483,12 @@ mod tests {
 
         let result: Result<String, String> = Err("connection refused".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
 
@@ -1234,7 +1506,12 @@ mod tests {
 
         let result: Result<String, String> = Ok("value".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
 
@@ -1251,7 +1528,12 @@ mod tests {
 
         let result: Result<String, String> = Err("invalid key format".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Permanent)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Permanent,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
 
@@ -1272,7 +1554,12 @@ mod tests {
         // Attempts 0, 1, 2 should return RetryInternally
         for i in 0..3 {
             let action = durability
-                .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+                .try_trigger_retry_or_loop_with_properties(
+                    &mut ctx,
+                    &result,
+                    |_| HostFailureKind::Transient,
+                    RetryProperties::new(),
+                )
                 .await
                 .expect("should not propagate error");
             assert_eq!(
@@ -1284,12 +1571,161 @@ mod tests {
 
         // Attempt 3 should return Persist (budget exhausted)
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::Persist);
         assert_eq!(ctx.retry_entries_appended, 3);
         assert_eq!(durability.retry_state.retry_count(), 3);
+    }
+
+    #[test]
+    async fn named_retry_policy_match_overrides_legacy_retry_budget() {
+        let mut ctx = MockDurabilityHost::new();
+        // Legacy fallback would be exhausted immediately, but a matching semantic
+        // policy should still allow one in-function retry.
+        ctx.retry_config.max_attempts = 0;
+        ctx.named_retry_policies = Some(vec![NamedRetryPolicy {
+            name: "rpc-transient".to_string(),
+            priority: 100,
+            predicate: Predicate::PropEq {
+                property: "verb".to_string(),
+                value: PredicateValue::Text("invoke".to_string()),
+            },
+            policy: RetryPolicy::CountBox {
+                max_retries: 1,
+                inner: Box::new(RetryPolicy::Immediate),
+            },
+        }]);
+
+        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut props = RetryProperties::new();
+        props.set("verb", PredicateValue::Text("invoke".to_string()));
+
+        let result: Result<String, String> = Err("timeout".to_string());
+        let action = durability
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                props,
+            )
+            .await
+            .expect("should not propagate error");
+
+        assert_eq!(action, InternalRetryResult::RetryInternally);
+        assert_eq!(ctx.retry_entries_appended, 1);
+    }
+
+    #[test]
+    async fn named_retry_policy_no_match_falls_back_to_legacy_retry_config() {
+        let mut ctx = MockDurabilityHost::new();
+        // No retries in legacy path.
+        ctx.retry_config.max_attempts = 0;
+        ctx.named_retry_policies = Some(vec![NamedRetryPolicy {
+            name: "rpc-transient".to_string(),
+            priority: 100,
+            predicate: Predicate::PropEq {
+                property: "verb".to_string(),
+                value: PredicateValue::Text("invoke".to_string()),
+            },
+            policy: RetryPolicy::Immediate,
+        }]);
+
+        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut props = RetryProperties::new();
+        props.set("verb", PredicateValue::Text("query".to_string()));
+
+        let result: Result<String, String> = Err("timeout".to_string());
+        let action = durability
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                props,
+            )
+            .await
+            .expect("should not propagate error");
+
+        assert_eq!(action, InternalRetryResult::Persist);
+        assert_eq!(ctx.retry_entries_appended, 0);
+    }
+
+    #[test]
+    async fn semantic_policy_resolution_error_falls_back_to_legacy_retry_config() {
+        let mut ctx = MockDurabilityHost::new();
+        // Legacy path should allow exactly one retry.
+        ctx.retry_config.max_attempts = 1;
+        ctx.named_retry_policies = Some(vec![NamedRetryPolicy {
+            name: "invalid-for-props".to_string(),
+            priority: 100,
+            predicate: Predicate::PropEq {
+                property: "attempt".to_string(),
+                value: PredicateValue::Integer(1),
+            },
+            policy: RetryPolicy::Never,
+        }]);
+
+        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut props = RetryProperties::new();
+        // This type mismatch forces a coercion error during predicate evaluation.
+        props.set("attempt", PredicateValue::Boolean(true));
+
+        let result: Result<String, String> = Err("timeout".to_string());
+        let action = durability
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                props,
+            )
+            .await
+            .expect("should not propagate error");
+
+        assert_eq!(action, InternalRetryResult::RetryInternally);
+        assert_eq!(ctx.retry_entries_appended, 1);
+    }
+
+    #[test]
+    async fn elapsed_time_policy_falls_back_to_legacy_retry_config() {
+        let mut ctx = MockDurabilityHost::new();
+        // Legacy path is exhausted immediately.
+        ctx.retry_config.max_attempts = 0;
+        ctx.named_retry_policies = Some(vec![NamedRetryPolicy {
+            name: "time-boxed".to_string(),
+            priority: 100,
+            predicate: Predicate::PropEq {
+                property: "verb".to_string(),
+                value: PredicateValue::Text("invoke".to_string()),
+            },
+            policy: RetryPolicy::TimeBox {
+                limit: Duration::from_secs(60),
+                inner: Box::new(RetryPolicy::Immediate),
+            },
+        }]);
+
+        let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
+        let mut props = RetryProperties::new();
+        props.set("verb", PredicateValue::Text("invoke".to_string()));
+
+        let result: Result<String, String> = Err("timeout".to_string());
+        let action = durability
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                props,
+            )
+            .await
+            .expect("should not propagate error");
+
+        assert_eq!(action, InternalRetryResult::Persist);
+        assert_eq!(ctx.retry_entries_appended, 0);
     }
 
     // Test 1e: WriteRemote with idempotence is eligible
@@ -1301,7 +1737,12 @@ mod tests {
 
         let result: Result<String, String> = Err("timeout".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
 
@@ -1321,7 +1762,12 @@ mod tests {
 
         let result: Result<String, String> = Err("timeout".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error (mock try_trigger_retry returns Ok)");
 
@@ -1346,7 +1792,12 @@ mod tests {
 
         let result: Result<String, String> = Err("connection refused".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error (mock try_trigger_retry returns Ok)");
 
@@ -1371,7 +1822,12 @@ mod tests {
 
         let result: Result<String, String> = Err("timeout".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
 
@@ -1388,7 +1844,12 @@ mod tests {
 
         let result: Result<String, String> = Err("timeout".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
 
@@ -1405,7 +1866,12 @@ mod tests {
 
         let result: Result<String, String> = Err("timeout".to_string());
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
 
@@ -1429,7 +1895,12 @@ mod tests {
 
         let result: Result<String, String> = Err("timeout".to_string());
         let err = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect_err("should propagate interrupt as error");
 
@@ -1456,7 +1927,12 @@ mod tests {
 
         let result: Result<String, String> = Err("timeout".to_string());
         let err = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect_err("should propagate interrupt as error");
 
@@ -1477,21 +1953,36 @@ mod tests {
         // With 3 oplog retries, total=3. max_attempts=5.
         // Attempt at total=3 → ok (get_delay(config, 3) = Some)
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::RetryInternally);
 
         // Attempt at total=4 → ok (get_delay(config, 4) = Some)
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::RetryInternally);
 
         // Attempt at total=5 → exhausted (get_delay(config, 5) = None since 5 >= 5)
         let action = durability
-            .try_trigger_retry_or_loop(&mut ctx, &result, |_| HostFailureKind::Transient)
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
             .await
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::Persist);

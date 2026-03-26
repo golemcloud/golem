@@ -5,7 +5,18 @@ interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use golem:core/types@1.5.0.{value-and-type, account-id, data-value, data-schema, wit-value};
 
-    use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
+    use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
+    use wasi:clocks/monotonic-clock@0.2.3.{duration};
+
+    /// Legacy retry policy record, kept for oplog backward compatibility.
+    /// New code should use `golem:api/retry` instead.
+    record retry-policy {
+        max-attempts: u32,
+        min-delay: duration,
+        max-delay: duration,
+        multiplier: f64,
+        max-jitter-factor: option<f64>
+    }
     use context.{attribute, attribute-value, span-id, trace-id};
 
     record environment-plugin-grant-id {
@@ -107,7 +118,10 @@ interface oplog {
     record error-parameters {
         timestamp: datetime,
         error: string,
-        retry-from: oplog-index
+        retry-from: oplog-index,
+        inside-atomic-region: bool,
+        /// Serialized retry policy state (JSON-encoded PublicRetryPolicyState)
+        retry-policy-state: option<list<u8>>,
     }
 
     record oplog-region {
@@ -422,6 +436,8 @@ interface oplog {
         error: worker-error,
         retry-from: oplog-index,
         inside-atomic-region: bool,
+        /// Serialized retry policy state (JSON-encoded RetryPolicyState)
+        retry-policy-state: option<list<u8>>,
     }
 
     record raw-pending-agent-invocation-parameters {

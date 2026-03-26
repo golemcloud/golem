@@ -19,10 +19,10 @@ use crate::durable_host::{
 };
 use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
-use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest, PersistenceLevel};
+use golem_common::model::{IdempotencyKey, RetryContext};
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
@@ -85,6 +85,14 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
         .get_mut(&Resource::<HostFutureIncomingResponse>::new_borrow(handle))?;
     let old = std::mem::replace(future_res, HostFutureIncomingResponse::Consumed);
     let wrapped = if let HostFutureIncomingResponse::Pending(orig_handle) = old {
+        let named_retry_policies = {
+            let policies = crate::durable_host::durability::collect_named_retry_policies(
+                &ctx.state.agent_config,
+            );
+            (!policies.is_empty()).then_some(policies)
+        };
+        let retry_properties =
+            RetryContext::http(&state.request.method.to_string(), &state.request.uri);
         let retry_handle = spawn_http_request_with_retry(
             orig_handle,
             state.request.clone(),
@@ -92,6 +100,8 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
             ctx.wasi_http.connection_pool.clone(),
             ctx.public_state.worker(),
             ctx.retry_config(),
+            named_retry_policies,
+            retry_properties,
             durable_state.max_in_function_retry_delay,
             state.begin_index,
             ctx.execution_status.clone(),

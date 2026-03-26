@@ -20,7 +20,9 @@ use super::{
     ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicRetryConfig, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
+    PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
+    PublicRetryConfig, PublicRetryPolicyState, PublicSnapshotData, PublicSpanData,
+    PublicUpdateDescription,
     RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
     StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
@@ -344,7 +346,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
-                inside_atomic_region: false,
+                inside_atomic_region: error.inside_atomic_region,
+                retry_policy_state: error
+                    .retry_policy_state
+                    .map(TryInto::try_into)
+                    .transpose()?,
             })),
             oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(NoOpParams {
                 timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -783,6 +789,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         timestamp: Some(error.timestamp.into()),
                         error: error.error,
                         retry_from: error.retry_from.0,
+                        inside_atomic_region: error.inside_atomic_region,
+                        retry_policy_state: error.retry_policy_state.map(Into::into),
                     },
                 )),
             },
@@ -1975,5 +1983,134 @@ impl TryFrom<PublicOplogEntryWithIndex>
             oplog_index: value.oplog_index.into(),
             entry: Some(value.entry.try_into()?),
         })
+    }
+}
+
+impl From<PublicRetryPolicyState>
+    for golem_api_grpc::proto::golem::worker::RetryPolicyState
+{
+    fn from(value: PublicRetryPolicyState) -> Self {
+        use golem_api_grpc::proto::golem::worker::retry_policy_state::State;
+        use golem_api_grpc::proto::golem::worker::{
+            RetryPolicyStateAndThen, RetryPolicyStateCountBox, RetryPolicyStatePair,
+            RetryPolicyStateTimeBox, RetryPolicyStateWrapper,
+        };
+
+        let state = match value {
+            PublicRetryPolicyState::Counter(c) => State::Counter(c.count),
+            PublicRetryPolicyState::Terminal(_) => {
+                State::Terminal(golem_api_grpc::proto::golem::common::Empty {})
+            }
+            PublicRetryPolicyState::Wrapper(w) => {
+                State::Wrapper(Box::new(RetryPolicyStateWrapper {
+                    inner: Some(Box::new((*w.inner).into())),
+                }))
+            }
+            PublicRetryPolicyState::CountBox(cb) => {
+                State::CountBox(Box::new(RetryPolicyStateCountBox {
+                    attempts: cb.attempts,
+                    inner: Some(Box::new((*cb.inner).into())),
+                }))
+            }
+            PublicRetryPolicyState::TimeBox(tb) => {
+                State::TimeBox(Box::new(RetryPolicyStateTimeBox {
+                    inner: Some(Box::new((*tb.inner).into())),
+                }))
+            }
+            PublicRetryPolicyState::AndThen(at) => {
+                State::AndThen(Box::new(RetryPolicyStateAndThen {
+                    left: Some(Box::new((*at.left).into())),
+                    right: Some(Box::new((*at.right).into())),
+                    on_right: at.on_right,
+                }))
+            }
+            PublicRetryPolicyState::Pair(p) => State::Pair(Box::new(RetryPolicyStatePair {
+                first: Some(Box::new((*p.first).into())),
+                second: Some(Box::new((*p.second).into())),
+            })),
+        };
+        golem_api_grpc::proto::golem::worker::RetryPolicyState { state: Some(state) }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicyState>
+    for PublicRetryPolicyState
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::RetryPolicyState,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::retry_policy_state::State;
+
+        let state = value.state.ok_or("Missing retry policy state")?;
+        match state {
+            State::Counter(n) => Ok(PublicRetryPolicyState::Counter(
+                super::PublicRetryPolicyStateCounter { count: n },
+            )),
+            State::Terminal(_) => Ok(PublicRetryPolicyState::Terminal(
+                crate::base_model::Empty {},
+            )),
+            State::Wrapper(w) => {
+                let inner = w
+                    .inner
+                    .ok_or("Missing inner in Wrapper")?;
+                Ok(PublicRetryPolicyState::Wrapper(
+                    super::PublicRetryPolicyStateWrapper {
+                        inner: Box::new((*inner).try_into()?),
+                    },
+                ))
+            }
+            State::CountBox(cb) => {
+                let inner = cb
+                    .inner
+                    .ok_or("Missing inner in CountBox")?;
+                Ok(PublicRetryPolicyState::CountBox(
+                    super::PublicRetryPolicyStateCountBox {
+                        attempts: cb.attempts,
+                        inner: Box::new((*inner).try_into()?),
+                    },
+                ))
+            }
+            State::TimeBox(tb) => {
+                let inner = tb
+                    .inner
+                    .ok_or("Missing inner in TimeBox")?;
+                Ok(PublicRetryPolicyState::TimeBox(
+                    super::PublicRetryPolicyStateTimeBox {
+                        inner: Box::new((*inner).try_into()?),
+                    },
+                ))
+            }
+            State::AndThen(at) => {
+                let left = at
+                    .left
+                    .ok_or("Missing left in AndThen")?;
+                let right = at
+                    .right
+                    .ok_or("Missing right in AndThen")?;
+                Ok(PublicRetryPolicyState::AndThen(
+                    super::PublicRetryPolicyStateAndThen {
+                        left: Box::new((*left).try_into()?),
+                        right: Box::new((*right).try_into()?),
+                        on_right: at.on_right,
+                    },
+                ))
+            }
+            State::Pair(p) => {
+                let first = p
+                    .first
+                    .ok_or("Missing first in Pair")?;
+                let second = p
+                    .second
+                    .ok_or("Missing second in Pair")?;
+                Ok(PublicRetryPolicyState::Pair(
+                    super::PublicRetryPolicyStatePair {
+                        first: Box::new((*first).try_into()?),
+                        second: Box::new((*second).try_into()?),
+                    },
+                ))
+            }
+        }
     }
 }

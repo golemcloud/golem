@@ -284,6 +284,7 @@ fn error_serialization_poem_serde_equivalence() {
         error: "test".to_string(),
         retry_from: OplogIndex::INITIAL,
         inside_atomic_region: false,
+        retry_policy_state: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

@@ -107,7 +107,9 @@ interface oplog {
     record error-parameters {
         timestamp: datetime,
         error: string,
-        retry-from: oplog-index
+        retry-from: oplog-index,
+        inside-atomic-region: bool,
+        retry-policy-state: option<list<u8>>,
     }
 
     record oplog-region {
@@ -422,6 +424,7 @@ interface oplog {
         error: worker-error,
         retry-from: oplog-index,
         inside-atomic-region: bool,
+        retry-policy-state: option<list<u8>>,
     }
 
     record raw-pending-agent-invocation-parameters {

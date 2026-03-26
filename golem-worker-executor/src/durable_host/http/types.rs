@@ -1067,6 +1067,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     None,
                     self.public_state.worker(),
                     self.retry_config(),
+                    {
+                        let policies =
+                            crate::durable_host::durability::collect_named_retry_policies(
+                                &self.state.agent_config,
+                            );
+                        (!policies.is_empty()).then_some(policies)
+                    },
+                    golem_common::model::RetryContext::http(
+                        &request_state.request.method.to_string(),
+                        &request_state.request.uri,
+                    ),
                     exec_state.max_in_function_retry_delay,
                     request_state.begin_index,
                     self.execution_status.clone(),
