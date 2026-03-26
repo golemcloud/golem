@@ -10,6 +10,7 @@ import {
   classifyFailure,
   type FailureClassification,
 } from "./failure-classification.js";
+import { findGolemAppDir } from "./workspace.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
 // --- Schemas ---
@@ -1028,28 +1029,7 @@ export class ScenarioExecutor {
   }
 
   private async findGolemProjectDir(): Promise<string> {
-    // Check workspace root first
-    try {
-      await fs.access(path.join(this.workspace, "golem.yaml"));
-      return this.workspace;
-    } catch {
-      // Not in root, search immediate subdirectories
-    }
-
-    const entries = await fs.readdir(this.workspace, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-      const candidate = path.join(this.workspace, entry.name);
-      try {
-        await fs.access(path.join(candidate, "golem.yaml"));
-        return candidate;
-      } catch {
-        // Continue searching
-      }
-    }
-
-    // Fall back to workspace root and let golem build report the error
-    return this.workspace;
+    return findGolemAppDir(this.workspace);
   }
 
   private async runLocalCommand(

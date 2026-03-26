@@ -22,6 +22,7 @@ import {
   type HtmlScenarioReport,
 } from "./html-report.js";
 import chalk from "chalk";
+import { findGolemAppDir } from "./workspace.js";
 
 const SUPPORTED_AGENTS = [
   "claude-code",
@@ -58,24 +59,7 @@ function createDriver(agent: SupportedAgent): AgentDriver {
 }
 
 async function cleanupGolemState(cwd: string): Promise<void> {
-  // Find a subdirectory containing golem.yaml (the app dir is one level inside the workspace)
-  let appDir = cwd;
-  try {
-    await fs.access(path.join(cwd, "golem.yaml"));
-  } catch {
-    const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        try {
-          await fs.access(path.join(cwd, entry.name, "golem.yaml"));
-          appDir = path.join(cwd, entry.name);
-          break;
-        } catch {
-          // Not in this subdir
-        }
-      }
-    }
-  }
+  const appDir = await findGolemAppDir(cwd);
   return new Promise((resolve) => {
     const child = spawn("golem", ["deploy", "--reset", "--yes"], {
       cwd: appDir,
