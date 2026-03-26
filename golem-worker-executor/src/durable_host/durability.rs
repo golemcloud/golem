@@ -28,10 +28,9 @@ use golem_common::model::oplog::{
     PersistenceLevel,
 };
 use golem_common::model::{
-    NamedRetryPolicy, PredicateValue, RetryConfig, RetryEvaluationError, RetryPolicy,
+    NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicy,
     RetryPolicyState, RetryProperties, RetryVerdict, ThreadRng, Timestamp,
 };
-use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::{FromValue, IntoValueAndType};
 use std::collections::HashMap;
@@ -122,16 +121,8 @@ pub trait InFunctionRetryHost {
     /// Returns the oplog index that `OplogEntry::Error` entries should reference as `retry_from`.
     fn current_retry_point(&self) -> OplogIndex;
 
-    /// Returns the current retry configuration (overridden or default).
-    fn retry_config(&self) -> RetryConfig;
-
     /// Returns available semantic retry policies for the current worker context.
-    ///
-    /// Returning `None` means semantic policy resolution is unavailable and callers
-    /// should use the legacy `RetryConfig`-based fallback.
-    fn named_retry_policies(&mut self) -> Option<Vec<NamedRetryPolicy>> {
-        None
-    }
+    fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy>;
 
     /// Returns the current semantic retry policy state for the given retry point, if available.
     async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState>;
@@ -245,15 +236,6 @@ impl InFunctionRetryState {
     ///
     /// On `RetryAfterDelay`, increments the retry counter, writes an oplog error entry,
     /// emits a debug log, and records the metric.
-    pub async fn decide_retry(
-        &mut self,
-        ctx: &mut (impl InFunctionRetryHost + Sync),
-        function_label: &str,
-    ) -> AsyncRetryDecision {
-        self.decide_retry_with_properties(ctx, function_label, &RetryProperties::new())
-            .await
-    }
-
     pub async fn decide_retry_with_properties(
         &mut self,
         ctx: &mut (impl InFunctionRetryHost + Sync),
@@ -265,76 +247,67 @@ impl InFunctionRetryState {
         }
 
         let retry_point = ctx.current_retry_point();
-        let retry_config = ctx.retry_config();
         let current_state = ctx.current_retry_state_for(retry_point).await;
         let oplog_retry_count = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
         let total_attempts = self.retry_count + oplog_retry_count;
         let mut retry_policy_state: Option<RetryPolicyState> = None;
 
-        let semantic_delay = if let Some(policies) = ctx.named_retry_policies() {
-            match NamedRetryPolicy::resolve(&policies, properties) {
-                Ok(Some(named_policy)) => {
-                    if policy_uses_elapsed_time(&named_policy.policy) {
-                        warn!(
-                            function = function_label,
-                            retry_policy = %named_policy.name,
-                            total_attempts,
-                            "Semantic retry policy uses elapsed-time operators that are not supported in inline retry reconstruction; falling back to legacy retry config"
-                        );
-                        get_delay(&retry_config, total_attempts)
-                    } else {
-                        match evaluate_named_policy_step(
-                            named_policy,
-                            total_attempts,
-                            properties,
-                            current_state.as_ref(),
-                        ) {
-                            Ok((new_state, RetryVerdict::Retry(delay))) => {
-                                retry_policy_state = Some(new_state);
-                                Some(delay)
-                            }
-                            Ok((_new_state, RetryVerdict::GiveUp)) => None,
-                            Ok((_new_state, RetryVerdict::Error(error))) => {
-                                warn!(
-                                    function = function_label,
-                                    retry_policy = %named_policy.name,
-                                    total_attempts,
-                                    ?error,
-                                    "Semantic retry policy evaluation returned error verdict, falling back to legacy retry config"
-                                );
-                                get_delay(&retry_config, total_attempts)
-                            }
-                            Err(error) => {
-                                warn!(
-                                    function = function_label,
-                                    retry_policy = %named_policy.name,
-                                    total_attempts,
-                                    ?error,
-                                    "Failed evaluating semantic retry policy, falling back to legacy retry config"
-                                );
-                                get_delay(&retry_config, total_attempts)
-                            }
-                        }
-                    }
-                }
-                Ok(None) => get_delay(&retry_config, total_attempts),
-                Err(error) => {
-                    warn!(
-                        function = function_label,
-                        total_attempts,
-                        ?error,
-                        "Failed resolving semantic retry policy, falling back to legacy retry config"
-                    );
-                    get_delay(&retry_config, total_attempts)
-                }
+        let policies = ctx.named_retry_policies();
+        let named_policy = match NamedRetryPolicy::resolve(&policies, properties) {
+            Ok(Some(policy)) => policy,
+            Ok(None) => return AsyncRetryDecision::Exhausted,
+            Err(error) => {
+                warn!(
+                    function = function_label,
+                    total_attempts,
+                    ?error,
+                    "Failed resolving semantic retry policy"
+                );
+                return AsyncRetryDecision::Exhausted;
             }
-        } else {
-            get_delay(&retry_config, total_attempts)
         };
 
-        let delay = match semantic_delay {
-            Some(delay) => delay,
-            None => return AsyncRetryDecision::Exhausted,
+        if policy_uses_elapsed_time(&named_policy.policy) {
+            warn!(
+                function = function_label,
+                retry_policy = %named_policy.name,
+                total_attempts,
+                "Semantic retry policy uses elapsed-time operators that are not supported in inline retry reconstruction"
+            );
+            return AsyncRetryDecision::Exhausted;
+        }
+
+        let delay = match evaluate_named_policy_step(
+            named_policy,
+            total_attempts,
+            properties,
+            current_state.as_ref(),
+        ) {
+            Ok((new_state, RetryVerdict::Retry(delay))) => {
+                retry_policy_state = Some(new_state);
+                delay
+            }
+            Ok((_new_state, RetryVerdict::GiveUp)) => return AsyncRetryDecision::Exhausted,
+            Ok((_new_state, RetryVerdict::Error(error))) => {
+                warn!(
+                    function = function_label,
+                    retry_policy = %named_policy.name,
+                    total_attempts,
+                    ?error,
+                    "Semantic retry policy evaluation returned error verdict"
+                );
+                return AsyncRetryDecision::Exhausted;
+            }
+            Err(error) => {
+                warn!(
+                    function = function_label,
+                    retry_policy = %named_policy.name,
+                    total_attempts,
+                    ?error,
+                    "Failed evaluating semantic retry policy"
+                );
+                return AsyncRetryDecision::Exhausted;
+            }
         };
 
         let state = ctx.durable_execution_state();
@@ -618,17 +591,8 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         self.state.current_retry_point
     }
 
-    fn retry_config(&self) -> RetryConfig {
-        self.state
-            .overridden_retry_policy
-            .as_ref()
-            .unwrap_or(&self.state.config.retry)
-            .clone()
-    }
-
-    fn named_retry_policies(&mut self) -> Option<Vec<NamedRetryPolicy>> {
-        let policies = self.state.named_retry_policies();
-        (!policies.is_empty()).then_some(policies.to_vec())
+    fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        self.state.named_retry_policies().to_vec()
     }
 
     async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState> {
@@ -1114,10 +1078,8 @@ pub async fn count_oplog_errors_for(
 pub struct TaskRetryContext<Ctx: WorkerCtx> {
     /// The oplog index that error entries reference as their `retry_from` point.
     pub retry_point: OplogIndex,
-    /// The legacy retry configuration used as a fallback when no semantic policy matches.
-    pub retry_config: RetryConfig,
-    /// Optional list of semantic retry policies to evaluate before falling back to `retry_config`.
-    pub named_retry_policies: Option<Vec<NamedRetryPolicy>>,
+    /// List of semantic retry policies to evaluate.
+    pub named_retry_policies: Vec<NamedRetryPolicy>,
     /// Maximum delay for in-function retries; delays exceeding this fall back to trap+replay.
     pub max_in_function_retry_delay: Duration,
     /// The current semantic retry policy state, if a named policy was previously selected.
@@ -1139,11 +1101,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         self.retry_point
     }
 
-    fn retry_config(&self) -> RetryConfig {
-        self.retry_config.clone()
-    }
-
-    fn named_retry_policies(&mut self) -> Option<Vec<NamedRetryPolicy>> {
+    fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
         self.named_retry_policies.clone()
     }
 
@@ -1283,9 +1241,8 @@ impl DynamicPollable for LazyInitializedPollableEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::RetryConfig;
-    use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::oplog::host_functions::KeyvalueEventualGet;
+    use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1296,8 +1253,7 @@ mod tests {
         in_atomic_region: bool,
         assume_idempotence: bool,
         max_in_function_retry_delay: Duration,
-        retry_config: RetryConfig,
-        named_retry_policies: Option<Vec<NamedRetryPolicy>>,
+        named_retry_policies: Vec<NamedRetryPolicy>,
         oplog_retry_count: u32,
         /// Tracks how many times `append_retry_error_entry` was called.
         retry_entries_appended: u32,
@@ -1308,6 +1264,8 @@ mod tests {
         /// Controls whether the interrupt fires before the sleep completes.
         /// When true, the interrupt resolves immediately.
         interrupt_armed: Arc<AtomicBool>,
+        /// Tracks the latest retry policy state written via `append_retry_error_entry`.
+        current_retry_policy_state: Option<RetryPolicyState>,
     }
 
     impl MockDurabilityHost {
@@ -1316,19 +1274,13 @@ mod tests {
                 in_atomic_region: false,
                 assume_idempotence: true,
                 max_in_function_retry_delay: Duration::from_secs(20),
-                retry_config: RetryConfig {
-                    max_attempts: 5,
-                    min_delay: Duration::from_millis(1),
-                    max_delay: Duration::from_millis(100),
-                    multiplier: 1.0,
-                    max_jitter_factor: None,
-                },
-                named_retry_policies: None,
+                named_retry_policies: Vec::new(),
                 oplog_retry_count: 0,
                 retry_entries_appended: 0,
                 trap_triggered_count: 0,
                 interrupt_signal: None,
                 interrupt_armed: Arc::new(AtomicBool::new(false)),
+                current_retry_policy_state: None,
             }
         }
 
@@ -1353,16 +1305,21 @@ mod tests {
             OplogIndex::INITIAL
         }
 
-        fn retry_config(&self) -> RetryConfig {
-            self.retry_config.clone()
-        }
-
-        fn named_retry_policies(&mut self) -> Option<Vec<NamedRetryPolicy>> {
+        fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
             self.named_retry_policies.clone()
         }
 
         async fn current_retry_state_for(&self, _retry_from: OplogIndex) -> Option<RetryPolicyState> {
-            None
+            if let Some(state) = &self.current_retry_policy_state {
+                Some(state.clone())
+            } else if self.oplog_retry_count > 0 {
+                Some(RetryPolicyState::CountBox {
+                    attempts: self.oplog_retry_count,
+                    inner: Box::new(RetryPolicyState::Counter(self.oplog_retry_count)),
+                })
+            } else {
+                None
+            }
         }
 
         fn durable_execution_state(&self) -> DurableExecutionState {
@@ -1372,9 +1329,10 @@ mod tests {
         async fn append_retry_error_entry(
             &mut self,
             _retry_from: OplogIndex,
-            _retry_policy_state: Option<RetryPolicyState>,
+            retry_policy_state: Option<RetryPolicyState>,
         ) {
             self.retry_entries_appended += 1;
+            self.current_retry_policy_state = retry_policy_state;
         }
     }
 
@@ -1453,7 +1411,15 @@ mod tests {
     #[test]
     async fn in_function_retry_returns_retry_internally_on_transient_error() {
         let mut ctx = MockDurabilityHost::new();
-        // Allow up to 5 attempts, with 1ms delay — well within the 20s threshold
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 5,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        }];
         let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("connection refused".to_string());
@@ -1521,7 +1487,15 @@ mod tests {
     #[test]
     async fn in_function_retry_exhausts_budget_then_persists() {
         let mut ctx = MockDurabilityHost::new();
-        ctx.retry_config.max_attempts = 3;
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 3,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        }];
         let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
@@ -1562,10 +1536,7 @@ mod tests {
     #[test]
     async fn named_retry_policy_match_overrides_legacy_retry_budget() {
         let mut ctx = MockDurabilityHost::new();
-        // Legacy fallback would be exhausted immediately, but a matching semantic
-        // policy should still allow one in-function retry.
-        ctx.retry_config.max_attempts = 0;
-        ctx.named_retry_policies = Some(vec![NamedRetryPolicy {
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
             name: "rpc-transient".to_string(),
             priority: 100,
             predicate: Predicate::PropEq {
@@ -1576,7 +1547,7 @@ mod tests {
                 max_retries: 1,
                 inner: Box::new(RetryPolicy::Immediate),
             },
-        }]);
+        }];
 
         let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
         let mut props = RetryProperties::new();
@@ -1598,11 +1569,9 @@ mod tests {
     }
 
     #[test]
-    async fn named_retry_policy_no_match_falls_back_to_legacy_retry_config() {
+    async fn named_retry_policy_no_match_returns_exhausted() {
         let mut ctx = MockDurabilityHost::new();
-        // No retries in legacy path.
-        ctx.retry_config.max_attempts = 0;
-        ctx.named_retry_policies = Some(vec![NamedRetryPolicy {
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
             name: "rpc-transient".to_string(),
             priority: 100,
             predicate: Predicate::PropEq {
@@ -1610,7 +1579,7 @@ mod tests {
                 value: PredicateValue::Text("invoke".to_string()),
             },
             policy: RetryPolicy::Immediate,
-        }]);
+        }];
 
         let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
         let mut props = RetryProperties::new();
@@ -1632,11 +1601,9 @@ mod tests {
     }
 
     #[test]
-    async fn semantic_policy_resolution_error_falls_back_to_legacy_retry_config() {
+    async fn semantic_policy_resolution_error_returns_exhausted() {
         let mut ctx = MockDurabilityHost::new();
-        // Legacy path should allow exactly one retry.
-        ctx.retry_config.max_attempts = 1;
-        ctx.named_retry_policies = Some(vec![NamedRetryPolicy {
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
             name: "invalid-for-props".to_string(),
             priority: 100,
             predicate: Predicate::PropEq {
@@ -1644,7 +1611,7 @@ mod tests {
                 value: PredicateValue::Integer(1),
             },
             policy: RetryPolicy::Never,
-        }]);
+        }];
 
         let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
         let mut props = RetryProperties::new();
@@ -1662,16 +1629,14 @@ mod tests {
             .await
             .expect("should not propagate error");
 
-        assert_eq!(action, InternalRetryResult::RetryInternally);
-        assert_eq!(ctx.retry_entries_appended, 1);
+        assert_eq!(action, InternalRetryResult::Persist);
+        assert_eq!(ctx.retry_entries_appended, 0);
     }
 
     #[test]
-    async fn elapsed_time_policy_falls_back_to_legacy_retry_config() {
+    async fn elapsed_time_policy_returns_exhausted() {
         let mut ctx = MockDurabilityHost::new();
-        // Legacy path is exhausted immediately.
-        ctx.retry_config.max_attempts = 0;
-        ctx.named_retry_policies = Some(vec![NamedRetryPolicy {
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
             name: "time-boxed".to_string(),
             priority: 100,
             predicate: Predicate::PropEq {
@@ -1682,7 +1647,7 @@ mod tests {
                 limit: Duration::from_secs(60),
                 inner: Box::new(RetryPolicy::Immediate),
             },
-        }]);
+        }];
 
         let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
         let mut props = RetryProperties::new();
@@ -1708,6 +1673,15 @@ mod tests {
     async fn in_function_retry_eligible_for_write_remote_with_idempotence() {
         let mut ctx = MockDurabilityHost::new();
         ctx.assume_idempotence = true;
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 5,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        }];
         let mut durability = make_durability(&mut ctx, DurableFunctionType::WriteRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
@@ -1729,9 +1703,12 @@ mod tests {
     #[test]
     async fn fallback_to_trap_when_delay_exceeds_threshold() {
         let mut ctx = MockDurabilityHost::new();
-        // Set min_delay very high so it exceeds the threshold
-        ctx.retry_config.min_delay = Duration::from_secs(30);
-        ctx.retry_config.max_delay = Duration::from_secs(60);
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::Periodic(Duration::from_secs(30)),
+        }];
         ctx.max_in_function_retry_delay = Duration::from_secs(20);
         let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
 
@@ -1858,9 +1835,12 @@ mod tests {
     #[test]
     async fn interrupt_during_in_function_retry_sleep_propagates_error() {
         let mut ctx = MockDurabilityHost::new();
-        // Set a non-trivial sleep so the interrupt wins the race
-        ctx.retry_config.min_delay = Duration::from_secs(10);
-        ctx.retry_config.max_delay = Duration::from_secs(10);
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::Periodic(Duration::from_secs(10)),
+        }];
         // But still within the threshold so we don't fall back to trap
         ctx.max_in_function_retry_delay = Duration::from_secs(20);
         // Interrupt fires immediately
@@ -1892,8 +1872,12 @@ mod tests {
     #[test]
     async fn interrupt_armed_during_sleep_propagates() {
         let mut ctx = MockDurabilityHost::new();
-        ctx.retry_config.min_delay = Duration::from_millis(500);
-        ctx.retry_config.max_delay = Duration::from_millis(500);
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::Periodic(Duration::from_millis(500)),
+        }];
         ctx.max_in_function_retry_delay = Duration::from_secs(20);
         // Arm the interrupt to fire via the polling loop
         ctx.interrupt_armed.store(true, Ordering::Release);
@@ -1918,15 +1902,23 @@ mod tests {
     #[test]
     async fn oplog_retry_count_combined_with_in_function_retry_count() {
         let mut ctx = MockDurabilityHost::new();
-        ctx.retry_config.max_attempts = 5;
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 5,
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+            },
+        }];
         // Simulate 3 prior oplog-level retries
         ctx.oplog_retry_count = 3;
         let mut durability = make_durability(&mut ctx, DurableFunctionType::ReadRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
 
-        // With 3 oplog retries, total=3. max_attempts=5.
-        // Attempt at total=3 → ok (get_delay(config, 3) = Some)
+        // With 3 oplog retries, total=3. max_retries=5.
+        // Attempt at total=3 → ok (within budget)
         let action = durability
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
@@ -1938,7 +1930,7 @@ mod tests {
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::RetryInternally);
 
-        // Attempt at total=4 → ok (get_delay(config, 4) = Some)
+        // Attempt at total=4 → ok (within budget)
         let action = durability
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,
@@ -1950,7 +1942,7 @@ mod tests {
             .expect("should not propagate error");
         assert_eq!(action, InternalRetryResult::RetryInternally);
 
-        // Attempt at total=5 → exhausted (get_delay(config, 5) = None since 5 >= 5)
+        // Attempt at total=5 → exhausted (5 >= max_retries)
         let action = durability
             .try_trigger_retry_or_loop_with_properties(
                 &mut ctx,

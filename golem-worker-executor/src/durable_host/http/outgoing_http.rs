@@ -59,17 +59,17 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
     }
 
     let durable_state = ctx.durable_execution_state();
-    let retry_config = ctx.retry_config();
+    let named_retry_policies = ctx.state.named_retry_policies().to_vec();
     let method_eligible =
         durable_state.assume_idempotence || is_method_idempotent(&state.request.method);
     let body_ready_for_retry = state.retry.body_finished || state.output_stream_rep.is_none();
-    let delay_eligible = retry_config.min_delay <= durable_state.max_in_function_retry_delay;
+    let has_policies = !named_retry_policies.is_empty();
 
     let enable_background_retry = durable_state.is_live
         && durable_state.snapshotting_mode.is_none()
         && durable_state.persistence_level != PersistenceLevel::PersistNothing
         && !ctx.in_atomic_region()
-        && delay_eligible
+        && has_policies
         && method_eligible
         && body_ready_for_retry
         && !state.retry.has_unreconstructable_body
@@ -85,10 +85,6 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
         .get_mut(&Resource::<HostFutureIncomingResponse>::new_borrow(handle))?;
     let old = std::mem::replace(future_res, HostFutureIncomingResponse::Consumed);
     let wrapped = if let HostFutureIncomingResponse::Pending(orig_handle) = old {
-        let named_retry_policies = {
-            let policies = ctx.state.named_retry_policies();
-            (!policies.is_empty()).then_some(policies.to_vec())
-        };
         let retry_properties =
             RetryContext::http(&state.request.method.to_string(), &state.request.uri);
         let retry_handle = spawn_http_request_with_retry(
@@ -97,7 +93,6 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
             state.outgoing_request_config(),
             ctx.wasi_http.connection_pool.clone(),
             ctx.public_state.worker(),
-            ctx.retry_config(),
             named_retry_policies,
             retry_properties,
             durable_state.max_in_function_retry_delay,

@@ -1066,11 +1066,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     request_state.outgoing_request_config(),
                     None,
                     self.public_state.worker(),
-                    self.retry_config(),
-                    {
-                        let policies = self.state.named_retry_policies();
-                        (!policies.is_empty()).then_some(policies.to_vec())
-                    },
+                    self.state.named_retry_policies().to_vec(),
                     golem_common::model::RetryContext::http(
                         &request_state.request.method.to_string(),
                         &request_state.request.uri,

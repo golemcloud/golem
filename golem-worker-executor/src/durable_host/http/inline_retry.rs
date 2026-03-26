@@ -44,7 +44,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
-use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryConfig, RetryProperties};
+use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryProperties};
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
@@ -511,7 +511,13 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                 if let (Some(retry_state), Some(function_name)) =
                     (retry_state.as_mut(), retry_function_name)
                 {
-                    match retry_state.decide_retry(ctx, function_name).await {
+                    let retry_properties = golem_common::model::RetryContext::http_with_response(
+                        &request_state.request.method.to_string(),
+                        &request_state.request.uri,
+                        None,
+                        "transient",
+                    );
+                    match retry_state.decide_retry_with_properties(ctx, function_name, &retry_properties).await {
                         AsyncRetryDecision::RetryAfterDelay(delay) => {
                             // Interrupt-aware sleep
                             let interrupt = ctx.create_interrupt_signal();
@@ -678,8 +684,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     config: OutgoingRequestConfig,
     _connection_pool: Option<HttpConnectionPool>,
     worker: Arc<crate::worker::Worker<Ctx>>,
-    retry_config: RetryConfig,
-    named_retry_policies: Option<Vec<NamedRetryPolicy>>,
+    named_retry_policies: Vec<NamedRetryPolicy>,
     retry_properties: RetryProperties,
     max_delay: Duration,
     begin_index: OplogIndex,
@@ -721,7 +726,6 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         .cloned();
                     let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: begin_index,
-                        retry_config,
                         named_retry_policies,
                         max_in_function_retry_delay: max_delay,
                         current_retry_policy_state,
@@ -875,7 +879,13 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     //    entry writing, and metric recording. The oplog-based retry count provides
     //    persistence across individual write calls within the same request.
     let mut retry_state = InFunctionRetryState::new();
-    let decision = retry_state.decide_retry(ctx, "output-stream-write").await;
+    let retry_properties = golem_common::model::RetryContext::http_with_response(
+        &request_state.request.method.to_string(),
+        &request_state.request.uri,
+        None,
+        "transient",
+    );
+    let decision = retry_state.decide_retry_with_properties(ctx, "output-stream-write", &retry_properties).await;
 
     match decision {
         AsyncRetryDecision::RetryAfterDelay(delay) => {
@@ -910,10 +920,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     // original request had it, so that transient errors at get() are still handled.
     let new_future = if request_state.retry.has_background_retry {
         if let HostFutureIncomingResponse::Pending(handle) = rebuilt.future {
-            let named_retry_policies = {
-                let policies = ctx.state.named_retry_policies();
-                (!policies.is_empty()).then_some(policies.to_vec())
-            };
+            let named_retry_policies = ctx.state.named_retry_policies().to_vec();
             let retry_properties = golem_common::model::RetryContext::http(
                 &request_state.request.method.to_string(),
                 &request_state.request.uri,
@@ -924,7 +931,6 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 request_state.outgoing_request_config(),
                 ctx.wasi_http.connection_pool.clone(),
                 ctx.public_state.worker(),
-                ctx.retry_config(),
                 named_retry_policies,
                 retry_properties,
                 exec_state.max_in_function_retry_delay,
@@ -1036,8 +1042,14 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     // so oplog/error accounting reflects that we recovered from a transient read
     // failure by reconstructing and resuming the request.
     let mut retry_state = InFunctionRetryState::new();
+    let retry_properties = golem_common::model::RetryContext::http_with_response(
+        &request_state.request.method.to_string(),
+        &request_state.request.uri,
+        None,
+        "transient",
+    );
     match retry_state
-        .decide_retry(ctx, "http-resume-response-body-read")
+        .decide_retry_with_properties(ctx, "http-zone2-read", &retry_properties)
         .await
     {
         AsyncRetryDecision::RetryAfterDelay(delay) => {

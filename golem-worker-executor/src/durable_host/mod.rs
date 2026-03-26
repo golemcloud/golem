@@ -802,9 +802,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return (fallback_decision, None);
         }
 
-        let Some(named_retry_policies) = self.named_retry_policies() else {
+        let named_retry_policies = self.named_retry_policies();
+        if named_retry_policies.is_empty() {
             return (fallback_decision, None);
-        };
+        }
 
         let properties = RetryContext::trap(
             Self::semantic_trap_type_name(error),
