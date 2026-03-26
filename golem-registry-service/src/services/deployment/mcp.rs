@@ -67,18 +67,18 @@ impl DeployedMcpService {
                         .ok()
                         .flatten();
 
-                    if let Some(record) = scheme_record {
-                        if let Ok(scheme) = SecurityScheme::try_from(record) {
-                            compiled_mcp.security_scheme = Some(SecuritySchemeDetails {
-                                id: scheme.id,
-                                name: scheme.name,
-                                provider_type: scheme.provider_type,
-                                client_id: scheme.client_id,
-                                client_secret: scheme.client_secret,
-                                redirect_url: scheme.redirect_url,
-                                scopes: scheme.scopes,
-                            });
-                        }
+                    if let Some(record) = scheme_record
+                        && let Ok(scheme) = SecurityScheme::try_from(record)
+                    {
+                        compiled_mcp.security_scheme = Some(SecuritySchemeDetails {
+                            id: scheme.id,
+                            name: scheme.name,
+                            provider_type: scheme.provider_type,
+                            client_id: scheme.client_id,
+                            client_secret: scheme.client_secret,
+                            redirect_url: scheme.redirect_url,
+                            scopes: scheme.scopes,
+                        });
                     }
                 }
 

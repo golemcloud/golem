@@ -82,7 +82,7 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
                 .security_scheme
                 .as_ref()
                 .map(|s| s.name.clone())
-                .map(|n| golem_common::model::security_scheme::SecuritySchemeName(n)),
+                .map(golem_common::model::security_scheme::SecuritySchemeName),
             security_scheme: value
                 .security_scheme
                 .map(|s| s.try_into())
