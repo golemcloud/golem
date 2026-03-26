@@ -37,17 +37,7 @@ pub struct WebSocketConnectionEntry {
 
 #[async_trait::async_trait]
 impl wasmtime_wasi::p2::Pollable for WebSocketConnectionEntry {
-    async fn ready(&mut self) {
-        // For WebSocket connections, we consider them "ready" when it's possible
-        // to attempt a receive operation. Since our receive operations are async
-        // and handle waiting internally, we can consider the socket always ready.
-        //
-        // This is similar to how other stream implementations in the codebase work
-        // (e.g., IncomingValueEntryStream, OutgoingValueEntryStream) which have
-        // empty ready() implementations.
-        //
-        // The actual blocking/waiting happens in the receive() method itself.
-    }
+    async fn ready(&mut self) {}
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
