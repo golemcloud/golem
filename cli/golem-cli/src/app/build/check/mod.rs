@@ -285,7 +285,11 @@ fn plan_rust_cargo_fix_steps(
 
         for requirement in &requirements {
             let found = specs.get(requirement.name).and_then(|spec| spec.as_ref());
-            let compliance = evaluate_cargo_dependency_compliance(found, requirement);
+            let compliance = evaluate_cargo_dependency_compliance(
+                found,
+                requirement,
+                cargo_toml_path.parent(),
+            );
 
             match compliance {
                 DependencySpecCompliance::Compatible => {}
@@ -293,7 +297,11 @@ fn plan_rust_cargo_fix_steps(
                     warnings.push(format!("{} ({})", message, cargo_toml_path.display()));
                 }
                 DependencySpecCompliance::NeedsUpdate => {
-                    let update_spec = build_cargo_update_spec(found, requirement);
+                    let update_spec = build_cargo_update_spec(
+                        found,
+                        requirement,
+                        cargo_toml_path.parent(),
+                    );
                     working = edit::cargo_toml::upsert_dependency_auto(
                         &working,
                         requirement.name,
@@ -413,6 +421,7 @@ struct CargoDependencyRequirement {
 fn build_cargo_update_spec(
     found: Option<&DependencySpec>,
     requirement: &CargoDependencyRequirement,
+    base_dir: Option<&Path>,
 ) -> DependencySpec {
     let base_spec = match (&requirement.matcher, found) {
         (
@@ -435,8 +444,10 @@ fn build_cargo_update_spec(
                 semantics,
             },
             Some(DependencySpec::Path { path, features }),
-        ) if evaluate_dependency_spec_compliance(path, expected, *semantics)
-            == DependencySpecCompliance::Compatible =>
+        ) if matches!(expected, ExpectedDependencyKind::ExactPath(expected_path)
+            if path_matches_expected(path, expected_path, base_dir))
+            || evaluate_dependency_spec_compliance(path, expected, *semantics)
+                == DependencySpecCompliance::Compatible =>
         {
             DependencySpec::Path {
                 path: path.clone(),
@@ -579,6 +590,7 @@ fn verify_semantic_version_compatible_with_base(
 fn evaluate_cargo_dependency_compliance(
     found: Option<&DependencySpec>,
     requirement: &CargoDependencyRequirement,
+    base_dir: Option<&Path>,
 ) -> DependencySpecCompliance {
     let Some(found) = found else {
         return DependencySpecCompliance::NeedsUpdate;
@@ -613,8 +625,33 @@ fn evaluate_cargo_dependency_compliance(
                 semantics,
             },
             DependencySpec::Path { path, .. },
-        ) => evaluate_dependency_spec_compliance(path, expected, *semantics),
+        ) => {
+            if let ExpectedDependencyKind::ExactPath(expected_path) = expected {
+                if path_matches_expected(path, expected_path, base_dir) {
+                    return DependencySpecCompliance::Compatible;
+                }
+            }
+
+            evaluate_dependency_spec_compliance(path, expected, *semantics)
+        }
     }
+}
+
+fn path_matches_expected(found: &str, expected: &str, base_dir: Option<&Path>) -> bool {
+    let resolve = |value: &str| {
+        let path = PathBuf::from(value);
+        let path = if path.is_absolute() {
+            path
+        } else if let Some(base_dir) = base_dir {
+            base_dir.join(path)
+        } else {
+            path
+        };
+
+        fs::normalize_path_lexically(path.as_path())
+    };
+
+    resolve(found) == resolve(expected)
 }
 
 fn has_required_features(found: &DependencySpec, expected: &DependencySpec) -> bool {
@@ -706,6 +743,10 @@ fn looks_semver_compatible_spec(spec: &str) -> bool {
 }
 
 fn normalize_path_str(path: &str) -> String {
+    let path = path
+        .strip_prefix("file://")
+        .or_else(|| path.strip_prefix("file:"))
+        .unwrap_or(path);
     let normalized: PathBuf = fs::normalize_path_lexically(Path::new(path));
     normalized.to_string_lossy().to_string()
 }
@@ -1020,10 +1061,11 @@ fn version_range_to_text(range: VersionRange) -> String {
 #[cfg(test)]
 mod test {
     use super::{
-        build_cargo_update_spec, evaluate_dependency_spec_compliance, rust_dependency_requirements,
-        typescript_sdk_requirements, verify_semantic_version_compatibility, CargoDependencyMatcher,
-        CargoDependencyRequirement, DependencyMatcherSemantics, DependencySpecCompliance,
-        ExpectedDependencyKind, PackageJsonSection,
+        build_cargo_update_spec, evaluate_cargo_dependency_compliance,
+        evaluate_dependency_spec_compliance, rust_dependency_requirements,
+        typescript_sdk_requirements, verify_semantic_version_compatibility,
+        CargoDependencyMatcher, CargoDependencyRequirement, DependencyMatcherSemantics,
+        DependencySpecCompliance, ExpectedDependencyKind, PackageJsonSection,
     };
     use crate::app::edit::cargo_toml::DependencySpec;
     use crate::sdk_overrides::sdk_overrides;
@@ -1116,7 +1158,7 @@ mod test {
             features: vec!["extra-feature".to_string()],
         };
 
-        let updated = build_cargo_update_spec(Some(&found), &requirement);
+        let updated = build_cargo_update_spec(Some(&found), &requirement, None);
 
         assert_eq!(
             updated,
@@ -1128,6 +1170,36 @@ mod test {
                 ],
             }
         );
+    }
+
+    #[test]
+    fn cargo_path_comparison_accepts_relative_path_equivalent_to_absolute_override() {
+        let requirement = CargoDependencyRequirement {
+            name: "golem-rust",
+            expected_spec: DependencySpec::Path {
+                path: "/repo/sdks/rust/golem-rust".to_string(),
+                features: vec!["export_golem_agentic".to_string()],
+            },
+            matcher: CargoDependencyMatcher::Kind {
+                expected: ExpectedDependencyKind::ExactPath(
+                    "/repo/sdks/rust/golem-rust".to_string(),
+                ),
+                semantics: DependencyMatcherSemantics::Rust,
+            },
+        };
+
+        let found = DependencySpec::Path {
+            path: "../../sdks/rust/golem-rust".to_string(),
+            features: vec!["export_golem_agentic".to_string()],
+        };
+
+        let compliance = evaluate_cargo_dependency_compliance(
+            Some(&found),
+            &requirement,
+            Some(std::path::Path::new("/repo/test-components/oplog-processor")),
+        );
+
+        assert_eq!(compliance, DependencySpecCompliance::Compatible);
     }
 
     #[test]

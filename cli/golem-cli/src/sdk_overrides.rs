@@ -87,7 +87,7 @@ impl SdkOverrides {
 
     pub fn ts_package_dep(&self, package_name: &str) -> String {
         match &self.ts_packages_path {
-            Some(ts_packages_path) => format!("{}/{}", ts_packages_path, package_name),
+            Some(ts_packages_path) => format!("file:{}/{}", ts_packages_path, package_name),
             None => self
                 .ts_version
                 .as_deref()
@@ -550,6 +550,19 @@ mod tests {
         );
         assert_eq!(item["default-features"].as_bool(), Some(false));
         assert_eq!(item["features"].as_array().map(|a| a.len()), Some(1));
+    }
+
+    #[test]
+    fn ts_package_dep_uses_file_prefix_for_local_path_overrides() {
+        let overrides = SdkOverrides {
+            ts_packages_path: Some("/tmp/repo/sdks/ts/packages".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            overrides.ts_package_dep("golem-ts-sdk"),
+            "file:/tmp/repo/sdks/ts/packages/golem-ts-sdk"
+        );
     }
 
     #[test]
