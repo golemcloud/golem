@@ -445,6 +445,14 @@ export class ScenarioExecutor {
             ...step.http,
             url: substituteVariables(step.http.url, variables),
             body: sub(step.http.body),
+            headers: step.http.headers
+              ? Object.fromEntries(
+                  Object.entries(step.http.headers).map(([k, v]) => [
+                    k,
+                    substituteVariables(v, variables),
+                  ]),
+                )
+              : step.http.headers,
           }
         : step.http,
     } as StepSpec;
