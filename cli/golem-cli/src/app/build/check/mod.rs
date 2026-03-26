@@ -1233,6 +1233,7 @@ mod test {
                 ),
                 semantics: DependencyMatcherSemantics::Rust,
             },
+            required: true,
         };
 
         let found = DependencySpec::Path {
@@ -1268,6 +1269,7 @@ mod test {
                 ),
                 semantics: DependencyMatcherSemantics::Rust,
             },
+            required: true,
         };
 
         let found = DependencySpec::Path {
