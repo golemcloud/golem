@@ -264,6 +264,61 @@ fn plan_rust_cargo_fix_steps(
     overrides: &crate::sdk_overrides::SdkOverrides,
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<Vec<DependencyFixStep>> {
+    let requirements = rust_dependency_requirements(overrides);
+
+    let spec_names = requirements
+        .iter()
+        .map(|requirement| requirement.name)
+        .collect::<Vec<_>>();
+
+    let mut steps = Vec::new();
+    for component_name in ctx.application_context().selected_component_names() {
+        let component = ctx.application().component(component_name);
+        if component.guess_language() != Some(GuestLanguage::Rust) {
+            continue;
+        }
+
+        let cargo_toml_path = component.component_dir().join("Cargo.toml");
+        let original = fs::read_to_string(&cargo_toml_path)?;
+        let mut working = original.clone();
+        let specs = edit::cargo_toml::collect_dependency_specs(&original, &spec_names)?;
+
+        for requirement in &requirements {
+            let found = specs.get(requirement.name).and_then(|spec| spec.as_ref());
+            let compliance = evaluate_cargo_dependency_compliance(found, requirement);
+
+            match compliance {
+                DependencySpecCompliance::Compatible => {}
+                DependencySpecCompliance::SkipWarn(message) => {
+                    warnings.push(format!("{} ({})", message, cargo_toml_path.display()));
+                }
+                DependencySpecCompliance::NeedsUpdate => {
+                    let update_spec = build_cargo_update_spec(found, requirement);
+                    working = edit::cargo_toml::upsert_dependency_auto(
+                        &working,
+                        requirement.name,
+                        &update_spec,
+                        DependencyTable::Dependencies,
+                    )?;
+                }
+            }
+        }
+
+        if working != original {
+            steps.push(DependencyFixStep {
+                path: cargo_toml_path,
+                current: original,
+                new: working,
+            });
+        }
+    }
+
+    Ok(steps)
+}
+
+fn rust_dependency_requirements(
+    overrides: &crate::sdk_overrides::SdkOverrides,
+) -> Vec<CargoDependencyRequirement> {
     let golem_rust_expected = match overrides.golem_rust_dependency() {
         RustDependency::Path(path) => {
             ExpectedDependencyKind::ExactPath(path.to_string_lossy().to_string())
@@ -331,54 +386,7 @@ fn plan_rust_cargo_fix_steps(
         },
     });
 
-    let spec_names = requirements
-        .iter()
-        .map(|requirement| requirement.name)
-        .collect::<Vec<_>>();
-
-    let mut steps = Vec::new();
-    for component_name in ctx.application_context().selected_component_names() {
-        let component = ctx.application().component(component_name);
-        if component.guess_language() != Some(GuestLanguage::Rust) {
-            continue;
-        }
-
-        let cargo_toml_path = component.component_dir().join("Cargo.toml");
-        let original = fs::read_to_string(&cargo_toml_path)?;
-        let mut working = original.clone();
-        let specs = edit::cargo_toml::collect_dependency_specs(&original, &spec_names)?;
-
-        for requirement in &requirements {
-            let found = specs.get(requirement.name).and_then(|spec| spec.as_ref());
-            let compliance = evaluate_cargo_dependency_compliance(found, requirement);
-
-            match compliance {
-                DependencySpecCompliance::Compatible => {}
-                DependencySpecCompliance::SkipWarn(message) => {
-                    warnings.push(format!("{} ({})", message, cargo_toml_path.display()));
-                }
-                DependencySpecCompliance::NeedsUpdate => {
-                    let update_spec = build_cargo_update_spec(found, requirement);
-                    working = edit::cargo_toml::upsert_dependency_auto(
-                        &working,
-                        requirement.name,
-                        &update_spec,
-                        DependencyTable::Dependencies,
-                    )?;
-                }
-            }
-        }
-
-        if working != original {
-            steps.push(DependencyFixStep {
-                path: cargo_toml_path,
-                current: original,
-                new: working,
-            });
-        }
-    }
-
-    Ok(steps)
+    requirements
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1012,12 +1020,18 @@ fn version_range_to_text(range: VersionRange) -> String {
 #[cfg(test)]
 mod test {
     use super::{
-        build_cargo_update_spec, evaluate_dependency_spec_compliance,
-        verify_semantic_version_compatibility, CargoDependencyMatcher, CargoDependencyRequirement,
-        DependencyMatcherSemantics, DependencySpecCompliance, ExpectedDependencyKind,
+        build_cargo_update_spec, evaluate_dependency_spec_compliance, rust_dependency_requirements,
+        typescript_sdk_requirements, verify_semantic_version_compatibility, CargoDependencyMatcher,
+        CargoDependencyRequirement, DependencyMatcherSemantics, DependencySpecCompliance,
+        ExpectedDependencyKind, PackageJsonSection,
     };
     use crate::app::edit::cargo_toml::DependencySpec;
+    use crate::sdk_overrides::sdk_overrides;
+    use pretty_assertions::assert_eq;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
     use test_r::test;
+    use toml_edit::DocumentMut;
 
     #[test]
     fn dependency_version_check_accepts_semantic_compatible_version() {
@@ -1114,5 +1128,108 @@ mod test {
                 ],
             }
         );
+    }
+
+    #[test]
+    fn ts_template_and_check_requirements_match() {
+        let template_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates/ts/common/package.json");
+        let template_source = std::fs::read_to_string(&template_path).unwrap();
+        let template_json: serde_json::Value = serde_json::from_str(&template_source).unwrap();
+
+        let template_deps = template_json["dependencies"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let template_dev_deps = template_json["devDependencies"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        let overrides = sdk_overrides().unwrap();
+        let mut check_deps = BTreeSet::new();
+        let mut check_dev_deps = BTreeSet::new();
+
+        for requirement in typescript_sdk_requirements(&overrides) {
+            match requirement.section {
+                PackageJsonSection::Dependencies => {
+                    check_deps.insert(requirement.name.to_string());
+                }
+                PackageJsonSection::DevDependencies => {
+                    check_dev_deps.insert(requirement.name.to_string());
+                }
+            }
+        }
+
+        assert_eq!(check_deps, template_deps);
+        assert_eq!(check_dev_deps, template_dev_deps);
+    }
+
+    #[test]
+    fn rust_template_and_check_requirements_match() {
+        let template_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("templates/rust/component/component-dir/Cargo.toml._");
+        let template_source = std::fs::read_to_string(&template_path)
+            .unwrap()
+            .replace("GOLEM_RUST_VERSION_OR_PATH", "version = \"0.0.0\"");
+
+        let doc: DocumentMut = template_source.parse().unwrap();
+        let deps = doc["dependencies"].as_table_like().unwrap();
+
+        let template_names = deps
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .collect::<BTreeSet<_>>();
+
+        let overrides = sdk_overrides().unwrap();
+        let requirements = rust_dependency_requirements(&overrides);
+        let check_names = requirements
+            .iter()
+            .map(|r| r.name.to_string())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(check_names, template_names);
+
+        let required_features = requirements
+            .iter()
+            .filter_map(|requirement| match &requirement.expected_spec {
+                DependencySpec::Version { features, .. }
+                | DependencySpec::Path { features, .. }
+                    if !features.is_empty() =>
+                {
+                    Some((requirement.name.to_string(), features.clone()))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for (dep_name, required) in required_features {
+            let item = deps.get(dep_name.as_str()).unwrap();
+            let found = item
+                .as_table_like()
+                .and_then(|table| table.get("features"))
+                .and_then(|features| features.as_array())
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            for feature in required {
+                assert!(
+                    found.contains(&feature),
+                    "missing feature '{}' for dependency '{}' in rust template",
+                    feature,
+                    dep_name
+                );
+            }
+        }
     }
 }
