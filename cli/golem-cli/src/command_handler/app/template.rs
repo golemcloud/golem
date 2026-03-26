@@ -706,7 +706,7 @@ impl TemplateHandler {
                 component_name.as_str().log_color_highlight()
             ),
         );
-        let _indent = self.ctx.log_handler().nested_text_view_indent();
+        let _indent = self.ctx.log_handler().decorated_indent_primary();
 
         for step in upgrade_plan.steps() {
             match step {
@@ -781,7 +781,7 @@ impl TemplateHandler {
         if !validation_errors.is_empty() {
             logln("");
             log_failed_to("validate Multi-component layout upgrade plan");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             logln("");
             logln(
@@ -841,7 +841,7 @@ impl TemplateHandler {
         if !overwrites.is_empty() || !failed_plans.is_empty() {
             logln("");
             log_failed_to("plan the required changes to apply the selected template(s)");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             logln("");
 
@@ -887,7 +887,7 @@ impl TemplateHandler {
             "Planned",
             "required changes for applying the selected template(s)",
         );
-        let _indent = self.ctx.log_handler().nested_text_view_indent();
+        let _indent = self.ctx.log_handler().decorated_indent_primary();
         for (path, step) in safe_template_plan.file_steps() {
             match step {
                 SafeTemplatePlanStep::Create { .. } => {
@@ -904,7 +904,7 @@ impl TemplateHandler {
                         path.log_color_highlight()
                     ));
                     let _indent = LogIndent::new();
-                    let _indent = self.ctx.log_handler().nested_text_view_indent();
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
                     log_unified_diff(&diff::unified_diff(current, new));
                 }
                 SafeTemplatePlanStep::SkipSame { .. } => {

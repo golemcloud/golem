@@ -722,19 +722,18 @@ impl AppCommandHandler {
             return Ok(None);
         }
 
-        log_action("Diffing", "");
+        let (stage_is_same_as_current, deploy_diff) = {
+            log_action("Diffing", "");
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
-        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
-        debug!("deploy_diff: {:#?}", deploy_diff);
+            let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+            debug!("deploy_diff: {:#?}", deploy_diff);
 
-        let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
-        debug!("detailed deploy_diff: {:#?}", deploy_diff);
+            let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
+            debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
-        let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive());
-        let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
-
-        {
-            let _indent = LogIndent::new();
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive());
+            let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
                 "Comparing",
@@ -752,7 +751,7 @@ impl AppCommandHandler {
                 match &unified_diffs.deployment_diff_stage {
                     Some(diff) => {
                         log_action("Diffing", "with staging area");
-                        let _indent = self.ctx.log_handler().nested_text_view_indent();
+                        let _indent = self.ctx.log_handler().decorated_indent_secondary();
                         log_unified_diff(diff);
                         if let Some(diff) = unified_diffs.agent_diff_stage {
                             logln("");
@@ -772,24 +771,26 @@ impl AppCommandHandler {
                     log_action("Diffing", "with current deployment");
                 }
 
-                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                let _indent = self.ctx.log_handler().decorated_indent_secondary();
                 log_unified_diff(&unified_diffs.deployment_diff);
                 if let Some(diff) = unified_diffs.agent_diff {
                     logln("");
                     log_unified_diff(&diff);
                 }
             }
-        }
+
+            (stage_is_same_as_current, deploy_diff)
+        };
 
         {
             log_action("Planning", "");
-            let _indent = LogIndent::new();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             if !stage_is_same_as_current {
                 match &deploy_diff.diff_stage {
                     Some(diff_stage) => {
                         log_action("Planned", "changes to be applied to the staging area:");
-                        let _indent = self.ctx.log_handler().nested_text_view_indent();
+                        let _indent = self.ctx.log_handler().decorated_indent_secondary();
                         self.ctx.log_handler().log_view(diff_stage)
                     }
                     None => log_skipping_up_to_date("planning changes for staging area"),
@@ -805,7 +806,7 @@ impl AppCommandHandler {
                 } else {
                     log_action("Planned", "changes to be applied to the environment:");
                 }
-                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                let _indent = self.ctx.log_handler().decorated_indent_secondary();
                 self.ctx.log_handler().log_view(&deploy_diff.diff)
             }
         }
@@ -1105,7 +1106,7 @@ impl AppCommandHandler {
         deployment_revision: DeploymentRevision,
     ) -> anyhow::Result<Option<RollbackDiff>> {
         log_action("Preparing", "rollback");
-        let _indent = LogIndent::new();
+        let _indent = self.ctx.log_handler().decorated_indent_primary();
 
         log_action("Diffing", "current deployment with target revision");
 
@@ -1127,7 +1128,7 @@ impl AppCommandHandler {
         let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive());
 
         {
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_secondary();
             log_unified_diff(&unified_diffs.deployment_diff);
             if let Some(diff) = unified_diffs.agent_diff {
                 logln("");
@@ -1137,7 +1138,7 @@ impl AppCommandHandler {
 
         {
             log_action("Planned", "changes to be applied to the environment:");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_secondary();
             self.ctx.log_handler().log_view(&rollback_diff.diff)
         }
 
@@ -1716,7 +1717,7 @@ impl AppCommandHandler {
                 "Planned",
                 "required changes for dependencies and configurations",
             );
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             for step in &plan.steps {
                 let path = step.path.display().to_string();
@@ -1726,7 +1727,7 @@ impl AppCommandHandler {
                     path.log_color_highlight()
                 ));
                 let _indent = LogIndent::new();
-                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                let _indent = self.ctx.log_handler().decorated_indent_secondary();
                 log_unified_diff(&diff::unified_diff(
                     step.current.as_str(),
                     step.new.as_str(),

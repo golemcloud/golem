@@ -375,7 +375,7 @@ impl EnvironmentCommandHandler {
 
         log_warn_action("Detected", "environment deployment option changes");
         {
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_secondary();
             log_unified_diff(&unified_diff);
         }
         let _indent = LogIndent::new();

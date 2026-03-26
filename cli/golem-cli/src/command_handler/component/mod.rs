@@ -321,7 +321,7 @@ impl ComponentCommandHandler {
                     component_name.as_str().log_color_highlight()
                 ),
             );
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
             self.ctx.log_handler().log_serializable(
                 &app_ctx
                     .application()

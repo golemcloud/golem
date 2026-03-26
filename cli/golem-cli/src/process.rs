@@ -16,6 +16,7 @@ use crate::error::PipedExitCode;
 use crate::log::{logln, LogColorize, LogIndent};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
+use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use gag::BufferRedirect;
 use std::io::Read;
@@ -65,6 +66,34 @@ pub trait CommandExt {
             .check_exit_status()
     }
 
+    fn stream_output_prefix(command_name: &str, is_stderr: bool) -> String {
+        if !SHOULD_COLORIZE.should_colorize() {
+            return format!("{command_name} |");
+        }
+
+        let (badge, separator) = if is_stderr {
+            (
+                format!(" {} ", command_name)
+                    .on_bright_black()
+                    .yellow()
+                    .bold()
+                    .to_string(),
+                "│".yellow().bold().to_string(),
+            )
+        } else {
+            (
+                format!(" {} ", command_name)
+                    .on_bright_black()
+                    .green()
+                    .bold()
+                    .to_string(),
+                "│".green().bold().to_string(),
+            )
+        };
+
+        format!("{badge}{separator}")
+    }
+
     fn stream_output(command_name: &str, child: &mut Child) -> anyhow::Result<()> {
         let stdout = child
             .stdout
@@ -77,7 +106,7 @@ pub trait CommandExt {
             .ok_or_else(|| anyhow!("Failed to capture stderr for {command_name}"))?;
 
         tokio::spawn({
-            let prefix = format!("{} | ", command_name).green().bold();
+            let prefix = Self::stream_output_prefix(command_name, false);
             async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
@@ -87,7 +116,7 @@ pub trait CommandExt {
         });
 
         tokio::spawn({
-            let prefix = format!("{} | ", command_name).yellow().bold();
+            let prefix = Self::stream_output_prefix(command_name, true);
             async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
