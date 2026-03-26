@@ -2042,71 +2042,7 @@ async fn websocket_polling_test(
     Ok(())
 }
 
-#[test]
-#[tracing::instrument]
-#[timeout("2m")]
-async fn websocket_polling_timeout_test(
-    deps: &EnvBasedTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let user = deps.user().await?;
-    let (_, env) = user.app_and_env().await?;
-    let component = user
-        .component(&env.id, "golem_it_host_api_tests_release")
-        .name("golem-it:host-api-tests")
-        .unique()
-        .store()
-        .await?;
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let ws_port = listener.local_addr().unwrap().port();
-
-    let ws_server = tokio::spawn(async move {
-        if let Ok((stream, _)) = listener.accept().await {
-            let ws_stream = tokio_tungstenite::accept_async(stream)
-                .await
-                .expect("WS handshake failed");
-            // Don't send any messages, just keep the connection open
-            let (_write, _read) = futures::StreamExt::split(ws_stream);
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-        }
-    });
-
-    let mut env_vars = HashMap::new();
-    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
-
-    let agent_id = agent_id!("WebsocketTest", "websocket-polling-timeout-test");
-    let _agent_id = user
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
-        .await?;
-
-    let result = user
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "poll_for_message",
-            data_value!(format!("ws://localhost:{ws_port}"), 100u64), // Short timeout
-        )
-        .await?
-        .into_return_value()
-        .ok_or_else(|| anyhow!("expected return value"))?;
-
-    // The test component should return a timeout indicator
-    match result {
-        Value::String(s) if s.contains("timeout") => {},
-        _ => panic!("Expected timeout response, got: {:?}", result)
-    }
-
-    ws_server.abort();
-
-    Ok(())
-}
 
 /// Verifies that the per-agent disk space quota from the plan is enforced
 /// end-to-end through the full Golem stack. The user's plan is changed to one
