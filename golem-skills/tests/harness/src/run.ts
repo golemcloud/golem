@@ -292,6 +292,13 @@ Options:
     : undefined;
   const skipCleanup = noCleanup || !!workspaceOverride;
 
+  if (resumeFrom && !scenarioFilter) {
+    console.error(
+      chalk.red("--resume-from requires --scenario to avoid aborting on unrelated scenarios"),
+    );
+    process.exit(1);
+  }
+
   if (
     globalTimeoutSeconds !== undefined &&
     (!Number.isFinite(globalTimeoutSeconds) || globalTimeoutSeconds <= 0)
