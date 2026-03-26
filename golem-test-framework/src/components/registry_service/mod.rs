@@ -367,11 +367,11 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_HTTP_LIMIT",
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_HTTP_CALL_LIMIT",
             "1".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_RPC_LIMIT",
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_RPC_CALL_LIMIT",
             "1000000000000000000".to_string(),
         )
         // Low RPC calls plan — monthly RPC call limit of 1 so the first RPC call exhausts it
@@ -424,11 +424,11 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_HTTP_LIMIT",
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_HTTP_CALL_LIMIT",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_RPC_LIMIT",
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_RPC_CALL_LIMIT",
             "1".to_string(),
         )
         //

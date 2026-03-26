@@ -86,8 +86,8 @@ impl Deps {
                 max_disk_space_per_worker: 1073741824.into(),
                 per_invocation_http_call_limit: u64::MAX.into(),
                 per_invocation_rpc_call_limit: u64::MAX.into(),
-                monthly_http_limit: 5000.into(),
-                monthly_rpc_limit: 5000.into(),
+                monthly_http_call_limit: 5000.into(),
+                monthly_rpc_call_limit: 5000.into(),
             })
             .await
             .unwrap();

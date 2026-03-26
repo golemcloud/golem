@@ -37,7 +37,7 @@ declare_structs! {
         pub max_disk_space_per_worker: u64,
         pub per_invocation_http_call_limit: u64,
         pub per_invocation_rpc_call_limit: u64,
-        pub monthly_http_limit: u64,
-        pub monthly_rpc_limit: u64,
+        pub monthly_http_call_limit: u64,
+        pub monthly_rpc_call_limit: u64,
     }
 }

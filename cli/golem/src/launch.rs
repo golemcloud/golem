@@ -238,8 +238,8 @@ fn registry_service_config(
                     max_disk_space_per_worker: u64::MAX,
                     per_invocation_http_call_limit: u64::MAX,
                     per_invocation_rpc_call_limit: u64::MAX,
-                    monthly_http_limit: u64::MAX,
-                    monthly_rpc_limit: u64::MAX,
+                    monthly_http_call_limit: u64::MAX,
+                    monthly_rpc_call_limit: u64::MAX,
                 },
             );
             plans

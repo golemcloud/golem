@@ -109,8 +109,8 @@ impl PlanService {
                         max_disk_space_per_worker: plan.max_disk_space_per_worker,
                         per_invocation_http_call_limit: plan.per_invocation_http_call_limit,
                         per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit,
-                        monthly_http_limit: plan.monthly_http_limit,
-                        monthly_rpc_limit: plan.monthly_rpc_limit,
+                        monthly_http_call_limit: plan.monthly_http_call_limit,
+                        monthly_rpc_call_limit: plan.monthly_rpc_call_limit,
                     },
                     &AuthCtx::System,
                 )
@@ -155,8 +155,8 @@ impl PlanService {
             monthly_gas_limit: plan.monthly_gas_limit.into(),
             per_invocation_http_call_limit: plan.per_invocation_http_call_limit.into(),
             per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit.into(),
-            monthly_http_limit: plan.monthly_http_limit.into(),
-            monthly_rpc_limit: plan.monthly_rpc_limit.into(),
+            monthly_http_call_limit: plan.monthly_http_call_limit.into(),
+            monthly_rpc_call_limit: plan.monthly_rpc_call_limit.into(),
         };
 
         self.plan_repo.create_or_update(record).await?;

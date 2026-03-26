@@ -10137,8 +10137,8 @@ components:
       - maxDiskSpacePerWorker
       - perInvocationHttpCallLimit
       - perInvocationRpcCallLimit
-      - monthlyHttpLimit
-      - monthlyRpcLimit
+      - monthlyHttpCallLimit
+      - monthlyRpcCallLimit
       properties:
         planId:
           type: string
@@ -10184,10 +10184,10 @@ components:
         perInvocationRpcCallLimit:
           type: integer
           format: uint64
-        monthlyHttpLimit:
+        monthlyHttpCallLimit:
           type: integer
           format: uint64
-        monthlyRpcLimit:
+        monthlyRpcCallLimit:
           type: integer
           format: uint64
     PluginInstallation:

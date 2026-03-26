@@ -358,7 +358,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
     /// is exhausted. This trap maps to `RetryDecision::TryStop` — the worker is
-    /// suspended (same as filesystem `NodeOutOfFilesystemStorage` → `ReacquirePermits`),
+    /// suspended (same as filesystem `NodeOutOfFilesystemStorage` -> `ReacquirePermits`),
     /// and will be resumed when the registry replenishes the budget.
     pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
         if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
@@ -382,12 +382,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             Ok(())
         }
-    }
-
-    /// Returns the shared resource limit entry for this worker, used by the
-    /// epoch callback to check remaining monthly HTTP/RPC call budgets.
-    pub fn resource_limit_entry(&self) -> &Arc<AtomicResourceEntry> {
-        &self.state.resource_limit_entry
     }
 
     fn check_if_file_is_readonly(
