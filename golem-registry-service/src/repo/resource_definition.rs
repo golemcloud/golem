@@ -236,11 +236,12 @@ impl DbResourceDefinitionRepo<PostgresPool> {
                         deleted,
                         limit_value,
                         limit_period,
+                        limit_max,
                         enforcement_action,
                         unit,
                         units
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                     RETURNING
                         resource_definition_id,
                         revision_id,
@@ -250,6 +251,7 @@ impl DbResourceDefinitionRepo<PostgresPool> {
                         deleted,
                         limit_value,
                         limit_period,
+                        limit_max,
                         enforcement_action,
                         unit,
                         units
@@ -260,6 +262,7 @@ impl DbResourceDefinitionRepo<PostgresPool> {
             .bind_deletable_revision_audit(revision.audit)
             .bind(revision.limit.limit_value)
             .bind(revision.limit.limit_period)
+            .bind(revision.limit.limit_max)
             .bind(revision.enforcement_action)
             .bind(revision.unit)
             .bind(revision.units),
@@ -409,6 +412,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                         rr.deleted,
                         rr.limit_value,
                         rr.limit_period,
+                        rr.limit_max,
                         rr.enforcement_action,
                         rr.unit,
                         rr.units
@@ -443,6 +447,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                         rr.deleted,
                         rr.limit_value,
                         rr.limit_period,
+                        rr.limit_max,
                         rr.enforcement_action,
                         rr.unit,
                         rr.units
@@ -478,6 +483,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                         rr.deleted,
                         rr.limit_value,
                         rr.limit_period,
+                        rr.limit_max,
                         rr.enforcement_action,
                         rr.unit,
                         rr.units
@@ -512,6 +518,7 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
                         rr.deleted,
                         rr.limit_value,
                         rr.limit_period,
+                        rr.limit_max,
                         rr.enforcement_action,
                         rr.unit,
                         rr.units
