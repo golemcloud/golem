@@ -205,6 +205,7 @@ mod json;
 #[cfg(feature = "json")]
 pub use json::*;
 
+mod checkpoint;
 mod transaction;
 pub mod value_and_type;
 
@@ -217,6 +218,7 @@ pub use bindings::golem::api::host::{
 };
 pub use bindings::golem::api::host::{ForkResult, PersistenceLevel, PromiseId};
 
+pub use checkpoint::*;
 pub use transaction::*;
 
 #[cfg(feature = "macro")]

@@ -9,6 +9,7 @@ use golem_rust::{
     fallible_transaction, infallible_transaction,
     use_retry_policy, RetryPolicy, use_idempotence_mode, use_persistence_level,
     with_persistence_level, PersistenceLevel,
+    Checkpoint, CheckpointResultExt,
     ForkResult, PromiseId, Transaction, Uuid,
 };
 use golem_wasi_http::{Client, Response};
@@ -40,6 +41,7 @@ pub trait GolemHostApi {
     fn infallible_transaction_test(&self) -> u64;
     fn fork_test(&self, input: String) -> String;
 
+    fn checkpoint_test(&self) -> u64;
     fn jump(&self) -> u64;
     fn get_workers(&self, component_id: HostComponentId, filter: Option<AgentAnyFilter>, precise: bool) -> Vec<AgentMetadata>;
     fn get_self_uri(&self) -> AgentMetadata;
@@ -232,6 +234,27 @@ impl GolemHostApi for GolemHostApiImpl {
         let part2: String = serde_json::from_str(&part2_raw).unwrap();
 
         format!("{part1}::{part2}")
+    }
+
+    fn checkpoint_test(&self) -> u64 {
+        let mut state = 0;
+        println!("started: {state}");
+        state += 1;
+        let cp = Checkpoint::new();
+        state += 1;
+        println!("second: {state}");
+        let call_result: Result<(), String> = if remote_call(state) {
+            Err("reverting".to_string())
+        } else {
+            Ok(())
+        };
+        call_result.unwrap_or_revert(&cp);
+        state += 1;
+        println!("third: {state}");
+        cp.assert_or_revert(!remote_call(state));
+        state += 1;
+        println!("fourth: {state}");
+        state
     }
 
     fn jump(&self) -> u64 {
