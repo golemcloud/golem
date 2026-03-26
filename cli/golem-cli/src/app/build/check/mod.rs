@@ -33,6 +33,7 @@ use anyhow::{anyhow, bail};
 use regex::Regex;
 use semver::{Version as SemVerVersion, VersionReq};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use version_compare::{Cmp, Version};
@@ -350,7 +351,11 @@ fn plan_rust_cargo_fix_steps(
             match compliance {
                 DependencySpecCompliance::Compatible => {}
                 DependencySpecCompliance::SkipWarn(message) => {
-                    warnings.push(format!("{} ({})", message, workspace_cargo_toml_path.display()));
+                    warnings.push(format!(
+                        "{} ({})",
+                        message,
+                        workspace_cargo_toml_path.display()
+                    ));
                 }
                 DependencySpecCompliance::NeedsUpdate => {
                     if found.is_none() && !requirement.required {
@@ -409,7 +414,7 @@ fn rust_dependency_requirements(
         },
     };
 
-        let mut requirements = vec![
+    let mut requirements = vec![
         CargoDependencyRequirement {
             name: "log",
             expected_spec: DependencySpec::Version {
@@ -583,7 +588,8 @@ fn evaluate_dependency_spec_compliance(
 ) -> DependencySpecCompliance {
     match expected {
         ExpectedDependencyKind::ExactPath(expected_path) => {
-            if normalize_path_str(found_text) == normalize_path_str(expected_path) {
+            if resolve_local_dependency_path(found_text) == resolve_local_dependency_path(expected_path)
+            {
                 DependencySpecCompliance::Compatible
             } else {
                 DependencySpecCompliance::NeedsUpdate
@@ -831,6 +837,17 @@ fn normalize_path_str(path: &str) -> String {
         .unwrap_or(path);
     let normalized: PathBuf = fs::normalize_path_lexically(Path::new(path));
     normalized.to_string_lossy().to_string()
+}
+
+fn resolve_local_dependency_path(path: &str) -> String {
+    let normalized = normalize_path_str(path);
+    let path = PathBuf::from(&normalized);
+    if path.is_absolute() {
+        return normalized;
+    }
+
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    normalize_path_str(cwd.join(path).to_string_lossy().as_ref())
 }
 
 fn parse_json_string_literal(raw: &str) -> Option<String> {
@@ -1312,7 +1329,7 @@ mod test {
         let mut check_deps = BTreeSet::new();
         let mut check_dev_deps = BTreeSet::new();
 
-        for requirement in typescript_sdk_requirements(&overrides) {
+        for requirement in typescript_sdk_requirements(overrides) {
             match requirement.section {
                 PackageJsonSection::Dependencies => {
                     check_deps.insert(requirement.name.to_string());
@@ -1344,7 +1361,7 @@ mod test {
             .collect::<BTreeSet<_>>();
 
         let overrides = sdk_overrides().unwrap();
-        let requirements = rust_dependency_requirements(&overrides);
+        let requirements = rust_dependency_requirements(overrides);
         let check_names = requirements
             .iter()
             .map(|r| r.name.to_string())
@@ -1415,6 +1432,29 @@ mod test {
         };
 
         let compliance = evaluate_cargo_dependency_compliance(None, &requirement, None);
+        assert_eq!(compliance, DependencySpecCompliance::Compatible);
+    }
+
+    #[test]
+    fn ts_path_comparison_accepts_relative_file_path_equivalent_to_absolute_override() {
+        let cwd = std::env::current_dir().unwrap();
+        let found = format!(
+            "file:{}",
+            cwd.join("sdks/ts/packages/golem-ts-sdk")
+                .to_string_lossy()
+                .replace("/workspace/golem-alt-00/", "/workspace/golem-alt-00/../golem-alt-00/")
+        );
+        let expected = format!(
+            "file:{}",
+            cwd.join("sdks/ts/packages/golem-ts-sdk").to_string_lossy()
+        );
+
+        let compliance = evaluate_dependency_spec_compliance(
+            &found,
+            &ExpectedDependencyKind::ExactPath(expected),
+            DependencyMatcherSemantics::TypeScript,
+        );
+
         assert_eq!(compliance, DependencySpecCompliance::Compatible);
     }
 }

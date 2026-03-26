@@ -1640,7 +1640,7 @@ mod app_builder {
                     fs::path_to_str(app_root_dir).map(|path| path.to_string())?,
                     fs::path_to_str(&app_root_dir.join(TEMP_DIR)).map(|path| path.to_string())?,
                     edit::cargo_toml::is_workspace_manifest(
-                        &fs::read_to_string(&app_root_dir.join("Cargo.toml")).unwrap_or_default(),
+                        &fs::read_to_string(app_root_dir.join("Cargo.toml")).unwrap_or_default(),
                     )
                     .unwrap_or(false),
                 ))
