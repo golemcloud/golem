@@ -439,7 +439,7 @@ async fn env_vars(
 
     let builder = if let Some(wasm_path) = otlp_wasm_path {
         builder
-            .with_str("GOLEM__BUILTIN_PLUGINS__ENABLED", "true")
+            .with_str("GOLEM__BUILTIN_PLUGINS__TYPE", "Enabled")
             .with(
                 "GOLEM__BUILTIN_PLUGINS__OTLP_EXPORTER_WASM_PATH",
                 wasm_path.to_string_lossy().to_string(),

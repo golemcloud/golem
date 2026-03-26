@@ -270,7 +270,7 @@ fn registry_service_config(
             );
             accounts
         },
-        builtin_plugins: BuiltinPluginsConfig { enabled: true },
+        builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
         ..Default::default()
     }
 }

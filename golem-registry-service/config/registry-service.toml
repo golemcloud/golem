@@ -11,7 +11,9 @@ type = "LocalFileSystem"
 root = "../data/blob_storage"
 
 [builtin_plugins]
-enabled = false
+type = "Disabled"
+
+[builtin_plugins.config]
 
 [component_compilation]
 type = "Enabled"
