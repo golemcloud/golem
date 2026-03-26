@@ -689,7 +689,7 @@ export class ScenarioExecutor {
     } else if (step.invoke) {
       await this.executeInvoke(stepLabel, step.invoke, step.expect, stepTimeoutSeconds, commandEnv, fail);
     } else if (step.http) {
-      await this.executeHttp(stepLabel, step.http, step.expect, fail);
+      await this.executeHttp(stepLabel, step.http, step.expect, stepTimeoutSeconds, fail);
     }
 
     // Verify skills activation
@@ -827,14 +827,20 @@ export class ScenarioExecutor {
     stepLabel: string,
     http: HttpSpec,
     expect: StepCommon["expect"],
+    timeoutSeconds: number,
     fail: (msg: string) => void,
   ): Promise<void> {
     console.log(`Step ${stepLabel}: HTTP ${http.method ?? "GET"} ${http.url}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+    const onParentAbort = () => controller.abort();
+    this.options.abortSignal?.addEventListener("abort", onParentAbort);
     try {
       const response = await fetch(http.url, {
         method: http.method ?? "GET",
         body: http.body,
         headers: http.headers,
+        signal: controller.signal,
       });
       const body = await response.text();
 
@@ -847,7 +853,14 @@ export class ScenarioExecutor {
         fail(`HTTP_FAILED: ${response.status} ${body.slice(0, 500)}`);
       }
     } catch (err) {
-      fail(`HTTP_FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      if (err instanceof Error && err.name === "AbortError") {
+        fail(`HTTP_FAILED: request timed out after ${timeoutSeconds}s`);
+      } else {
+        fail(`HTTP_FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      this.options.abortSignal?.removeEventListener("abort", onParentAbort);
     }
   }
 
