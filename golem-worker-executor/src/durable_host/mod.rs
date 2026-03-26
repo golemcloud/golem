@@ -3372,11 +3372,6 @@ impl PrivateDurableWorkerState {
         Ok(())
     }
 
-    // TODO - should this happen when and where we return the fuel
-    /// Resets the per-invocation HTTP and RPC call counters to zero.
-    ///
-    /// Called at the start of each exported function invocation, matching the
-    /// same boundary at which fuel accounting is reset.
     pub fn reset_invocation_call_counts(&mut self) {
         self.http_call_count = 0;
         self.rpc_call_count = 0;

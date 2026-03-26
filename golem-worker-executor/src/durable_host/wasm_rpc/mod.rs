@@ -156,9 +156,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .check_and_increment_rpc_call_count()
             .map_err(wasmtime::Error::from)?;
 
-        // Record against the monthly account-level RPC call quota.
-        // Record against the monthly account-level RPC call quota.
-        // Record against the monthly account-level RPC call quota (live mode only).
         // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
@@ -386,7 +383,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .check_and_increment_rpc_call_count()
             .map_err(wasmtime::Error::from)?;
 
-        // Record against the monthly account-level RPC call quota (live mode only).
         // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
