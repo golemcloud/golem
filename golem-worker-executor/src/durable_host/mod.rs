@@ -189,8 +189,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         http_connection_pool: Option<HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
-        per_invocation_http_limit: u64,
-        per_invocation_rpc_limit: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -329,8 +329,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 pending_update,
                 original_phantom_id,
                 worker_config.last_snapshot_index,
-                per_invocation_http_limit,
-                per_invocation_rpc_limit,
+                per_invocation_http_call_limit,
+                per_invocation_rpc_call_limit,
                 resource_limits.clone(),
             )
             .await,
@@ -3177,13 +3177,13 @@ struct PrivateDurableWorkerState {
     /// Reset to 0 at the start of each exported function invocation.
     http_call_count: u64,
     /// Per-invocation HTTP call limit from the account's Plan. u64::MAX means unlimited.
-    per_invocation_http_limit: u64,
+    per_invocation_http_call_limit: u64,
 
     /// Number of RPC calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
     rpc_call_count: u64,
     /// Per-invocation RPC call limit from the account's Plan. u64::MAX means unlimited.
-    per_invocation_rpc_limit: u64,
+    per_invocation_rpc_call_limit: u64,
 
     /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
     /// and to check remaining budgets from the epoch callback.
@@ -3228,8 +3228,8 @@ impl PrivateDurableWorkerState {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
-        per_invocation_http_limit: u64,
-        per_invocation_rpc_limit: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
     ) -> Self {
         let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
@@ -3254,9 +3254,9 @@ impl PrivateDurableWorkerState {
             oplog,
             agent_id,
             http_call_count: 0,
-            per_invocation_http_limit,
+            per_invocation_http_call_limit,
             rpc_call_count: 0,
-            per_invocation_rpc_limit,
+            per_invocation_rpc_call_limit,
             promise_service,
             scheduler_service,
             worker_service,
@@ -3347,8 +3347,8 @@ impl PrivateDurableWorkerState {
         if !self.is_live() {
             return Ok(());
         }
-        if self.per_invocation_http_limit != u64::MAX
-            && self.http_call_count >= self.per_invocation_http_limit
+        if self.per_invocation_http_call_limit != u64::MAX
+            && self.http_call_count >= self.per_invocation_http_call_limit
         {
             return Err(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit);
         }
@@ -3363,8 +3363,8 @@ impl PrivateDurableWorkerState {
         if !self.is_live() {
             return Ok(());
         }
-        if self.per_invocation_rpc_limit != u64::MAX
-            && self.rpc_call_count >= self.per_invocation_rpc_limit
+        if self.per_invocation_rpc_call_limit != u64::MAX
+            && self.rpc_call_count >= self.per_invocation_rpc_call_limit
         {
             return Err(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit);
         }

@@ -153,8 +153,8 @@ impl AccountUsage {
             max_memory_per_worker: self.plan.max_memory_per_worker.get(),
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
             max_disk_space_per_worker: self.plan.max_disk_space_per_worker.get(),
-            per_invocation_http_limit: self.plan.per_invocation_http_limit.get(),
-            per_invocation_rpc_limit: self.plan.per_invocation_rpc_limit.get(),
+            per_invocation_http_call_limit: self.plan.per_invocation_http_call_limit.get(),
+            per_invocation_rpc_call_limit: self.plan.per_invocation_rpc_call_limit.get(),
             available_http_calls,
             available_rpc_calls,
         }

@@ -10135,8 +10135,8 @@ components:
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
-      - perInvocationHttpLimit
-      - perInvocationRpcLimit
+      - perInvocationHttpCallLimit
+      - perInvocationRpcCallLimit
       - monthlyHttpLimit
       - monthlyRpcLimit
       properties:
@@ -10178,10 +10178,10 @@ components:
         maxDiskSpacePerWorker:
           type: integer
           format: uint64
-        perInvocationHttpLimit:
+        perInvocationHttpCallLimit:
           type: integer
           format: uint64
-        perInvocationRpcLimit:
+        perInvocationRpcCallLimit:
           type: integer
           format: uint64
         monthlyHttpLimit:

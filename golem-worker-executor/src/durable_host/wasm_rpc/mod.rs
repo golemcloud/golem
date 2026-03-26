@@ -370,10 +370,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let config_vars = self.state.config_vars.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
-        let begin_index = self
-            .begin_function(&DurableFunctionType::WriteRemote)
-            .await?;
-
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_agent_id = payload.remote_agent_id.clone();
@@ -390,12 +386,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .check_and_increment_rpc_call_count()
             .map_err(wasmtime::Error::from)?;
 
-        // Record against the monthly account-level RPC call quota.
-        // Record against the monthly account-level RPC call quota.
         // Record against the monthly account-level RPC call quota (live mode only).
         // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
         // which maps to RetryDecision::TryStop — suspending the worker.
         self.record_monthly_rpc_call()?;
+
+        let begin_index = self
+            .begin_function(&DurableFunctionType::WriteRemote)
+            .await?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()

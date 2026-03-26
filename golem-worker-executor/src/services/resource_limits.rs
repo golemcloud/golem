@@ -49,9 +49,9 @@ pub struct AtomicResourceEntry {
     last_refresh_secs: AtomicI64,
     // Plan-level per-invocation HTTP call limit. Uses AtomicU64 so that it can
     // be updated when the account's plan changes (propagated via batch responses).
-    per_invocation_http_limit: AtomicU64,
+    per_invocation_http_call_limit: AtomicU64,
     // Plan-level per-invocation RPC call limit.
-    per_invocation_rpc_limit: AtomicU64,
+    per_invocation_rpc_call_limit: AtomicU64,
 
     // Monthly account-level HTTP call tracking.
     // The available count last reported by the registry service.
@@ -82,8 +82,8 @@ impl AtomicResourceEntry {
             max_table_elements: AtomicUsize::new(max_table_elements),
             max_disk_space: AtomicU64::new(max_disk_space),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
-            per_invocation_http_limit: AtomicU64::new(u64::MAX),
-            per_invocation_rpc_limit: AtomicU64::new(u64::MAX),
+            per_invocation_http_call_limit: AtomicU64::new(u64::MAX),
+            per_invocation_rpc_call_limit: AtomicU64::new(u64::MAX),
             available_http_calls_from_server: AtomicU64::new(u64::MAX),
             unsynced_http_calls: AtomicU64::new(0),
             syncing_http_calls: AtomicU64::new(0),
@@ -98,8 +98,8 @@ impl AtomicResourceEntry {
         max_memory: usize,
         max_table_elements: usize,
         max_disk_space: u64,
-        per_invocation_http_limit: u64,
-        per_invocation_rpc_limit: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
     ) -> Self {
         Self {
             fuel: AtomicU64::new(fuel),
@@ -109,8 +109,8 @@ impl AtomicResourceEntry {
             max_table_elements: AtomicUsize::new(max_table_elements),
             max_disk_space: AtomicU64::new(max_disk_space),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
-            per_invocation_http_limit: AtomicU64::new(per_invocation_http_limit),
-            per_invocation_rpc_limit: AtomicU64::new(per_invocation_rpc_limit),
+            per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
+            per_invocation_rpc_call_limit: AtomicU64::new(per_invocation_rpc_call_limit),
             available_http_calls_from_server: AtomicU64::new(u64::MAX),
             unsynced_http_calls: AtomicU64::new(0),
             syncing_http_calls: AtomicU64::new(0),
@@ -127,8 +127,8 @@ impl AtomicResourceEntry {
         max_memory: usize,
         max_table_elements: usize,
         max_disk_space: u64,
-        per_invocation_http_limit: u64,
-        per_invocation_rpc_limit: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
         available_http_calls: u64,
         available_rpc_calls: u64,
     ) -> Self {
@@ -140,8 +140,8 @@ impl AtomicResourceEntry {
             max_table_elements: AtomicUsize::new(max_table_elements),
             max_disk_space: AtomicU64::new(max_disk_space),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
-            per_invocation_http_limit: AtomicU64::new(per_invocation_http_limit),
-            per_invocation_rpc_limit: AtomicU64::new(per_invocation_rpc_limit),
+            per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
+            per_invocation_rpc_call_limit: AtomicU64::new(per_invocation_rpc_call_limit),
             available_http_calls_from_server: AtomicU64::new(available_http_calls),
             unsynced_http_calls: AtomicU64::new(0),
             syncing_http_calls: AtomicU64::new(0),
@@ -151,12 +151,12 @@ impl AtomicResourceEntry {
         }
     }
 
-    pub fn per_invocation_http_limit(&self) -> u64 {
-        self.per_invocation_http_limit.load(Ordering::Acquire)
+    pub fn per_invocation_http_call_limit(&self) -> u64 {
+        self.per_invocation_http_call_limit.load(Ordering::Acquire)
     }
 
-    pub fn per_invocation_rpc_limit(&self) -> u64 {
-        self.per_invocation_rpc_limit.load(Ordering::Acquire)
+    pub fn per_invocation_rpc_call_limit(&self) -> u64 {
+        self.per_invocation_rpc_call_limit.load(Ordering::Acquire)
     }
 
     fn secs_since_last_refresh(&self) -> i64 {
@@ -537,12 +537,14 @@ impl ResourceLimitsGrpc {
                 entry
                     .max_disk_space
                     .store(updated_limits.max_disk_space_per_worker, Ordering::Release);
-                entry
-                    .per_invocation_http_limit
-                    .store(updated_limits.per_invocation_http_limit, Ordering::Release);
-                entry
-                    .per_invocation_rpc_limit
-                    .store(updated_limits.per_invocation_rpc_limit, Ordering::Release);
+                entry.per_invocation_http_call_limit.store(
+                    updated_limits.per_invocation_http_call_limit,
+                    Ordering::Release,
+                );
+                entry.per_invocation_rpc_call_limit.store(
+                    updated_limits.per_invocation_rpc_call_limit,
+                    Ordering::Release,
+                );
                 // Refresh monthly HTTP/RPC available counts from the server response.
                 // The server already incorporated our reported counts, so we reset
                 // syncing to 0 and update the server-side available count.
@@ -593,8 +595,8 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
                         fetched.max_disk_space_per_worker,
-                        fetched.per_invocation_http_limit,
-                        fetched.per_invocation_rpc_limit,
+                        fetched.per_invocation_http_call_limit,
+                        fetched.per_invocation_rpc_call_limit,
                         fetched.available_http_calls,
                         fetched.available_rpc_calls,
                     ),
@@ -822,7 +824,7 @@ mod tests {
             42,
             u64::MAX,
         );
-        assert_eq!(entry.per_invocation_http_limit(), 42);
+        assert_eq!(entry.per_invocation_http_call_limit(), 42);
     }
 
     #[test]
@@ -835,7 +837,7 @@ mod tests {
             u64::MAX,
             99,
         );
-        assert_eq!(entry.per_invocation_rpc_limit(), 99);
+        assert_eq!(entry.per_invocation_rpc_call_limit(), 99);
     }
 
     #[test]
@@ -843,8 +845,8 @@ mod tests {
         // AtomicResourceEntry::new (without invocation limits) must default to u64::MAX
         // so that workers using the old constructor are unaffected.
         let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX);
-        assert_eq!(entry.per_invocation_http_limit(), u64::MAX);
-        assert_eq!(entry.per_invocation_rpc_limit(), u64::MAX);
+        assert_eq!(entry.per_invocation_http_call_limit(), u64::MAX);
+        assert_eq!(entry.per_invocation_rpc_call_limit(), u64::MAX);
     }
 
     #[test]
@@ -852,10 +854,14 @@ mod tests {
         let entry =
             AtomicResourceEntry::new_with_invocation_limits(500, 256, usize::MAX, u64::MAX, 10, 20);
         // Simulate a plan change: update limits via the atomic store
-        entry.per_invocation_http_limit.store(50, Ordering::Release);
-        entry.per_invocation_rpc_limit.store(100, Ordering::Release);
-        assert_eq!(entry.per_invocation_http_limit(), 50);
-        assert_eq!(entry.per_invocation_rpc_limit(), 100);
+        entry
+            .per_invocation_http_call_limit
+            .store(50, Ordering::Release);
+        entry
+            .per_invocation_rpc_call_limit
+            .store(100, Ordering::Release);
+        assert_eq!(entry.per_invocation_http_call_limit(), 50);
+        assert_eq!(entry.per_invocation_rpc_call_limit(), 100);
     }
 
     // -------------------------------------------------------------------------
@@ -1016,8 +1022,8 @@ mod tests {
             max_memory_per_worker: 512,
             max_table_elements_per_worker: u64::MAX,
             max_disk_space_per_worker: u64::MAX,
-            per_invocation_http_limit: u64::MAX,
-            per_invocation_rpc_limit: u64::MAX,
+            per_invocation_http_call_limit: u64::MAX,
+            per_invocation_rpc_call_limit: u64::MAX,
             available_http_calls: 5,
             available_rpc_calls: 3,
         });
@@ -1039,8 +1045,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: 50,
                 available_rpc_calls: 40,
             },
@@ -1071,8 +1077,8 @@ mod tests {
             max_memory_per_worker: 512,
             max_table_elements_per_worker: u64::MAX,
             max_disk_space_per_worker: u64::MAX,
-            per_invocation_http_limit: u64::MAX,
-            per_invocation_rpc_limit: u64::MAX,
+            per_invocation_http_call_limit: u64::MAX,
+            per_invocation_rpc_call_limit: u64::MAX,
             available_http_calls: 10,
             available_rpc_calls: 10,
         });
@@ -1085,8 +1091,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: 10,
                 available_rpc_calls: 10,
             },
@@ -1144,8 +1150,8 @@ mod tests {
                     max_memory_per_worker: max_memory,
                     max_table_elements_per_worker: u64::MAX,
                     max_disk_space_per_worker: u64::MAX,
-                    per_invocation_http_limit: u64::MAX,
-                    per_invocation_rpc_limit: u64::MAX,
+                    per_invocation_http_call_limit: u64::MAX,
+                    per_invocation_rpc_call_limit: u64::MAX,
                     available_http_calls: u64::MAX,
                     available_rpc_calls: u64::MAX,
                 })),
@@ -1518,8 +1524,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
             },
@@ -1549,8 +1555,8 @@ mod tests {
                 max_memory_per_worker: 1024,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
             },
@@ -1581,8 +1587,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
             },
@@ -1664,8 +1670,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
             },
@@ -1694,8 +1700,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
             },
@@ -1751,8 +1757,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
             },
@@ -1788,8 +1794,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
             },
@@ -1859,8 +1865,8 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
-                per_invocation_http_limit: u64::MAX,
-                per_invocation_rpc_limit: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
             },

@@ -800,8 +800,8 @@ impl WorkerCtx for Context {
             http_connection_pool,
             pending_update,
             original_phantom_id,
-            account_resource_limits.per_invocation_http_limit(),
-            account_resource_limits.per_invocation_rpc_limit(),
+            account_resource_limits.per_invocation_http_call_limit(),
+            account_resource_limits.per_invocation_rpc_call_limit(),
         )
         .await?;
         Ok(Self::new(golem_ctx, config, account_resource_limits))

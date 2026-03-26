@@ -84,8 +84,8 @@ impl Deps {
                 max_memory_per_worker: 4000.into(),
                 max_table_elements_per_worker: 16384.into(),
                 max_disk_space_per_worker: 1073741824.into(),
-                per_invocation_http_limit: u64::MAX.into(),
-                per_invocation_rpc_limit: u64::MAX.into(),
+                per_invocation_http_call_limit: u64::MAX.into(),
+                per_invocation_rpc_call_limit: u64::MAX.into(),
                 monthly_http_limit: 5000.into(),
                 monthly_rpc_limit: 5000.into(),
             })

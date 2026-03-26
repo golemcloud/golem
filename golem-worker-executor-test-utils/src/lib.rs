@@ -1833,8 +1833,8 @@ pub async fn start_with_agent_storage_quota(
 /// call limits while keeping fuel, memory, and table elements unlimited.
 /// Used by per-invocation call-limit tests.
 struct FixedInvocationLimitResourceLimits {
-    per_invocation_http_limit: u64,
-    per_invocation_rpc_limit: u64,
+    per_invocation_http_call_limit: u64,
+    per_invocation_rpc_call_limit: u64,
 }
 
 #[async_trait]
@@ -1851,8 +1851,8 @@ impl ResourceLimits for FixedInvocationLimitResourceLimits {
             usize::MAX,
             usize::MAX,
             u64::MAX,
-            self.per_invocation_http_limit,
-            self.per_invocation_rpc_limit,
+            self.per_invocation_http_call_limit,
+            self.per_invocation_rpc_call_limit,
         )))
     }
 }
@@ -1864,15 +1864,15 @@ impl ResourceLimits for FixedInvocationLimitResourceLimits {
 pub async fn start_with_invocation_limits(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
-    per_invocation_http_limit: u64,
-    per_invocation_rpc_limit: u64,
+    per_invocation_http_call_limit: u64,
+    per_invocation_rpc_call_limit: u64,
 ) -> anyhow::Result<TestWorkerExecutor> {
     run_production_context_bootstrap(
         deps,
         context,
         Arc::new(FixedInvocationLimitResourceLimits {
-            per_invocation_http_limit,
-            per_invocation_rpc_limit,
+            per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit,
         }),
         "Timeout waiting for invocation-limit server to start",
     )
