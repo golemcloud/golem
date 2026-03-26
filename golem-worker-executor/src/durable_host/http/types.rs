@@ -884,7 +884,12 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         kind,
                         message: err.to_string(),
                     });
-                    self.try_trigger_retry(failure)
+                    let mut properties = golem_common::model::RetryProperties::new();
+                    properties.set(
+                        "error-type",
+                        golem_common::model::PredicateValue::Text("transient".to_string()),
+                    );
+                    self.try_trigger_retry(failure, properties)
                         .await
                         .map_err(wasmtime::Error::from_anyhow)?;
                 }
@@ -1060,6 +1065,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if let wasmtime_wasi_http::types::HostFutureIncomingResponse::Pending(pending_handle) =
                 new_future
             {
+                let mut retry_properties = golem_common::model::RetryContext::http(
+                    &request_state.request.method.to_string(),
+                    &request_state.request.uri,
+                );
+                self.state.enrich_retry_properties(&mut retry_properties);
                 let retry_handle = spawn_http_request_with_retry(
                     pending_handle,
                     request_state.request.clone(),
@@ -1067,10 +1077,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     None,
                     self.public_state.worker(),
                     self.state.named_retry_policies().to_vec(),
-                    golem_common::model::RetryContext::http(
-                        &request_state.request.method.to_string(),
-                        &request_state.request.uri,
-                    ),
+                    retry_properties,
                     exec_state.max_in_function_retry_delay,
                     request_state.begin_index,
                     self.execution_status.clone(),

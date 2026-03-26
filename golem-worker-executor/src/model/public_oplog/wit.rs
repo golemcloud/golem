@@ -17,7 +17,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
+    CancelPendingInvocationParams, ChangePersistenceLevelParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
@@ -25,9 +25,10 @@ use golem_common::model::oplog::public_oplog_entry::{
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
+    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
     RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams,
-    SnapshotParams, StartSpanParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    RemoveRetryPolicyParams, SetRetryPolicyParams, SnapshotParams, StartSpanParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
     WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -36,7 +37,6 @@ use golem_common::model::oplog::{
     RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::{Empty, Timestamp};
-use std::time::Duration;
 
 impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
     fn from(value: PublicOplogEntry) -> Self {
@@ -141,13 +141,6 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 Self::Interrupted(timestamp.into())
             }
             PublicOplogEntry::Exited(ExitedParams { timestamp }) => Self::Exited(timestamp.into()),
-            PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParams {
-                timestamp,
-                new_policy,
-            }) => Self::ChangeRetryPolicy(oplog::ChangeRetryPolicyParameters {
-                timestamp: timestamp.into(),
-                new_policy: new_policy.into(),
-            }),
             PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams { timestamp }) => {
                 Self::BeginAtomicRegion(timestamp.into())
             }
@@ -395,6 +388,23 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 sending_up_to: sending_up_to.into(),
                 last_batch_start: last_batch_start.into(),
             }),
+            PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
+                timestamp,
+                policy,
+            }) => Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
+                timestamp: timestamp.into(),
+                name: policy.name,
+                priority: policy.priority,
+                predicate_json: policy.predicate_json,
+                policy_json: policy.policy_json,
+            }),
+            PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams {
+                timestamp,
+                name,
+            }) => Self::RemoveRetryPolicy(oplog::RemoveRetryPolicyParameters {
+                timestamp: timestamp.into(),
+                name,
+            }),
         }
     }
 }
@@ -568,18 +578,6 @@ impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
                     error: result.error,
                 })
             }
-        }
-    }
-}
-
-impl From<PublicRetryConfig> for oplog::RetryPolicy {
-    fn from(value: PublicRetryConfig) -> Self {
-        Self {
-            max_attempts: value.max_attempts,
-            min_delay: value.min_delay.as_nanos() as u64,
-            max_delay: value.max_delay.as_nanos() as u64,
-            multiplier: value.multiplier,
-            max_jitter_factor: value.max_jitter_factor,
         }
     }
 }
@@ -883,16 +881,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::Exited(ts) => Ok(Self::Exited {
                 timestamp: timestamp_from_datetime(ts.timestamp),
             }),
-            oplog::OplogEntry::ChangeRetryPolicy(params) => Ok(Self::ChangeRetryPolicy {
-                timestamp: timestamp_from_datetime(params.timestamp),
-                new_policy: golem_common::model::RetryConfig {
-                    max_attempts: params.new_policy.max_attempts,
-                    min_delay: Duration::from_nanos(params.new_policy.min_delay),
-                    max_delay: Duration::from_nanos(params.new_policy.max_delay),
-                    multiplier: params.new_policy.multiplier,
-                    max_jitter_factor: params.new_policy.max_jitter_factor,
-                },
-            }),
             oplog::OplogEntry::BeginAtomicRegion(ts) => Ok(Self::BeginAtomicRegion {
                 timestamp: timestamp_from_datetime(ts.timestamp),
             }),
@@ -1116,6 +1104,25 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     ),
                 })
             }
+            oplog::OplogEntry::SetRetryPolicy(params) => {
+                let predicate: golem_common::model::retry_policy::Predicate = serde_json::from_str(&params.predicate_json)
+                    .map_err(|e| format!("Invalid predicate JSON: {e}"))?;
+                let policy: golem_common::model::retry_policy::RetryPolicy = serde_json::from_str(&params.policy_json)
+                    .map_err(|e| format!("Invalid policy JSON: {e}"))?;
+                Ok(Self::SetRetryPolicy {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    policy: golem_common::model::retry_policy::NamedRetryPolicy {
+                        name: params.name,
+                        priority: params.priority,
+                        predicate,
+                        policy,
+                    },
+                })
+            }
+            oplog::OplogEntry::RemoveRetryPolicy(params) => Ok(Self::RemoveRetryPolicy {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                name: params.name,
+            }),
         }
     }
 }

@@ -28,7 +28,6 @@ message OplogEntry {
     JumpParameters Jump = 8;
     TimestampParameter Interrupted = 9;
     TimestampParameter Exited = 10;
-    ChangeRetryPolicyParameters ChangeRetryPolicy = 11;
     TimestampParameter BeginAtomicRegion = 12;
     EndAtomicRegionParameters EndAtomicRegion = 13;
     TimestampParameter BeginRemoteWrite = 14;
@@ -58,6 +57,8 @@ message OplogEntry {
     SnapshotDataParameters Snapshot = 39;
     OplogProcessorCheckpointParameters OplogProcessorCheckpoint = 40;
     FilesystemStorageUsageUpdateParameters FilesystemStorageUsageUpdate = 41;
+    SetRetryPolicyParameters SetRetryPolicy = 42;
+    RemoveRetryPolicyParameters RemoveRetryPolicy = 43;
   }
 }
 
@@ -236,17 +237,14 @@ message JumpParameters {
   uint64 end = 3;
 }
 
-message ChangeRetryPolicyParameters {
+message SetRetryPolicyParameters {
   google.protobuf.Timestamp timestamp = 1;
-  RetryPolicy retry_policy = 2;
+  golem.worker.retry.NamedRetryPolicy named_policy = 2;
 }
 
-message RetryPolicy {
-  uint32 max_attempts = 1;
-  uint64 min_delay = 2;
-  uint64 max_delay = 3;
-  double multiplier = 4;
-  optional double max_jitter_factor = 5;
+message RemoveRetryPolicyParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string policy_name = 2;
 }
 
 message EndAtomicRegionParameters {

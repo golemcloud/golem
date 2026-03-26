@@ -85,8 +85,9 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
         .get_mut(&Resource::<HostFutureIncomingResponse>::new_borrow(handle))?;
     let old = std::mem::replace(future_res, HostFutureIncomingResponse::Consumed);
     let wrapped = if let HostFutureIncomingResponse::Pending(orig_handle) = old {
-        let retry_properties =
+        let mut retry_properties =
             RetryContext::http(&state.request.method.to_string(), &state.request.uri);
+        ctx.state.enrich_retry_properties(&mut retry_properties);
         let retry_handle = spawn_http_request_with_retry(
             orig_handle,
             state.request.clone(),

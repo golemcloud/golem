@@ -921,10 +921,11 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     let new_future = if request_state.retry.has_background_retry {
         if let HostFutureIncomingResponse::Pending(handle) = rebuilt.future {
             let named_retry_policies = ctx.state.named_retry_policies().to_vec();
-            let retry_properties = golem_common::model::RetryContext::http(
+            let mut retry_properties = golem_common::model::RetryContext::http(
                 &request_state.request.method.to_string(),
                 &request_state.request.uri,
             );
+            ctx.state.enrich_retry_properties(&mut retry_properties);
             let retry_handle = spawn_http_request_with_retry(
                 handle,
                 request_state.request.clone(),

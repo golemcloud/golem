@@ -38,8 +38,8 @@ mod raw_imports {
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::AttributeMap;
     pub use crate::model::oplog::raw_types::*;
-    pub use crate::model::retry_policy::RetryPolicyState;
-    pub use crate::model::{AgentInvocationPayload, AgentInvocationResult, RetryConfig};
+    pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
+    pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
     pub use golem_wasm::wasmtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
@@ -212,17 +212,6 @@ oplog_entry! {
         wit_raw_type: "timestamp"
         raw {}
         public {}
-    },
-    /// Overrides the worker's retry policy
-    ChangeRetryPolicy {
-        hint: false
-        wit_raw_type: "change-retry-policy-parameters"
-        raw {
-            new_policy: RetryConfig,
-        }
-        public {
-            new_policy: PublicRetryConfig,
-        }
     },
     /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
     /// recovery except if there is a corresponding `EndAtomicRegion` entry.
@@ -581,6 +570,28 @@ oplog_entry! {
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,
             last_batch_start: OplogIndex,
+        }
+    },
+    /// Sets or overwrites a named retry policy (persisted to oplog)
+    SetRetryPolicy {
+        hint: false
+        wit_raw_type: "set-retry-policy-parameters"
+        raw {
+            policy: NamedRetryPolicy,
+        }
+        public {
+            policy: PublicNamedRetryPolicy,
+        }
+    },
+    /// Removes a named retry policy by name (persisted to oplog)
+    RemoveRetryPolicy {
+        hint: false
+        wit_raw_type: "remove-retry-policy-parameters"
+        raw {
+            name: String,
+        }
+        public {
+            name: String,
         }
     }
 }

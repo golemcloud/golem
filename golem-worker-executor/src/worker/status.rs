@@ -329,8 +329,10 @@ fn calculate_latest_worker_status(
             OplogEntry::Exited { .. } => {
                 current_status = AgentStatus::Exited;
             }
-            OplogEntry::ChangeRetryPolicy { new_policy, .. } => {
-                current_retry_policy = Some(new_policy.clone());
+            OplogEntry::SetRetryPolicy { .. } => {
+                current_status = AgentStatus::Running;
+            }
+            OplogEntry::RemoveRetryPolicy { .. } => {
                 current_status = AgentStatus::Running;
             }
             OplogEntry::BeginAtomicRegion { .. } => {

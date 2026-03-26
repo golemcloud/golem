@@ -46,9 +46,10 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::{
     AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex, OwnedAgentId,
-    RetryContext, RetryProperties, ScheduledAction,
+    PredicateValue, RetryContext, RetryProperties, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
 
@@ -472,8 +473,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             } else {
                 self.state.named_retry_policies().to_vec()
             };
-            let retry_properties =
+            let mut retry_properties =
                 RetryContext::rpc("invoke-and-await", &remote_agent_id, &method_name);
+            self.state.enrich_retry_properties(&mut retry_properties);
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
             let worker = self.public_state.worker();
 
@@ -704,6 +706,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
             let worker = self.public_state.worker();
             let execution_status = self.execution_status.clone();
+            let enrichment_agent_id = self.state.agent_id.clone();
+            let enrichment_idempotence = self.state.assume_idempotence;
 
             let entry = self.table().get_mut(&this)?;
             let entry = entry
@@ -779,12 +783,16 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     )
                 }
                 FutureInvokeResultState::Deferred { .. } => {
+                    let enrichment = enrichment_agent_id
+                        .as_ref()
+                        .map(|id| (id, enrichment_idempotence));
                     handle_deferred_rpc_dispatch(
                         entry,
                         rpc,
                         stack,
                         allow_retry,
                         named_retry_policies,
+                        enrichment,
                         max_delay,
                         worker,
                         execution_status,
@@ -814,7 +822,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             {
                 self.state.current_retry_point = begin_index;
                 let failure = anyhow::Error::new(ClassifiedHostError { kind, message });
-                self.try_trigger_retry(failure).await?;
+                let mut properties = RetryProperties::new();
+                properties.set(
+                    "error-type",
+                    PredicateValue::Text("transient".to_string()),
+                );
+                self.try_trigger_retry(failure, properties).await?;
             }
 
             if self.state.snapshotting_mode.is_none() {
@@ -1307,6 +1320,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     stack: InvocationContextStack,
     allow_retry: bool,
     named_retry_policies: Vec<NamedRetryPolicy>,
+    enrichment: Option<(&ParsedAgentId, bool)>,
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
@@ -1342,7 +1356,18 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         remote_agent_type: None,
         remote_agent_parameters: None,
     };
-    let retry_properties = RetryContext::rpc("invoke-and-await", remote_agent_id, method_name);
+    let mut retry_properties =
+        RetryContext::rpc("invoke-and-await", remote_agent_id, method_name);
+    if let Some((agent_id, assume_idempotence)) = enrichment {
+        retry_properties.set(
+            "agent-type",
+            PredicateValue::Text(agent_id.agent_type.to_string()),
+        );
+        retry_properties.set(
+            "is-idempotent",
+            PredicateValue::Boolean(assume_idempotence),
+        );
+    }
 
     let handle = spawn_rpc_task_with_retry(
         rpc,

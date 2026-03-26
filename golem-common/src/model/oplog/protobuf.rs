@@ -21,8 +21,7 @@ use super::{
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
     PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
-    PublicRetryConfig, PublicRetryPolicyState, PublicSnapshotData, PublicSpanData,
-    PublicUpdateDescription,
+    PublicRetryConfig,
     RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
     StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
@@ -35,15 +34,16 @@ use crate::model::oplog::PersistenceLevel;
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
+    CancelPendingInvocationParams, ChangePersistenceLevelParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
     HostCallParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
-    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    RemoveRetryPolicyParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::worker::ParsedWorkerAgentConfigEntry;
@@ -54,7 +54,6 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
-use std::time::Duration;
 
 impl From<PersistenceLevel> for golem_api_grpc::proto::golem::worker::PersistenceLevel {
     fn from(value: PersistenceLevel) -> Self {
@@ -373,18 +372,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::Exited(exited) => Ok(PublicOplogEntry::Exited(ExitedParams {
                 timestamp: exited.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
-            oplog_entry::Entry::ChangeRetryPolicy(change_retry_policy) => Ok(
-                PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParams {
-                    timestamp: change_retry_policy
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    new_policy: change_retry_policy
-                        .retry_policy
-                        .ok_or("Missing retry_policy field")?
-                        .try_into()?,
-                }),
-            ),
             oplog_entry::Entry::BeginAtomicRegion(begin_atomic_region) => Ok(
                 PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
                     timestamp: begin_atomic_region
@@ -703,6 +690,28 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     last_batch_start: OplogIndex::from_u64(value.last_batch_start),
                 }),
             ),
+            oplog_entry::Entry::SetRetryPolicy(params) => {
+                let named_policy = params
+                    .named_policy
+                    .ok_or("Missing named_policy field")?;
+                let internal: crate::model::retry_policy::NamedRetryPolicy = named_policy.try_into()?;
+                Ok(PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
+                    timestamp: params
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    policy: internal.into(),
+                }))
+            }
+            oplog_entry::Entry::RemoveRetryPolicy(params) => {
+                Ok(PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams {
+                    timestamp: params
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    name: params.policy_name,
+                }))
+            }
         }
     }
 }
@@ -826,16 +835,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
-            PublicOplogEntry::ChangeRetryPolicy(change_retry_policy) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::ChangeRetryPolicy(
-                        golem_api_grpc::proto::golem::worker::ChangeRetryPolicyParameters {
-                            timestamp: Some(change_retry_policy.timestamp.into()),
-                            retry_policy: Some(change_retry_policy.new_policy.into()),
-                        },
-                    )),
-                }
-            }
             PublicOplogEntry::BeginAtomicRegion(begin_atomic_region) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::BeginAtomicRegion(
@@ -1205,6 +1204,27 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
+            PublicOplogEntry::SetRetryPolicy(params) => {
+                let internal: crate::model::retry_policy::NamedRetryPolicy = params.policy.try_into()?;
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::SetRetryPolicy(
+                        golem_api_grpc::proto::golem::worker::SetRetryPolicyParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            named_policy: Some(internal.into()),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::RemoveRetryPolicy(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::RemoveRetryPolicy(
+                        golem_api_grpc::proto::golem::worker::RemoveRetryPolicyParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            policy_name: params.name,
+                        },
+                    )),
+                }
+            }
         })
     }
 }
@@ -1285,34 +1305,6 @@ impl From<PublicDurableFunctionType> for golem_api_grpc::proto::golem::worker::W
                     oplog_index: parameters.index.map(|index| index.into()),
                 }
             }
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicy> for PublicRetryConfig {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::RetryPolicy,
-    ) -> Result<Self, Self::Error> {
-        Ok(PublicRetryConfig {
-            max_attempts: value.max_attempts,
-            min_delay: Duration::from_millis(value.min_delay),
-            max_delay: Duration::from_millis(value.max_delay),
-            multiplier: value.multiplier,
-            max_jitter_factor: value.max_jitter_factor,
-        })
-    }
-}
-
-impl From<PublicRetryConfig> for golem_api_grpc::proto::golem::worker::RetryPolicy {
-    fn from(value: PublicRetryConfig) -> Self {
-        golem_api_grpc::proto::golem::worker::RetryPolicy {
-            max_attempts: value.max_attempts,
-            min_delay: value.min_delay.as_millis() as u64,
-            max_delay: value.max_delay.as_millis() as u64,
-            multiplier: value.multiplier,
-            max_jitter_factor: value.max_jitter_factor,
         }
     }
 }

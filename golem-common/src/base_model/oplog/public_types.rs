@@ -24,7 +24,6 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
@@ -228,18 +227,48 @@ impl PublicSpanData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+/// API-facing representation of a named retry policy for public oplog entries.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct PublicRetryConfig {
-    pub max_attempts: u32,
-    #[serde(with = "humantime_serde")]
-    pub min_delay: Duration,
-    #[serde(with = "humantime_serde")]
-    pub max_delay: Duration,
-    pub multiplier: f64,
-    pub max_jitter_factor: Option<f64>,
+pub struct PublicNamedRetryPolicy {
+    /// Human-readable identifier for this policy.
+    pub name: String,
+    /// Selection priority — higher values are evaluated first.
+    pub priority: u32,
+    /// The predicate serialized as a JSON string.
+    pub predicate_json: String,
+    /// The retry policy serialized as a JSON string.
+    pub policy_json: String,
+}
+
+#[cfg(feature = "full")]
+impl From<crate::model::retry_policy::NamedRetryPolicy> for PublicNamedRetryPolicy {
+    fn from(value: crate::model::retry_policy::NamedRetryPolicy) -> Self {
+        Self {
+            name: value.name,
+            priority: value.priority,
+            predicate_json: serde_json::to_string(&value.predicate).unwrap_or_default(),
+            policy_json: serde_json::to_string(&value.policy).unwrap_or_default(),
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl TryFrom<PublicNamedRetryPolicy> for crate::model::retry_policy::NamedRetryPolicy {
+    type Error = String;
+
+    fn try_from(value: PublicNamedRetryPolicy) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name,
+            priority: value.priority,
+            predicate: serde_json::from_str(&value.predicate_json)
+                .map_err(|e| format!("Invalid predicate JSON: {e}"))?,
+            policy: serde_json::from_str(&value.policy_json)
+                .map_err(|e| format!("Invalid policy JSON: {e}"))?,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]

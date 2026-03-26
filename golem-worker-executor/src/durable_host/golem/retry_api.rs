@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::get_oplog_entry;
 use crate::preview2::golem_api_1_x::retry::{
     Host, NamedRetryPolicy as WitNamedRetryPolicy, PredicateValue as WitPredicateValue,
     RetryPolicy as WitRetryPolicy,
 };
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::OplogEntry;
 use golem_common::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryContext};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -33,7 +36,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policy_by_name");
         let policies = self.state.named_retry_policies();
-        Ok(policies.iter().find(|p| p.name == name).cloned().map(|p| p.into()))
+        Ok(policies
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .map(|p| p.into()))
     }
 
     async fn resolve_retry_policy(
@@ -57,24 +64,39 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn set_retry_policy(
-        &mut self,
-        _policy: WitNamedRetryPolicy,
-    ) -> anyhow::Result<()> {
+    async fn set_retry_policy(&mut self, policy: WitNamedRetryPolicy) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::retry", "set_retry_policy");
-        // PR 2 will introduce oplog entry types for durable named policy mutation.
-        // For now, this is a no-op stub — components cannot yet persist runtime
-        // policy changes via this interface.
-        Err(anyhow::anyhow!(
-            "set-retry-policy is not yet implemented; named policies are currently read-only and configured via agent config"
-        ))
+
+        let named_policy: NamedRetryPolicy = policy.into();
+
+        if self.state.is_live() {
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::set_retry_policy(named_policy.clone()))
+                .await;
+        } else {
+            let (_, _) =
+                get_oplog_entry!(self.state.replay_state, OplogEntry::SetRetryPolicy)?;
+        }
+
+        self.state.apply_set_retry_policy(named_policy);
+        Ok(())
     }
 
-    async fn remove_retry_policy(&mut self, _name: String) -> anyhow::Result<()> {
+    async fn remove_retry_policy(&mut self, name: String) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::retry", "remove_retry_policy");
-        // PR 2 will introduce oplog entry types for durable named policy mutation.
-        Err(anyhow::anyhow!(
-            "remove-retry-policy is not yet implemented; named policies are currently read-only and configured via agent config"
-        ))
+
+        if self.state.is_live() {
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::remove_retry_policy(name.clone()))
+                .await;
+        } else {
+            let (_, _) =
+                get_oplog_entry!(self.state.replay_state, OplogEntry::RemoveRetryPolicy)?;
+        }
+
+        self.state.apply_remove_retry_policy(&name);
+        Ok(())
     }
 }

@@ -19,14 +19,15 @@ use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
+    CancelPendingInvocationParams, ChangePersistenceLevelParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
     JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
-    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    RemoveRetryPolicyParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
@@ -34,7 +35,7 @@ use crate::model::oplog::{
     MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, PersistenceLevel,
     PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
-    PublicOplogEntry, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
+    PublicOplogEntry, PublicSnapshotData, PublicSpanData,
     PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
@@ -329,23 +330,6 @@ fn interrupted_serialization_poem_serde_equivalence() {
 fn exited_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Exited(ExitedParams {
         timestamp: Timestamp::now_utc().rounded(),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn change_retry_policy_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        new_policy: PublicRetryConfig {
-            max_attempts: 10,
-            min_delay: std::time::Duration::from_secs(1),
-            max_delay: std::time::Duration::from_secs(10),
-            multiplier: 2.0,
-            max_jitter_factor: Some(0.1),
-        },
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -865,6 +849,46 @@ fn snapshot_multipart_serialization_poem_serde_equivalence() {
                 },
             ],
         }),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn set_retry_policy_serialization_poem_serde_equivalence() {
+    use crate::model::oplog::PublicNamedRetryPolicy;
+    use crate::model::retry_policy::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
+
+    let named_policy = NamedRetryPolicy {
+        name: "http-transient".to_string(),
+        priority: 10,
+        predicate: Predicate::PropEq {
+            property: "error-type".to_string(),
+            value: PredicateValue::Text("transient".to_string()),
+        },
+        policy: RetryPolicy::CountBox {
+            max_retries: 3,
+            inner: Box::new(RetryPolicy::Exponential {
+                base_delay: std::time::Duration::from_secs(1),
+                factor: 2.0,
+            }),
+        },
+    };
+    let entry = PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        policy: PublicNamedRetryPolicy::from(named_policy),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn remove_retry_policy_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        name: "http-transient".to_string(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

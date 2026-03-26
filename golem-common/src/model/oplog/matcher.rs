@@ -179,10 +179,6 @@ impl PublicOplogEntry {
             PublicOplogEntry::Exited(_params) => {
                 Self::string_match("exited", &[], query_path, query)
             }
-            PublicOplogEntry::ChangeRetryPolicy(_params) => {
-                Self::string_match("changeretrypolicy", &[], query_path, query)
-                    || Self::string_match("change-retry-policy", &[], query_path, query)
-            }
             PublicOplogEntry::BeginAtomicRegion(_params) => {
                 Self::string_match("beginatomicregion", &[], query_path, query)
                     || Self::string_match("begin-atomic-region", &[], query_path, query)
@@ -396,6 +392,14 @@ impl PublicOplogEntry {
             PublicOplogEntry::OplogProcessorCheckpoint(_params) => {
                 Self::string_match("oplogprocessorcheckpoint", &[], query_path, query)
                     || Self::string_match("oplog-processor-checkpoint", &[], query_path, query)
+            }
+            PublicOplogEntry::SetRetryPolicy(_params) => {
+                Self::string_match("setretrypolicy", &[], query_path, query)
+                    || Self::string_match("set-retry-policy", &[], query_path, query)
+            }
+            PublicOplogEntry::RemoveRetryPolicy(_params) => {
+                Self::string_match("removeretrypolicy", &[], query_path, query)
+                    || Self::string_match("remove-retry-policy", &[], query_path, query)
             }
         }
     }

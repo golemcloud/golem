@@ -26,14 +26,15 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
+    CancelPendingInvocationParams, ChangePersistenceLevelParams,
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
     HostCallParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
@@ -407,15 +408,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Exited { timestamp } => {
                 Ok(PublicOplogEntry::Exited(ExitedParams { timestamp }))
             }
-            OplogEntry::ChangeRetryPolicy {
-                timestamp,
-                new_policy,
-            } => Ok(PublicOplogEntry::ChangeRetryPolicy(
-                ChangeRetryPolicyParams {
-                    timestamp,
-                    new_policy: new_policy.into(),
-                },
-            )),
             OplogEntry::BeginAtomicRegion { timestamp } => Ok(PublicOplogEntry::BeginAtomicRegion(
                 BeginAtomicRegionParams { timestamp },
             )),
@@ -789,6 +781,24 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     },
                 ))
             }
+            OplogEntry::SetRetryPolicy {
+                timestamp,
+                policy,
+            } => Ok(PublicOplogEntry::SetRetryPolicy(
+                SetRetryPolicyParams {
+                    timestamp,
+                    policy: policy.into(),
+                },
+            )),
+            OplogEntry::RemoveRetryPolicy {
+                timestamp,
+                name,
+            } => Ok(PublicOplogEntry::RemoveRetryPolicy(
+                RemoveRetryPolicyParams {
+                    timestamp,
+                    name,
+                },
+            )),
         }
     }
 }

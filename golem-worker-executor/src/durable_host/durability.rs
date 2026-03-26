@@ -389,7 +389,15 @@ pub trait DurabilityHost: InFunctionRetryHost {
     ///
     /// If retrying is not possible, the function returns Ok(()) and the host function
     /// can continue persisting the failed result permanently.
-    async fn try_trigger_retry(&mut self, failure: Error) -> anyhow::Result<()>;
+    ///
+    /// The `properties` bag is used for semantic policy resolution when named retry
+    /// policies are available. When empty or when no semantic policy matches, the
+    /// legacy `RetryConfig` fallback is used.
+    async fn try_trigger_retry(
+        &mut self,
+        failure: Error,
+        properties: RetryProperties,
+    ) -> anyhow::Result<()>;
 
     /// Marks the outermost active atomic region (if any) as having produced side effects.
     /// This is called when a non-hint oplog entry is persisted during live execution.
@@ -734,7 +742,11 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn try_trigger_retry(&mut self, failure: Error) -> anyhow::Result<()> {
+    async fn try_trigger_retry(
+        &mut self,
+        failure: Error,
+        properties: RetryProperties,
+    ) -> anyhow::Result<()> {
         let latest_status = self
             .public_state
             .worker()
@@ -746,15 +758,84 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             self.state.current_retry_point
         };
 
-        let default_retry_config = &self.state.config.retry;
-        let retry_config = self
-            .state
-            .overridden_retry_policy
-            .as_ref()
-            .unwrap_or(default_retry_config)
-            .clone();
+        let retry_config = self.state.config.retry.clone();
         let in_atomic_region = !self.state.active_atomic_regions.is_empty();
         let trap_type = TrapType::from_error::<Ctx>(&failure, current_retry_point);
+
+        // Try semantic policy resolution first
+        let policies = self.state.named_retry_policies().to_vec();
+        if !policies.is_empty() {
+            if let Ok(Some(named_policy)) =
+                NamedRetryPolicy::resolve(&policies, &properties)
+            {
+                if !policy_uses_elapsed_time(&named_policy.policy) {
+                    let current_state = latest_status
+                        .current_retry_state
+                        .get(&current_retry_point)
+                        .cloned();
+                    let total_attempts = current_state
+                        .as_ref()
+                        .map(|s| s.retry_count())
+                        .unwrap_or(0);
+                    match evaluate_named_policy_step(
+                        named_policy,
+                        total_attempts,
+                        &properties,
+                        current_state.as_ref(),
+                    ) {
+                        Ok((_new_state, RetryVerdict::Retry(_))) => {
+                            debug!(
+                                retry_policy = %named_policy.name,
+                                retry_path = "host-trap",
+                                retry_policy_source = "worker-local",
+                                retry_decision = "retry",
+                                attempt = total_attempts + 1,
+                                "Semantic host-trap retry: triggering retry"
+                            );
+                            return Err(failure);
+                        }
+                        Ok((_new_state, RetryVerdict::GiveUp)) => {
+                            debug!(
+                                retry_policy = %named_policy.name,
+                                retry_path = "host-trap",
+                                retry_policy_source = "worker-local",
+                                retry_decision = "give-up",
+                                attempt = total_attempts + 1,
+                                "Semantic host-trap retry: exhausted"
+                            );
+                            return Ok(());
+                        }
+                        Ok((_new_state, RetryVerdict::Error(error))) => {
+                            warn!(
+                                retry_policy = %named_policy.name,
+                                ?error,
+                                retry_path = "host-trap",
+                                fallback_reason = "eval-error",
+                                "Semantic host-trap retry evaluation error, falling back to legacy"
+                            );
+                        }
+                        Err(error) => {
+                            warn!(
+                                retry_policy = %named_policy.name,
+                                ?error,
+                                retry_path = "host-trap",
+                                fallback_reason = "eval-error",
+                                "Failed evaluating semantic host-trap retry policy, falling back to legacy"
+                            );
+                        }
+                    }
+                } else {
+                    warn!(
+                        retry_policy = %named_policy.name,
+                        retry_path = "host-trap",
+                        fallback_reason = "elapsed-unsupported",
+                        "Semantic host-trap retry policy uses elapsed-time operators, falling back to legacy"
+                    );
+                }
+            }
+        }
+
+        // Legacy fallback
         let decision = Self::get_recovery_decision_on_trap(
             &retry_config,
             &latest_status.current_retry_state,
@@ -847,7 +928,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         ctx: &mut impl DurabilityHost,
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
-        _properties: RetryProperties,
+        properties: RetryProperties,
     ) -> anyhow::Result<()> {
         if let Err(err) = result {
             let kind = classify(err);
@@ -859,7 +940,12 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
                         kind,
                         message: message.clone(),
                     });
-                    ctx.try_trigger_retry(failure).await
+                    let mut properties = properties;
+                    properties.set(
+                        "error-type",
+                        PredicateValue::Text("transient".to_string()),
+                    );
+                    ctx.try_trigger_retry(failure, properties).await
                 }
             }
         } else {
@@ -918,7 +1004,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         if !self.is_eligible_for_internal_retry() {
             let message = err.to_string();
             let failure = Error::new(ClassifiedHostError { kind, message });
-            ctx.try_trigger_retry(failure).await?;
+            ctx.try_trigger_retry(failure, properties).await?;
             return Ok(InternalRetryResult::Persist);
         }
 
@@ -947,7 +1033,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
             AsyncRetryDecision::FallBackToTrap => {
                 let message = err.to_string();
                 let failure = Error::new(ClassifiedHostError { kind, message });
-                ctx.try_trigger_retry(failure).await?;
+                ctx.try_trigger_retry(failure, properties.clone()).await?;
                 // If try_trigger_retry returned Ok, retries are exhausted — persist the failure
                 Ok(InternalRetryResult::Persist)
             }
@@ -1371,7 +1457,11 @@ mod tests {
             Err(WorkerExecutorError::runtime("not implemented in mock"))
         }
 
-        async fn try_trigger_retry(&mut self, _failure: Error) -> anyhow::Result<()> {
+        async fn try_trigger_retry(
+            &mut self,
+            _failure: Error,
+            _properties: RetryProperties,
+        ) -> anyhow::Result<()> {
             self.trap_triggered_count += 1;
             // Simulate: retries exhausted, persist the failure
             Ok(())

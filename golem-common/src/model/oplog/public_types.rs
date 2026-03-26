@@ -15,21 +15,9 @@
 pub use crate::base_model::oplog::OplogCursor;
 use crate::model::invocation_context::AttributeValue;
 use crate::model::oplog::DurableFunctionType;
-use crate::model::{Empty, RetryConfig};
+use crate::model::Empty;
 
 pub use crate::base_model::oplog::public_types::*;
-
-impl From<RetryConfig> for PublicRetryConfig {
-    fn from(retry_config: RetryConfig) -> Self {
-        PublicRetryConfig {
-            max_attempts: retry_config.max_attempts,
-            min_delay: retry_config.min_delay,
-            max_delay: retry_config.max_delay,
-            multiplier: retry_config.multiplier,
-            max_jitter_factor: retry_config.max_jitter_factor,
-        }
-    }
-}
 
 impl From<DurableFunctionType> for PublicDurableFunctionType {
     fn from(function_type: DurableFunctionType) -> Self {
