@@ -588,7 +588,8 @@ fn evaluate_dependency_spec_compliance(
 ) -> DependencySpecCompliance {
     match expected {
         ExpectedDependencyKind::ExactPath(expected_path) => {
-            if resolve_local_dependency_path(found_text) == resolve_local_dependency_path(expected_path)
+            if resolve_local_dependency_path(found_text)
+                == resolve_local_dependency_path(expected_path)
             {
                 DependencySpecCompliance::Compatible
             } else {
@@ -1442,7 +1443,10 @@ mod test {
             "file:{}",
             cwd.join("sdks/ts/packages/golem-ts-sdk")
                 .to_string_lossy()
-                .replace("/workspace/golem-alt-00/", "/workspace/golem-alt-00/../golem-alt-00/")
+                .replace(
+                    "/workspace/golem-alt-00/",
+                    "/workspace/golem-alt-00/../golem-alt-00/"
+                )
         );
         let expected = format!(
             "file:{}",
