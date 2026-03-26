@@ -158,6 +158,11 @@ pub fn resolve_dependency_location(
     Ok(None)
 }
 
+pub fn is_workspace_manifest(source: &str) -> anyhow::Result<bool> {
+    let doc: DocumentMut = source.parse().map_err(|e| anyhow!("{e}"))?;
+    Ok(doc.get("workspace").is_some())
+}
+
 pub fn upsert_dependency_in_package(
     source: &str,
     table: DependencyTable,

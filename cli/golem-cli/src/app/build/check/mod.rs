@@ -264,6 +264,7 @@ fn plan_rust_cargo_fix_steps(
     overrides: &crate::sdk_overrides::SdkOverrides,
     warnings: &mut Vec<String>,
 ) -> anyhow::Result<Vec<DependencyFixStep>> {
+    let cargo_workspace_manifest = cargo_workspace_manifest(ctx)?;
     let requirements = rust_dependency_requirements(overrides);
 
     let spec_names = requirements
@@ -285,6 +286,15 @@ fn plan_rust_cargo_fix_steps(
 
         for requirement in &requirements {
             let found = specs.get(requirement.name).and_then(|spec| spec.as_ref());
+            if cargo_workspace_manifest.is_some()
+                && matches!(
+                    edit::cargo_toml::resolve_dependency_location(&original, requirement.name)?,
+                    Some(edit::cargo_toml::DependencyLocation::WorkspaceDependencies)
+                )
+            {
+                continue;
+            }
+
             let compliance =
                 evaluate_cargo_dependency_compliance(found, requirement, cargo_toml_path.parent());
 
@@ -315,7 +325,69 @@ fn plan_rust_cargo_fix_steps(
         }
     }
 
+    if let Some((workspace_cargo_toml_path, workspace_source)) = cargo_workspace_manifest {
+        let mut working = workspace_source.clone();
+        let specs = edit::cargo_toml::collect_dependency_specs(&workspace_source, &spec_names)?;
+
+        for requirement in &requirements {
+            let found = specs.get(requirement.name).and_then(|spec| spec.as_ref());
+            if !matches!(
+                edit::cargo_toml::resolve_dependency_location(&workspace_source, requirement.name)?,
+                Some(edit::cargo_toml::DependencyLocation::WorkspaceDependencies)
+            ) {
+                continue;
+            }
+
+            let compliance = evaluate_cargo_dependency_compliance(
+                found,
+                requirement,
+                workspace_cargo_toml_path.parent(),
+            );
+
+            match compliance {
+                DependencySpecCompliance::Compatible => {}
+                DependencySpecCompliance::SkipWarn(message) => {
+                    warnings.push(format!("{} ({})", message, workspace_cargo_toml_path.display()));
+                }
+                DependencySpecCompliance::NeedsUpdate => {
+                    let update_spec = build_cargo_update_spec(
+                        found,
+                        requirement,
+                        workspace_cargo_toml_path.parent(),
+                    );
+                    working = edit::cargo_toml::upsert_dependency_in_workspace_dependencies(
+                        &working,
+                        requirement.name,
+                        &update_spec,
+                    )?;
+                }
+            }
+        }
+
+        if working != workspace_source {
+            steps.push(DependencyFixStep {
+                path: workspace_cargo_toml_path,
+                current: workspace_source,
+                new: working,
+            });
+        }
+    }
+
     Ok(steps)
+}
+
+fn cargo_workspace_manifest(ctx: &BuildContext<'_>) -> anyhow::Result<Option<(PathBuf, String)>> {
+    let path = ctx.application().app_root_dir().join("Cargo.toml");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let source = fs::read_to_string(&path)?;
+    if edit::cargo_toml::is_workspace_manifest(&source)? {
+        Ok(Some((path, source)))
+    } else {
+        Ok(None)
+    }
 }
 
 fn rust_dependency_requirements(
@@ -467,7 +539,7 @@ fn merge_dependency_features(
     let found_features = found.map(dependency_features).unwrap_or_default();
 
     let mut features = Vec::new();
-    for feature in found_features.into_iter().chain(expected_features) {
+    for feature in expected_features.into_iter().chain(found_features) {
         if !features.iter().any(|f| f == &feature) {
             features.push(feature);
         }
@@ -1159,8 +1231,8 @@ mod test {
             DependencySpec::Path {
                 path: "/tmp/sdks/rust/golem-rust".to_string(),
                 features: vec![
-                    "extra-feature".to_string(),
-                    "export_golem_agentic".to_string()
+                    "export_golem_agentic".to_string(),
+                    "extra-feature".to_string()
                 ],
             }
         );
@@ -1299,5 +1371,16 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rust_common_on_demand_template_uses_relative_target_and_no_cargo_target_dir_env() {
+        let template_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("templates/rust/common-on-demand/golem.yaml");
+        let template_source = std::fs::read_to_string(&template_path).unwrap();
+
+        assert!(template_source.contains("target/wasm32-wasip2/debug"));
+        assert!(template_source.contains("target/wasm32-wasip2/release"));
+        assert!(!template_source.contains("CARGO_TARGET_DIR"));
     }
 }

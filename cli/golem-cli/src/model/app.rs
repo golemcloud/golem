@@ -732,6 +732,7 @@ pub struct ComponentLayerApplyContext {
     app_root_dir: Option<String>,
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
+    cargo_target: Option<String>,
 }
 
 impl ComponentLayerApplyContext {
@@ -740,6 +741,7 @@ impl ComponentLayerApplyContext {
         app_root_dir: Option<String>,
         golem_temp_dir: Option<String>,
         component_dir: Option<String>,
+        cargo_target: Option<String>,
     ) -> Self {
         Self {
             env: Self::new_template_env(),
@@ -747,6 +749,7 @@ impl ComponentLayerApplyContext {
             app_root_dir,
             golem_temp_dir,
             component_dir,
+            cargo_target,
         }
     }
 
@@ -784,6 +787,7 @@ impl ComponentLayerApplyContext {
             appRootDir => self.app_root_dir.as_deref().unwrap_or(EMPTY_STR),
             golemTempDir => self.golem_temp_dir.as_deref().unwrap_or(EMPTY_STR),
             componentDir => self.component_dir.as_deref().unwrap_or(EMPTY_STR),
+            cargoTarget => self.cargo_target.as_deref().unwrap_or(EMPTY_STR),
         })
     }
 }
@@ -1470,6 +1474,7 @@ impl PluginInstallation {
 }
 
 mod app_builder {
+    use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
@@ -1584,6 +1589,7 @@ mod app_builder {
         // "Consts" for component templating
         app_root_dir_str: String,
         golem_temp_dir_str: String,
+        cargo_workspace_mode: bool,
 
         // For app build
         include: Vec<String>,
@@ -1633,11 +1639,16 @@ mod app_builder {
                 Ok((
                     fs::path_to_str(app_root_dir).map(|path| path.to_string())?,
                     fs::path_to_str(&app_root_dir.join(TEMP_DIR)).map(|path| path.to_string())?,
+                    edit::cargo_toml::is_workspace_manifest(
+                        &fs::read_to_string(&app_root_dir.join("Cargo.toml")).unwrap_or_default(),
+                    )
+                    .unwrap_or(false),
                 ))
             }) {
-                Ok((app_root_dir_str, golem_temp_dir_str)) => {
+                Ok((app_root_dir_str, golem_temp_dir_str, cargo_workspace_mode)) => {
                     builder.app_root_dir_str = app_root_dir_str;
                     builder.golem_temp_dir_str = golem_temp_dir_str;
+                    builder.cargo_workspace_mode = cargo_workspace_mode;
                 }
                 Err(err) => {
                     return ValidatedResult::from_error(format!(
@@ -2218,7 +2229,12 @@ mod app_builder {
                 Some(component_name.clone()),
                 Some(self.app_root_dir_str.clone()),
                 Some(self.golem_temp_dir_str.clone()),
-                Some(component_dir_str),
+                Some(component_dir_str.clone()),
+                Some(if self.cargo_workspace_mode {
+                    format!("{}/target", self.app_root_dir_str)
+                } else {
+                    format!("{}/target", component_dir_str)
+                }),
             );
 
             match self.component_layer_store.value(
