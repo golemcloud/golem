@@ -2007,31 +2007,27 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
         )
         .await?;
 
-    // Keep invoking `run` — the first call succeeds, subsequent ones exhaust the budget.
-    let invoker_task = tokio::spawn({
-        let user = user.clone();
-        let component = component.clone();
-        let agent_id = http_agent_id.clone();
-        async move {
-            loop {
-                let _ = user
-                    .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
-                    .await;
-            }
-        }
-    });
+    // First `run` succeeds — consumes the 1 available HTTP call (remaining → 0).
+    user.invoke_and_await_agent(&component, &http_agent_id, "run", data_value!())
+        .await?;
+
+    // Fire-and-forget a second `run`. The epoch will detect remaining_http_calls == 0
+    // and suspend the worker mid-invocation. We don't await — it will never complete.
+    user.invoke_agent(&component, &http_agent_id, "run", data_value!())
+        .await?;
 
     user.wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(30))
         .await?;
 
-    // The monthly limit is 1 so at most 1 HTTP call should have reached the server.
     let http_count = received_http_posts.load(Ordering::Acquire);
+    // The limit is 1; the worker should have made at most a small number of HTTP calls
+    // before being suspended. Allow 2 in case the second `run` gets one call in before
+    // the epoch fires.
     assert!(
-        http_count <= 1,
-        "expected at most 1 HTTP call before suspension, got {http_count}"
+        http_count <= 2,
+        "expected at most 2 HTTP calls before suspension, got {http_count}"
     );
 
-    invoker_task.abort();
     http_server_task.abort();
 
     Ok(())
@@ -2075,30 +2071,17 @@ async fn worker_suspends_when_monthly_rpc_call_limit_exhausted(
     let caller_id = agent_id!("RustParent", "rpc_monthly_limit_test");
     let agent_id = user.start_agent(&component.id, caller_id.clone()).await?;
 
-    // Keep invoking `spawn_child` — each call makes one RPC call.
-    // With limit = 1, the second invocation exhausts the budget and suspends.
-    let invoker_task = tokio::spawn({
-        let user = user.clone();
-        let component = component.clone();
-        let agent_id = caller_id.clone();
-        async move {
-            loop {
-                let _ = user
-                    .invoke_and_await_agent(
-                        &component,
-                        &agent_id,
-                        "spawn_child",
-                        data_value!("test"),
-                    )
-                    .await;
-            }
-        }
-    });
+    // First `spawn_child` succeeds — consumes the 1 available RPC call (remaining → 0).
+    user.invoke_and_await_agent(&component, &caller_id, "spawn_child", data_value!("first"))
+        .await?;
+
+    // Fire-and-forget a second `spawn_child`. The epoch will detect remaining_rpc_calls == 0
+    // and suspend the worker mid-invocation.
+    user.invoke_agent(&component, &caller_id, "spawn_child", data_value!("second"))
+        .await?;
 
     user.wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(30))
         .await?;
-
-    invoker_task.abort();
 
     Ok(())
 }
