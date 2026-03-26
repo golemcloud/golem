@@ -19,7 +19,7 @@ describe("shouldRunStep", () => {
   });
 
   it("skips step when only_if does not match", () => {
-    const step = makeStep({ only_if: { agent: "gemini" } });
+    const step = makeStep({ only_if: { agent: "opencode" } });
     assert.equal(shouldRunStep(step, ctx), false);
   });
 
@@ -49,7 +49,7 @@ describe("shouldRunStep", () => {
   });
 
   it("runs step when skip_if agent does not match", () => {
-    const step = makeStep({ skip_if: { agent: "gemini" } });
+    const step = makeStep({ skip_if: { agent: "opencode" } });
     assert.equal(shouldRunStep(step, ctx), true);
   });
 
@@ -80,7 +80,7 @@ describe("shouldRunStep", () => {
   it("only_if is evaluated before skip_if", () => {
     // only_if fails -> step should not run, regardless of skip_if
     const step = makeStep({
-      only_if: { agent: "gemini" },
+      only_if: { agent: "opencode" },
       skip_if: { language: "rust" },
     });
     assert.equal(shouldRunStep(step, ctx), false);

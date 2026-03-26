@@ -309,13 +309,13 @@ steps:
     const filePath = await writeTempYaml(`
 name: "skip-if-test"
 steps:
-  - id: "skip-gemini"
+  - id: "skip-opencode"
     prompt: "do something"
     skip_if:
-      agent: "gemini"
+      agent: "opencode"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.deepEqual(spec.steps[0].skip_if, { agent: "gemini" });
+    assert.deepEqual(spec.steps[0].skip_if, { agent: "opencode" });
   });
 
   it("loads step with both only_if and skip_if", async () => {

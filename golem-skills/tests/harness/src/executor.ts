@@ -516,7 +516,6 @@ export class ScenarioExecutor {
     // Watch all agent skill directories — each agent reads skills from its own location
     const agentSkillsDirs = [
       ".claude/skills",
-      ".gemini/skills",
       ".agents/skills",
     ];
     for (const rel of agentSkillsDirs) {

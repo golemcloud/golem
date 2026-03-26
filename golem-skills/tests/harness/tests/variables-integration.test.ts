@@ -119,7 +119,7 @@ describe("Variable substitution integration", () => {
   it("substitutes variables in a shell command and verifies via expect", async () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(skillsDir);
-    const opts: ScenarioExecutorOptions = { agent: "gemini", language: "rust" };
+    const opts: ScenarioExecutorOptions = { agent: "opencode", language: "rust" };
     const executor = createExecutor(
       driver,
       watcher,
@@ -139,7 +139,7 @@ describe("Variable substitution integration", () => {
             args: ["-c", 'echo "agent={{agent}} lang={{language}}"'],
           },
           expect: {
-            stdout_contains: "agent=gemini lang=rust",
+            stdout_contains: "agent=opencode lang=rust",
           },
         },
       ],

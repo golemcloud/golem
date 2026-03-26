@@ -10,7 +10,6 @@ import {
   type ScenarioRunResult,
 } from "./executor.js";
 import { ClaudeAgentDriver } from "./driver/claude.js";
-import { GeminiAgentDriver } from "./driver/gemini.js";
 import { OpenCodeAgentDriver } from "./driver/opencode.js";
 import { CodexAgentDriver } from "./driver/codex.js";
 import type { AgentDriver } from "./driver/base.js";
@@ -26,7 +25,6 @@ import { findGolemAppDir } from "./workspace.js";
 
 const SUPPORTED_AGENTS = [
   "claude-code",
-  "gemini",
   "opencode",
   "codex",
 ] as const;
@@ -49,8 +47,6 @@ function createDriver(agent: SupportedAgent): AgentDriver {
   switch (agent) {
     case "claude-code":
       return new ClaudeAgentDriver();
-    case "gemini":
-      return new GeminiAgentDriver();
     case "opencode":
       return new OpenCodeAgentDriver();
     case "codex":

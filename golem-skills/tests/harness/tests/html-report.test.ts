@@ -227,7 +227,7 @@ describe("generateHtmlReport", () => {
       overallPassed: 3,
       overallFailed: 1,
       matrix: {
-        agents: ["claude-code", "gemini"],
+        agents: ["claude-code", "opencode"],
         languages: ["ts"],
         os: ["linux"],
       },
@@ -241,7 +241,7 @@ describe("generateHtmlReport", () => {
           failed: 0,
         },
         {
-          agent: "gemini",
+          agent: "opencode",
           language: "ts",
           os: "linux",
           total: 2,
@@ -256,6 +256,6 @@ describe("generateHtmlReport", () => {
     assert.ok(html.includes("Merged Test Report"));
     assert.ok(html.includes("Matrix Results"));
     assert.ok(html.includes("claude-code"));
-    assert.ok(html.includes("gemini"));
+    assert.ok(html.includes("opencode"));
   });
 });

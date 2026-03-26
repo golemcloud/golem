@@ -15,6 +15,8 @@ Try `golem --version` to check if it exists. If not, try `golem-cli --version`. 
 - Do NOT remove or modify `@agent`, `@endpoint`, `@prompt`, or `@description` decorators in generated code. They are valid and required.
 - Do NOT run `npm install` after `golem new` — dependencies are already set up correctly.
 - If `golem build` fails, read the error carefully. Do NOT try to "fix" it by changing SDK versions or removing decorators.
+- Keep all file operations inside the current workspace using relative paths (for example, `test-app/golem.yaml`). Do not traverse to parent directories or use absolute paths outside the workspace.
+- Prefer shell checks such as `ls`/`find` for generated artifacts in `golem-temp`. Some environments block direct file-tool reads there via ignore rules.
 
 ## Step 1: Run `golem new`
 
