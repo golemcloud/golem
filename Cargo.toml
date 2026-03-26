@@ -298,6 +298,7 @@ wasmtime-wasi-http = { version = "=42.0.1" }
 wax = "0.6.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
+which = "8.0.0"
 wit-bindgen = "0.51.0"
 wit-bindgen-rt = "=0.44.0"
 wit-bindgen-rust = "0.51.0"

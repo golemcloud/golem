@@ -112,6 +112,7 @@ version-compare = { workspace = true }
 wac-graph = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
+which = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
 wasmtime-wasi = { workspace = true }

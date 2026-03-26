@@ -18,8 +18,6 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use colored::Colorize;
 use gag::BufferRedirect;
-use std::env;
-use std::ffi::OsString;
 use std::collections::HashMap;
 use std::io::Read;
 use std::io::Write;
@@ -28,79 +26,35 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::{LazyLock, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use which::which as wrapped_which;
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-struct ProgramLookupCacheKey {
-    program: String,
-    path_var: OsString,
-    pathext_var: Option<OsString>,
-}
-
-static PROGRAM_LOOKUP_CACHE: LazyLock<Mutex<HashMap<ProgramLookupCacheKey, Option<PathBuf>>>> =
+static PROGRAM_LOOKUP_CACHE: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub fn resolve_program_for_spawn(program: &str) -> anyhow::Result<PathBuf> {
-    let Some(path_var) = env::var_os("PATH") else {
-        return Err(anyhow!(
-            "Program '{}' was not found: PATH is not set",
-            program
-        ));
-    };
-    let pathext_var = env::var_os("PATHEXT");
-
-    resolve_program_for_spawn_from_env(program, path_var, pathext_var)
-}
-
-fn resolve_program_for_spawn_from_env(
-    program: &str,
-    path_var: OsString,
-    pathext_var: Option<OsString>,
-) -> anyhow::Result<PathBuf> {
+pub fn which(program: &str) -> anyhow::Result<PathBuf> {
     let program_path = Path::new(program);
 
     if is_explicit_program_path(program_path) {
         return Ok(program_path.to_path_buf());
     }
 
-    let cache_key = ProgramLookupCacheKey {
-        program: program.to_string(),
-        path_var: path_var.clone(),
-        pathext_var: pathext_var.clone(),
-    };
-
     if let Some(cached) = PROGRAM_LOOKUP_CACHE
         .lock()
         .expect("program lookup cache lock poisoned")
-        .get(&cache_key)
+        .get(program)
         .cloned()
     {
         return cached.ok_or_else(|| anyhow!("Program '{}' not found on PATH", program));
     }
 
-    let resolved = resolve_program_on_path(program_path, &path_var, pathext_var.as_ref());
+    let resolved = wrapped_which(program_path).ok();
 
     PROGRAM_LOOKUP_CACHE
         .lock()
         .expect("program lookup cache lock poisoned")
-        .insert(cache_key, resolved.clone());
+        .insert(program.to_string(), resolved.clone());
 
     resolved.ok_or_else(|| anyhow!("Program '{}' not found on PATH", program))
-}
-
-fn resolve_program_on_path(
-    program_path: &Path,
-    path_var: &OsString,
-    pathext_var: Option<&OsString>,
-) -> Option<PathBuf> {
-    for dir in env::split_paths(path_var) {
-        for candidate in candidate_program_paths(&dir, program_path, pathext_var) {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    None
 }
 
 pub fn normalized_program_name(program: &str) -> String {
@@ -113,69 +67,6 @@ pub fn normalized_program_name(program: &str) -> String {
 
 fn is_explicit_program_path(path: &Path) -> bool {
     path.is_absolute() || path.components().count() > 1
-}
-
-#[cfg(not(windows))]
-fn candidate_program_paths(
-    dir: &Path,
-    program: &Path,
-    _pathext_var: Option<&OsString>,
-) -> Vec<PathBuf> {
-    vec![dir.join(program)]
-}
-
-#[cfg(windows)]
-fn candidate_program_paths(
-    dir: &Path,
-    program: &Path,
-    pathext_var: Option<&OsString>,
-) -> Vec<PathBuf> {
-    if program.extension().is_some() {
-        return vec![dir.join(program)];
-    }
-
-    windows_pathexts(pathext_var)
-        .into_iter()
-        .map(|ext| {
-            let mut file_name = OsString::from(program.as_os_str());
-            file_name.push(ext);
-            dir.join(file_name)
-        })
-        .collect()
-}
-
-#[cfg(windows)]
-fn windows_pathexts(pathext_var: Option<&OsString>) -> Vec<String> {
-    const DEFAULT_EXTS: [&str; 4] = [".exe", ".cmd", ".bat", ".com"];
-
-    let mut result = Vec::new();
-
-    if let Some(pathext) = pathext_var {
-        for ext in pathext
-            .to_string_lossy()
-            .split(';')
-            .map(str::trim)
-            .filter(|ext| !ext.is_empty())
-        {
-            let normalized = if ext.starts_with('.') {
-                ext.to_ascii_lowercase()
-            } else {
-                format!(".{}", ext.to_ascii_lowercase())
-            };
-
-            if !result.iter().any(|known| known == &normalized) {
-                result.push(normalized);
-            }
-        }
-    }
-
-    for ext in DEFAULT_EXTS {
-        if !result.iter().any(|known| known == ext) {
-            result.push(ext.to_string());
-        }
-    }
-
-    result
 }
 
 #[cfg(test)]
@@ -358,32 +249,20 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use test_r::test;
 
     #[test]
-    fn resolve_program_for_spawn_uses_cache_for_identical_lookup() {
+    fn which_uses_cache_for_identical_lookup() {
         clear_program_lookup_cache();
 
-        let bin_dir = tempdir().unwrap();
-        let program_name = "demo-tool";
-
         #[cfg(windows)]
-        let (program_file_name, pathext_var) = ("demo-tool.cmd", Some(OsString::from(".CMD")));
+        let requested_program_name = "cargo.exe";
 
         #[cfg(not(windows))]
-        let (program_file_name, pathext_var) = ("demo-tool", None);
+        let requested_program_name = "cargo";
 
-        let program_path = bin_dir.path().join(program_file_name);
-        std::fs::write(&program_path, "").unwrap();
-
-        let path_var = bin_dir.path().as_os_str().to_os_string();
-
-        let first =
-            resolve_program_for_spawn_from_env(program_name, path_var.clone(), pathext_var.clone())
-                .unwrap();
-        let cached =
-            resolve_program_for_spawn_from_env(program_name, path_var.clone(), pathext_var).unwrap();
+        let first = which(requested_program_name).unwrap();
+        let cached = which(requested_program_name).unwrap();
 
         assert_eq!(first, cached);
         assert_eq!(program_lookup_cache_len(), 1);

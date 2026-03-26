@@ -4094,6 +4094,7 @@ dependencies = [
  "wasm-rquickjs",
  "wasmtime-wasi",
  "wax",
+ "which 8.0.2",
  "wit-component 0.244.0",
  "wit-parser 0.244.0",
 ]

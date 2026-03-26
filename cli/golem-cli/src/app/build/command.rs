@@ -25,8 +25,7 @@ use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColori
 use crate::model::app_raw;
 use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
 use crate::process::{
-    normalized_program_name, resolve_program_for_spawn, with_hidden_output_unless_error,
-    CommandExt, HiddenOutput,
+    normalized_program_name, which, with_hidden_output_unless_error, CommandExt, HiddenOutput,
 };
 use anyhow::{anyhow, Context as AnyhowContext};
 use camino::Utf8Path;
@@ -375,7 +374,7 @@ pub async fn execute_external_command(
                 )
                 .await?;
 
-                let mut cmd = Command::new(resolve_program_for_spawn(command_tokens[0].as_str())?);
+                let mut cmd = Command::new(which(command_tokens[0].as_str())?);
                 cmd.args(command_tokens.iter().skip(1))
                     .current_dir(&build_dir)
                     .envs(&command.env)
@@ -413,7 +412,7 @@ pub async fn ensure_common_deps_for_tool(
                     ),
                 );
 
-                Command::new(resolve_program_for_spawn("npm")?)
+                Command::new(which("npm")?)
                     .args(["install"])
                     .stream_and_run("npm")
                     .await
