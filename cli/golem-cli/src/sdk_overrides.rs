@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 use toml_edit::{value, Array, Item, Table};
+use tracing::debug;
 
 const GOLEM_PATH: &str = "GOLEM_PATH";
 const GOLEM_RUST_PATH: &str = "GOLEM_RUST_PATH";
@@ -171,17 +172,20 @@ impl SdkOverrides {
 
     fn load() -> anyhow::Result<Self> {
         let current_dir = std::env::current_dir().context("Failed to resolve current directory")?;
+        debug!(current_dir = %current_dir.display(), "Loading SDK overrides");
         let file_values = Self::load_file_values(&current_dir)?;
+        debug!(?file_values, "Loaded SDK override file values");
 
         let test_values = Self::load_test_values()?;
+        debug!(?test_values, "Loaded SDK override test values");
 
         let env_values = Self::load_env_values();
+        debug!(?env_values, "Loaded SDK override environment values");
 
-        Ok(Self::from_values_with_test(
-            file_values,
-            test_values,
-            env_values,
-        ))
+        let overrides = Self::from_values_with_test(file_values, test_values, env_values);
+        debug!(?overrides, "Resolved SDK overrides");
+
+        Ok(overrides)
     }
 
     fn load_test_values() -> anyhow::Result<HashMap<String, String>> {
@@ -263,13 +267,21 @@ impl SdkOverrides {
 
     fn load_file_values(current_dir: &Path) -> anyhow::Result<HashMap<String, String>> {
         let Some(overrides_file) = find_sdk_overrides_file(current_dir) else {
+            debug!(current_dir = %current_dir.display(), "No SDK overrides file found");
             return Ok(HashMap::new());
         };
+
+        debug!(overrides_file = %overrides_file.display(), "Loading SDK overrides file");
 
         let mut values = parse_dotenv_with_relative_paths(&overrides_file)?;
         if values.is_empty() {
             let parent = fs::parent_or_err(&overrides_file)?;
             values.insert(GOLEM_PATH.to_string(), fs::path_to_str(parent)?.to_string());
+            debug!(
+                overrides_file = %overrides_file.display(),
+                inferred_golem_path = %parent.display(),
+                "SDK overrides file is empty, inferring GOLEM_PATH from parent directory"
+            );
         }
 
         Ok(values)
