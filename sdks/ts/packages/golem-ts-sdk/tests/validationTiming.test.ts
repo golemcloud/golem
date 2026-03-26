@@ -21,22 +21,24 @@ import { AgentClassName } from '../src/agentClassName';
 test('HTTP validation errors are stored during agent registration, not thrown', async () => {
   // Clear any previous state
   clearAgentValidationError();
-  
+
   // Dynamically import an agent with invalid HTTP configuration
   // This should NOT throw an error during import
   await expect(import('./agentWithInvalidHttpMount1')).resolves.toBeDefined();
-  
+
   // The validation error should be stored
   const error = getAgentValidationError();
   expect(error).toBeDefined();
   expect(error?.message).toContain("HTTP validation failed for agent 'AgentWithInvalidHttpMount1'");
-  expect(error?.message).toContain("Agent constructor variable 'bar' is not provided by the HTTP mount path");
-  
+  expect(error?.message).toContain(
+    "Agent constructor variable 'bar' is not provided by the HTTP mount path",
+  );
+
   // The agent should still be registered in the registry
   const agentType = AgentTypeRegistry.get(new AgentClassName('AgentWithInvalidHttpMount1'));
   expect(agentType).toBeDefined();
   expect(agentType?.typeName).toBe('AgentWithInvalidHttpMount1');
-  
+
   // Clean up
   clearAgentValidationError();
 });
