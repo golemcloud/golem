@@ -21,7 +21,7 @@ use crate::preview2::golem::agent::host::{
 };
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
-use crate::services::{HasOplog, HasWorker};
+use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
@@ -1224,15 +1224,10 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         async move {
             let result = match retry_config {
                 Some(retry_config) => {
-                    let base_retry_count = crate::durable_host::durability::count_oplog_errors_for(
-                        &worker.oplog(),
-                        retry_point,
-                    )
-                    .await;
                     let current_retry_policy_state = worker
                         .get_non_detached_last_known_status()
                         .await
-                        .current_retry_policy_state
+                        .current_retry_state
                         .get(&retry_point)
                         .cloned();
                     let task_ctx = crate::durable_host::durability::TaskRetryContext {
@@ -1240,7 +1235,6 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                         retry_config,
                         named_retry_policies,
                         max_in_function_retry_delay,
-                        base_retry_count,
                         current_retry_policy_state,
                         retry_properties,
                         worker,

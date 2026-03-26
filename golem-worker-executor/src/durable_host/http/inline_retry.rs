@@ -716,21 +716,14 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                     let current_retry_policy_state = worker
                         .get_non_detached_last_known_status()
                         .await
-                        .current_retry_policy_state
+                        .current_retry_state
                         .get(&begin_index)
                         .cloned();
-                    let mut base_retry_count =
-                        crate::durable_host::durability::count_oplog_errors_for(
-                            &oplog,
-                            begin_index,
-                        )
-                        .await;
                     let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: begin_index,
                         retry_config,
                         named_retry_policies,
                         max_in_function_retry_delay: max_delay,
-                        base_retry_count,
                         current_retry_policy_state,
                         retry_properties,
                         worker,
@@ -753,8 +746,6 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                     {
                         AsyncRetryDecision::RetryAfterDelay(delay) => {
                             tokio::time::sleep(delay).await;
-                            base_retry_count += initial_retry_state.retry_count();
-                            task_ctx.base_retry_count = base_retry_count;
                         }
                         AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
                             return Ok(Err(initial_error));

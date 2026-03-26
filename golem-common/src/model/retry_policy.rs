@@ -188,6 +188,31 @@ pub enum RetryPolicyState {
     Pair(Box<RetryPolicyState>, Box<RetryPolicyState>),
 }
 
+impl RetryPolicyState {
+    /// Returns the total number of retry attempts tracked by this state.
+    pub fn retry_count(&self) -> u32 {
+        match self {
+            RetryPolicyState::Counter(n) => *n,
+            RetryPolicyState::Terminal => 0,
+            RetryPolicyState::Wrapper(inner) => inner.retry_count(),
+            RetryPolicyState::CountBox { attempts, .. } => *attempts,
+            RetryPolicyState::TimeBox(inner) => inner.retry_count(),
+            RetryPolicyState::AndThen {
+                left,
+                right,
+                on_right,
+            } => {
+                if *on_right {
+                    left.retry_count() + right.retry_count()
+                } else {
+                    left.retry_count()
+                }
+            }
+            RetryPolicyState::Pair(left, right) => left.retry_count().max(right.retry_count()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RetryProperties {
     entries: BTreeMap<String, PredicateValue>,

@@ -1848,9 +1848,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .as_ref()
                 .and_then(|last_error| {
                     latest_status
-                        .current_retry_count
+                        .current_retry_state
                         .get(&last_error.retry_from)
-                        .copied()
+                        .map(|s| s.retry_count())
                 })
                 .unwrap_or_default(),
             pending_invocation_count: latest_status.pending_invocations.len() as u64,

@@ -133,16 +133,8 @@ pub trait InFunctionRetryHost {
         None
     }
 
-    /// Returns the number of prior retry attempts for the given retry point.
-    async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32;
-
-    /// Returns the latest persisted semantic retry state for the given retry point, if available.
-    async fn current_retry_policy_state_for(
-        &self,
-        _retry_from: OplogIndex,
-    ) -> Option<RetryPolicyState> {
-        None
-    }
+    /// Returns the current semantic retry policy state for the given retry point, if available.
+    async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState>;
 
     /// Returns the current durable execution state.
     fn durable_execution_state(&self) -> DurableExecutionState;
@@ -274,7 +266,8 @@ impl InFunctionRetryState {
 
         let retry_point = ctx.current_retry_point();
         let retry_config = ctx.retry_config();
-        let oplog_retry_count = ctx.current_retry_count_for(retry_point).await;
+        let current_state = ctx.current_retry_state_for(retry_point).await;
+        let oplog_retry_count = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
         let total_attempts = self.retry_count + oplog_retry_count;
         let mut retry_policy_state: Option<RetryPolicyState> = None;
 
@@ -290,7 +283,6 @@ impl InFunctionRetryState {
                         );
                         get_delay(&retry_config, total_attempts)
                     } else {
-                        let current_state = ctx.current_retry_policy_state_for(retry_point).await;
                         match evaluate_named_policy_step(
                             named_policy,
                             total_attempts,
@@ -639,30 +631,14 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         (!policies.is_empty()).then_some(policies)
     }
 
-    async fn current_retry_count_for(&self, retry_from: OplogIndex) -> u32 {
+    async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState> {
         let latest_status = self
             .public_state
             .worker()
             .get_non_detached_last_known_status()
             .await;
         latest_status
-            .current_retry_count
-            .get(&retry_from)
-            .copied()
-            .unwrap_or(0)
-    }
-
-    async fn current_retry_policy_state_for(
-        &self,
-        retry_from: OplogIndex,
-    ) -> Option<RetryPolicyState> {
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
-        latest_status
-            .current_retry_policy_state
+            .current_retry_state
             .get(&retry_from)
             .cloned()
     }
@@ -817,7 +793,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         let trap_type = TrapType::from_error::<Ctx>(&failure, current_retry_point);
         let decision = Self::get_recovery_decision_on_trap(
             &retry_config,
-            &latest_status.current_retry_count,
+            &latest_status.current_retry_state,
             &trap_type,
             in_atomic_region,
         );
@@ -1140,7 +1116,6 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
     pub retry_config: RetryConfig,
     pub named_retry_policies: Option<Vec<NamedRetryPolicy>>,
     pub max_in_function_retry_delay: Duration,
-    pub base_retry_count: u32,
     pub current_retry_policy_state: Option<RetryPolicyState>,
     pub retry_properties: RetryProperties,
     pub worker: Arc<crate::worker::Worker<Ctx>>,
@@ -1165,14 +1140,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         self.named_retry_policies.clone()
     }
 
-    async fn current_retry_count_for(&self, _retry_from: OplogIndex) -> u32 {
-        self.base_retry_count
-    }
-
-    async fn current_retry_policy_state_for(
-        &self,
-        _retry_from: OplogIndex,
-    ) -> Option<RetryPolicyState> {
+    async fn current_retry_state_for(&self, _retry_from: OplogIndex) -> Option<RetryPolicyState> {
         self.current_retry_policy_state.clone()
     }
 
@@ -1386,8 +1354,8 @@ mod tests {
             self.named_retry_policies.clone()
         }
 
-        async fn current_retry_count_for(&self, _retry_from: OplogIndex) -> u32 {
-            self.oplog_retry_count
+        async fn current_retry_state_for(&self, _retry_from: OplogIndex) -> Option<RetryPolicyState> {
+            None
         }
 
         fn durable_execution_state(&self) -> DurableExecutionState {

@@ -131,11 +131,10 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 
     let active_plugins = last_known.active_plugins.clone();
 
-    let (status, current_retry_count, current_retry_policy_state, overridden_retry_config) =
+    let (status, current_retry_state, overridden_retry_config) =
         calculate_latest_worker_status(
             last_known.status,
-            last_known.current_retry_count,
-            last_known.current_retry_policy_state,
+            last_known.current_retry_state,
             last_known.overridden_retry_config,
             default_retry_policy,
             &skipped_regions,
@@ -229,8 +228,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         oplog_processor_checkpoints,
         deleted_regions,
         component_revision_for_replay,
-        current_retry_count,
-        current_retry_policy_state,
+        current_retry_state,
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
@@ -241,8 +239,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 
 fn calculate_latest_worker_status(
     mut current_status: AgentStatus,
-    mut current_retry_count: HashMap<OplogIndex, u32>,
-    mut current_retry_policy_state: HashMap<OplogIndex, RetryPolicyState>,
+    mut current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
     mut current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
@@ -250,7 +247,6 @@ fn calculate_latest_worker_status(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     AgentStatus,
-    HashMap<OplogIndex, u32>,
     HashMap<OplogIndex, RetryPolicyState>,
     Option<RetryConfig>,
 ) {
@@ -265,15 +261,8 @@ fn calculate_latest_worker_status(
                 ..
             } = entry
             {
-                let new_count = current_retry_count
-                    .get(retry_from)
-                    .copied()
-                    .unwrap_or_default()
-                    + 1;
-                current_retry_count.insert(*retry_from, new_count);
-
                 if let Some(state) = retry_policy_state {
-                    current_retry_policy_state.insert(*retry_from, state.clone());
+                    current_retry_state.insert(*retry_from, state.clone());
                 }
             }
         }
@@ -292,9 +281,9 @@ fn calculate_latest_worker_status(
                 ..
             } = entry
         {
-            let count = current_retry_count
+            let count = current_retry_state
                 .get(retry_from)
-                .copied()
+                .map(|s| s.retry_count())
                 .unwrap_or_default();
             if is_worker_error_retriable(
                 current_retry_policy
@@ -319,13 +308,11 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::AgentInvocationStarted { .. } => {
                 current_status = AgentStatus::Running;
-                current_retry_count.clear();
-                current_retry_policy_state.clear();
+                current_retry_state.clear();
             }
             OplogEntry::AgentInvocationFinished { .. } => {
                 current_status = AgentStatus::Idle;
-                current_retry_count.clear();
-                current_retry_policy_state.clear();
+                current_retry_state.clear();
             }
             OplogEntry::Suspend { .. } => {
                 current_status = AgentStatus::Suspended;
@@ -416,8 +403,7 @@ fn calculate_latest_worker_status(
     }
     (
         current_status,
-        current_retry_count,
-        current_retry_policy_state,
+        current_retry_state,
         current_retry_policy,
     )
 }

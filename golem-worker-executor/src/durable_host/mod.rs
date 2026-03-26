@@ -660,7 +660,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     fn get_recovery_decision_on_trap(
         retry_config: &RetryConfig,
-        previous_tries: &HashMap<OplogIndex, u32>,
+        retry_state: &HashMap<OplogIndex, RetryPolicyState>,
         trap_type: &TrapType,
         in_atomic_region: bool,
     ) -> RetryDecision {
@@ -714,10 +714,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 error: AgentError::DeterministicTrap(_),
                 retry_from,
             } if in_atomic_region => {
-                let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
-                let retryable = previous_tries < retry_config.max_attempts;
+                // +1 because the current attempt hasn't been persisted to the state yet
+                let attempts = retry_state.get(retry_from).map(|s| s.retry_count()).unwrap_or_default() + 1;
+                let retryable = attempts < retry_config.max_attempts;
                 if retryable {
-                    match get_delay(retry_config, previous_tries) {
+                    match get_delay(retry_config, attempts) {
                         Some(delay) => RetryDecision::Delayed(delay),
                         None => RetryDecision::None,
                     }
@@ -737,10 +738,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 error: AgentError::Unknown(_) | AgentError::TransientError(_),
                 retry_from,
             } => {
-                let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
-                let retryable = previous_tries < retry_config.max_attempts;
+                // +1 because the current attempt hasn't been persisted to the state yet
+                let attempts = retry_state.get(retry_from).map(|s| s.retry_count()).unwrap_or_default() + 1;
+                let retryable = attempts < retry_config.max_attempts;
                 if retryable {
-                    match get_delay(retry_config, previous_tries) {
+                    match get_delay(retry_config, attempts) {
                         Some(delay) => RetryDecision::Delayed(delay),
                         None => RetryDecision::None,
                     }
@@ -773,14 +775,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn get_recovery_decision_on_trap_with_semantic(
         &self,
         retry_config: &RetryConfig,
-        retry_counts_with_current_attempt: &HashMap<OplogIndex, u32>,
+        retry_state_with_current_attempt: &HashMap<OplogIndex, RetryPolicyState>,
         trap_type: &TrapType,
         in_atomic_region: bool,
         full_function_name: &str,
     ) -> (RetryDecision, Option<RetryPolicyState>) {
         let fallback_decision = Self::get_recovery_decision_on_trap(
             retry_config,
-            retry_counts_with_current_attempt,
+            retry_state_with_current_attempt,
             trap_type,
             in_atomic_region,
         );
@@ -832,12 +834,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return (fallback_decision, None);
         }
 
-        let total_attempts_with_current = retry_counts_with_current_attempt
+        let current_state = retry_state_with_current_attempt
             .get(retry_from)
-            .copied()
-            .unwrap_or_default();
+            .cloned();
+        let total_attempts_with_current = current_state.as_ref().map(|s| s.retry_count()).unwrap_or_default();
         let total_attempts_before_current = total_attempts_with_current.saturating_sub(1);
-        let current_state = self.current_retry_policy_state_for(*retry_from).await;
 
         match evaluate_named_policy_step(
             named_policy,
@@ -2069,21 +2070,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .worker()
             .get_non_detached_last_known_status()
             .await;
-        let mut retry_counts_with_current_attempt =
-            latest_status_before.current_retry_count.clone();
-        if let TrapType::Error { retry_from, .. } = trap_type {
-            let new_count = retry_counts_with_current_attempt
-                .get(retry_from)
-                .copied()
-                .unwrap_or_default()
-                + 1;
-            retry_counts_with_current_attempt.insert(*retry_from, new_count);
-        }
-
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(
                 &retry_config,
-                &retry_counts_with_current_attempt,
+                &latest_status_before.current_retry_state,
                 trap_type,
                 in_atomic_region,
                 full_function_name,
@@ -2150,7 +2140,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         debug!(
             "Recovery decision for {trap_type:?} with {:?} retries (in_atomic_region={in_atomic_region}): {:?}",
-            retry_counts_with_current_attempt, decision
+            latest_status_before.current_retry_state, decision
         );
 
         decision
