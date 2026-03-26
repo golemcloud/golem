@@ -2035,14 +2035,15 @@ async fn websocket_polling_test(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Result(Ok(Some(Box::new(Value::String(message.to_string()))))));
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String(message.to_string())))))
+    );
 
     ws_server.abort();
 
     Ok(())
 }
-
-
 
 /// Verifies that the per-agent disk space quota from the plan is enforced
 /// end-to-end through the full Golem stack. The user's plan is changed to one
@@ -2138,4 +2139,3 @@ async fn agent_write_within_per_plan_disk_space_quota_succeeds(
 
     Ok(())
 }
-
