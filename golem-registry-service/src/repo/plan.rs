@@ -188,6 +188,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             .fetch_all_as(sqlx::query_as(indoc! { r#"
                 SELECT
                     plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
+                    max_concurrent_agents_per_executor,
                     total_app_count, total_env_count, total_component_count, total_worker_count,
                     total_worker_connection_count, total_component_storage_bytes,
                     monthly_gas_limit, monthly_component_upload_limit_bytes
