@@ -1390,15 +1390,18 @@ impl InitialComponentFileSource {
         let url = Url::parse(url_string).or_else(|_| {
             // If that fails, try to parse it as a relative path
             let relative_parent = relative_to.parent().expect("Failed to get parent");
-            let absolute_relative_to = fs::absolute_lexical_path(relative_parent)
-                .map_err(|_| {
+            let absolute_relative_to =
+                fs::absolute_lexical_path(relative_parent).map_err(|_| {
                     format!(
                         "Failed to resolve relative path: {}",
                         relative_to.log_color_highlight()
                     )
                 })?;
 
-            let source = fs::absolute_lexical_path_from_base_dir(Path::new(url_string), &absolute_relative_to);
+            let source = fs::absolute_lexical_path_from_base_dir(
+                Path::new(url_string),
+                &absolute_relative_to,
+            );
             Url::from_file_path(&source).map_err(|_| {
                 format!(
                     "Failed to convert source ({}) to URL",
