@@ -31,9 +31,9 @@ use golem_common::model::oplog::public_oplog_entry::{
     WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
-    AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, PublicOplogEntry,
-    PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotBasedUpdateParameters,
+    AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, MultipartPartData,
+    MultipartSnapshotData, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::{Empty, Timestamp};
 use std::time::Duration;
@@ -367,6 +367,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                         serde_json::to_vec(&data).unwrap_or_default(),
                         "application/json".to_string(),
                     ),
+                    PublicSnapshotData::Multipart(multipart) => multipart_to_raw(multipart),
                 };
                 Self::Snapshot(oplog::SnapshotParameters {
                     timestamp: timestamp.into(),
@@ -488,6 +489,7 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
                         serde_json::to_vec(&data).unwrap_or_default(),
                         "application/json".to_string(),
                     ),
+                    PublicSnapshotData::Multipart(multipart) => multipart_to_raw(multipart),
                 };
                 Self::LoadSnapshot(oplog::LoadSnapshotParameters {
                     snapshot: crate::preview2::golem_api_1_x::host::Snapshot { data, mime_type },
@@ -547,6 +549,7 @@ impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
                         serde_json::to_vec(&data).unwrap_or_default(),
                         "application/json".to_string(),
                     ),
+                    PublicSnapshotData::Multipart(multipart) => multipart_to_raw(multipart),
                 };
                 Self::SaveSnapshot(oplog::SaveSnapshotResultParameters {
                     snapshot: crate::preview2::golem_api_1_x::host::Snapshot {
@@ -1101,4 +1104,41 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }
         }
     }
+}
+
+fn multipart_to_raw(multipart: MultipartSnapshotData) -> (Vec<u8>, String) {
+    use golem_common::base_model::oplog::multipart::extract_boundary;
+
+    let boundary = extract_boundary(&multipart.mime_type)
+        .unwrap_or("boundary")
+        .to_string();
+
+    let mut output = Vec::new();
+    for part in &multipart.parts {
+        output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        output.extend_from_slice(format!("Content-Type: {}\r\n", part.content_type).as_bytes());
+        output.extend_from_slice(
+            format!(
+                "Content-Disposition: attachment; name=\"{}\"\r\n",
+                part.name
+            )
+            .as_bytes(),
+        );
+        output.extend_from_slice(b"\r\n");
+        match &part.data {
+            MultipartPartData::Json(json) => {
+                output.extend_from_slice(
+                    serde_json::to_vec(&json.data)
+                        .unwrap_or_default()
+                        .as_slice(),
+                );
+            }
+            MultipartPartData::Raw(raw) => {
+                output.extend_from_slice(&raw.data);
+            }
+        }
+        output.extend_from_slice(b"\r\n");
+    }
+    output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (output, multipart.mime_type)
 }

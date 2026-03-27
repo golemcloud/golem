@@ -7,30 +7,24 @@ componentTemplates:
         default: true
         build:
         - command: cargo build --target wasm32-wasip2
-          env:
-            CARGO_TARGET_DIR: "{{ componentDir }}/target"
           sources:
           - "{{ componentDir }}/src"
           - "{{ componentDir }}/Cargo.toml"
           targets:
-          - "{{ componentDir }}/target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
-        componentWasm: "{{ componentDir }}/target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
+          - "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_debug.wasm"
         clean:
-        - "{{ appDir }}/target"
-        - "{{ componentDir }}/target"
+        - "{{ cargoTarget }}"
       release:
         build:
         - command: cargo build --target wasm32-wasip2 --release
-          env:
-            CARGO_TARGET_DIR: "{{ componentDir }}/target"
           sources:
           - "{{ componentDir }}/src"
           - "{{ componentDir }}/Cargo.toml"
           targets:
-          - "{{ componentDir }}/target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
-        componentWasm: "{{ componentDir }}/target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
         clean:
-        - "{{ appDir }}/target"
-        - "{{ componentDir }}/target"
+        - "{{ cargoTarget }}"

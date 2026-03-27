@@ -90,9 +90,15 @@ grep -n "pattern" tmp/test_output.txt
 
 ## Test Components
 
-Worker executor tests and integration tests use pre-compiled WASM files from the `test-components/` directory. These are checked into the repository and **rebuilding them is not automated**. Do not attempt to rebuild test components — use the existing compiled WASM files, EXCEPT if the test component itself has an AGENTS.md file with instructions of how to do so.
+Worker executor tests, integration tests, and CLI integration tests can depend on built WASM artifacts in `test-components/`. These `.wasm` files are no longer checked into the repository, so compiling the test components used by the selected tests is a separate prerequisite step before running the tests.
 
-Load the `modifying-test-components` skill when rebuilding is needed.
+Use this workflow:
+
+1. Identify which tagged `PrecompiledComponent` or test component files the selected tests require.
+2. Build those components first by following their `AGENTS.md`, or run `cargo make build-test-components` if a broad rebuild is simpler.
+3. Only then run the Rust test command.
+
+Load the `modifying-test-components` skill for targeted rebuilds, or `rebuild-all-test-components` for a full rebuild.
 
 ## Timeouts
 
