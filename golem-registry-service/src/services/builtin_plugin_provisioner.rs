@@ -80,7 +80,7 @@ pub async fn provision_builtin_plugins(
     deployment_write_service: &Arc<DeploymentWriteService>,
     plugin_registration_service: &Arc<PluginRegistrationService>,
 ) -> anyhow::Result<()> {
-    if !config.enabled {
+    if !config.enabled() {
         return Ok(());
     }
 
