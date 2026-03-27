@@ -426,6 +426,8 @@ async fn replay_from_cursor(
 
 /// Produces a stream of registry invalidation events by replaying missed events from the
 /// repository and then forwarding live events from the broadcast channel.
+/// If `last_seen_event_id` is omitted, the stream starts from the latest known event id
+/// (live-only mode).
 /// Includes all event types (deployment, token, permission changes).
 pub fn subscribe_registry_invalidations(
     repo: Arc<dyn RegistryChangeRepo>,
@@ -436,7 +438,22 @@ pub fn subscribe_registry_invalidations(
     let mut broadcast_rx = notifier.subscribe();
 
     tokio::spawn(async move {
-        let mut cursor = ChangeEventId(last_seen_event_id.map(|id| id as i64).unwrap_or(0));
+        let mut cursor = if let Some(last_seen_event_id) = last_seen_event_id {
+            ChangeEventId(last_seen_event_id as i64)
+        } else {
+            match repo.get_latest_event_id().await {
+                Ok(Some(latest_id)) => latest_id,
+                Ok(None) => ChangeEventId(0),
+                Err(e) => {
+                    let _ = tx
+                        .send(Err(tonic::Status::internal(format!(
+                            "Failed to initialize live cursor: {e}"
+                        ))))
+                        .await;
+                    return;
+                }
+            }
+        };
 
         if last_seen_event_id.is_some() {
             match replay_from_cursor(&tx, repo.as_ref(), cursor).await {
@@ -702,6 +719,36 @@ mod tests {
             .expect("stream ended")
             .expect("error");
         assert_eq!(received.event_id, 10);
+        join_set.abort_all();
+    }
+
+    #[test]
+    async fn test_subscribe_none_is_live_only() {
+        use tokio_stream::StreamExt;
+
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        repo.push(make_deployment_change_event(1));
+        repo.push(make_deployment_change_event(2));
+
+        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
+        let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
+
+        // Historical events exist but should not be replayed in live-only mode.
+        let no_event = tokio::time::timeout(std::time::Duration::from_millis(150), stream.next())
+            .await;
+        assert!(no_event.is_err(), "expected no replayed event in live-only mode");
+
+        repo.push(make_deployment_change_event(3));
+        notifier.signal_new_events_available();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout")
+            .expect("stream ended")
+            .expect("error");
+        assert_eq!(received.event_id, 3);
         join_set.abort_all();
     }
 
