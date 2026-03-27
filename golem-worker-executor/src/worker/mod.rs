@@ -2786,15 +2786,12 @@ fn is_snapshot_capable_oplog_processor(
 ) -> bool {
     let has_oplog_processor = match metadata.oplog_processor() {
         Ok(Some(_)) => true,
-        Ok(None) => return false,
+        Ok(None) => false,
         Err(err) => {
             warn!("Failed to check oplog processor export: {err}");
-            return false;
+            false
         }
     };
-    if !has_oplog_processor {
-        return false;
-    }
     let has_save = match metadata.save_snapshot() {
         Ok(Some(_)) => true,
         Ok(None) => false,
@@ -2811,7 +2808,7 @@ fn is_snapshot_capable_oplog_processor(
             false
         }
     };
-    has_save && has_load
+    has_oplog_processor && has_save && has_load
 }
 
 #[derive(Debug)]
