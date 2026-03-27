@@ -39,6 +39,8 @@ use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::base_model::component::ComponentRevision;
+use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
@@ -48,7 +50,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
     HostResponseGolemApiFork, OplogEntry, OplogIndex, OplogIndexRange,
 };
-use golem_common::model::{AgentId, OwnedAgentId};
+use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::model::{AgentMetadata, Timestamp};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -538,9 +540,89 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
 
+        // Track pending invocations and updates while copying, so we can cancel
+        // any that remain unmatched. This prevents the forked worker from inheriting
+        // and re-executing pending work from the source worker.
+        let mut pending_invocation_keys: Vec<IdempotencyKey> = Vec::new();
+        let mut pending_update_revisions: Vec<ComponentRevision> = Vec::new();
+        let mut deleted_regions_builder = DeletedRegionsBuilder::new();
+
         for oplog_index in oplog_range {
             let entry = source_oplog.read(oplog_index).await;
             new_oplog.add(entry.clone()).await;
+
+            if let OplogEntry::Revert { dropped_region, .. } = &entry {
+                deleted_regions_builder.add(dropped_region.clone());
+            }
+
+            // For pending invocations, deleted regions don't matter - both inputs
+            // and outputs in deleted regions are still accounted for (see calculate_pending_invocations).
+            match &entry {
+                OplogEntry::PendingAgentInvocation {
+                    idempotency_key, ..
+                } => {
+                    pending_invocation_keys.push(idempotency_key.clone());
+                }
+                OplogEntry::AgentInvocationStarted {
+                    idempotency_key, ..
+                } => {
+                    pending_invocation_keys.retain(|key| key != idempotency_key);
+                }
+                OplogEntry::CancelPendingInvocation {
+                    idempotency_key, ..
+                } => {
+                    pending_invocation_keys.retain(|key| key != idempotency_key);
+                }
+                _ => {}
+            }
+        }
+
+        // For pending updates, we need to respect deleted regions (see calculate_update_fields).
+        let deleted_regions = deleted_regions_builder.build();
+        let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
+        for oplog_index in oplog_range {
+            if deleted_regions.is_in_deleted_region(oplog_index) {
+                continue;
+            }
+            let entry = source_oplog.read(oplog_index).await;
+            match &entry {
+                OplogEntry::PendingUpdate { description, .. } => {
+                    pending_update_revisions.push(*description.target_revision());
+                }
+                OplogEntry::SuccessfulUpdate { .. } | OplogEntry::FailedUpdate { .. } => {
+                    // Pop front to match calculate_update_fields semantics
+                    if !pending_update_revisions.is_empty() {
+                        pending_update_revisions.remove(0);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Append cancellation entries for any remaining pending invocations and updates
+        let now = Timestamp::now_utc();
+
+        for idempotency_key in pending_invocation_keys {
+            tracing::debug!("Cancelling pending invocation {idempotency_key} in forked worker");
+            new_oplog
+                .add(OplogEntry::CancelPendingInvocation {
+                    timestamp: now,
+                    idempotency_key,
+                })
+                .await;
+        }
+
+        for target_revision in pending_update_revisions {
+            tracing::debug!(
+                "Cancelling pending update to revision {target_revision} in forked worker"
+            );
+            new_oplog
+                .add(OplogEntry::FailedUpdate {
+                    timestamp: now,
+                    target_revision,
+                    details: Some("cancelled by fork".to_string()),
+                })
+                .await;
         }
 
         Ok(new_oplog)
