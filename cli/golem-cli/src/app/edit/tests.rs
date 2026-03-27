@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::edit::cargo_toml::DependencySpec;
+use crate::app::edit::cargo_toml::{DependencyLocation, DependencyTable};
 use crate::app::edit::{
     agents_md, cargo_toml, gitignore, golem_yaml, json, main_rs, main_ts, package_json,
     tsconfig_json,
@@ -63,6 +65,179 @@ fn package_json_merge_and_collect() {
     assert_eq!(collected.get("foo").unwrap().as_deref(), Some("\"1.2.0\""));
     assert_eq!(collected.get("bar").unwrap().as_deref(), Some("\"2.0.0\""));
     assert_eq!(collected.get("baz").unwrap().as_deref(), Some("\"3.0.0\""));
+}
+
+#[test]
+fn package_json_merge_many_entries_into_empty_sections_produces_valid_json() {
+    let source = r#"{
+  "name": "app",
+  "dependencies": {},
+  "devDependencies": {}
+}"#;
+
+    let updated = package_json::merge_dependencies(
+        source,
+        &[(
+            "@golemcloud/golem-ts-sdk".to_string(),
+            "0.1.0-dev.1".to_string(),
+        )],
+        &[
+            (
+                "@golemcloud/golem-ts-typegen".to_string(),
+                "0.1.0-dev.1".to_string(),
+            ),
+            ("@rollup/plugin-alias".to_string(), "^5.1.1".to_string()),
+            (
+                "@rollup/plugin-node-resolve".to_string(),
+                "^16.0.1".to_string(),
+            ),
+            ("typescript".to_string(), "^5.9.2".to_string()),
+        ],
+    )
+    .unwrap();
+
+    let parsed: serde_json::Value = serde_json::from_str(updated.as_str())
+        .unwrap_or_else(|err| panic!("Failed to parse merged JSON: {err}\n{updated}"));
+    assert_eq!(
+        parsed["dependencies"]["@golemcloud/golem-ts-sdk"],
+        serde_json::Value::String("0.1.0-dev.1".to_string())
+    );
+    assert_eq!(
+        parsed["devDependencies"]["@rollup/plugin-alias"],
+        serde_json::Value::String("^5.1.1".to_string())
+    );
+}
+
+#[test]
+fn package_json_merge_dependencies_handles_empty_file() {
+    let source = "";
+
+    let merged = package_json::merge_dependencies(
+        source,
+        &[("dep".to_string(), "1.2.3".to_string())],
+        &[("dev".to_string(), "4.5.6".to_string())],
+    );
+
+    assert!(merged.is_err());
+}
+
+#[test]
+fn package_json_merge_dependencies_handles_empty_object() {
+    let source = "{}";
+
+    let merged = package_json::merge_dependencies(
+        source,
+        &[("dep".to_string(), "1.2.3".to_string())],
+        &[("dev".to_string(), "4.5.6".to_string())],
+    )
+    .unwrap();
+
+    let json: serde_json::Value = serde_json::from_str(&merged)
+        .unwrap_or_else(|err| panic!("Failed to parse merged JSON: {err}\n{merged}"));
+    assert_eq!(json["dependencies"]["dep"], "1.2.3");
+    assert_eq!(json["devDependencies"]["dev"], "4.5.6");
+    assert!(merged.contains("\n  \"dependencies\""));
+}
+
+#[test]
+fn package_json_merge_many_entries_into_empty_root_object_produces_valid_json() {
+    let source = "{}";
+
+    let merged = package_json::merge_dependencies(
+        source,
+        &[(
+            "@golemcloud/golem-ts-sdk".to_string(),
+            "0.1.0-dev.1".to_string(),
+        )],
+        &[
+            (
+                "@golemcloud/golem-ts-typegen".to_string(),
+                "0.1.0-dev.1".to_string(),
+            ),
+            ("@rollup/plugin-alias".to_string(), "^5.1.1".to_string()),
+            (
+                "@rollup/plugin-node-resolve".to_string(),
+                "^16.0.1".to_string(),
+            ),
+            ("typescript".to_string(), "^5.9.2".to_string()),
+        ],
+    )
+    .unwrap();
+
+    let parsed: serde_json::Value = serde_json::from_str(merged.as_str())
+        .unwrap_or_else(|err| panic!("Failed to parse merged JSON: {err}\n{merged}"));
+    assert_eq!(
+        parsed["dependencies"]["@golemcloud/golem-ts-sdk"],
+        serde_json::Value::String("0.1.0-dev.1".to_string())
+    );
+    assert_eq!(
+        parsed["devDependencies"]["@rollup/plugin-alias"],
+        serde_json::Value::String("^5.1.1".to_string())
+    );
+}
+
+#[test]
+fn package_json_merge_handles_empty_dev_dependencies_object_shapes() {
+    let sources = vec![
+        r#"{
+  "dependencies": {
+    "@golemcloud/golem-ts-sdk": "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-sdk"
+  },
+  "devDependencies": {}
+}"#,
+        r#"{
+  "dependencies": {
+    "@golemcloud/golem-ts-sdk": "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-sdk"
+  },
+  "devDependencies": {
+    
+  }
+}"#,
+        r#"{
+  "dependencies": {
+    "@golemcloud/golem-ts-sdk": "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-sdk"
+  },
+  "devDependencies": {
+  }
+}"#,
+    ];
+
+    for source in sources {
+        let merged = package_json::merge_dependencies(
+            source,
+            &[],
+            &[
+                (
+                    "@golemcloud/golem-ts-typegen".to_string(),
+                    "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-typegen"
+                        .to_string(),
+                ),
+                ("typescript".to_string(), "^5.9.2".to_string()),
+            ],
+        )
+        .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(merged.as_str())
+            .unwrap_or_else(|err| panic!("Failed to parse merged JSON: {err}\n{merged}"));
+
+        assert_eq!(
+            parsed["devDependencies"]["@golemcloud/golem-ts-typegen"],
+            serde_json::Value::String(
+                "/Users/noise64/workspace/golem-alt-00/sdks/ts/packages/golem-ts-typegen"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            parsed["devDependencies"]["typescript"],
+            serde_json::Value::String("^5.9.2".to_string())
+        );
+
+        assert!(merged.contains("\n  \"devDependencies\": {"));
+        assert!(merged.contains("\n    \"@golemcloud/golem-ts-typegen\""));
+        assert!(!merged.contains("\n\"@golemcloud/golem-ts-typegen\""));
+        assert!(merged.contains("\"typescript\": \"^5.9.2\"\n  }"));
+        assert!(!merged.contains("\"typescript\": \"^5.9.2\"}"));
+    }
 }
 
 #[test]
@@ -190,6 +365,262 @@ workspace_shared = "2.0"
     let missing =
         cargo_toml::check_required_deps(&updated, &["serde", "tokio", "workspace_shared"]).unwrap();
     assert_eq!(missing, vec!["tokio".to_string()]);
+}
+
+#[test]
+fn cargo_toml_collect_versions_resolves_workspace_reference() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { workspace = true, features = ["export_golem_agentic"] }
+serde = "1"
+
+[workspace.dependencies]
+golem-rust = "2.0.0-dev.2"
+"#;
+
+    let versions =
+        cargo_toml::collect_versions(source, &["golem-rust", "serde", "missing"]).unwrap();
+
+    assert_eq!(
+        versions.get("golem-rust").and_then(|v| v.as_deref()),
+        Some("2.0.0-dev.2")
+    );
+    assert_eq!(versions.get("serde").and_then(|v| v.as_deref()), Some("1"));
+    assert_eq!(versions.get("missing"), Some(&None));
+}
+
+#[test]
+fn cargo_toml_collect_versions_reads_inline_dependency_version() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { version = "2.1.0", features = ["export_golem_agentic"] }
+"#;
+
+    let versions = cargo_toml::collect_versions(source, &["golem-rust"]).unwrap();
+
+    assert_eq!(
+        versions.get("golem-rust").and_then(|v| v.as_deref()),
+        Some("2.1.0")
+    );
+}
+
+#[test]
+fn cargo_toml_collect_dependency_specs_reads_path_dependency() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { path = "/tmp/sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+"#;
+
+    let specs = cargo_toml::collect_dependency_specs(source, &["golem-rust"]).unwrap();
+
+    assert_eq!(
+        specs.get("golem-rust"),
+        Some(&Some(DependencySpec::Path {
+            path: "/tmp/sdks/rust/golem-rust".to_string(),
+            features: vec!["export_golem_agentic".to_string()],
+        }))
+    );
+}
+
+#[test]
+fn cargo_toml_upsert_dependency_auto_updates_workspace_dependencies() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { workspace = true }
+
+[workspace.dependencies]
+golem-rust = "2.0.0-dev.2"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_auto(
+        source,
+        "golem-rust",
+        &DependencySpec::Version {
+            version: "2.1.0".to_string(),
+            features: Vec::new(),
+        },
+        DependencyTable::Dependencies,
+    )
+    .unwrap();
+
+    assert!(updated.contains("[workspace.dependencies]"));
+    assert!(updated.contains("golem-rust = \"2.1.0\""));
+    assert!(updated.contains("golem-rust = { workspace = true }"));
+}
+
+#[test]
+fn cargo_toml_upsert_dependency_auto_updates_local_table() {
+    let source = r#"[package]
+name = "demo"
+
+[dev-dependencies]
+golem-rust = "2.0.0"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_auto(
+        source,
+        "golem-rust",
+        &DependencySpec::Version {
+            version: "2.1.0".to_string(),
+            features: Vec::new(),
+        },
+        DependencyTable::Dependencies,
+    )
+    .unwrap();
+
+    assert!(updated.contains("[dev-dependencies]"));
+    assert!(updated.contains("golem-rust = \"2.1.0\""));
+}
+
+#[test]
+fn cargo_toml_upsert_dependency_auto_writes_inline_path_table_with_features() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = "2.0.0"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_auto(
+        source,
+        "golem-rust",
+        &DependencySpec::Path {
+            path: "/tmp/sdks/rust/golem-rust".to_string(),
+            features: vec!["export_golem_agentic".to_string()],
+        },
+        DependencyTable::Dependencies,
+    )
+    .unwrap();
+
+    assert!(updated.contains(
+        "golem-rust = { path = \"/tmp/sdks/rust/golem-rust\", features = [\"export_golem_agentic\"] }"
+    ));
+    assert!(!updated.contains("[dependencies.golem-rust"));
+}
+
+#[test]
+fn cargo_toml_resolve_dependency_location_detects_workspace_reference() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { workspace = true }
+
+[workspace.dependencies]
+golem-rust = "2.0.0-dev.2"
+"#;
+
+    let location = cargo_toml::resolve_dependency_location(source, "golem-rust").unwrap();
+    assert_eq!(location, Some(DependencyLocation::WorkspaceDependencies));
+}
+
+#[test]
+fn cargo_toml_collect_dependency_specs_prefers_local_non_workspace_dependency() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = "2.3.0"
+
+[workspace.dependencies]
+golem-rust = "2.0.0-dev.2"
+"#;
+
+    let specs = cargo_toml::collect_dependency_specs(source, &["golem-rust"]).unwrap();
+    assert_eq!(
+        specs.get("golem-rust"),
+        Some(&Some(DependencySpec::Version {
+            version: "2.3.0".to_string(),
+            features: Vec::new(),
+        }))
+    );
+}
+
+#[test]
+fn cargo_toml_collect_dependency_specs_workspace_ref_without_workspace_dep_is_none() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+golem-rust = { workspace = true }
+"#;
+
+    let specs = cargo_toml::collect_dependency_specs(source, &["golem-rust"]).unwrap();
+    assert_eq!(specs.get("golem-rust"), Some(&None));
+}
+
+#[test]
+fn cargo_toml_upsert_dependency_auto_creates_missing_dependencies_table() {
+    let source = r#"[package]
+name = "demo"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_auto(
+        source,
+        "golem-rust",
+        &DependencySpec::Version {
+            version: "2.1.0".to_string(),
+            features: Vec::new(),
+        },
+        DependencyTable::Dependencies,
+    )
+    .unwrap();
+
+    assert!(updated.contains("[dependencies]"));
+    assert!(updated.contains("golem-rust = \"2.1.0\""));
+}
+
+#[test]
+fn cargo_toml_upsert_workspace_dependency_creates_missing_workspace_tables() {
+    let source = r#"[package]
+name = "demo"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_in_workspace_dependencies(
+        source,
+        "golem-rust",
+        &DependencySpec::Version {
+            version: "2.1.0".to_string(),
+            features: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    assert!(updated.contains("[workspace.dependencies]"));
+    assert!(updated.contains("golem-rust = \"2.1.0\""));
+}
+
+#[test]
+fn cargo_toml_upsert_dependency_auto_adds_missing_key_to_existing_table() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+serde = "1"
+"#;
+
+    let updated = cargo_toml::upsert_dependency_auto(
+        source,
+        "golem-rust",
+        &DependencySpec::Version {
+            version: "2.1.0".to_string(),
+            features: Vec::new(),
+        },
+        DependencyTable::Dependencies,
+    )
+    .unwrap();
+
+    assert!(updated.contains("[dependencies]"));
+    assert!(updated.contains("serde = \"1\""));
+    assert!(updated.contains("golem-rust = \"2.1.0\""));
 }
 
 fn table_like(item: &toml_edit::Item) -> &dyn toml_edit::TableLike {
@@ -835,6 +1266,30 @@ fn agents_md_merge_guides_handles_source_order_not_key_order() {
     assert!(merged.contains("# TS guide\nV1"));
     assert!(merged.contains("# Rust guide\nV2"));
     assert!(!merged.contains("# Rust guide\nV1"));
+}
+
+#[test]
+fn agents_md_extract_managed_guide_returns_only_inner_content() {
+    let source = format!(
+        "# Notes\n\n{}\n{}",
+        make_managed_guide(GuestLanguage::Rust, "# Rust guide\nRust body\n"),
+        make_managed_guide(GuestLanguage::TypeScript, "# TS guide\nTS body\n")
+    );
+
+    let rust = agents_md::extract_managed_guide(&source, GuestLanguage::Rust.id()).unwrap();
+    let ts = agents_md::extract_managed_guide(&source, GuestLanguage::TypeScript.id()).unwrap();
+
+    assert_eq!(rust, "# Rust guide\nRust body");
+    assert_eq!(ts, "# TS guide\nTS body");
+}
+
+#[test]
+fn agents_md_render_managed_guide_uses_expected_markers() {
+    let rendered = agents_md::render_managed_guide(GuestLanguage::Rust.id(), "# Rust guide\nBody");
+
+    assert!(rendered.starts_with("<!-- golem-managed:guide:rust:start -->\n"));
+    assert!(rendered.ends_with("<!-- golem-managed:guide:rust:end -->\n"));
+    assert!(rendered.contains("# Rust guide\nBody\n"));
 }
 
 #[test]

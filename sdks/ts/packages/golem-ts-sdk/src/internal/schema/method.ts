@@ -17,7 +17,6 @@ import * as Either from '../../newTypes/either';
 import { AgentMethod, DataSchema, HttpMountDetails } from 'golem:agent/common@1.5.0';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
-import { validateHttpEndpoint } from '../http/validation';
 import { validateMethodName } from './helpers';
 import { resolveMethodInputSchema } from './methodInput';
 import { resolveMethodReturnDataSchema } from './methodOutput';
@@ -62,8 +61,6 @@ export function getAgentMethodSchema(
       outputSchema,
       httpEndpoint: baseMeta.httpEndpoint ?? [],
     };
-
-    validateHttpEndpoint(agentClassName, agentMethod, httpMountDetails);
 
     return agentMethod;
   });

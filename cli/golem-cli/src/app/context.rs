@@ -16,6 +16,7 @@ use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
+use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
 use crate::fs;
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
@@ -23,7 +24,7 @@ use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
     ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig,
     CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps,
-    WithSource, DEFAULT_CONFIG_FILE_NAME,
+    WithSource,
 };
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
@@ -37,6 +38,8 @@ use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+
+const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
@@ -664,20 +667,22 @@ fn load_raw_apps(source_mode: ApplicationSourceMode) -> Option<ValidatedResult<L
     fn load(root_source: Option<&Path>) -> Option<ValidatedResult<LoadedRawApps>> {
         collect_sources_and_switch_to_app_root(root_source).map(|collected_sources| {
             collected_sources.and_then(|collected_sources| {
-                collected_sources
-                    .sources
-                    .into_iter()
-                    .map(|source| {
-                        ValidatedResult::from_result(
-                            app_raw::ApplicationWithSource::from_yaml_file(&source),
-                        )
-                    })
-                    .collect::<ValidatedResult<Vec<_>>>()
-                    .map(|raw_apps| LoadedRawApps {
-                        app_root_dir: collected_sources.app_root_dir,
-                        calling_working_dir: collected_sources.calling_working_dir,
-                        raw_apps,
-                    })
+                validate_manifest_versions(&collected_sources.sources).and_then(|()| {
+                    collected_sources
+                        .sources
+                        .into_iter()
+                        .map(|source| {
+                            ValidatedResult::from_result(
+                                app_raw::ApplicationWithSource::from_yaml_file(&source),
+                            )
+                        })
+                        .collect::<ValidatedResult<Vec<_>>>()
+                        .map(|raw_apps| LoadedRawApps {
+                            app_root_dir: collected_sources.app_root_dir,
+                            calling_working_dir: collected_sources.calling_working_dir,
+                            raw_apps,
+                        })
+                })
             })
         })
     }

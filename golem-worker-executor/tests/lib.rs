@@ -30,6 +30,7 @@ pub mod durability;
 pub mod fuel;
 pub mod hot_update;
 pub mod http;
+pub mod ignite_service;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
@@ -64,6 +65,7 @@ tag_suite!(wasi, group3);
 tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
 
+tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 tag_suite!(storage_quota, group1);

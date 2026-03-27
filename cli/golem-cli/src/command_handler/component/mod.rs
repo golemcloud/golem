@@ -101,9 +101,6 @@ impl ComponentCommandHandler {
                     self.cmd_redeploy_workers(component_name.component_name)
                         .await
                 }
-                ComponentSubcommand::Diagnose { component_name } => {
-                    self.cmd_diagnose(component_name).await
-                }
                 ComponentSubcommand::ManifestTrace { component_name } => {
                     self.cmd_manifest_trace(component_name).await
                 }
@@ -304,16 +301,6 @@ impl ComponentCommandHandler {
         Ok(components)
     }
 
-    async fn cmd_diagnose(&self, component_names: OptionalComponentNames) -> anyhow::Result<()> {
-        self.ctx
-            .app_handler()
-            .diagnose(
-                component_names.component_name,
-                &ApplicationComponentSelectMode::CurrentDir,
-            )
-            .await
-    }
-
     async fn cmd_manifest_trace(
         &self,
         _component_names: OptionalComponentNames,
@@ -334,7 +321,7 @@ impl ComponentCommandHandler {
                     component_name.as_str().log_color_highlight()
                 ),
             );
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
             self.ctx.log_handler().log_serializable(
                 &app_ctx
                     .application()

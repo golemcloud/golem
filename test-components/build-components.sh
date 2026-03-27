@@ -12,6 +12,7 @@ TS_CHUNKS=1   # Number of chunks to split ts apps into for parallel CI builds
 # Optional arguments:
 # - clean: clean all projects without building
 # - rebuild: clean all projects before building them
+# - check: run only `golem-cli build --step check` for selected projects
 # - rust / ts / benchmarks: build only the specified group
 # - rust-N / ts-N: build only the Nth chunk of that group (for parallel CI)
 # - list-groups: print available group names for CI matrix generation
@@ -70,6 +71,7 @@ print_groups_json() {
 
 clean_only=false
 rebuild=false
+check_only=false
 single_group=false
 group=""
 for arg in "$@"; do
@@ -79,6 +81,9 @@ for arg in "$@"; do
       ;;
     rebuild)
       rebuild=true
+      ;;
+    check)
+      check_only=true
       ;;
     rust|ts|benchmarks)
       single_group=true
@@ -104,6 +109,11 @@ for arg in "$@"; do
   esac
 done
 
+if [ "$check_only" = true ] && ([ "$clean_only" = true ] || [ "$rebuild" = true ]); then
+  echo "'check' mode cannot be combined with 'clean' or 'rebuild'" >&2
+  exit 1
+fi
+
 GOLEM_CLI="${TEST_COMP_DIR:-$(pwd)}/../target/debug/golem-cli"
 
 should_clean() {
@@ -114,6 +124,8 @@ build_rust_apps() {
   local apps=("$@")
   if [ "$clean_only" = true ]; then
     echo "Cleaning Rust test apps"
+  elif [ "$check_only" = true ]; then
+    echo "Checking Rust test apps"
   else
     echo "Building Rust test apps"
   fi
@@ -127,7 +139,10 @@ build_rust_apps() {
       "$GOLEM_CLI" clean
     fi
 
-    if [ "$clean_only" = false ]; then
+    if [ "$check_only" = true ]; then
+      echo "Checking $subdir..."
+      "$GOLEM_CLI" build --step check --yes
+    elif [ "$clean_only" = false ]; then
       echo "Building $subdir..."
       "$GOLEM_CLI" --preset release  build
       "$GOLEM_CLI" --preset release exec copy
@@ -142,6 +157,8 @@ build_node_apps() {
   local label="${NODE_GROUP_LABEL:-Node}"
   if [ "$clean_only" = true ]; then
     echo "Cleaning $label test apps"
+  elif [ "$check_only" = true ]; then
+    echo "Checking $label test apps"
   else
     echo "Building $label test apps"
   fi
@@ -154,7 +171,10 @@ build_node_apps() {
       "$GOLEM_CLI" clean
     fi
 
-    if [ "$clean_only" = false ]; then
+    if [ "$check_only" = true ]; then
+      echo "Checking $subdir..."
+      "$GOLEM_CLI" build --step check --yes
+    elif [ "$clean_only" = false ]; then
       echo "Building $subdir..."
       npm install
       "$GOLEM_CLI" build

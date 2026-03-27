@@ -59,7 +59,7 @@ impl<T: MessageWithFields> TextView for T {
             MessageWithFieldsIndentMode::None => None,
             MessageWithFieldsIndentMode::IdentFields => None,
             MessageWithFieldsIndentMode::NestedIdentAll => {
-                Some(NestedTextViewIndent::new(Format::Text))
+                Some(DecoratedIndent::new_primary(Format::Text))
             }
         };
 
@@ -475,35 +475,51 @@ pub fn format_rib_source_for_error(source: &str, error: &str) -> String {
     }
 }
 
-pub struct NestedTextViewIndent {
-    decorated: bool,
+pub struct DecoratedIndent {
+    close_line: Option<String>,
     log_indent: Option<LogIndent>,
 }
 
-impl NestedTextViewIndent {
-    pub fn new(format: Format) -> Self {
+impl DecoratedIndent {
+    pub fn new_primary(format: Format) -> Self {
         match format {
             Format::Text if SHOULD_COLORIZE.should_colorize() => {
                 logln("╔═");
                 Self {
-                    decorated: true,
+                    close_line: Some("╚═".to_string()),
                     log_indent: Some(LogIndent::prefix("║ ")),
                 }
             }
             _ => Self {
-                decorated: false,
+                close_line: None,
+                log_indent: Some(LogIndent::new()),
+            },
+        }
+    }
+
+    pub fn new_secondary(format: Format) -> Self {
+        match format {
+            Format::Text if SHOULD_COLORIZE.should_colorize() => {
+                logln("┏━".bright_black().bold().to_string());
+                Self {
+                    close_line: Some("┗━".bright_black().bold().to_string()),
+                    log_indent: Some(LogIndent::prefix(format!("{} ", "┃".bright_black().bold()))),
+                }
+            }
+            _ => Self {
+                close_line: None,
                 log_indent: Some(LogIndent::new()),
             },
         }
     }
 }
 
-impl Drop for NestedTextViewIndent {
+impl Drop for DecoratedIndent {
     fn drop(&mut self) {
         if let Some(ident) = self.log_indent.take() {
             drop(ident);
-            if self.decorated {
-                logln("╚═");
+            if let Some(close_line) = self.close_line.take() {
+                logln(close_line);
             }
         }
     }

@@ -14,11 +14,11 @@
 
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    InjectToPrebuiltQuickJsCommandMarkerHash, PreinitializeJsCommandMarkerHash,
-    ResolvedExternalCommandMarkerHash,
+    InjectToPrebuiltQuickJsCommandMarkerHash, NpmInstallDepsMarkerHash,
+    PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
 };
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
-use crate::app::context::{BuildContext, ToolsWithEnsuredCommonDeps};
+use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
@@ -395,11 +395,7 @@ pub async fn execute_external_command(
                     return Err(anyhow!("Empty command!"));
                 }
 
-                ensure_common_deps_for_tool(
-                    ctx.tools_with_ensured_common_deps(),
-                    command_tokens[0].as_str(),
-                )
-                .await?;
+                ensure_common_deps_for_tool(ctx, command_tokens[0].as_str()).await?;
 
                 let mut process = Command::new(command_tokens[0].clone());
 
@@ -423,35 +419,86 @@ pub async fn execute_external_command(
         .await
 }
 
-pub async fn ensure_common_deps_for_tool(
-    ctx: &ToolsWithEnsuredCommonDeps,
-    tool: &str,
-) -> anyhow::Result<()> {
+pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> anyhow::Result<()> {
     match tool {
         "node" | "npx" => {
-            ctx.ensure_common_deps_for_tool_once("node", || async {
-                if std::fs::exists("node_modules")? {
-                    return Ok(());
-                }
+            let package_json_path = ctx.application().app_root_dir().join("package.json");
+            if !package_json_path.exists() {
+                return Ok(());
+            }
 
-                log_warn_action(
-                    "Detected",
-                    format!(
-                        "missing {}, executing {}",
-                        "node_modules".log_color_highlight(),
-                        "npm install".log_color_highlight()
-                    ),
-                );
-
-                Command::new("npm")
-                    .args(["install"])
-                    .stream_and_run("npm")
-                    .await
-            })
-            .await
+            let app_root_dir = ctx.application().app_root_dir().to_path_buf();
+            ctx.tools_with_ensured_common_deps()
+                .ensure_common_deps_for_tool_once("node", || async {
+                    ensure_npm_dependencies(ctx, &app_root_dir).await
+                })
+                .await
         }
         _ => Ok(()),
     }
+}
+
+async fn ensure_npm_dependencies(
+    ctx: &BuildContext<'_>,
+    app_root_dir: &Path,
+) -> anyhow::Result<()> {
+    let package_json_path = app_root_dir.join("package.json");
+    let package_lock_path = app_root_dir.join("package-lock.json");
+    let node_modules_path = app_root_dir.join("node_modules");
+
+    let package_json_hash = blake3::hash(&std::fs::read(&package_json_path)?)
+        .to_hex()
+        .to_string();
+    let package_lock_hash = if package_lock_path.exists() {
+        Some(
+            blake3::hash(&std::fs::read(&package_lock_path)?)
+                .to_hex()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    let marker = TaskResultMarker::new(
+        &ctx.application().task_result_marker_dir(),
+        NpmInstallDepsMarkerHash {
+            package_json_hash: &package_json_hash,
+            package_lock_hash: package_lock_hash.as_deref(),
+        },
+    )?;
+
+    if marker.is_up_to_date() && std::fs::exists(&node_modules_path)? {
+        return Ok(());
+    }
+
+    if std::fs::exists(&node_modules_path)? {
+        log_warn_action(
+            "Detected",
+            format!(
+                "dependency changes, executing {}",
+                "npm install".log_color_highlight()
+            ),
+        );
+    } else {
+        log_warn_action(
+            "Detected",
+            format!(
+                "missing {}, executing {}",
+                "node_modules".log_color_highlight(),
+                "npm install".log_color_highlight()
+            ),
+        );
+    }
+
+    marker.result(run_npm_install(app_root_dir).await)
+}
+
+async fn run_npm_install(app_root_dir: &Path) -> anyhow::Result<()> {
+    Command::new("npm")
+        .args(["install"])
+        .current_dir(app_root_dir)
+        .stream_and_run("npm")
+        .await
 }
 
 fn configure_external_command_env(command: &mut Command, executable: &str, ctx: &BuildContext<'_>) {
