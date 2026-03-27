@@ -154,6 +154,7 @@ jobs:
     runs-on: ${{ matrix.group.runner || 'blacksmith-8vcpu-ubuntu-2204' }}
     needs:
       - build-and-store
+      - build-golem-ts
       - merge-test-components
     strategy:
       fail-fast: false
@@ -191,11 +192,6 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
-      - name: Install WASI SDK
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -219,6 +215,21 @@ jobs:
       - name: Install wasm-rquickjs
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+
+      - name: Restore built TS SDK
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
 
       - uses: ./.github/actions/restore-binaries
         with:
