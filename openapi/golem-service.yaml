@@ -15236,6 +15236,9 @@ components:
         maxDiskSpacePerWorker:
           type: integer
           format: uint64
+        maxConcurrentAgentsPerExecutor:
+          type: integer
+          format: uint64
       required:
       - planId
       - name
@@ -15250,6 +15253,7 @@ components:
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
+      - maxConcurrentAgentsPerExecutor
     PluginInstallation:
       title: PluginInstallation
       type: object
