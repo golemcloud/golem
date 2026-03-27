@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tracing::{error, info};
 
+pub mod docker_ignite;
 pub mod docker_mysql;
 pub mod docker_postgres;
 pub mod provided_postgres;
