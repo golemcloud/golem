@@ -157,10 +157,10 @@ fn get_agent_type_with_remote_client(
     let mut constructor_methods = vec![];
 
     for item in &agent_definition_trait.items {
-        if let syn::TraitItem::Fn(trait_fn) = item {
-            if is_constructor_method(&trait_fn.sig, None) {
-                constructor_methods.push(trait_fn.clone());
-            }
+        if let syn::TraitItem::Fn(trait_fn) = item
+            && is_constructor_method(&trait_fn.sig, None)
+        {
+            constructor_methods.push(trait_fn.clone());
         }
     }
 
@@ -582,10 +582,10 @@ fn extract_prompt_hint(attrs: &[syn::Attribute]) -> Option<String> {
 
 fn extract_meta(attrs: &[syn::Attribute], key: &str) -> Option<String> {
     for attr in attrs {
-        if attr.path().is_ident(key) {
-            if let Ok(syn::Lit::Str(lit_str)) = attr.parse_args::<syn::Lit>() {
-                return Some(lit_str.value());
-            }
+        if attr.path().is_ident(key)
+            && let Ok(syn::Lit::Str(lit_str)) = attr.parse_args::<syn::Lit>()
+        {
+            return Some(lit_str.value());
         }
     }
     None

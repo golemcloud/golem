@@ -82,10 +82,10 @@ pub fn derive_allowed_mime_types(
     expanded.into()
 }
 fn parse_mime_type_attr(attr: &Attribute) -> Option<String> {
-    if attr.path().is_ident("mime_type") {
-        if let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>() {
-            return Some(lit_str.value());
-        }
+    if attr.path().is_ident("mime_type")
+        && let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>()
+    {
+        return Some(lit_str.value());
     }
     None
 }

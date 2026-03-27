@@ -79,10 +79,10 @@ pub fn derive_allowed_languages(input: TokenStream, golem_rust_crate_ident: &Ide
     expanded.into()
 }
 fn parse_lang_attr(attr: &Attribute) -> Option<String> {
-    if attr.path().is_ident("code") {
-        if let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>() {
-            return Some(lit_str.value());
-        }
+    if attr.path().is_ident("code")
+        && let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>()
+    {
+        return Some(lit_str.value());
     }
     None
 }
