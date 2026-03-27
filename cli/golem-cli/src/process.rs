@@ -27,9 +27,9 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::{LazyLock, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use which::which as wrapped_which;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use which::which as wrapped_which;
 
 static PROGRAM_LOOKUP_CACHE: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -87,7 +87,6 @@ fn program_lookup_cache_len() -> usize {
         .expect("program lookup cache lock poisoned")
         .len()
 }
-
 
 pub trait ExitStatusExt {
     fn check_exit_status(&self) -> anyhow::Result<()>;

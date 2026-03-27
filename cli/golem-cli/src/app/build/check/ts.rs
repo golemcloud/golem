@@ -166,10 +166,14 @@ fn parse_json_string_literal(raw: &str) -> Option<String> {
     serde_json::from_str::<String>(raw).ok()
 }
 
-fn typescript_sdk_requirements(overrides: &SdkOverrides) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
+fn typescript_sdk_requirements(
+    overrides: &SdkOverrides,
+) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
     let make_expected = |package_name: &str| -> anyhow::Result<ExpectedDependencyKind> {
         if overrides.ts_packages_path.is_some() {
-            Ok(ExpectedDependencyKind::ExactPath(overrides.ts_package_dep(package_name)?))
+            Ok(ExpectedDependencyKind::ExactPath(
+                overrides.ts_package_dep(package_name)?,
+            ))
         } else {
             Ok(ExpectedDependencyKind::SemanticCompatibleVersion {
                 base_version: overrides.ts_package_dep(package_name)?,

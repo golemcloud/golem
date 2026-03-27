@@ -800,13 +800,13 @@ pub fn delete_logged(context: &str, path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod test {
     use crate::fs;
+    use crate::fs::absolute_lexical_path;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeSet;
     use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
-    use crate::fs::absolute_lexical_path;
 
     #[test]
     fn resolve_relative_globs() {
