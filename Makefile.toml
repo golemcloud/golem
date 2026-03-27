@@ -9,6 +9,7 @@
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make unit-tests`: runs unit tests only
 # - `cargo make worker-executor-tests`: runs worker executor tests only
+# - `cargo make worker-executor-tests-ignite-service`: runs ignite service tests only (requires GOLEM_IGNITE_URL)
 # - `cargo make integration-tests`: runs integration tests only
 # - `cargo make sharding-tests-debug`: runs sharding integration tests with file logging enabled, also accepts test name filter arguments
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
@@ -380,6 +381,15 @@ script = '''
 cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture $JUNIT_OPTS
 cargo-test-r run --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
 cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests-ignite-service]
+dependencies = ["wit"]
+description = "Runs ignite service worker-executor-tests (requires GOLEM_IGNITE_URL=ignite://host:10800 and a running Apache Ignite 2.x node)"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group1]
@@ -484,6 +494,9 @@ dependencies = [
     "cli-integration-tests-group1",
     "cli-integration-tests-group2",
     "cli-integration-tests-group3",
+    "cli-integration-tests-group4",
+    "cli-integration-tests-group5",
+    "cli-integration-tests-group6",
 ]
 
 [tasks.cli-integration-tests-group1]
@@ -507,11 +520,38 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test int
 
 [tasks.cli-integration-tests-group3]
 dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
-description = "Run CLI integration tests (3/3)"
+description = "Run CLI integration tests (3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group4]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
+description = "Run CLI integration tests (4)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group4 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group5]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
+description = "Run CLI integration tests (5)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group5 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group6]
+dependencies = ["build-bins-all-non-ci", "build-sdk-ts"]
+description = "Run CLI integration tests (6)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group6 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-update-golden-files]
