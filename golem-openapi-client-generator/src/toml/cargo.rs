@@ -21,7 +21,7 @@ pub fn gen(name: &str, version: &str) -> String {
         "[package]" + NewLine +
         r#"name = ""# + name + r#"""# + NewLine +
         r#"version = ""# + version + r#"""# + NewLine +
-        r#"edition = "2021""# + NewLine +
+        r#"edition = "2024""# + NewLine +
         r#"license = "Apache-2.0""# + NewLine +
         r#"description = "Client for Golem Cloud's REST API""# + NewLine +
         NewLine +
