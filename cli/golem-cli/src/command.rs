@@ -707,11 +707,6 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         component_name: OptionalComponentNames,
     },
-    /// Diagnose possible tooling problems
-    Diagnose {
-        #[command(flatten)]
-        component_name: OptionalComponentNames,
-    },
     /// List all the deployed agent types
     ListAgentTypes {},
 
@@ -819,8 +814,11 @@ pub mod shared_args {
     #[derive(Debug, Args)]
     pub struct BuildArgs {
         /// Select specific build step(s)
-        #[clap(long, short)]
+        #[clap(long, short, conflicts_with = "skip_check")]
         pub step: Vec<AppBuildStep>,
+        /// Skip build-time requirement checks
+        #[clap(long, default_value = "false", conflicts_with = "step")]
+        pub skip_check: bool,
         #[command(flatten)]
         pub force_build: ForceBuildArg,
         /// Internal flag for REPL reload
@@ -961,11 +959,6 @@ pub mod component {
         RedeployAgents {
             #[command(flatten)]
             component_name: OptionalComponentName,
-        },
-        /// Diagnose possible tooling problems
-        Diagnose {
-            #[command(flatten)]
-            component_name: OptionalComponentNames,
         },
         /// Show component manifest properties with source trace
         ManifestTrace {

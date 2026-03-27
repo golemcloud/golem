@@ -4,15 +4,15 @@
     "@golemcloud/golem-ts-sdk": "GOLEM_TS_SDK_VERSION_OR_PATH"
   },
   "devDependencies": {
-    "@rollup/plugin-alias": "^5.1.1",
-    "@rollup/plugin-node-resolve": "^16.0.1",
-    "@rollup/plugin-typescript": "^12.1.4",
-    "@rollup/plugin-commonjs": "^28.0.6",
-    "@rollup/plugin-json": "^6.1.0",
-    "@types/node": "^24.3.1",
-    "rollup": "^4.50.1",
-    "tslib": "^2.8.1",
-    "typescript": "^5.9.2",
+    "@rollup/plugin-alias": "GOLEM_TS_ROLLUP_PLUGIN_ALIAS_VERSION",
+    "@rollup/plugin-node-resolve": "GOLEM_TS_ROLLUP_PLUGIN_NODE_RESOLVE_VERSION",
+    "@rollup/plugin-typescript": "GOLEM_TS_ROLLUP_PLUGIN_TYPESCRIPT_VERSION",
+    "@rollup/plugin-commonjs": "GOLEM_TS_ROLLUP_PLUGIN_COMMONJS_VERSION",
+    "@rollup/plugin-json": "GOLEM_TS_ROLLUP_PLUGIN_JSON_VERSION",
+    "@types/node": "GOLEM_TS_TYPES_NODE_VERSION",
+    "rollup": "GOLEM_TS_ROLLUP_VERSION",
+    "tslib": "GOLEM_TS_TSLIB_VERSION",
+    "typescript": "GOLEM_TS_TYPESCRIPT_VERSION",
     "@golemcloud/golem-ts-typegen": "GOLEM_TS_TYPEGEN_VERSION_OR_PATH"
   }
 }

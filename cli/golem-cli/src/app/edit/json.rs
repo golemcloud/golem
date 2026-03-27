@@ -62,7 +62,8 @@ pub fn update_object_entries(
         }
         edits.extend(merge_entries_into_object(source, value, entries)?);
     } else {
-        let object_literal = format_new_object_literal(source, entries)?;
+        let (pair_indent, _) = detect_object_indent(source, root)?;
+        let object_literal = format_new_object_literal(pair_indent.as_str(), entries)?;
         edits.push(insert_object_pair_edit(
             source,
             root,
@@ -145,7 +146,7 @@ fn root_object<'a>(tree: &'a Tree, _source: &str) -> anyhow::Result<Node<'a>> {
             stack.push(child);
         }
     }
-    Err(anyhow!("No object found in JSONC source"))
+    Err(anyhow!("No object found in JSON source"))
 }
 
 fn find_value_by_path<'a>(
@@ -229,39 +230,99 @@ fn merge_entries_into_object(
     entries: &[(String, String)],
 ) -> anyhow::Result<Vec<TextEdit>> {
     let mut edits = Vec::new();
+    let pairs = object_pair_nodes(object, source)?;
+
+    let mut existing = BTreeMap::new();
+    for (key, _pair, value_node) in &pairs {
+        existing.insert(key.clone(), *value_node);
+    }
+
+    let mut missing = Vec::<(String, String)>::new();
     for (key, value) in entries {
-        let mut existing = None;
-        for (pair_key, value_node) in object_pairs(object, source)? {
-            if pair_key == *key {
-                existing = Some(value_node);
-                break;
-            }
-        }
-        if let Some(value_node) = existing {
+        if let Some(value_node) = existing.get(key) {
             edits.push(TextEdit::new(
                 value_node.start_byte(),
                 value_node.end_byte(),
                 format!("\"{}\"", escape_json_string(value)),
             ));
         } else {
-            edits.push(insert_object_pair_edit(
-                source,
-                object,
-                key,
-                &format!("\"{}\"", escape_json_string(value)),
-            )?);
+            missing.push((key.clone(), format!("\"{}\"", escape_json_string(value))));
         }
     }
+
+    if !missing.is_empty() {
+        let (indent, multiline) = detect_object_indent(source, object)?;
+        if pairs.is_empty() {
+            let insert_pos = object.end_byte() - 1;
+            let insertion = if multiline {
+                let closing_indent = indent.strip_suffix("  ").unwrap_or("");
+                let body = missing
+                    .iter()
+                    .map(|(key, value)| {
+                        format!("{}\"{}\": {}", indent, escape_json_string(key), value)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",\n");
+                format!("\n{}\n{}", body, closing_indent)
+            } else {
+                let body = missing
+                    .iter()
+                    .map(|(key, value)| format!("\"{}\": {}", escape_json_string(key), value))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(" {}", body)
+            };
+            edits.push(TextEdit::new(insert_pos, insert_pos, insertion));
+        } else {
+            let last_pair_end = pairs.last().unwrap().1.end_byte();
+
+            let rendered = if multiline {
+                missing
+                    .iter()
+                    .map(|(key, value)| {
+                        format!("\n{}\"{}\": {}", indent, escape_json_string(key), value)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            } else {
+                missing
+                    .iter()
+                    .map(|(key, value)| format!("\"{}\": {}", escape_json_string(key), value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+
+            if let Some(comma_pos) = find_trailing_comma(source, last_pair_end, object.end_byte()) {
+                let insertion = if multiline {
+                    rendered
+                } else {
+                    format!(" {}", rendered)
+                };
+                edits.push(TextEdit::new(comma_pos + 1, comma_pos + 1, insertion));
+            } else {
+                let insertion = if multiline {
+                    format!(",{}", rendered)
+                } else {
+                    format!(", {}", rendered)
+                };
+                edits.push(TextEdit::new(last_pair_end, last_pair_end, insertion));
+            }
+        }
+    }
+
     Ok(edits)
 }
 
-fn format_new_object_literal(source: &str, entries: &[(String, String)]) -> anyhow::Result<String> {
-    let indent = detect_indent_for_new_object(source);
+fn format_new_object_literal(
+    pair_indent: &str,
+    entries: &[(String, String)],
+) -> anyhow::Result<String> {
+    let value_indent = format!("{}  ", pair_indent);
     let mut parts = Vec::new();
     for (key, value) in entries {
         parts.push(format!(
             "{}\"{}\": \"{}\"",
-            indent,
+            value_indent,
             escape_json_string(key),
             escape_json_string(value)
         ));
@@ -269,7 +330,7 @@ fn format_new_object_literal(source: &str, entries: &[(String, String)]) -> anyh
     if parts.is_empty() {
         return Ok("{}".to_string());
     }
-    Ok(format!("{{\n{}\n}}", parts.join(",\n")))
+    Ok(format!("{{\n{}\n{}}}", parts.join(",\n"), pair_indent))
 }
 
 fn insert_object_pair_edit(
@@ -336,18 +397,40 @@ fn detect_object_indent(source: &str, object: Node<'_>) -> anyhow::Result<(Strin
     }
     if let Some(pair) = first_pair {
         let line_start = line_start_at(source, pair.start_byte());
-        let indent = source[line_start..pair.start_byte()].to_string();
+        let before_pair = &source[line_start..pair.start_byte()];
+        let indent = if let Some(brace_pos) = before_pair.rfind('{') {
+            let leading = &before_pair[..brace_pos];
+            if leading.trim().is_empty() {
+                format!("{}  ", leading)
+            } else {
+                before_pair.to_string()
+            }
+        } else {
+            before_pair.to_string()
+        };
         return Ok((
             indent,
             source[object.start_byte()..object.end_byte()].contains('\n'),
         ));
     }
     let line_start = line_start_at(source, object.start_byte());
-    let base_indent = &source[line_start..object.start_byte()];
-    Ok((
-        format!("{}  ", base_indent),
-        source[object.start_byte()..object.end_byte()].contains('\n'),
-    ))
+    let line = &source[line_start..];
+    let base_indent = line
+        .chars()
+        .take_while(|ch| ch.is_whitespace() && *ch != '\n' && *ch != '\r')
+        .collect::<String>();
+    let object_text = &source[object.start_byte()..object.end_byte()];
+    let multiline = if object_text.contains('\n') {
+        true
+    } else {
+        let trimmed = object_text.trim();
+        let inner = trimmed
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .unwrap_or(trimmed);
+        inner.trim().is_empty()
+    };
+    Ok((format!("{}  ", base_indent), multiline))
 }
 
 fn object_pair_nodes<'a>(
@@ -362,10 +445,10 @@ fn object_pair_nodes<'a>(
         }
         let key_node = child
             .child_by_field_name("key")
-            .ok_or_else(|| anyhow!("Missing key in JSONC pair"))?;
+            .ok_or_else(|| anyhow!("Missing key in JSON pair"))?;
         let value_node = child
             .child_by_field_name("value")
-            .ok_or_else(|| anyhow!("Missing value in JSONC pair"))?;
+            .ok_or_else(|| anyhow!("Missing value in JSON pair"))?;
         let key_text = source[key_node.start_byte()..key_node.end_byte()].trim();
         let key = unquote_json_string(key_text)?;
         pairs.push((key, child, value_node));
@@ -415,15 +498,6 @@ fn find_trailing_comma(source: &str, start: usize, end: usize) -> Option<usize> 
 
 fn line_start_at(source: &str, pos: usize) -> usize {
     source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0)
-}
-
-fn detect_indent_for_new_object(source: &str) -> String {
-    let indent = source
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .and_then(|line| line.find(|ch| ch != ' ').map(|idx| &line[..idx]))
-        .unwrap_or("  ");
-    indent.to_string()
 }
 
 fn unquote_json_string(value: &str) -> anyhow::Result<String> {
