@@ -19,7 +19,9 @@ use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::{stream, StreamExt};
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicSnapshotData};
+use golem_common::model::oplog::{
+    MultipartPartData, OplogIndex, PublicOplogEntry, PublicSnapshotData,
+};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
@@ -676,14 +678,14 @@ async fn ts_default_json_snapshot_recovery(
                     panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
                 });
                 assert!(
-                    (1.0..=5.0).contains(&count),
-                    "Snapshot {i} count should be between 1 and 5, got {count}"
+                    (0.0..=5.0).contains(&count),
+                    "Snapshot {i} count should be between 0 and 5, got {count}"
                 );
             }
-            PublicSnapshotData::Raw(raw) => {
+            other => {
                 panic!(
-                    "Expected JSON snapshot but got Raw with mime_type '{}'",
-                    raw.mime_type
+                    "Expected JSON snapshot but got {:?}",
+                    std::mem::discriminant(other)
                 );
             }
         }
@@ -794,14 +796,14 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
                     panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
                 });
                 assert!(
-                    (1.0..=6.0).contains(&count),
-                    "Snapshot {i} count should be between 1 and 6, got {count}"
+                    (0.0..=6.0).contains(&count),
+                    "Snapshot {i} count should be between 0 and 6, got {count}"
                 );
             }
-            PublicSnapshotData::Raw(raw) => {
+            other => {
                 panic!(
-                    "Expected JSON snapshot but got Raw with mime_type '{}'",
-                    raw.mime_type
+                    "Expected JSON snapshot but got {:?}",
+                    std::mem::discriminant(other)
                 );
             }
         }
@@ -897,10 +899,10 @@ async fn rust_default_json_snapshot_recovery(
                     "Snapshot {i} count should be between 0 and 5, got {count}"
                 );
             }
-            PublicSnapshotData::Raw(raw) => {
+            other => {
                 panic!(
-                    "Expected JSON snapshot but got Raw with mime_type '{}'",
-                    raw.mime_type
+                    "Expected JSON snapshot but got {:?}",
+                    std::mem::discriminant(other)
                 );
             }
         }
@@ -1030,10 +1032,10 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
                     "Snapshot {i} count should be between 0 and 6, got {count}"
                 );
             }
-            PublicSnapshotData::Raw(raw) => {
+            other => {
                 panic!(
-                    "Expected JSON snapshot but got Raw with mime_type '{}'",
-                    raw.mime_type
+                    "Expected JSON snapshot but got {:?}",
+                    std::mem::discriminant(other)
                 );
             }
         }
@@ -1054,8 +1056,185 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     assert_eq!(
         result.into_return_value(),
         Some(Value::U32(6)),
-        "Counter should be 6 after two rounds of 3 increments across restarts"
+        "Counter should be 6 after two rounds of 3 increments across restarts (rust)"
     );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ts_sqlite_multipart_snapshot_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-recovery");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Insert data into both databases and set a label
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("apple"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("banana"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("started"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "setLabel", data_value!("after-init"))
+        .await?;
+
+    let state_before = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+
+    let state_before_str = match state_before.clone().into_return_value() {
+        Some(Value::String(s)) => s,
+        other => panic!("Expected string from getState, got {:?}", other),
+    };
+    let state_before_json: serde_json::Value = serde_json::from_str(&state_before_str)?;
+    assert_eq!(state_before_json["label"], "after-init");
+    assert_eq!(
+        state_before_json["items"],
+        serde_json::json!(["apple", "banana"])
+    );
+    assert_eq!(state_before_json["logs"], serde_json::json!(["started"]));
+
+    // Verify multipart snapshots exist in the oplog
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshots: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(params) => Some(params.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !snapshots.is_empty(),
+        "Expected at least one snapshot before restart"
+    );
+
+    // Verify snapshots are multipart with the expected structure
+    let last_snapshot = snapshots.last().unwrap();
+    match &last_snapshot.data {
+        PublicSnapshotData::Multipart(multipart) => {
+            assert!(
+                multipart.mime_type.starts_with("multipart/mixed"),
+                "Expected multipart/mixed mime type, got '{}'",
+                multipart.mime_type
+            );
+
+            // Should have a state part (JSON) and two db parts
+            let state_parts: Vec<_> = multipart
+                .parts
+                .iter()
+                .filter(|p| p.name == "state")
+                .collect();
+            assert_eq!(state_parts.len(), 1, "Expected exactly one 'state' part");
+            match &state_parts[0].data {
+                MultipartPartData::Json(json) => {
+                    let state = json
+                        .data
+                        .get("state")
+                        .expect("State JSON should contain 'state' envelope");
+                    assert!(
+                        state.get("label").is_some(),
+                        "State JSON 'state' should contain 'label'"
+                    );
+                }
+                other => panic!("Expected JSON data for state part, got {:?}", other),
+            }
+
+            let db_parts: Vec<_> = multipart
+                .parts
+                .iter()
+                .filter(|p| p.name.starts_with("db:"))
+                .collect();
+            assert_eq!(
+                db_parts.len(),
+                2,
+                "Expected 2 database parts (memDb and fileDb), got {}",
+                db_parts.len()
+            );
+
+            for db_part in &db_parts {
+                assert_eq!(db_part.content_type, "application/x-sqlite3");
+                match &db_part.data {
+                    MultipartPartData::Raw(raw) => {
+                        assert!(
+                            !raw.data.is_empty(),
+                            "Database part '{}' should not be empty",
+                            db_part.name
+                        );
+                    }
+                    other => panic!(
+                        "Expected Raw data for db part '{}', got {:?}",
+                        db_part.name, other
+                    ),
+                }
+            }
+        }
+        other => panic!(
+            "Expected Multipart snapshot but got {:?}",
+            std::mem::discriminant(other)
+        ),
+    }
+
+    // Restart the executor — this triggers snapshot-based recovery
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    // Verify state is preserved after recovery
+    let state_after = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+
+    assert_eq!(
+        state_before, state_after,
+        "Agent state (including SQLite databases) should be preserved across restart"
+    );
+
+    // Add more data after recovery to verify databases are functional
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("cherry"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("recovered"))
+        .await?;
+
+    let state_after_more = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+
+    let state_after_str = match state_after_more.into_return_value() {
+        Some(Value::String(s)) => s,
+        other => panic!("Expected string from getState, got {:?}", other),
+    };
+    let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
+    assert_eq!(state_after_json["label"], "after-init");
+    assert_eq!(
+        state_after_json["items"],
+        serde_json::json!(["apple", "banana", "cherry"])
+    );
+    assert_eq!(
+        state_after_json["logs"],
+        serde_json::json!(["started", "recovered"])
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     Ok(())

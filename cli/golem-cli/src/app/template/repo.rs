@@ -69,6 +69,18 @@ impl AppTemplateRepo {
         Ok(&self.language_templates(language)?.common)
     }
 
+    pub fn common_template_file_contents(
+        &self,
+        language: GuestLanguage,
+        relative_path: &Path,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(common_template) = self.common_template(language)?.as_ref() else {
+            return Ok(None);
+        };
+
+        Self::template_file_contents(&common_template.0, relative_path)
+    }
+
     pub fn common_on_demand_template(
         &self,
         language: GuestLanguage,
@@ -193,6 +205,22 @@ impl AppTemplateRepo {
         }
 
         Ok(templates)
+    }
+
+    fn template_file_contents(
+        template: &AppTemplate,
+        relative_path: &Path,
+    ) -> anyhow::Result<Option<String>> {
+        let file_path = template.template_path.join(relative_path);
+        let Some(file) = TEMPLATES_DIR.get_file(file_path.as_path()) else {
+            return Ok(None);
+        };
+
+        let source = file
+            .contents_utf8()
+            .ok_or_else(|| anyhow!("Template file is not valid UTF-8: {}", file_path.display()))?;
+
+        Ok(Some(source.to_string()))
     }
 
     fn collect_templates(dev_mode: bool) -> anyhow::Result<Vec<AppTemplate>> {

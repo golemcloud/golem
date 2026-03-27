@@ -38,7 +38,7 @@ jobs:
     - name: Setup Node
       uses: actions/setup-node@v4
       with:
-        node-version: lts/*
+        node-version: "lts/*"
 
     - name: Install Rust stable
       uses: dtolnay/rust-toolchain@stable

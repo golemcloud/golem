@@ -359,9 +359,6 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .cmd_redeploy_workers(component_name.component_name)
                         .await
                 }
-                GolemCliSubcommand::Diagnose { component_name } => {
-                    self.ctx.app_handler().cmd_diagnose(component_name).await
-                }
                 GolemCliSubcommand::ListAgentTypes {} => {
                     self.ctx.app_handler().cmd_list_agent_types().await
                 }

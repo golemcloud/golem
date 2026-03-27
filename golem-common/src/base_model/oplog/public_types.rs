@@ -503,9 +503,184 @@ impl golem_wasm::FromValue for JsonSnapshotData {
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
+pub enum MultipartPartData {
+    Json(JsonSnapshotData),
+    Raw(RawSnapshotData),
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for MultipartPartData {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            MultipartPartData::Json(json) => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(json.into_value())),
+            },
+            MultipartPartData::Raw(raw) => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(raw.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        golem_wasm::analysis::analysed_type::variant(vec![
+            golem_wasm::analysis::analysed_type::case("Json", JsonSnapshotData::get_type()),
+            golem_wasm::analysis::analysed_type::case("Raw", RawSnapshotData::get_type()),
+        ])
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::FromValue for MultipartPartData {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value,
+            } => {
+                let inner = case_value.ok_or("Missing case value for Json")?;
+                Ok(MultipartPartData::Json(
+                    <JsonSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
+                ))
+            }
+            golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value,
+            } => {
+                let inner = case_value.ok_or("Missing case value for Raw")?;
+                Ok(MultipartPartData::Raw(
+                    <RawSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
+                ))
+            }
+            _ => Err(format!(
+                "Expected Variant for MultipartPartData, got {:?}",
+                value
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct MultipartSnapshotPart {
+    pub name: String,
+    pub content_type: String,
+    pub data: MultipartPartData,
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for MultipartSnapshotPart {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::Record(vec![
+            golem_wasm::Value::String(self.name),
+            golem_wasm::Value::String(self.content_type),
+            self.data.into_value(),
+        ])
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        golem_wasm::analysis::analysed_type::record(vec![
+            golem_wasm::analysis::analysed_type::field(
+                "name",
+                golem_wasm::analysis::analysed_type::str(),
+            ),
+            golem_wasm::analysis::analysed_type::field(
+                "content-type",
+                golem_wasm::analysis::analysed_type::str(),
+            ),
+            golem_wasm::analysis::analysed_type::field("data", MultipartPartData::get_type()),
+        ])
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::FromValue for MultipartSnapshotPart {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Record(mut fields) if fields.len() == 3 => {
+                let data = MultipartPartData::from_value(fields.remove(2))?;
+                let content_type = <String as golem_wasm::FromValue>::from_value(fields.remove(1))?;
+                let name = <String as golem_wasm::FromValue>::from_value(fields.remove(0))?;
+                Ok(MultipartSnapshotPart {
+                    name,
+                    content_type,
+                    data,
+                })
+            }
+            _ => Err(format!(
+                "Expected Record with 3 fields for MultipartSnapshotPart, got {:?}",
+                value
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct MultipartSnapshotData {
+    pub mime_type: String,
+    pub parts: Vec<MultipartSnapshotPart>,
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for MultipartSnapshotData {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::Record(vec![
+            golem_wasm::Value::String(self.mime_type),
+            golem_wasm::Value::List(self.parts.into_iter().map(|p| p.into_value()).collect()),
+        ])
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        golem_wasm::analysis::analysed_type::record(vec![
+            golem_wasm::analysis::analysed_type::field(
+                "mime-type",
+                golem_wasm::analysis::analysed_type::str(),
+            ),
+            golem_wasm::analysis::analysed_type::field(
+                "parts",
+                golem_wasm::analysis::analysed_type::list(MultipartSnapshotPart::get_type()),
+            ),
+        ])
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::FromValue for MultipartSnapshotData {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Record(mut fields) if fields.len() == 2 => {
+                let parts = match fields.remove(1) {
+                    golem_wasm::Value::List(items) => items
+                        .into_iter()
+                        .map(MultipartSnapshotPart::from_value)
+                        .collect::<Result<Vec<_>, String>>()?,
+                    other => return Err(format!("Expected List for parts, got {:?}", other)),
+                };
+                let mime_type = <String as golem_wasm::FromValue>::from_value(fields.remove(0))?;
+                Ok(MultipartSnapshotData { mime_type, parts })
+            }
+            _ => Err(format!(
+                "Expected Record with 2 fields for MultipartSnapshotData, got {:?}",
+                value
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
 pub enum PublicSnapshotData {
     Raw(RawSnapshotData),
     Json(JsonSnapshotData),
+    Multipart(MultipartSnapshotData),
 }
 
 #[cfg(feature = "full")]
@@ -520,6 +695,10 @@ impl golem_wasm::IntoValue for PublicSnapshotData {
                 case_idx: 1,
                 case_value: Some(Box::new(json.into_value())),
             },
+            PublicSnapshotData::Multipart(multipart) => golem_wasm::Value::Variant {
+                case_idx: 2,
+                case_value: Some(Box::new(multipart.into_value())),
+            },
         }
     }
 
@@ -527,6 +706,10 @@ impl golem_wasm::IntoValue for PublicSnapshotData {
         golem_wasm::analysis::analysed_type::variant(vec![
             golem_wasm::analysis::analysed_type::case("Raw", RawSnapshotData::get_type()),
             golem_wasm::analysis::analysed_type::case("Json", JsonSnapshotData::get_type()),
+            golem_wasm::analysis::analysed_type::case(
+                "Multipart",
+                MultipartSnapshotData::get_type(),
+            ),
         ])
     }
 }
@@ -551,6 +734,15 @@ impl golem_wasm::FromValue for PublicSnapshotData {
                 let inner = case_value.ok_or("Missing case value for Json")?;
                 Ok(PublicSnapshotData::Json(
                     <JsonSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
+                ))
+            }
+            golem_wasm::Value::Variant {
+                case_idx: 2,
+                case_value,
+            } => {
+                let inner = case_value.ok_or("Missing case value for Multipart")?;
+                Ok(PublicSnapshotData::Multipart(
+                    <MultipartSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
                 ))
             }
             _ => Err(format!(
