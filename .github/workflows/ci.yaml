@@ -231,6 +231,11 @@ jobs:
           key: golem-ts-sdk-${{ github.run_id }}
           fail-on-cache-miss: true
 
+      - name: Install TS SDK dependencies
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        working-directory: sdks/ts
+        run: pnpm install --frozen-lockfile
+
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}
