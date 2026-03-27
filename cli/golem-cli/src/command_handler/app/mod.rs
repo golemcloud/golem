@@ -46,7 +46,7 @@ use crate::model::deploy::{
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
-use crate::model::text::diff::log_unified_diff;
+use crate::model::text::diff::{log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
@@ -1728,10 +1728,10 @@ impl AppCommandHandler {
                 ));
                 let _indent = LogIndent::new();
                 let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                log_unified_diff(&diff::unified_diff(
-                    step.current.as_str(),
-                    step.new.as_str(),
-                ));
+                log_unified_diff_for_path(
+                    &step.path,
+                    &diff::unified_diff(step.current.as_str(), step.new.as_str()),
+                );
             }
         }
 

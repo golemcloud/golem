@@ -27,7 +27,7 @@ use crate::log::{
     log_action, log_anyhow_error, log_error, log_failed_to, log_finished_ok,
     log_skipping_up_to_date, logln, LogColorize, LogIndent,
 };
-use crate::model::text::diff::log_unified_diff;
+use crate::model::text::diff::log_unified_diff_for_path;
 use crate::model::GuestLanguage;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
@@ -905,7 +905,7 @@ impl TemplateHandler {
                     ));
                     let _indent = LogIndent::new();
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                    log_unified_diff(&diff::unified_diff(current, new));
+                    log_unified_diff_for_path(path, &diff::unified_diff(current, new));
                 }
                 SafeTemplatePlanStep::SkipSame { .. } => {
                     logln(format!(
