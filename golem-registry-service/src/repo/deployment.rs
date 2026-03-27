@@ -1171,6 +1171,17 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .to_string()
         };
 
+        let current_deployment_revision_expr = if deployment_revision.is_some() {
+            "NULL".to_string()
+        } else {
+            indoc! { r#"
+                (SELECT cd.current_revision_id
+                 FROM current_deployments cd
+                 WHERE cd.environment_id = env.environment_id)"#
+            }
+            .to_string()
+        };
+
         let query = formatdoc! { r#"
             WITH owner AS (
               SELECT account_id
@@ -1192,6 +1203,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 env.environment_id,
                 env.owner_account_id,
                 {deployment_revision_expr} AS deployment_revision_id,
+                {current_deployment_revision_expr} AS current_deployment_revision_id,
                 COALESCE((
                   SELECT esr.roles
                   FROM environment_shares es
@@ -1205,7 +1217,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
               FROM env
             )
             SELECT
-              r.environment_id, r.deployment_revision_id,
+              r.environment_id, r.deployment_revision_id, target.current_deployment_revision_id,
               r.agent_type_name, r.canonical_agent_type_name,
               r.component_id, r.component_revision_id,
               r.webhook_prefix_authority_and_path, r.agent_type,

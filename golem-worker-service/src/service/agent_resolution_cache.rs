@@ -21,6 +21,7 @@ use golem_service_base::clients::registry::{RegistryService, RegistryServiceErro
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::warn;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct AgentResolutionCacheKey {
@@ -120,7 +121,13 @@ impl AgentResolutionCache {
             .await?;
 
         // Track the revision for staleness detection
-        self.advance_latest_revision(resolved.environment_id, resolved.deployment_revision);
+        if let Some(current_deployment_revision) = resolved.current_deployment_revision {
+            self.advance_latest_revision(
+                resolved.environment_id,
+                resolved.deployment_revision,
+                current_deployment_revision,
+            );
+        }
 
         Ok(resolved)
     }
@@ -166,9 +173,19 @@ impl AgentResolutionCache {
     }
 
     fn is_stale(&self, resolved: &ResolvedAgentType) -> bool {
+        let Some(current_deployment_revision) = resolved.current_deployment_revision else {
+            warn!(
+                environment_id = %resolved.environment_id,
+                deployment_revision = resolved.deployment_revision.get(),
+                "Resolved latest agent type without current_deployment_revision; treating as stale"
+            );
+            return true;
+        };
+
         self.latest_revisions
             .read_sync(&resolved.environment_id, |_, latest_rev| {
-                resolved.deployment_revision != *latest_rev
+                current_deployment_revision != latest_rev.current_deployment_revision
+                    || resolved.deployment_revision != latest_rev.deployment_revision
             })
             == Some(true)
     }
@@ -235,7 +252,7 @@ mod tests {
     };
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::{ComponentId, ComponentRevision};
-    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::resource_definition::{
         ResourceDefinition, ResourceDefinitionId, ResourceName,
@@ -273,6 +290,10 @@ mod tests {
             },
             environment_id: env_id,
             deployment_revision: rev,
+            current_deployment_revision: Some(
+                CurrentDeploymentRevision::new(rev.get())
+                    .unwrap_or(CurrentDeploymentRevision::INITIAL),
+            ),
         }
     }
 
@@ -391,25 +412,6 @@ mod tests {
             _: ComponentId,
             _: ComponentRevision,
             _: &AgentTypeName,
-        ) -> Result<golem_common::model::agent::RegisteredAgentType, RegistryServiceError> {
-            unimplemented!()
-        }
-        async fn resolve_latest_agent_type_by_names(
-            &self,
-            _: &AccountId,
-            _: &ApplicationName,
-            _: &EnvironmentName,
-            _: &AgentTypeName,
-        ) -> Result<golem_common::model::agent::RegisteredAgentType, RegistryServiceError> {
-            unimplemented!()
-        }
-        async fn resolve_agent_type_at_deployment(
-            &self,
-            _: &AccountId,
-            _: &ApplicationName,
-            _: &EnvironmentName,
-            _: &AgentTypeName,
-            _: DeploymentRevision,
         ) -> Result<golem_common::model::agent::RegisteredAgentType, RegistryServiceError> {
             unimplemented!()
         }
@@ -550,7 +552,11 @@ mod tests {
 
         // Simulate invalidation with a newer revision
         let new_rev = DeploymentRevision::new(1).unwrap();
-        cache.update_latest_revision(env_id, new_rev);
+        cache.update_latest_revision(
+            env_id,
+            new_rev,
+            CurrentDeploymentRevision::new(new_rev.get()).unwrap(),
+        );
 
         // Update mock to return new revision
         registry.set_revision(1);
@@ -574,7 +580,11 @@ mod tests {
         let result = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result.is_ok());
 
-        cache.update_latest_revision(env_id, DeploymentRevision::INITIAL);
+        cache.update_latest_revision(
+            env_id,
+            DeploymentRevision::INITIAL,
+            CurrentDeploymentRevision::INITIAL,
+        );
 
         let result2 = cache.resolve(&app, &env, &agent, None, &make_auth()).await;
         assert!(result2.is_ok());

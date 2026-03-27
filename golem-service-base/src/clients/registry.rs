@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
     GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
-    ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
+    ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
     UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
     batch_update_fuel_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
@@ -38,8 +38,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_component_metadata_response, get_current_environment_state_response,
     get_deployed_component_metadata_response, get_resource_definition_by_id_response,
     get_resource_definition_by_name_response, get_resource_limits_response,
-    resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
-    resolve_component_response, resolve_latest_agent_type_by_names_response,
+    resolve_agent_type_by_names_response, resolve_component_response,
     update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
@@ -49,7 +48,7 @@ use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAge
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::resource_definition::{
@@ -157,23 +156,6 @@ pub trait RegistryService: Send + Sync {
         component_id: ComponentId,
         component_revision: ComponentRevision,
         name: &AgentTypeName,
-    ) -> Result<RegisteredAgentType, RegistryServiceError>;
-
-    async fn resolve_latest_agent_type_by_names(
-        &self,
-        account_id: &AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-    ) -> Result<RegisteredAgentType, RegistryServiceError>;
-
-    async fn resolve_agent_type_at_deployment(
-        &self,
-        account_id: &AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-        deployment_revision: DeploymentRevision,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
     async fn resolve_agent_type_by_names(
@@ -707,78 +689,6 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn resolve_latest_agent_type_by_names(
-        &self,
-        account_id: &AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-    ) -> Result<RegisteredAgentType, RegistryServiceError> {
-        let response = self
-            .client
-            .call("resolve_latest_agent_type_by_names", move |client| {
-                let request = golem_api_grpc::proto::golem::registry::v1::ResolveLatestAgentTypeByNamesRequest {
-                    account_id: Some((*account_id).into()),
-                    app_name: app_name.0.clone(),
-                    environment_name: environment_name.0.clone(),
-                    agent_type_name: agent_type_name.0.clone(),
-                };
-                Box::pin(client.resolve_latest_agent_type_by_names(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(resolve_latest_agent_type_by_names_response::Result::Success(payload)) => {
-                Ok(payload
-                    .agent_type
-                    .ok_or("missing agent_type field")?
-                    .try_into()?)
-            }
-            Some(resolve_latest_agent_type_by_names_response::Result::Error(error)) => {
-                Err(error.into())
-            }
-        }
-    }
-
-    async fn resolve_agent_type_at_deployment(
-        &self,
-        account_id: &AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-        deployment_revision: DeploymentRevision,
-    ) -> Result<RegisteredAgentType, RegistryServiceError> {
-        let response = self
-            .client
-            .call("resolve_agent_type_at_deployment", move |client| {
-                let request = ResolveAgentTypeAtDeploymentRequest {
-                    account_id: Some((*account_id).into()),
-                    app_name: app_name.0.clone(),
-                    environment_name: environment_name.0.clone(),
-                    agent_type_name: agent_type_name.0.clone(),
-                    deployment_revision: deployment_revision.get(),
-                };
-                Box::pin(client.resolve_agent_type_at_deployment(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(resolve_agent_type_at_deployment_response::Result::Success(payload)) => {
-                Ok(payload
-                    .agent_type
-                    .ok_or("missing agent_type field")?
-                    .try_into()?)
-            }
-            Some(resolve_agent_type_at_deployment_response::Result::Error(error)) => {
-                Err(error.into())
-            }
-        }
-    }
-
     async fn resolve_agent_type_by_names(
         &self,
         app_name: &ApplicationName,
@@ -817,10 +727,16 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?;
                 let deployment_revision = DeploymentRevision::try_from(payload.deployment_revision)
                     .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+                let current_deployment_revision = payload
+                    .current_deployment_revision
+                    .map(CurrentDeploymentRevision::try_from)
+                    .transpose()
+                    .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
                 Ok(ResolvedAgentType {
                     registered_agent_type,
                     environment_id,
                     deployment_revision,
+                    current_deployment_revision,
                 })
             }
             Some(resolve_agent_type_by_names_response::Result::Error(error)) => Err(error.into()),

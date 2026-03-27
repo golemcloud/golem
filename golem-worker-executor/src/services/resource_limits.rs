@@ -729,27 +729,6 @@ mod tests {
             unimplemented!()
         }
 
-        async fn resolve_latest_agent_type_by_names(
-            &self,
-            _account_id: &AccountId,
-            _app_name: &ApplicationName,
-            _environment_name: &EnvironmentName,
-            _agent_type_name: &AgentTypeName,
-        ) -> Result<RegisteredAgentType, RegistryServiceError> {
-            unimplemented!()
-        }
-
-        async fn resolve_agent_type_at_deployment(
-            &self,
-            _account_id: &AccountId,
-            _app_name: &ApplicationName,
-            _environment_name: &EnvironmentName,
-            _agent_type_name: &AgentTypeName,
-            _deployment_revision: DeploymentRevision,
-        ) -> Result<RegisteredAgentType, RegistryServiceError> {
-            unimplemented!()
-        }
-
         async fn resolve_agent_type_by_names(
             &self,
             _app_name: &ApplicationName,
