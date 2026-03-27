@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod concurrent_agents_semaphore;
 pub mod fs_semaphore;
 #[cfg(test)]
 mod tests;
 
+pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 pub use fs_semaphore::{
     bytes_to_filesystem_storage_permits, filesystem_storage_pool_bytes_to_permits,
     FilesystemStorageSemaphore, FILESYSTEM_STORAGE_PERMIT_SIZE_KB,

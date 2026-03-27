@@ -556,6 +556,7 @@ impl WorkerCtx for DebugContext {
             usize::MAX,
             usize::MAX,
             u64::MAX,
+            u64::MAX,
         ));
 
         let golem_ctx = DurableWorkerCtx::create(

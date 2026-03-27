@@ -848,6 +848,7 @@ impl WorkerCtx for TestWorkerCtx {
             usize::MAX,
             usize::MAX,
             u64::MAX,
+            u64::MAX,
         ));
 
         let durable_ctx = DurableWorkerCtx::create(
@@ -1635,6 +1636,7 @@ impl ResourceLimits for FixedTableLimitResourceLimits {
             usize::MAX,
             self.max_table_elements,
             u64::MAX,
+            u64::MAX,
         )))
     }
 }
@@ -1787,6 +1789,7 @@ impl ResourceLimits for FixedFilesystemStorageQuotaResourceLimits {
             usize::MAX,
             usize::MAX,
             self.max_disk_space_bytes,
+            u64::MAX,
         )))
     }
 }
