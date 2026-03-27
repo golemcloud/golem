@@ -24,4 +24,4 @@ Then copy the output to the test-components directory:
 cp golem-temp/agents/golem_it_constructor_parameter_echo.wasm ../
 ```
 
-The compiled WASM file `test-components/golem_it_constructor_parameter_echo.wasm` is checked into the repository.
+The compiled WASM file `test-components/golem_it_constructor_parameter_echo.wasm` is not checked into the repository. Build it as a separate step before running tests that use this component.
