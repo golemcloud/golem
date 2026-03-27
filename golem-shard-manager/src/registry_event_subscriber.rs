@@ -16,9 +16,8 @@ use crate::quota::{QuotaService, ResourceDefinitionFetcher};
 use golem_common::model::agent::RegistryInvalidationEvent;
 use golem_service_base::clients::registry::RegistryService;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::task::JoinSet;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 pub fn start(
     registry_service: Arc<dyn RegistryService>,
@@ -34,47 +33,21 @@ async fn run_loop(
     fetcher: Arc<dyn ResourceDefinitionFetcher>,
     quota_service: Arc<QuotaService>,
 ) -> anyhow::Result<()> {
-    use futures::StreamExt;
+    registry_service
+        .run_registry_invalidation_event_subscriber(
+            "shard-manager",
+            None,
+            Box::new(move |event| {
+                let fetcher = fetcher.clone();
+                let quota_service = quota_service.clone();
+                Box::pin(async move {
+                    dispatch_event(&fetcher, &quota_service, &event).await;
+                })
+            }),
+        )
+        .await;
 
-    let mut last_seen_event_id: Option<u64> = None;
-    let mut backoff = Duration::from_millis(100);
-    let max_backoff = Duration::from_secs(30);
-
-    loop {
-        let connect_result = registry_service
-            .subscribe_registry_invalidations(last_seen_event_id)
-            .await;
-
-        match connect_result {
-            Ok(mut stream) => {
-                info!("Connected to registry invalidation stream");
-                backoff = Duration::from_millis(100);
-
-                loop {
-                    match stream.next().await {
-                        Some(Ok(event)) => {
-                            last_seen_event_id = Some(event.event_id());
-                            dispatch_event(&fetcher, &quota_service, &event).await;
-                        }
-                        Some(Err(e)) => {
-                            warn!("Error receiving registry event: {e}, reconnecting");
-                            break;
-                        }
-                        None => {
-                            warn!("Registry invalidation stream ended, reconnecting");
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to connect to registry invalidation stream: {e}");
-            }
-        }
-
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(max_backoff);
-    }
+    Ok(())
 }
 
 async fn dispatch_event(

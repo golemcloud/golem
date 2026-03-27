@@ -115,6 +115,7 @@ impl CompileWorker {
             host: config.host,
             port: config.port,
             max_message_size: self.config.max_message_size,
+            invalidation_event_subscriber: Default::default(),
             client_config: self.config.client_config.clone(),
         });
 

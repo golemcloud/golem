@@ -20,57 +20,36 @@ use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevis
 use golem_common::model::domain_registration::Domain;
 use golem_service_base::clients::registry::RegistryService;
 use std::sync::Arc;
-use std::time::Duration;
-use tracing::{debug, info, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, warn};
 
 pub async fn run_registry_event_subscriber(
     registry_service: Arc<dyn RegistryService>,
     agent_resolution_cache: Arc<AgentResolutionCache>,
     route_resolver: Arc<RouteResolver>,
     auth_service: Arc<dyn AuthService>,
+    shutdown_token: Option<CancellationToken>,
 ) {
-    use futures::StreamExt;
-
-    let mut last_seen_event_id: Option<u64> = None;
-    let mut backoff = Duration::from_millis(100);
-    let max_backoff = Duration::from_secs(30);
-
-    loop {
-        match registry_service
-            .subscribe_registry_invalidations(last_seen_event_id)
-            .await
-        {
-            Ok(mut stream) => {
-                info!("Connected to registry invalidation stream");
-                backoff = Duration::from_millis(100);
-
-                while let Some(result) = stream.next().await {
-                    match result {
-                        Ok(event) => {
-                            last_seen_event_id = Some(event.event_id());
-                            dispatch_event(
-                                &event,
-                                &agent_resolution_cache,
-                                &route_resolver,
-                                &*auth_service,
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            warn!("Error receiving registry event: {e}, reconnecting");
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to connect to registry invalidation stream: {e}");
-            }
-        }
-
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(max_backoff);
-    }
+    registry_service
+        .run_registry_invalidation_event_subscriber(
+            "worker-service",
+            shutdown_token,
+            Box::new(move |event| {
+                let agent_resolution_cache = agent_resolution_cache.clone();
+                let route_resolver = route_resolver.clone();
+                let auth_service = auth_service.clone();
+                Box::pin(async move {
+                    dispatch_event(
+                        &event,
+                        &agent_resolution_cache,
+                        &route_resolver,
+                        &*auth_service,
+                    )
+                    .await;
+                })
+            }),
+        )
+        .await;
 }
 
 async fn dispatch_event(

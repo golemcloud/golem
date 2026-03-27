@@ -17,9 +17,8 @@ use crate::services::environment_state::EnvironmentStateService;
 use golem_common::model::agent::RegistryInvalidationEvent;
 use golem_service_base::clients::registry::RegistryService;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 pub async fn run_registry_event_subscriber(
     registry_service: Arc<dyn RegistryService>,
@@ -27,70 +26,20 @@ pub async fn run_registry_event_subscriber(
     agent_types_service: Arc<dyn AgentTypesService>,
     shutdown_token: CancellationToken,
 ) {
-    use futures::StreamExt;
-
-    let mut last_seen_event_id: Option<u64> = None;
-    let mut backoff = Duration::from_millis(100);
-    let max_backoff = Duration::from_secs(30);
-
-    loop {
-        let connect_result = tokio::select! {
-            result = registry_service.subscribe_registry_invalidations(last_seen_event_id) => result,
-            _ = shutdown_token.cancelled() => {
-                info!("Registry event subscriber shutting down");
-                return;
-            }
-        };
-
-        match connect_result {
-            Ok(mut stream) => {
-                info!("Connected to registry invalidation stream");
-                backoff = Duration::from_millis(100);
-
-                loop {
-                    let item = tokio::select! {
-                        item = stream.next() => item,
-                        _ = shutdown_token.cancelled() => {
-                            info!("Registry event subscriber shutting down");
-                            return;
-                        }
-                    };
-
-                    match item {
-                        Some(Ok(event)) => {
-                            last_seen_event_id = Some(event.event_id());
-                            dispatch_event(
-                                &event,
-                                &*environment_state_service,
-                                &*agent_types_service,
-                            )
-                            .await;
-                        }
-                        Some(Err(e)) => {
-                            warn!("Error receiving registry event: {e}, reconnecting");
-                            break;
-                        }
-                        None => {
-                            warn!("Registry invalidation stream ended, reconnecting");
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to connect to registry invalidation stream: {e}");
-            }
-        }
-
-        tokio::select! {
-            _ = tokio::time::sleep(backoff) => {}
-            _ = shutdown_token.cancelled() => {
-                info!("Registry event subscriber shutting down");
-                return;
-            }
-        }
-        backoff = (backoff * 2).min(max_backoff);
-    }
+    registry_service
+        .run_registry_invalidation_event_subscriber(
+            "worker-executor",
+            Some(shutdown_token),
+            Box::new(move |event| {
+                let environment_state_service = environment_state_service.clone();
+                let agent_types_service = agent_types_service.clone();
+                Box::pin(async move {
+                    dispatch_event(&event, &*environment_state_service, &*agent_types_service)
+                        .await;
+                })
+            }),
+        )
+        .await;
 }
 
 async fn dispatch_event(

@@ -58,9 +58,14 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use tracing::{info, warn};
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -209,6 +214,36 @@ pub trait RegistryService: Send + Sync {
         >,
         RegistryServiceError,
     >;
+
+    /// Common helper on top of subscribe_registry_invalidations to consume and dispatch
+    /// the invalidations events.
+    async fn run_registry_invalidation_event_subscriber(
+        &self,
+        service_name: &'static str,
+        shutdown_token: Option<CancellationToken>,
+        on_event: Box<
+            dyn Fn(golem_common::model::agent::RegistryInvalidationEvent) -> Pin<Box<dyn Future<Output = ()> + Send>>
+                + Send
+                + Sync,
+        >,
+    );
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegistryInvalidationEventSubscriberConfig {
+    #[serde(with = "humantime_serde")]
+    pub initial_backoff: Duration,
+    #[serde(with = "humantime_serde")]
+    pub max_backoff: Duration,
+}
+
+impl Default for RegistryInvalidationEventSubscriberConfig {
+    fn default() -> Self {
+        Self {
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(30),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -218,6 +253,8 @@ pub struct GrpcRegistryServiceConfig {
     pub max_message_size: usize,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
+    #[serde(default)]
+    pub invalidation_event_subscriber: RegistryInvalidationEventSubscriberConfig,
 }
 
 impl GrpcRegistryServiceConfig {
@@ -232,6 +269,16 @@ impl SafeDisplay for GrpcRegistryServiceConfig {
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
         let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
+        let _ = writeln!(
+            &mut result,
+            "invalidation_event_subscriber.initial_backoff: {:?}",
+            self.invalidation_event_subscriber.initial_backoff
+        );
+        let _ = writeln!(
+            &mut result,
+            "invalidation_event_subscriber.max_backoff: {:?}",
+            self.invalidation_event_subscriber.max_backoff
+        );
         let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
@@ -243,6 +290,7 @@ impl Default for GrpcRegistryServiceConfig {
             host: "localhost".to_string(),
             port: 8080,
             max_message_size: 50 * 1024 * 1024,
+            invalidation_event_subscriber: RegistryInvalidationEventSubscriberConfig::default(),
             client_config: GrpcClientConfig::default(),
         }
     }
@@ -257,6 +305,7 @@ impl HasConfigExamples<GrpcRegistryServiceConfig> for GrpcRegistryServiceConfig 
 #[derive(Clone)]
 pub struct GrpcRegistryService {
     client: GrpcClient<RegistryServiceClient<OtelGrpcService<Channel>>>,
+    config: GrpcRegistryServiceConfig,
 }
 
 impl GrpcRegistryService {
@@ -273,12 +322,120 @@ impl GrpcRegistryService {
             config.uri(),
             config.client_config.clone(),
         );
-        Self { client }
+        Self {
+            client,
+            config: config.clone(),
+        }
     }
 }
 
 #[async_trait]
 impl RegistryService for GrpcRegistryService {
+    async fn run_registry_invalidation_event_subscriber(
+        &self,
+        service_name: &'static str,
+        shutdown_token: Option<CancellationToken>,
+        on_event: Box<
+            dyn Fn(golem_common::model::agent::RegistryInvalidationEvent) -> Pin<Box<dyn Future<Output = ()> + Send>>
+                + Send
+                + Sync,
+        >,
+    ) {
+        use futures::StreamExt;
+
+        let config = self.config.invalidation_event_subscriber.clone();
+        let mut last_seen_event_id: Option<u64> = None;
+        let mut backoff = config.initial_backoff;
+
+        loop {
+            let connect_result = if let Some(shutdown_token) = shutdown_token.as_ref() {
+                tokio::select! {
+                    result = self.subscribe_registry_invalidations(last_seen_event_id) => result,
+                    _ = shutdown_token.cancelled() => {
+                        info!(service = service_name, "Registry event subscriber shutting down");
+                        return;
+                    }
+                }
+            } else {
+                self.subscribe_registry_invalidations(last_seen_event_id).await
+            };
+
+            match connect_result {
+                Ok(mut stream) => {
+                    info!(service = service_name, "Connected to registry invalidation stream");
+                    backoff = config.initial_backoff;
+
+                    loop {
+                        let item = if let Some(shutdown_token) = shutdown_token.as_ref() {
+                            tokio::select! {
+                                item = stream.next() => item,
+                                _ = shutdown_token.cancelled() => {
+                                    info!(service = service_name, "Registry event subscriber shutting down");
+                                    return;
+                                }
+                            }
+                        } else {
+                            stream.next().await
+                        };
+
+                        match item {
+                            Some(Ok(event)) => {
+                                if let Some(last_seen) = last_seen_event_id {
+                                    if event.event_id() <= last_seen {
+                                        warn!(
+                                            service = service_name,
+                                            event_id = event.event_id(),
+                                            last_seen_event_id = last_seen,
+                                            "Ignoring out-of-order or duplicate registry event"
+                                        );
+                                        continue;
+                                    }
+                                }
+
+                                last_seen_event_id = Some(event.event_id());
+                                on_event(event).await;
+                            }
+                            Some(Err(e)) => {
+                                warn!(
+                                    service = service_name,
+                                    "Error receiving registry event: {e}, reconnecting"
+                                );
+                                break;
+                            }
+                            None => {
+                                warn!(
+                                    service = service_name,
+                                    "Registry invalidation stream ended, reconnecting"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        service = service_name,
+                        "Failed to connect to registry invalidation stream: {e}"
+                    );
+                }
+            }
+
+            if let Some(shutdown_token) = shutdown_token.as_ref() {
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {}
+                    _ = shutdown_token.cancelled() => {
+                        info!(service = service_name, "Registry event subscriber shutting down");
+                        return;
+                    }
+                }
+            } else {
+                tokio::time::sleep(backoff).await;
+            }
+
+            backoff = (backoff * 2).min(config.max_backoff);
+        }
+    }
+
     async fn authenticate_token(
         &self,
         token: &TokenSecret,

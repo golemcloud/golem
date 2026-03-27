@@ -94,6 +94,7 @@ impl WorkerService {
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                None,
             )
             .await;
             Ok(())

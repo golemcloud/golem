@@ -480,6 +480,21 @@ mod tests {
         > {
             unimplemented!()
         }
+
+        async fn run_registry_invalidation_event_subscriber(
+            &self,
+            _service_name: &'static str,
+            _shutdown_token: Option<tokio_util::sync::CancellationToken>,
+            _on_event: Box<
+                dyn Fn(
+                        golem_common::model::agent::RegistryInvalidationEvent,
+                    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                    + Send
+                    + Sync,
+            >,
+        ) {
+            unimplemented!()
+        }
     }
 
     fn make_auth() -> AuthCtx {
