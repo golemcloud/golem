@@ -33,14 +33,17 @@ describe('path normalization', () => {
     expect(normalizeFilePatterns(inputs, cwd)).toEqual(expected);
   });
 
-  it('normalizes windows-style glob patterns to forward slashes', () => {
-    const cwd = 'C:\\workspace\\golem-test\\test-app';
-    const inputs = ['.\\src\\**\\*.ts', 'C:\\workspace\\golem-test\\test-app\\other\\**\\*.ts'];
-    const expected = [
-      'C:/workspace/golem-test/test-app/src/**/*.ts',
-      'C:/workspace/golem-test/test-app/other/**/*.ts',
-    ];
+  it.runIf(process.platform === 'win32')(
+    'normalizes windows-style glob patterns to forward slashes',
+    () => {
+      const cwd = 'C:\\workspace\\golem-test\\test-app';
+      const inputs = ['.\\src\\**\\*.ts', 'C:\\workspace\\golem-test\\test-app\\other\\**\\*.ts'];
+      const expected = [
+        'C:/workspace/golem-test/test-app/src/**/*.ts',
+        'C:/workspace/golem-test/test-app/other/**/*.ts',
+      ];
 
-    expect(normalizeFilePatterns(inputs, cwd)).toEqual(expected);
-  });
+      expect(normalizeFilePatterns(inputs, cwd)).toEqual(expected);
+    },
+  );
 });
