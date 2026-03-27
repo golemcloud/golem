@@ -55,11 +55,6 @@ pub fn file_name_to_str(path: &Path) -> anyhow::Result<&str> {
         .ok_or_else(|| anyhow!("Filename {} cannot be converted to string", path.display()))
 }
 
-pub fn canonicalize_path(path: &Path) -> anyhow::Result<PathBuf> {
-    path.canonicalize()
-        .map_err(|err| anyhow!("Failed to canonicalize path ({}): {}", path.display(), err))
-}
-
 pub fn current_dir_lexical() -> anyhow::Result<PathBuf> {
     std::env::current_dir()
         .map(|path| normalize_path_lexically(&path))
@@ -811,6 +806,7 @@ mod test {
     use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
+    use crate::fs::absolute_lexical_path;
 
     #[test]
     fn resolve_relative_globs() {
@@ -1033,11 +1029,7 @@ mod test {
     fn path_set(paths: Vec<PathBuf>) -> BTreeSet<PathBuf> {
         paths
             .into_iter()
-            .map(|path| normalize_for_assert(path.as_path()))
+            .map(|path| absolute_lexical_path(path.as_path()).unwrap())
             .collect()
-    }
-
-    fn normalize_for_assert(path: &Path) -> PathBuf {
-        fs::canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf())
     }
 }
