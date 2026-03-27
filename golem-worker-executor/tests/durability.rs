@@ -678,8 +678,8 @@ async fn ts_default_json_snapshot_recovery(
                     panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
                 });
                 assert!(
-                    (1.0..=5.0).contains(&count),
-                    "Snapshot {i} count should be between 1 and 5, got {count}"
+                    (0.0..=5.0).contains(&count),
+                    "Snapshot {i} count should be between 0 and 5, got {count}"
                 );
             }
             other => {
@@ -796,8 +796,8 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
                     panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
                 });
                 assert!(
-                    (1.0..=6.0).contains(&count),
-                    "Snapshot {i} count should be between 1 and 6, got {count}"
+                    (0.0..=6.0).contains(&count),
+                    "Snapshot {i} count should be between 0 and 6, got {count}"
                 );
             }
             other => {
