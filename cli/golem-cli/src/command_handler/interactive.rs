@@ -426,6 +426,14 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_dependency_fix_plan_apply(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            "The above dependency and configuration update steps will now be applied. Do you want to continue?",
+            None,
+        )
+    }
+
     fn confirm<M: AsRef<str>>(
         &self,
         default: bool,

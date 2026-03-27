@@ -88,8 +88,8 @@ export class ResolvedAgent {
     return customSave;
   }
 
-  loadSnapshot(bytes: Uint8Array): Promise<void> {
-    return this.agentInstance.loadSnapshot(bytes);
+  loadSnapshot(bytes: Uint8Array, mimeType?: string): Promise<void> {
+    return this.agentInstance.loadSnapshot(bytes, mimeType);
   }
 
   async saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }> {
