@@ -23,4 +23,4 @@ Then copy the output to the test-components directory using the custom command d
 ../../target/debug/golem exec -P release copy
 ```
 
-The compiled WASM file `test-components/oplog-processor.wasm` is checked into the repository.
+The compiled WASM file `test-components/oplog-processor.wasm` is not checked into the repository. Build it as a separate step before running tests that use this component.

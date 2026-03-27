@@ -2253,14 +2253,6 @@ impl Drop for WaitingWorker {
     }
 }
 
-impl Drop for RunningWorker {
-    fn drop(&mut self) {
-        if let Some(task) = self.snapshot_task.take() {
-            task.abort();
-        }
-    }
-}
-
 #[derive(Debug)]
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
@@ -2274,7 +2266,6 @@ struct RunningWorker {
     filesystem_storage_permit: Option<OwnedSemaphorePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
-    snapshot_task: Option<JoinHandle<()>>,
 }
 
 impl RunningWorker {
@@ -2306,10 +2297,6 @@ impl RunningWorker {
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
-        let snapshot_policy = parent.snapshot_policy().clone();
-        let snapshot_queue = queue.clone();
-        let snapshot_sender = sender.clone();
-
         let handle = tokio::task::spawn(
             async move {
                 RunningWorker::invocation_loop(
@@ -2327,28 +2314,6 @@ impl RunningWorker {
             .in_current_span(),
         );
 
-        let snapshot_task = if let SnapshotPolicy::Periodic { period } = snapshot_policy {
-            let snapshot_pending = Arc::new(AtomicBool::new(false));
-            Some(tokio::task::spawn(async move {
-                let mut interval = tokio::time::interval(period);
-                interval.tick().await;
-                loop {
-                    interval.tick().await;
-                    if !snapshot_pending.swap(true, Ordering::AcqRel) {
-                        snapshot_queue
-                            .write()
-                            .await
-                            .push_back(QueuedWorkerInvocation::SaveSnapshot);
-                        if snapshot_sender.send(WorkerCommand::Unblock).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }))
-        } else {
-            None
-        };
-
         RunningWorker {
             handle: Some(handle),
             sender,
@@ -2357,7 +2322,6 @@ impl RunningWorker {
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
-            snapshot_task,
         }
     }
 
@@ -2376,9 +2340,6 @@ impl RunningWorker {
     }
 
     pub fn stop(mut self) -> JoinHandle<()> {
-        if let Some(task) = self.snapshot_task.take() {
-            task.abort();
-        }
         self.handle.take().unwrap()
     }
 
@@ -2727,10 +2688,20 @@ fn resolve_agent_properties<T: HasConfig>(
         .as_ref()
         .map_or(AgentMode::Durable, |at| at.mode);
 
-    let snapshot_policy = resolve_snapshot_policy(
-        &deps.config().oplog.default_snapshotting,
-        resolved_agent_type.as_ref().map(|at| &at.snapshotting),
-    );
+    let snapshot_policy = if let Some(agent_type) = resolved_agent_type.as_ref() {
+        // Agent with explicit metadata — use agent-level snapshotting config
+        resolve_snapshot_policy(
+            &deps.config().oplog.default_snapshotting,
+            Some(&agent_type.snapshotting),
+        )
+    } else if is_snapshot_capable_oplog_processor(metadata) {
+        // Oplog processor that exports save-snapshot/load-snapshot — use the
+        // oplog-processor-specific global config
+        deps.config().oplog.oplog_processor_snapshotting.clone()
+    } else {
+        // Non-agent, non-snapshot-capable-oplog-processor — use default
+        resolve_snapshot_policy(&deps.config().oplog.default_snapshotting, None)
+    };
 
     ResolvedAgentProperties {
         agent_mode,
@@ -2767,6 +2738,39 @@ fn resolve_snapshot_policy(
     }
 }
 
+/// Returns true if the component is an oplog processor that also exports
+/// save-snapshot and load-snapshot functions, making it eligible for
+/// automatic snapshot-based recovery.
+fn is_snapshot_capable_oplog_processor(
+    metadata: &golem_common::model::component_metadata::ComponentMetadata,
+) -> bool {
+    let has_oplog_processor = match metadata.oplog_processor() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            warn!("Failed to check oplog processor export: {err}");
+            false
+        }
+    };
+    let has_save = match metadata.save_snapshot() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            warn!("Failed to check save-snapshot export: {err}");
+            false
+        }
+    };
+    let has_load = match metadata.load_snapshot() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            warn!("Failed to check load-snapshot export: {err}");
+            false
+        }
+    };
+    has_oplog_processor && has_save && has_load
+}
+
 #[derive(Debug)]
 enum WorkerCommand {
     Unblock,
@@ -2794,7 +2798,6 @@ pub enum QueuedWorkerInvocation {
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
-    // Triggers a periodic snapshot save for the worker
     SaveSnapshot,
 }
 

@@ -13,7 +13,7 @@ use golem_common::model::AgentInvocationPayload;
 use golem_common::model::{
     AgentInvocation, AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
     IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, RetryConfig,
-    SuccessfulUpdateRecord, TimestampedAgentInvocation,
+    SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -157,6 +157,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         component_revision_for_replay,
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
+        last_automatic_snapshot_timestamp,
     ) = calculate_update_fields(
         last_known.pending_updates,
         last_known.failed_updates,
@@ -166,6 +167,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         last_known.component_revision_for_replay,
         last_known.last_manual_update_snapshot_index,
         last_known.last_automatic_snapshot_index,
+        last_known.last_automatic_snapshot_timestamp,
         &deleted_regions,
         &new_entries,
     );
@@ -228,6 +230,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         current_retry_count,
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
+        last_automatic_snapshot_timestamp,
     };
 
     Some(result)
@@ -626,6 +629,7 @@ fn calculate_update_fields(
     initial_component_revision_for_replay: ComponentRevision,
     initial_last_manual_update_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_index: Option<OplogIndex>,
+    initial_last_automatic_snapshot_timestamp: Option<Timestamp>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -637,6 +641,7 @@ fn calculate_update_fields(
     ComponentRevision,
     Option<OplogIndex>,
     Option<OplogIndex>,
+    Option<Timestamp>,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
@@ -646,6 +651,7 @@ fn calculate_update_fields(
     let mut component_revision_for_replay = initial_component_revision_for_replay;
     let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
     let mut last_automatic_snapshot_index = initial_last_automatic_snapshot_index;
+    let mut last_automatic_snapshot_timestamp = initial_last_automatic_snapshot_timestamp;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
@@ -708,10 +714,12 @@ fn calculate_update_fields(
                     component_revision_for_replay = *target_revision;
                     last_manual_update_snapshot_index = Some(applied_update_oplog_index);
                     last_automatic_snapshot_index = None;
+                    last_automatic_snapshot_timestamp = None;
                 }
             }
-            OplogEntry::Snapshot { .. } => {
+            OplogEntry::Snapshot { timestamp, .. } => {
                 last_automatic_snapshot_index = Some(*oplog_idx);
+                last_automatic_snapshot_timestamp = Some(*timestamp);
             }
             _ => {}
         }
@@ -725,6 +733,7 @@ fn calculate_update_fields(
         component_revision_for_replay,
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
+        last_automatic_snapshot_timestamp,
     )
 }
 
@@ -1812,14 +1821,16 @@ mod test {
 
         pub fn snapshot(self) -> Self {
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
+            let timestamp = Timestamp::now_utc().rounded();
             self.add(
                 OplogEntry::Snapshot {
-                    timestamp: Timestamp::now_utc(),
+                    timestamp,
                     data: OplogPayload::Inline(Box::new(vec![])),
                     mime_type: "application/octet-stream".to_string(),
                 },
                 move |mut status| {
                     status.last_automatic_snapshot_index = Some(oplog_idx);
+                    status.last_automatic_snapshot_timestamp = Some(timestamp);
                     status
                 },
             )
@@ -1876,6 +1887,8 @@ mod test {
                 status.last_manual_update_snapshot_index =
                     old_status.last_manual_update_snapshot_index;
                 status.last_automatic_snapshot_index = old_status.last_automatic_snapshot_index;
+                status.last_automatic_snapshot_timestamp =
+                    old_status.last_automatic_snapshot_timestamp;
 
                 status
             })
@@ -1982,6 +1995,7 @@ mod test {
                     status.last_manual_update_snapshot_index =
                         applied_update.map(|au| au.oplog_index);
                     status.last_automatic_snapshot_index = None;
+                    status.last_automatic_snapshot_timestamp = None;
                 };
 
                 status

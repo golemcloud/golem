@@ -204,6 +204,10 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         get,
     )?;
 
+    crate::preview2::golem::rdbms::ignite2::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
     crate::preview2::golem::rdbms::mysql::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
         get,
