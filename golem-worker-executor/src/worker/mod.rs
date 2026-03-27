@@ -1604,7 +1604,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
                     let _ = sender.send(Err(error.clone()));
                 }
-                QueuedWorkerInvocation::SaveSnapshot { .. } => {}
+                QueuedWorkerInvocation::SaveSnapshot => {}
             }
         }
 
@@ -2253,14 +2253,6 @@ impl Drop for WaitingWorker {
     }
 }
 
-impl Drop for RunningWorker {
-    fn drop(&mut self) {
-        if let Some(task) = self.snapshot_task.take() {
-            task.abort();
-        }
-    }
-}
-
 #[derive(Debug)]
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
@@ -2274,7 +2266,6 @@ struct RunningWorker {
     filesystem_storage_permit: Option<OwnedSemaphorePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
-    snapshot_task: Option<JoinHandle<()>>,
 }
 
 impl RunningWorker {
@@ -2306,10 +2297,6 @@ impl RunningWorker {
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
-        let snapshot_policy = parent.snapshot_policy().clone();
-        let snapshot_queue = queue.clone();
-        let snapshot_sender = sender.clone();
-
         let handle = tokio::task::spawn(
             async move {
                 RunningWorker::invocation_loop(
@@ -2327,29 +2314,6 @@ impl RunningWorker {
             .in_current_span(),
         );
 
-        let snapshot_task = if let SnapshotPolicy::Periodic { period } = snapshot_policy {
-            let snapshot_pending = Arc::new(AtomicBool::new(false));
-            Some(tokio::task::spawn(async move {
-                let mut interval = tokio::time::interval(period);
-                interval.tick().await;
-                loop {
-                    interval.tick().await;
-                    if !snapshot_pending.swap(true, Ordering::AcqRel) {
-                        snapshot_queue.write().await.push_back(
-                            QueuedWorkerInvocation::SaveSnapshot {
-                                pending_flag: Some(snapshot_pending.clone()),
-                            },
-                        );
-                        if snapshot_sender.send(WorkerCommand::Unblock).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }))
-        } else {
-            None
-        };
-
         RunningWorker {
             handle: Some(handle),
             sender,
@@ -2358,7 +2322,6 @@ impl RunningWorker {
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
-            snapshot_task,
         }
     }
 
@@ -2377,9 +2340,6 @@ impl RunningWorker {
     }
 
     pub fn stop(mut self) -> JoinHandle<()> {
-        if let Some(task) = self.snapshot_task.take() {
-            task.abort();
-        }
         self.handle.take().unwrap()
     }
 
@@ -2838,13 +2798,7 @@ pub enum QueuedWorkerInvocation {
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
-    // Triggers a periodic snapshot save for the worker.
-    // When enqueued by the periodic snapshot timer, `pending_flag` carries the
-    // `AtomicBool` that must be reset to `false` after the snapshot completes so
-    // the timer can schedule the next one.
-    SaveSnapshot {
-        pending_flag: Option<Arc<AtomicBool>>,
-    },
+    SaveSnapshot,
 }
 
 pub enum ResultOrSubscription {

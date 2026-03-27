@@ -29,11 +29,11 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tracing::warn;
 
 /// The shared global Golem executor configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
