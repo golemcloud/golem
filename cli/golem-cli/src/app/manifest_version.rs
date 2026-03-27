@@ -177,7 +177,6 @@ mod tests {
     use super::validate_manifest_versions;
     use crate::versions;
     use std::collections::BTreeSet;
-    use std::path::PathBuf;
     use test_r::test;
 
     #[test]
@@ -219,7 +218,7 @@ mod tests {
 
         std::fs::write(&source, "manifestVersion: 1.4.9\n").unwrap();
 
-        let result = validate_manifest_versions(&BTreeSet::from([PathBuf::from(source)]));
+        let result = validate_manifest_versions(&BTreeSet::from([source]));
         let (_value, warns, errors) = result.into_product();
 
         assert!(warns.is_empty(), "unexpected warnings: {warns:?}");
@@ -234,7 +233,7 @@ mod tests {
 
         std::fs::write(&source, "manifestVersion: 1.5.1\n").unwrap();
 
-        let result = validate_manifest_versions(&BTreeSet::from([PathBuf::from(source)]));
+        let result = validate_manifest_versions(&BTreeSet::from([source]));
         let (_value, warns, errors) = result.into_product();
 
         assert!(warns.is_empty(), "unexpected warnings: {warns:?}");
@@ -249,7 +248,7 @@ mod tests {
 
         std::fs::write(&source, "manifestVersion: not-a-version\n").unwrap();
 
-        let result = validate_manifest_versions(&BTreeSet::from([PathBuf::from(source)]));
+        let result = validate_manifest_versions(&BTreeSet::from([source]));
         let (_value, warns, errors) = result.into_product();
 
         assert!(warns.is_empty(), "unexpected warnings: {warns:?}");
@@ -270,10 +269,7 @@ mod tests {
         .unwrap();
         std::fs::write(&source_b, "manifestVersion: 1.5.1\n").unwrap();
 
-        let result = validate_manifest_versions(&BTreeSet::from([
-            PathBuf::from(source_a),
-            PathBuf::from(source_b),
-        ]));
+        let result = validate_manifest_versions(&BTreeSet::from([source_a, source_b]));
         let (_value, warns, errors) = result.into_product();
 
         assert!(warns.is_empty(), "unexpected warnings: {warns:?}");
