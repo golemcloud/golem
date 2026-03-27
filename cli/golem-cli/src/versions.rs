@@ -15,6 +15,14 @@
 pub mod sdk {
     pub const RUST: &str = "2.0.0-dev.2";
     pub const TS: &str = "0.1.0-dev.1";
+    pub const MANIFEST: &str = "1.5.0";
+
+    #[macro_export]
+    macro_rules! manifest_schema_version {
+        () => {
+            "1.5.0-dev.1"
+        };
+    }
 }
 
 pub mod build_tool {

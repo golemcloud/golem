@@ -22,7 +22,7 @@ use crate::app::edit::cargo_toml::{DependencySpec, DependencyTable};
 use crate::fs;
 use crate::model::GuestLanguage;
 use crate::sdk_overrides::{RustDependency, SdkOverrides};
-use crate::sdk_versions;
+use crate::versions;
 use std::path::{Path, PathBuf};
 
 pub(super) fn plan_rust_cargo_fix_steps(
@@ -181,7 +181,7 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
         CargoDependencyRequirement {
             name: "log",
             expected_spec: DependencySpec::Version {
-                version: sdk_versions::rust_dep::LOG.to_string(),
+                version: versions::rust_dep::LOG.to_string(),
                 features: vec!["kv".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
@@ -190,7 +190,7 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
         CargoDependencyRequirement {
             name: "serde",
             expected_spec: DependencySpec::Version {
-                version: sdk_versions::rust_dep::SERDE.to_string(),
+                version: versions::rust_dep::SERDE.to_string(),
                 features: vec!["derive".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,
@@ -199,7 +199,7 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
         CargoDependencyRequirement {
             name: "serde_json",
             expected_spec: DependencySpec::Version {
-                version: sdk_versions::rust_dep::SERDE_JSON.to_string(),
+                version: versions::rust_dep::SERDE_JSON.to_string(),
                 features: Vec::new(),
             },
             matcher: CargoDependencyMatcher::Exact,
@@ -208,7 +208,7 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
         CargoDependencyRequirement {
             name: "wstd",
             expected_spec: DependencySpec::Version {
-                version: sdk_versions::rust_dep::WSTD.to_string(),
+                version: versions::rust_dep::WSTD.to_string(),
                 features: vec!["default".to_string(), "json".to_string()],
             },
             matcher: CargoDependencyMatcher::Exact,

@@ -284,10 +284,13 @@ pub struct CustomBridgeSdkTarget {
 }
 
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
+    manifest_metadata_from_yaml_file(source).includes
+}
+
+pub fn manifest_metadata_from_yaml_file(source: &Path) -> app_raw::ApplicationMetadata {
     fs::read_to_string(source)
         .ok()
-        .and_then(|source| app_raw::Application::from_yaml_str(source.as_str()).ok())
-        .map(|app| app.includes)
+        .and_then(|source| app_raw::ApplicationMetadata::from_yaml_str(source.as_str()).ok())
         .unwrap_or_default()
 }
 
@@ -2405,7 +2408,10 @@ mod app_builder {
 #[cfg(test)]
 mod test {
     use crate::fs;
-    use crate::model::app::{Application, ApplicationNameAndEnvironments, ComponentPresetSelector};
+    use crate::model::app::{
+        includes_from_yaml_file, Application, ApplicationNameAndEnvironments,
+        ComponentPresetSelector,
+    };
     use crate::model::app_raw;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
@@ -2486,5 +2492,28 @@ mod test {
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
         (app.unwrap(), tmp_dir)
+    }
+
+    #[test]
+    fn includes_loader_is_lenient_to_unknown_top_level_fields() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+
+        fs::write(
+            &golem_yaml_path,
+            indoc! {r#"
+                manifestVersion: 1.5.0-dev.1
+                includes:
+                  - ./shared/*.yaml
+                futureMigrationHints:
+                  message: planned
+            "#},
+        )
+        .unwrap();
+
+        assert_eq!(
+            includes_from_yaml_file(&golem_yaml_path),
+            vec!["./shared/*.yaml".to_string()]
+        );
     }
 }

@@ -25,7 +25,7 @@ use crate::app::edit::json::collect_object_entries;
 use crate::app::edit::tsconfig_json::RequiredSetting;
 use crate::fs;
 use crate::sdk_overrides::SdkOverrides;
-use crate::sdk_versions;
+use crate::versions;
 
 #[derive(Clone, Copy, Debug)]
 enum PackageJsonSection {
@@ -195,7 +195,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "@rollup/plugin-alias",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::ROLLUP_PLUGIN_ALIAS),
+                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_ALIAS),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
@@ -204,7 +204,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "@rollup/plugin-node-resolve",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE),
+                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
@@ -213,7 +213,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "@rollup/plugin-typescript",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::ROLLUP_PLUGIN_TYPESCRIPT),
+                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_TYPESCRIPT),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
@@ -222,7 +222,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "@rollup/plugin-commonjs",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::ROLLUP_PLUGIN_COMMONJS),
+                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_COMMONJS),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
@@ -231,7 +231,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "@rollup/plugin-json",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::ROLLUP_PLUGIN_JSON),
+                base_version: dep_base_version(versions::ts_dep::ROLLUP_PLUGIN_JSON),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
@@ -240,7 +240,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "@types/node",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::TYPES_NODE),
+                base_version: dep_base_version(versions::ts_dep::TYPES_NODE),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
@@ -249,7 +249,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "rollup",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::ROLLUP),
+                base_version: dep_base_version(versions::ts_dep::ROLLUP),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
@@ -258,7 +258,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "tslib",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::TSLIB),
+                base_version: dep_base_version(versions::ts_dep::TSLIB),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
@@ -267,7 +267,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             name: "typescript",
             section: PackageJsonSection::DevDependencies,
             expected: ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: dep_base_version(sdk_versions::ts_dep::TYPESCRIPT),
+                base_version: dep_base_version(versions::ts_dep::TYPESCRIPT),
                 use_version_hint: true,
             },
             semantics: DependencyMatcherSemantics::TypeScript,
