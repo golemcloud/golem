@@ -17,8 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_asyncness, has_agent_config_attr, has_async_trait_attr, is_constructor_method,
-    is_static_method, trim_type_parameter, AgentConfigAttrRemover, Asyncness, FunctionOutputInfo,
+    AgentConfigAttrRemover, Asyncness, FunctionOutputInfo, get_asyncness, has_agent_config_attr,
+    has_async_trait_attr, is_constructor_method, is_static_method, trim_type_parameter,
 };
 use syn::visit_mut::VisitMut;
 

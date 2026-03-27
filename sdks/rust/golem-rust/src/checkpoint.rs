@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::api::host::{get_oplog_index, set_oplog_index, OplogIndex};
+use crate::bindings::golem::api::host::{OplogIndex, get_oplog_index, set_oplog_index};
 
 /// A checkpoint that captures the current oplog index and can revert execution back to it.
 pub struct Checkpoint {

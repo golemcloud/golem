@@ -82,7 +82,7 @@ pub fn parse_agent_definition_attributes(
                                 return Err(Error::new_spanned(
                                     lit,
                                     format!("invalid mode `{}`", other),
-                                ))
+                                ));
                             }
                         };
                         continue;
@@ -168,7 +168,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                                 &assign.right,
                                 "mount must be a string literal",
                             ))
-                        }
+                        };
                     }
                     "webhook_suffix" => {
                         return if let Expr::Lit(ExprLit {
@@ -182,7 +182,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                                 &assign.right,
                                 "webhook-suffix must be a string literal",
                             ))
-                        }
+                        };
                     }
                     "auth" => {
                         return if let Expr::Lit(ExprLit {
@@ -196,7 +196,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                                 &assign.right,
                                 "auth must be a boolean literal",
                             ))
-                        }
+                        };
                     }
                     "phantom_agent" => {
                         return if let Expr::Lit(ExprLit {
@@ -210,7 +210,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                                 &assign.right,
                                 "phantom-agent must be a boolean literal",
                             ))
-                        }
+                        };
                     }
                     "cors" => {
                         return if let Expr::Array(ExprArray { elems, .. }) = &*assign.right {
@@ -233,7 +233,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                                 &assign.right,
                                 "cors must be an array of string literals",
                             ))
-                        }
+                        };
                     }
                     _ => {}
                 }
@@ -293,7 +293,10 @@ fn parse_snapshotting_value(lit: &syn::LitStr) -> Result<TokenStream, Error> {
             } else {
                 Err(Error::new_spanned(
                     lit,
-                    format!("invalid snapshotting value `{}`. Valid values are: disabled, enabled, periodic(<duration>), every(<count>)", other),
+                    format!(
+                        "invalid snapshotting value `{}`. Valid values are: disabled, enabled, periodic(<duration>), every(<count>)",
+                        other
+                    ),
                 ))
             }
         }

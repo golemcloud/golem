@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::agentic::agent_definition_attributes::{
-    parse_agent_definition_attributes, AgentDefinitionAttributes,
+    AgentDefinitionAttributes, parse_agent_definition_attributes,
 };
 use crate::agentic::agent_definition_http_endpoint::{
-    extract_http_endpoints, ParsedHttpEndpointDetails,
+    ParsedHttpEndpointDetails, extract_http_endpoints,
 };
 use crate::agentic::helpers::{
-    has_agent_config_attr, is_async_trait_attr, is_constructor_method, is_static_method,
-    AgentConfigAttrRemover,
+    AgentConfigAttrRemover, has_agent_config_attr, is_async_trait_attr, is_constructor_method,
+    is_static_method,
 };
 use crate::agentic::{
     async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
@@ -31,9 +31,9 @@ use crate::agentic::{
 };
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::ItemTrait;
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
-use syn::ItemTrait;
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);

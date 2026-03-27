@@ -15,7 +15,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::quote;
-use syn::{parse_macro_input, Attribute, Data, DeriveInput, Lit};
+use syn::{Attribute, Data, DeriveInput, Lit, parse_macro_input};
 
 pub fn derive_allowed_mime_types(
     input: TokenStream,

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::{is_static_method, FunctionOutputInfo};
+use crate::agentic::helpers::{FunctionOutputInfo, is_static_method};
 use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
