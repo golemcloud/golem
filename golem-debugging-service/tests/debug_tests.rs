@@ -445,7 +445,24 @@ async fn test_playback_and_fork(
     assert_eq!(connect_result.agent_id, agent_id);
     assert_eq!(playback_result.agent_id, agent_id);
     assert!(fork_result.is_ok());
-    assert_eq!(forked_oplog_len_before, u64::from(first_boundary) as usize);
+
+    // The forked oplog should contain the entries up to first_boundary, plus
+    // any CancelPendingInvocation/FailedUpdate entries appended by the fork to
+    // cancel pending work inherited from the source worker's oplog.
+    let cancel_count = forked_oplogs
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.entry,
+                PublicOplogEntry::CancelPendingInvocation(_) | PublicOplogEntry::FailedUpdate(_)
+            )
+        })
+        .count();
+    assert_eq!(
+        forked_oplog_len_before,
+        u64::from(first_boundary) as usize + cancel_count
+    );
+
     assert!(forked_oplogs_after.len() > forked_oplog_len_before);
 
     Ok(())
