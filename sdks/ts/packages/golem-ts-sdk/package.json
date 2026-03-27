@@ -46,7 +46,7 @@
     "test": "npm run build && tsc --noEmit && vitest run",
     "dev": "rollup -c -w",
     "generate-agent-template": "wasm-rquickjs generate-wrapper-crate --wit ../../wit --output agent-template --world agent-guest --js-modules '@golemcloud/golem-ts-sdk=dist/index.mjs' --js-modules 'user=@slot'",
-    "compile-agent-template": "cargo component build --manifest-path=agent-template/Cargo.toml --release",
+    "compile-agent-template": "cargo component build --manifest-path=agent-template/Cargo.toml --release --features full",
     "copy-agent-template": "cp agent-template/target/wasm32-wasip1/release/agent_guest.wasm ./wasm/agent_guest.wasm",
     "build-agent-template": "pnpm run generate-agent-template && pnpm run compile-agent-template && pnpm run copy-agent-template"
   },

@@ -2892,6 +2892,67 @@ components:
         targetRevision:
           type: integer
           format: uint64
+    MultipartPartData:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/MultipartPartData_JsonSnapshotData'
+      - $ref: '#/components/schemas/MultipartPartData_RawSnapshotData'
+      discriminator:
+        propertyName: type
+        mapping:
+          Json: '#/components/schemas/MultipartPartData_JsonSnapshotData'
+          Raw: '#/components/schemas/MultipartPartData_RawSnapshotData'
+    MultipartPartData_JsonSnapshotData:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Json
+            example: Json
+      - $ref: '#/components/schemas/JsonSnapshotData'
+    MultipartPartData_RawSnapshotData:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Raw
+            example: Raw
+      - $ref: '#/components/schemas/RawSnapshotData'
+    MultipartSnapshotData:
+      type: object
+      title: MultipartSnapshotData
+      required:
+      - mimeType
+      - parts
+      properties:
+        mimeType:
+          type: string
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MultipartSnapshotPart'
+    MultipartSnapshotPart:
+      type: object
+      title: MultipartSnapshotPart
+      required:
+      - name
+      - contentType
+      - data
+      properties:
+        name:
+          type: string
+        contentType:
+          type: string
+        data:
+          $ref: '#/components/schemas/MultipartPartData'
     NameOptionTypePair:
       type: object
       title: NameOptionTypePair
@@ -3930,11 +3991,13 @@ components:
       oneOf:
       - $ref: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
       - $ref: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+      - $ref: '#/components/schemas/PublicSnapshotData_MultipartSnapshotData'
       discriminator:
         propertyName: type
         mapping:
           Raw: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
           Json: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+          Multipart: '#/components/schemas/PublicSnapshotData_MultipartSnapshotData'
     PublicSnapshotData_JsonSnapshotData:
       allOf:
       - type: object
@@ -3947,6 +4010,18 @@ components:
             - Json
             example: Json
       - $ref: '#/components/schemas/JsonSnapshotData'
+    PublicSnapshotData_MultipartSnapshotData:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Multipart
+            example: Multipart
+      - $ref: '#/components/schemas/MultipartSnapshotData'
     PublicSnapshotData_RawSnapshotData:
       allOf:
       - type: object

@@ -19,7 +19,9 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "v0.1.3"
+  WASM_RQUICKJS_VERSION: "v0.1.4"
+  WASI_SDK_VERSION: "25"
+  WASI_SDK_PATH: /opt/wasi-sdk
 
 jobs:
   build-and-store:
@@ -152,6 +154,7 @@ jobs:
     runs-on: ${{ matrix.group.runner || 'blacksmith-8vcpu-ubuntu-2204' }}
     needs:
       - build-and-store
+      - build-golem-ts
       - merge-test-components
     strategy:
       fail-fast: false
@@ -196,7 +199,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
-          rust-targets: 'wasm32-wasip2'
+          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
@@ -227,6 +230,26 @@ jobs:
       - name: Install wasm-rquickjs
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+
+      - name: Restore built TS SDK
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install TS SDK dependencies
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        working-directory: sdks/ts
+        run: pnpm install --frozen-lockfile
 
       - uses: ./.github/actions/restore-binaries
         with:
@@ -318,8 +341,12 @@ jobs:
         with:
           version: latest
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1 wasm32-wasip2
       - uses: cargo-bins/cargo-binstall@main
+      - name: Install WASI SDK
+        run: |
+          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
+          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
       - name: Install cargo-component
         run: cargo binstall --force cargo-component@0.21.1
       - name: Install wasm-rquickjs
@@ -455,6 +482,12 @@ jobs:
         if: matrix.chunk.needs-node
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
+
+      - name: Install WASI SDK
+        if: matrix.chunk.needs-node
+        run: |
+          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
+          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
 
       - name: Install wasm-rquickjs
         if: matrix.chunk.needs-node

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  WASM_RQUICKJS_VERSION: "v0.1.3"
+  WASM_RQUICKJS_VERSION: "v0.1.4"
 
 jobs:
   run-benchmark:
