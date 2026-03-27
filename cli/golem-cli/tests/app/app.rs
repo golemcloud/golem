@@ -462,6 +462,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+            manifestVersion: 1.5.0
+
             app: test-app-name
 
             environments:
@@ -505,6 +507,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+            manifestVersion: 1.5.0
+
             app: test-app-name
 
             environments:
