@@ -33,7 +33,7 @@ fn unlimited_resource_entry() -> Arc<AtomicResourceEntry> {
         usize::MAX,
         usize::MAX,
         u64::MAX,
-        u64::MAX,
+        AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
     ))
 }
 

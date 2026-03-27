@@ -200,6 +200,7 @@ impl AccountUsageService {
                             max_memory_per_worker: 0,
                             max_table_elements_per_worker: 0,
                             max_disk_space_per_worker: 0,
+                            max_concurrent_agents_per_executor: 0,
                         },
                     );
                 }

@@ -9,6 +9,7 @@ message ResourceLimits {
   uint64 max_memory_per_worker = 2;
   uint64 max_table_elements_per_worker = 3;
   uint64 max_disk_space_per_worker = 4;
+  uint64 max_concurrent_agents_per_executor = 5;
 }
 
 message AccountResourceLimitsEntry {

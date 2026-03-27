@@ -54,6 +54,13 @@ pub struct AtomicResourceEntry {
 }
 
 impl AtomicResourceEntry {
+    /// Sentinel value used in the database and service config to represent
+    /// "unlimited" for the concurrent agents per executor limit.
+    /// `1_000_000_000_000_000_000` (10^18) — fits in i64 (TOML max) and
+    /// is safe for SQLite REAL, consistent with `monthly_gas_limit` and the
+    /// `default_unlimited()` convention from PR #3068.
+    pub const UNLIMITED_CONCURRENT_AGENTS: u64 = 1_000_000_000_000_000_000;
+
     pub fn new(
         fuel: u64,
         max_memory: usize,
@@ -334,6 +341,10 @@ impl ResourceLimitsGrpc {
                 entry
                     .max_disk_space
                     .store(updated_limits.max_disk_space_per_worker, Ordering::Release);
+                entry.max_concurrent_agents_per_executor.store(
+                    updated_limits.max_concurrent_agents_per_executor,
+                    Ordering::Release,
+                );
                 entry
                     .last_refresh_secs
                     .store(Utc::now().timestamp(), Ordering::Release);
@@ -371,7 +382,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
                         fetched.max_disk_space_per_worker,
-                        u64::MAX, // TODO: replace with with fetched.max_concurrent_agents_per_executor later
+                        fetched.max_concurrent_agents_per_executor,
                     ),
                 ))
             })
@@ -394,7 +405,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
             usize::MAX,
             usize::MAX,
             u64::MAX,
-            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         )))
     }
 }
@@ -650,6 +661,7 @@ mod tests {
                     max_memory_per_worker: max_memory,
                     max_table_elements_per_worker: u64::MAX,
                     max_disk_space_per_worker: u64::MAX,
+                    max_concurrent_agents_per_executor: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
             }
@@ -981,6 +993,7 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1008,6 +1021,7 @@ mod tests {
                 max_memory_per_worker: 1024,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1036,6 +1050,7 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1115,6 +1130,7 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1141,6 +1157,7 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1194,6 +1211,7 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1227,6 +1245,7 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1294,6 +1313,7 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1307,6 +1327,118 @@ mod tests {
 
         // Fuel should now reflect the server-returned value
         assert_eq!(entry.fuel.load(Ordering::Acquire), 5000);
+    }
+
+    // -------------------------------------------------------------------------
+    // ResourceLimitsGrpc — concurrent agent limit propagation
+    // -------------------------------------------------------------------------
+
+    fn mock_with_concurrent_agent_limit(limit: u64) -> Arc<MockRegistryService> {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        *mock.get_limits_result.lock().unwrap() = Ok(ServiceResourceLimits {
+            available_fuel: 1000,
+            max_memory_per_worker: 512,
+            max_table_elements_per_worker: u64::MAX,
+            max_disk_space_per_worker: u64::MAX,
+            max_concurrent_agents_per_executor: limit,
+        });
+        mock
+    }
+
+    #[test]
+    async fn initialize_account_propagates_concurrent_agent_limit() {
+        let mock = mock_with_concurrent_agent_limit(5);
+        let svc = make_grpc(mock);
+
+        let entry = svc.initialize_account(account_id()).await.unwrap();
+
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 5);
+    }
+
+    #[test]
+    async fn initialize_account_propagates_unlimited_sentinel() {
+        // The DB/registry stores 10^18 as "unlimited". The executor stores it
+        // as-is in AtomicResourceEntry. The semaphore detects it via >= threshold.
+        let mock =
+            mock_with_concurrent_agent_limit(AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS);
+        let svc = make_grpc(mock);
+
+        let entry = svc.initialize_account(account_id()).await.unwrap();
+
+        assert_eq!(
+            entry.max_concurrent_agents_per_executor(),
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS
+        );
+    }
+
+    #[test]
+    async fn update_last_known_limits_refreshes_concurrent_agent_limit() {
+        let mock = mock_with_concurrent_agent_limit(5);
+        let id = account_id();
+
+        // Batch response returns a raised limit of 10.
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 900,
+                max_memory_per_worker: 512,
+                max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: 10,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+
+        let svc = make_grpc(mock);
+        let entry = svc.initialize_account(id).await.unwrap();
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 5);
+
+        entry.borrow_fuel(100); // trigger active batch
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        // After the batch sync the limit should be updated to 10.
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 10);
+    }
+
+    #[test]
+    async fn update_last_known_limits_reflects_lowered_concurrent_agent_limit() {
+        let mock = mock_with_concurrent_agent_limit(10);
+        let id = account_id();
+
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 900,
+                max_memory_per_worker: 512,
+                max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
+                max_concurrent_agents_per_executor: 3,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+
+        let svc = make_grpc(mock);
+        let entry = svc.initialize_account(id).await.unwrap();
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 10);
+
+        entry.borrow_fuel(100);
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 3);
+    }
+
+    #[test]
+    async fn disabled_returns_unlimited_concurrent_agent_sentinel() {
+        // ResourceLimitsDisabled returns the sentinel value (not u64::MAX directly)
+        // matching the convention used throughout the registry service.
+        let svc = ResourceLimitsDisabled;
+        let entry = svc.initialize_account(account_id()).await.unwrap();
+        assert_eq!(
+            entry.max_concurrent_agents_per_executor(),
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS
+        );
     }
 
     // -------------------------------------------------------------------------

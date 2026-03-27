@@ -26,6 +26,7 @@ pub struct PlanRecord {
     pub max_memory_per_worker: NumericU64,
     pub max_table_elements_per_worker: NumericU64,
     pub max_disk_space_per_worker: NumericU64,
+    pub max_concurrent_agents_per_executor: NumericU64,
     pub total_app_count: NumericU64,
     pub total_env_count: NumericU64,
     pub total_component_count: NumericU64,
@@ -67,6 +68,7 @@ impl From<PlanRecord> for Plan {
             max_memory_per_worker: value.max_memory_per_worker.get(),
             max_table_elements_per_worker: value.max_table_elements_per_worker.get(),
             max_disk_space_per_worker: value.max_disk_space_per_worker.get(),
+            max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor.get(),
             plan_id: PlanId(value.plan_id),
             name: PlanName(value.name),
         }

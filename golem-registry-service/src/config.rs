@@ -173,6 +173,7 @@ impl Default for RegistryServiceConfig {
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
                 max_table_elements_per_worker: 16_384,
                 max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
+                max_concurrent_agents_per_executor: 1_000_000_000_000_000_000, // unlimited sentinel
             },
         );
 
@@ -459,6 +460,8 @@ pub struct PrecreatedPlan {
     pub max_table_elements_per_worker: u64,
     #[serde(default = "default_max_disk_space_per_worker")]
     pub max_disk_space_per_worker: u64,
+    #[serde(default = "default_max_concurrent_agents_per_executor")]
+    pub max_concurrent_agents_per_executor: u64,
 }
 
 fn default_max_table_elements_per_worker() -> u64 {
@@ -467,6 +470,10 @@ fn default_max_table_elements_per_worker() -> u64 {
 
 fn default_max_disk_space_per_worker() -> u64 {
     1024 * 1024 * 1024 // 1 GB
+}
+
+fn default_max_concurrent_agents_per_executor() -> u64 {
+    1_000_000_000_000_000_000 // unlimited sentinel, consistent with monthly_gas_limit
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

@@ -140,6 +140,7 @@ impl AccountUsage {
             max_memory_per_worker: self.plan.max_memory_per_worker.get(),
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
             max_disk_space_per_worker: self.plan.max_disk_space_per_worker.get(),
+            max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
         }
     }
 }

@@ -145,6 +145,7 @@ pub struct ResourceLimits {
     pub max_memory_per_worker: u64,
     pub max_table_elements_per_worker: u64,
     pub max_disk_space_per_worker: u64,
+    pub max_concurrent_agents_per_executor: u64,
 }
 
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
@@ -154,6 +155,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
             max_disk_space_per_worker: value.max_disk_space_per_worker,
+            max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
         }
     }
 }
@@ -165,6 +167,7 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
             max_disk_space_per_worker: value.max_disk_space_per_worker,
+            max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
         }
     }
 }

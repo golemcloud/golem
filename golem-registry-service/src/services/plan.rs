@@ -76,7 +76,9 @@ impl PlanService {
                         || existing_plan.max_table_elements_per_worker
                             != plan.max_table_elements_per_worker
                         || existing_plan.max_disk_space_per_worker
-                            != plan.max_disk_space_per_worker;
+                            != plan.max_disk_space_per_worker
+                        || existing_plan.max_concurrent_agents_per_executor
+                            != plan.max_concurrent_agents_per_executor;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);
@@ -107,6 +109,7 @@ impl PlanService {
                         max_memory_per_worker: plan.max_memory_per_worker,
                         max_table_elements_per_worker: plan.max_table_elements_per_worker,
                         max_disk_space_per_worker: plan.max_disk_space_per_worker,
+                        max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor,
                     },
                     &AuthCtx::System,
                 )
@@ -141,6 +144,7 @@ impl PlanService {
             max_memory_per_worker: plan.max_memory_per_worker.into(),
             max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
             max_disk_space_per_worker: plan.max_disk_space_per_worker.into(),
+            max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor.into(),
             total_app_count: plan.app_limit.into(),
             total_env_count: plan.env_limit.into(),
             total_component_count: plan.component_limit.into(),

@@ -236,6 +236,7 @@ fn registry_service_config(
                     max_memory_per_worker: u64::MAX,
                     max_table_elements_per_worker: u64::MAX,
                     max_disk_space_per_worker: u64::MAX,
+                    max_concurrent_agents_per_executor: 1_000_000_000_000_000_000, // unlimited sentinel
                 },
             );
             plans

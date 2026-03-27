@@ -18,6 +18,29 @@ use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tracing::debug;
 
+/// Per-account concurrent agent limit semaphore.
+///
+/// Each account has its own tokio `Semaphore` sized to
+/// `AtomicResourceEntry::max_concurrent_agents_per_executor()`. When an agent
+/// starts it must acquire one permit; when it stops the permit is returned
+/// automatically via `Drop`.
+///
+/// Permits are only ever requested at agent startup (`WaitingWorker::new`).
+/// Running agents never request additional permits, so there is no need for a
+/// priority lock or non-blocking `try_acquire` — all callers are on equal
+/// footing in the startup path.
+///
+/// Extracted as a standalone struct (no `WorkerCtx` generic) so it can be
+/// unit-tested in isolation, following the same pattern as
+/// `FilesystemStorageSemaphore`.
+///
+/// ## Unlimited accounts
+///
+/// A limit value of `>= AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS`
+/// (10^18, the sentinel stored in the DB and config) is treated as unlimited.
+/// Unlimited accounts bypass the semaphore entirely and receive a zero-cost
+/// permit immediately. This matches the `default_unlimited()` convention used
+/// throughout the registry service (see PR #3068).
 pub struct ConcurrentAgentsSemaphore {
     accounts: scc::HashMap<AccountId, AccountConcurrencyEntry>,
 }
@@ -68,10 +91,9 @@ impl ConcurrentAgentsSemaphore {
         resource_entry: Arc<AtomicResourceEntry>,
     ) {
         let limit = resource_entry.max_concurrent_agents_per_executor();
-        let permits = if limit == u64::MAX {
-            // Unlimited — create a semaphore with a large but finite number of
-            // permits so we never block. We will bypass the semaphore entirely
-            // in acquire/try_acquire for the unlimited case.
+        let permits = if is_unlimited(limit) {
+            // Unlimited — we bypass the semaphore entirely in acquire/try_acquire.
+            // Create a zero-permit semaphore as a placeholder.
             0
         } else {
             limit as usize
@@ -100,8 +122,8 @@ impl ConcurrentAgentsSemaphore {
     /// is resized before attempting the acquire (grown on upgrade, shrunk on
     /// downgrade — see `sync_semaphore_limit`).
     ///
-    /// Returns immediately without touching the semaphore when the limit is
-    /// `u64::MAX` (unlimited), returning a zero-permit sentinel.
+    /// Returns immediately without touching the semaphore when the limit is at
+    /// or above the unlimited sentinel, returning a zero-permit sentinel permit.
     pub async fn acquire<F, Fut>(
         &self,
         account_id: AccountId,
@@ -179,11 +201,11 @@ impl ConcurrentAgentsSemaphore {
         }
     }
 
-    /// Returns `true` if the account's limit is `u64::MAX` (unlimited).
+    /// Returns `true` if the account's current limit is at or above the unlimited sentinel.
     async fn is_unlimited(&self, account_id: &AccountId) -> bool {
         self.accounts
             .read_async(account_id, |_, e| {
-                e.resource_entry.max_concurrent_agents_per_executor() == u64::MAX
+                is_unlimited(e.resource_entry.max_concurrent_agents_per_executor())
             })
             .await
             .unwrap_or(false)
@@ -210,14 +232,15 @@ impl ConcurrentAgentsSemaphore {
     /// Held permits (running agents) are never touched; the lower limit is
     /// enforced only for new agent starts.
     ///
-    /// If the limit is `u64::MAX` (unlimited) the semaphore is not touched.
+    /// If the limit is at or above the unlimited sentinel the semaphore is not
+    /// touched.
     async fn sync_semaphore_limit(&self, account_id: &AccountId, semaphore: &Arc<Semaphore>) {
         // Step 1: apply plan increase and update current_limit + total_issued.
         let maybe_increase: Option<u64> = self
             .accounts
             .read_async(account_id, |_, e| {
                 let new_limit = e.resource_entry.max_concurrent_agents_per_executor();
-                if new_limit == u64::MAX {
+                if is_unlimited(new_limit) {
                     return None;
                 }
                 if new_limit > e.current_limit {
@@ -240,7 +263,7 @@ impl ConcurrentAgentsSemaphore {
         self.accounts
             .update_async(account_id, |_, e| {
                 let new_limit = e.resource_entry.max_concurrent_agents_per_executor();
-                if new_limit != u64::MAX {
+                if !is_unlimited(new_limit) {
                     if new_limit > e.current_limit {
                         e.total_issued += (new_limit - e.current_limit) as usize;
                     }
@@ -333,4 +356,11 @@ impl ConcurrentAgentsSemaphore {
 
         semaphore.clone().try_acquire_owned().ok()
     }
+}
+
+/// Returns `true` if the given limit value is at or above the unlimited sentinel.
+/// Consistent with `AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS` and the
+/// `default_unlimited()` convention: any value >= 10^18 means "no limit".
+fn is_unlimited(limit: u64) -> bool {
+    limit >= AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS
 }
