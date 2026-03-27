@@ -219,6 +219,91 @@ async fn golem_rust_jump(
 }
 
 #[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn golem_rust_checkpoint(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let http_server = TestHttpServer::start(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let agent_id = agent_id!("GolemHostApi", "checkpoint");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "checkpoint_test", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    while (rx.len() as u64) < 17 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    abort_capture.send(()).unwrap();
+    let mut events = drain_connection(rx).await;
+    events.retain(|e| match e {
+        Some(e) => {
+            !stdout_event_starting_with(e, "Sending") && !stdout_event_starting_with(e, "Received")
+        }
+        None => false,
+    });
+
+    info!("events: {:?}", events);
+
+    // The checkpoint is created after state=1.
+    // Step 2: remote_call(2) returns true (first call), so unwrap_or_revert reverts to checkpoint.
+    //         On replay from checkpoint: state=2, remote_call(2) returns false, so we continue.
+    // Step 3: remote_call(3) returns true (first call), so assert_or_revert reverts to checkpoint.
+    //         On replay from checkpoint: state=2 again, remote_call(2) returns false, state=3,
+    //         remote_call(3) returns false, so we continue.
+    // Step 4: state=4, done.
+    assert_eq!(result, Value::U64(4));
+    assert_eq!(
+        stdout_events(events.into_iter().flatten()),
+        vec![
+            "started: 0\n",
+            "second: 2\n", // first attempt
+            "second: 2\n", // replay after first revert (step 2 failed)
+            "third: 3\n",  // continues, step 3 will fail
+            "second: 2\n", // replay after second revert (step 3 failed)
+            "third: 3\n",  // continues, step 3 now succeeds
+            "fourth: 4\n", // done
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
 #[instrument]
 async fn golem_rust_explicit_oplog_commit(
     last_unique_id: &LastUniqueId,

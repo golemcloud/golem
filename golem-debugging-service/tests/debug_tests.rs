@@ -442,6 +442,13 @@ async fn test_playback_and_fork(
         .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
 
+    regular_worker_executor
+        .check_oplog_is_queryable(&agent_id)
+        .await?;
+    regular_worker_executor
+        .check_oplog_is_queryable(&target_agent_id)
+        .await?;
+
     assert_eq!(connect_result.agent_id, agent_id);
     assert_eq!(playback_result.agent_id, agent_id);
     assert!(fork_result.is_ok());
