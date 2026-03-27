@@ -50,13 +50,13 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use url::Url;
 
-pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
-pub const TEMP_DIR: &str = "golem-temp";
-pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
+const TEMP_DIR: &str = "golem-temp";
+const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
 #[derive(Clone, Debug, Default)]
 pub struct BuildConfig {
     pub skip_up_to_date_checks: bool,
+    pub skip_check: bool,
     pub steps_filter: HashSet<AppBuildStep>,
     pub custom_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
     pub repl_bridge_sdk_target: Option<CustomBridgeSdkTarget>,
@@ -69,6 +69,11 @@ impl BuildConfig {
 
     pub fn with_skip_up_to_date_checks(mut self, skip_up_to_date_checks: bool) -> Self {
         self.skip_up_to_date_checks = skip_up_to_date_checks;
+        self
+    }
+
+    pub fn with_skip_check(mut self, skip_check: bool) -> Self {
+        self.skip_check = skip_check;
         self
     }
 
@@ -95,7 +100,7 @@ impl BuildConfig {
 
     pub fn should_run_step(&self, step: AppBuildStep) -> bool {
         if self.steps_filter.is_empty() {
-            true
+            !(matches!(step, AppBuildStep::Check) && self.skip_check)
         } else {
             self.steps_filter.contains(&step)
         }
@@ -257,11 +262,10 @@ pub struct ComponentStubInterfaces {
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[clap(rename_all = "kebab_case")]
 pub enum AppBuildStep {
-    GenWit,
+    Check,
     Build,
     AddMetadata,
     GenBridge,
-    GenBridgeRepl,
 }
 
 #[derive(Debug, Clone)]
@@ -280,10 +284,13 @@ pub struct CustomBridgeSdkTarget {
 }
 
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
+    manifest_metadata_from_yaml_file(source).includes
+}
+
+pub fn manifest_metadata_from_yaml_file(source: &Path) -> app_raw::ApplicationMetadata {
     fs::read_to_string(source)
         .ok()
-        .and_then(|source| app_raw::Application::from_yaml_str(source.as_str()).ok())
-        .map(|app| app.includes)
+        .and_then(|source| app_raw::ApplicationMetadata::from_yaml_str(source.as_str()).ok())
         .unwrap_or_default()
 }
 
@@ -728,6 +735,7 @@ pub struct ComponentLayerApplyContext {
     app_root_dir: Option<String>,
     golem_temp_dir: Option<String>,
     component_dir: Option<String>,
+    cargo_target: Option<String>,
 }
 
 impl ComponentLayerApplyContext {
@@ -736,6 +744,7 @@ impl ComponentLayerApplyContext {
         app_root_dir: Option<String>,
         golem_temp_dir: Option<String>,
         component_dir: Option<String>,
+        cargo_target: Option<String>,
     ) -> Self {
         Self {
             env: Self::new_template_env(),
@@ -743,6 +752,7 @@ impl ComponentLayerApplyContext {
             app_root_dir,
             golem_temp_dir,
             component_dir,
+            cargo_target,
         }
     }
 
@@ -780,6 +790,7 @@ impl ComponentLayerApplyContext {
             appRootDir => self.app_root_dir.as_deref().unwrap_or(EMPTY_STR),
             golemTempDir => self.golem_temp_dir.as_deref().unwrap_or(EMPTY_STR),
             componentDir => self.component_dir.as_deref().unwrap_or(EMPTY_STR),
+            cargoTarget => self.cargo_target.as_deref().unwrap_or(EMPTY_STR),
         })
     }
 }
@@ -1467,6 +1478,7 @@ impl PluginInstallation {
 }
 
 mod app_builder {
+    use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
@@ -1581,6 +1593,7 @@ mod app_builder {
         // "Consts" for component templating
         app_root_dir_str: String,
         golem_temp_dir_str: String,
+        cargo_workspace_mode: bool,
 
         // For app build
         include: Vec<String>,
@@ -1630,11 +1643,16 @@ mod app_builder {
                 Ok((
                     fs::path_to_str(app_root_dir).map(|path| path.to_string())?,
                     fs::path_to_str(&app_root_dir.join(TEMP_DIR)).map(|path| path.to_string())?,
+                    edit::cargo_toml::is_workspace_manifest(
+                        &fs::read_to_string(app_root_dir.join("Cargo.toml")).unwrap_or_default(),
+                    )
+                    .unwrap_or(false),
                 ))
             }) {
-                Ok((app_root_dir_str, golem_temp_dir_str)) => {
+                Ok((app_root_dir_str, golem_temp_dir_str, cargo_workspace_mode)) => {
                     builder.app_root_dir_str = app_root_dir_str;
                     builder.golem_temp_dir_str = golem_temp_dir_str;
+                    builder.cargo_workspace_mode = cargo_workspace_mode;
                 }
                 Err(err) => {
                     return ValidatedResult::from_error(format!(
@@ -2215,7 +2233,12 @@ mod app_builder {
                 Some(component_name.clone()),
                 Some(self.app_root_dir_str.clone()),
                 Some(self.golem_temp_dir_str.clone()),
-                Some(component_dir_str),
+                Some(component_dir_str.clone()),
+                Some(if self.cargo_workspace_mode {
+                    format!("{}/target", self.app_root_dir_str)
+                } else {
+                    format!("{}/target", component_dir_str)
+                }),
             );
 
             match self.component_layer_store.value(
@@ -2386,7 +2409,10 @@ mod app_builder {
 #[cfg(test)]
 mod test {
     use crate::fs;
-    use crate::model::app::{Application, ApplicationNameAndEnvironments, ComponentPresetSelector};
+    use crate::model::app::{
+        includes_from_yaml_file, Application, ApplicationNameAndEnvironments,
+        ComponentPresetSelector,
+    };
     use crate::model::app_raw;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
@@ -2467,5 +2493,28 @@ mod test {
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
         (app.unwrap(), tmp_dir)
+    }
+
+    #[test]
+    fn includes_loader_is_lenient_to_unknown_top_level_fields() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+
+        fs::write(
+            &golem_yaml_path,
+            indoc! {r#"
+                manifestVersion: 1.5.0-dev.1
+                includes:
+                  - ./shared/*.yaml
+                futureMigrationHints:
+                  message: planned
+            "#},
+        )
+        .unwrap();
+
+        assert_eq!(
+            includes_from_yaml_file(&golem_yaml_path),
+            vec!["./shared/*.yaml".to_string()]
+        );
     }
 }

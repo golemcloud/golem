@@ -1,5 +1,7 @@
 # golem-app-manifest-header
 
+manifestVersion: golem-manifest-version
+
 app: app-name
 
 environments:

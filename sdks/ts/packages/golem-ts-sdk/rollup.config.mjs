@@ -13,6 +13,7 @@ const external = [
   'golem:agent/host@1.5.0',
   'golem:api/host@1.5.0',
   'golem:core/types@1.5.0',
+  'node:sqlite',
   'wasi:cli/environment@0.2.3',
   'wasi:clocks/wall-clock@0.2.3',
 ];

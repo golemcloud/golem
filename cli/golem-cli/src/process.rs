@@ -16,6 +16,7 @@ use crate::error::PipedExitCode;
 use crate::log::{logln, LogColorize, LogIndent};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
+use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use gag::BufferRedirect;
 use std::collections::HashMap;
@@ -27,6 +28,8 @@ use std::sync::{LazyLock, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use which::which as wrapped_which;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 static PROGRAM_LOOKUP_CACHE: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -85,6 +88,7 @@ fn program_lookup_cache_len() -> usize {
         .len()
 }
 
+
 pub trait ExitStatusExt {
     fn check_exit_status(&self) -> anyhow::Result<()>;
     fn pipe_exit_status(&self) -> anyhow::Result<()>;
@@ -113,6 +117,12 @@ impl ExitStatusExt for ExitStatus {
     }
 }
 
+#[derive(Clone, Copy)]
+enum StreamKind {
+    Stdout,
+    Stderr,
+}
+
 #[async_trait]
 pub trait CommandExt {
     async fn stream_and_wait_for_status(
@@ -126,7 +136,35 @@ pub trait CommandExt {
             .check_exit_status()
     }
 
-    fn stream_output(command_name: &str, child: &mut Child) -> anyhow::Result<()> {
+    fn stream_output_prefix(command_name: &str, is_stderr: bool) -> String {
+        if !SHOULD_COLORIZE.should_colorize() {
+            return format!("{command_name} |");
+        }
+
+        let (badge, separator) = if is_stderr {
+            (
+                format!(" {} ", command_name)
+                    .on_bright_black()
+                    .yellow()
+                    .bold()
+                    .to_string(),
+                "│".yellow().bold().to_string(),
+            )
+        } else {
+            (
+                format!(" {} ", command_name)
+                    .on_bright_black()
+                    .green()
+                    .bold()
+                    .to_string(),
+                "│".green().bold().to_string(),
+            )
+        };
+
+        format!("{badge}{separator}")
+    }
+
+    fn stream_output(command_name: &str, child: &mut Child) -> anyhow::Result<Vec<JoinHandle<()>>> {
         let stdout = child
             .stdout
             .take()
@@ -137,27 +175,75 @@ pub trait CommandExt {
             .take()
             .ok_or_else(|| anyhow!("Failed to capture stderr for {command_name}"))?;
 
-        tokio::spawn({
-            let prefix = format!("{} | ", command_name).green().bold();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(StreamKind, String)>();
+
+        let stdout_task = tokio::spawn({
+            let tx = tx.clone();
             async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    logln(format!("{prefix} {line}"));
+                    let _ = tx.send((StreamKind::Stdout, line));
                 }
             }
         });
 
-        tokio::spawn({
-            let prefix = format!("{} | ", command_name).yellow().bold();
+        let stderr_task = tokio::spawn({
+            let tx = tx.clone();
             async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = tx.send((StreamKind::Stderr, line));
+                }
+            }
+        });
+        drop(tx);
+
+        let printer_task = tokio::spawn({
+            let command_name = command_name.to_string();
+            async move {
+                let color = SHOULD_COLORIZE.should_colorize();
+                let (top_frame, bottom_frame) = if color {
+                    let width = command_name.chars().count() + 2;
+                    (
+                        Some("▁".repeat(width).bright_black().to_string()),
+                        Some("▔".repeat(width).bright_black().to_string()),
+                    )
+                } else {
+                    (None, None)
+                };
+
+                let stdout_prefix = Self::stream_output_prefix(&command_name, false);
+                let stderr_prefix = Self::stream_output_prefix(&command_name, true);
+
+                let mut printed_top = false;
+                let mut had_any_output = false;
+
+                while let Some((stream_kind, line)) = rx.recv().await {
+                    if color && !printed_top {
+                        if let Some(top_frame) = &top_frame {
+                            logln(top_frame);
+                        }
+                        printed_top = true;
+                    }
+
+                    let prefix = match stream_kind {
+                        StreamKind::Stdout => &stdout_prefix,
+                        StreamKind::Stderr => &stderr_prefix,
+                    };
+
                     logln(format!("{prefix} {line}"));
+                    had_any_output = true;
+                }
+
+                if color && had_any_output {
+                    if let Some(bottom_frame) = &bottom_frame {
+                        logln(bottom_frame);
+                    }
                 }
             }
         });
 
-        Ok(())
+        Ok(vec![stdout_task, stderr_task, printer_task])
     }
 }
 
@@ -175,12 +261,18 @@ impl CommandExt for Command {
             .spawn()
             .with_context(|| format!("Failed to spawn {command_name}"))?;
 
-        Self::stream_output(command_name, &mut child)?;
+        let stream_tasks = Self::stream_output(command_name, &mut child)?;
 
-        child
+        let status = child
             .wait()
             .await
-            .with_context(|| format!("Failed to execute {command_name}"))
+            .with_context(|| format!("Failed to execute {command_name}"))?;
+
+        for task in stream_tasks {
+            let _ = task.await;
+        }
+
+        Ok(status)
     }
 }
 

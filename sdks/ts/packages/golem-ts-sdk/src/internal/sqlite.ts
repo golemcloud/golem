@@ -12,8 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub const GOLEM_RUST_VERSION_DEFAULT: &str = "2.0.0-dev.2";
-pub const GOLEM_TS_VERSION_DEFAULT: &str = "0.1.0-dev.1";
+// Re-exports from the wasm-rquickjs `node:sqlite` builtin.
+// The SDK imports SQLite functionality through this module so that
+// tests can mock it in a single place instead of intercepting `node:sqlite`.
+//
+// Type declarations for wasm-rquickjs extensions are in types/node-sqlite-extensions.d.ts
 
-pub const GOLEM_AI_VERSION: &str = "v0.5.0-dev.1";
-pub const GOLEM_AI_SUFFIX: &str = "-dev.wasm";
+export {
+  DatabaseSync,
+  StatementSync,
+  Session,
+  SQLTagStore,
+  serializeDatabaseSync,
+  restoreDatabaseSync,
+  isAutocommitDatabaseSync,
+} from 'node:sqlite';

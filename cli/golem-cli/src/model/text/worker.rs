@@ -905,6 +905,29 @@ impl TextView for PublicOplogEntry {
                                 .unwrap_or_else(|_| format!("{:?}", json.data))
                         ));
                     }
+                    PublicSnapshotData::Multipart(multipart) => {
+                        use golem_common::model::oplog::MultipartPartData;
+
+                        logln(format!(
+                            "{pad}mime type:         {}",
+                            format_id(&multipart.mime_type)
+                        ));
+                        for part in &multipart.parts {
+                            let data_summary = match &part.data {
+                                MultipartPartData::Json(json) => {
+                                    serde_json::to_string_pretty(&json.data)
+                                        .unwrap_or_else(|_| format!("{:?}", json.data))
+                                }
+                                MultipartPartData::Raw(raw) => {
+                                    format!("({} bytes)", raw.data.len())
+                                }
+                            };
+                            logln(format!(
+                                "{pad}part:              {} [{}]: {}",
+                                part.name, part.content_type, data_summary
+                            ));
+                        }
+                    }
                 }
             }
             PublicOplogEntry::OplogProcessorCheckpoint(params) => {

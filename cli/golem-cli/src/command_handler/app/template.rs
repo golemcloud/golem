@@ -27,7 +27,7 @@ use crate::log::{
     log_action, log_anyhow_error, log_error, log_failed_to, log_finished_ok,
     log_skipping_up_to_date, logln, LogColorize, LogIndent,
 };
-use crate::model::text::diff::log_unified_diff;
+use crate::model::text::diff::log_unified_diff_for_path;
 use crate::model::GuestLanguage;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
@@ -126,7 +126,7 @@ impl TemplateHandler {
             &context.existing_components,
         )?;
 
-        let template_plan = self.build_new_template_plan(
+        let template_plan = self.plan_applying_new_template(
             &selections.application_name,
             &context.application_path,
             &template_mapping.template_to_component,
@@ -509,7 +509,7 @@ impl TemplateHandler {
 
                         let component_template =
                             app_template_repo.component_template(component.language)?;
-                        let upgrade_plan = self.build_multi_component_layout_upgrade_plan(
+                        let upgrade_plan = self.plan_multi_component_layout_upgrade(
                             component,
                             application_path,
                             &new_component_dir,
@@ -567,7 +567,7 @@ impl TemplateHandler {
         })
     }
 
-    fn build_new_template_plan(
+    fn plan_applying_new_template(
         &self,
         application_name: &ApplicationName,
         application_path: &Path,
@@ -642,7 +642,7 @@ impl TemplateHandler {
         Ok(template_plan_builder.build())
     }
 
-    fn build_multi_component_layout_upgrade_plan(
+    fn plan_multi_component_layout_upgrade(
         &self,
         component: &ExistingComponent,
         application_path: &Path,
@@ -706,7 +706,7 @@ impl TemplateHandler {
                 component_name.as_str().log_color_highlight()
             ),
         );
-        let _indent = self.ctx.log_handler().nested_text_view_indent();
+        let _indent = self.ctx.log_handler().decorated_indent_primary();
 
         for step in upgrade_plan.steps() {
             match step {
@@ -781,7 +781,7 @@ impl TemplateHandler {
         if !validation_errors.is_empty() {
             logln("");
             log_failed_to("validate Multi-component layout upgrade plan");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             logln("");
             logln(
@@ -841,7 +841,7 @@ impl TemplateHandler {
         if !overwrites.is_empty() || !failed_plans.is_empty() {
             logln("");
             log_failed_to("plan the required changes to apply the selected template(s)");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             logln("");
 
@@ -887,7 +887,7 @@ impl TemplateHandler {
             "Planned",
             "required changes for applying the selected template(s)",
         );
-        let _indent = self.ctx.log_handler().nested_text_view_indent();
+        let _indent = self.ctx.log_handler().decorated_indent_primary();
         for (path, step) in safe_template_plan.file_steps() {
             match step {
                 SafeTemplatePlanStep::Create { .. } => {
@@ -904,8 +904,8 @@ impl TemplateHandler {
                         path.log_color_highlight()
                     ));
                     let _indent = LogIndent::new();
-                    let _indent = self.ctx.log_handler().nested_text_view_indent();
-                    log_unified_diff(&diff::unified_diff(current, new));
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    log_unified_diff_for_path(path, &diff::unified_diff(current, new));
                 }
                 SafeTemplatePlanStep::SkipSame { .. } => {
                     logln(format!(

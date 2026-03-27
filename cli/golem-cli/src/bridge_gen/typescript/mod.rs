@@ -102,7 +102,7 @@ impl TypeScriptBridgeGenerator {
             .to_string());
         }
 
-        Ok(sdk_overrides()?.ts_package_dep("golem-ts-bridge"))
+        Ok(sdk_overrides()?.ts_package_dep("golem-ts-bridge")?)
     }
 
     /// Generates the client library's package.json
