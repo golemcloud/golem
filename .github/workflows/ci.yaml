@@ -205,6 +205,12 @@ jobs:
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
 
+      - name: Setup Node
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
       - uses: pnpm/action-setup@v2
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         with:
