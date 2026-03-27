@@ -168,87 +168,24 @@ type HttpSpec = {
   headers?: Record<string, string>;
 };
 
-export type StepSpec =
-  | (StepCommon & {
-      prompt: string;
-      invoke?: undefined;
-      shell?: undefined;
-      trigger?: undefined;
-      create_agent?: undefined;
-      delete_agent?: undefined;
-      sleep?: undefined;
-      http?: undefined;
-    })
-  | (StepCommon & {
-      invoke: InvokeSpec;
-      prompt?: undefined;
-      shell?: undefined;
-      trigger?: undefined;
-      create_agent?: undefined;
-      delete_agent?: undefined;
-      sleep?: undefined;
-      http?: undefined;
-    })
-  | (StepCommon & {
-      shell: ShellSpec;
-      prompt?: undefined;
-      invoke?: undefined;
-      trigger?: undefined;
-      create_agent?: undefined;
-      delete_agent?: undefined;
-      sleep?: undefined;
-      http?: undefined;
-    })
-  | (StepCommon & {
-      trigger: TriggerSpec;
-      prompt?: undefined;
-      invoke?: undefined;
-      shell?: undefined;
-      create_agent?: undefined;
-      delete_agent?: undefined;
-      sleep?: undefined;
-      http?: undefined;
-    })
-  | (StepCommon & {
-      create_agent: CreateAgentSpec;
-      prompt?: undefined;
-      invoke?: undefined;
-      shell?: undefined;
-      trigger?: undefined;
-      delete_agent?: undefined;
-      sleep?: undefined;
-      http?: undefined;
-    })
-  | (StepCommon & {
-      delete_agent: DeleteAgentSpec;
-      prompt?: undefined;
-      invoke?: undefined;
-      shell?: undefined;
-      trigger?: undefined;
-      create_agent?: undefined;
-      sleep?: undefined;
-      http?: undefined;
-    })
-  | (StepCommon & {
-      sleep: number;
-      prompt?: undefined;
-      invoke?: undefined;
-      shell?: undefined;
-      trigger?: undefined;
-      create_agent?: undefined;
-      delete_agent?: undefined;
-      http?: undefined;
-    })
-  | (StepCommon & {
-      http: HttpSpec;
-      prompt?: undefined;
-      invoke?: undefined;
-      shell?: undefined;
-      trigger?: undefined;
-      create_agent?: undefined;
-      delete_agent?: undefined;
-      sleep?: undefined;
-    });
+type OneOf<T extends object, Keys extends keyof T = keyof T> = {
+  [K in Keys]: T[K] extends undefined
+    ? never
+    : StepCommon & Pick<Required<T>, K> & Partial<Record<Exclude<Keys, K>, undefined>>;
+}[Keys];
+
+type StepVariants = {
+  prompt: string;
+  invoke: InvokeSpec;
+  shell: ShellSpec;
+  trigger: TriggerSpec;
+  create_agent: CreateAgentSpec;
+  delete_agent: DeleteAgentSpec;
+  sleep: number;
+  http: HttpSpec;
+};
+
+export type StepSpec = OneOf<StepVariants>;
 
 export interface ScenarioSpec {
   name: string;
