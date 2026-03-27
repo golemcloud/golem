@@ -30,6 +30,7 @@ use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use crate::services::reports::ReportsError;
 use crate::services::resource_definition::ResourceDefinitionError;
+use crate::services::retry_policy::RetryPolicyError;
 use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -624,6 +625,32 @@ impl From<AgentSecretError> for ApiError {
             }
             AgentSecretError::Unauthorized(inner) => inner.into(),
             AgentSecretError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<RetryPolicyError> for ApiError {
+    fn from(value: RetryPolicyError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            RetryPolicyError::InvalidPredicateJson(_)
+            | RetryPolicyError::InvalidPolicyJson(_) => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+            RetryPolicyError::ConcurrentModification
+            | RetryPolicyError::RetryPolicyForNameAlreadyExists { .. } => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+            RetryPolicyError::RetryPolicyNotFound(_)
+            | RetryPolicyError::ParentEnvironmentNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            RetryPolicyError::Unauthorized(inner) => inner.into(),
+            RetryPolicyError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),

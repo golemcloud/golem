@@ -31,6 +31,7 @@ pub mod plan;
 pub mod plugin;
 pub mod registry_change;
 pub mod report;
+pub mod retry_policy;
 pub mod resource_definition;
 pub mod security_scheme;
 pub mod token;
