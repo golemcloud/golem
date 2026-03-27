@@ -19,28 +19,28 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
+use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
 use crate::command_handler::api::domain::ApiDomainCommandHandler;
 use crate::command_handler::api::security_scheme::ApiSecuritySchemeCommandHandler;
-use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::bridge::BridgeCommandHandler;
+use crate::command_handler::cloud::CloudCommandHandler;
 use crate::command_handler::cloud::account::CloudAccountCommandHandler;
 use crate::command_handler::cloud::token::CloudTokenCommandHandler;
-use crate::command_handler::cloud::CloudCommandHandler;
 use crate::command_handler::component::ComponentCommandHandler;
 use crate::command_handler::environment::EnvironmentCommandHandler;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::command_handler::log::LogHandler;
 use crate::command_handler::partial_match::ErrorHandler;
 use crate::command_handler::plugin::PluginCommandHandler;
-use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
+use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::repl::ReplHandler;
 use crate::command_handler::worker::WorkerCommandHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
-use crate::log::{log_anyhow_error, logln, set_log_output, Output};
+use crate::log::{Output, log_anyhow_error, logln, set_log_output};
 use crate::{command_name, init_tracing};
 use anyhow::anyhow;
 use clap::CommandFactory;
@@ -50,7 +50,7 @@ use clap_verbosity_flag::Verbosity;
 use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
-use tracing::{debug, Level};
+use tracing::{Level, debug};
 
 mod agent_secret;
 mod api;

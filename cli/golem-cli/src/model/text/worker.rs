@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agent_id_display::SourceLanguage;
-use crate::log::{logln, LogColorize};
+use crate::log::{LogColorize, logln};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
@@ -21,11 +21,12 @@ use crate::model::text::fmt::*;
 use crate::model::worker::{
     AgentMetadata, AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
 };
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use chrono::DateTime;
-use cli_table::{format::Justify, Table};
+use cli_table::{Table, format::Justify};
 use colored::Colorize;
+use golem_common::model::Timestamp;
 use golem_common::model::agent::{
     BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
     UnstructuredBinaryElementValue, UnstructuredTextElementValue,
@@ -36,8 +37,7 @@ use golem_common::model::oplog::{
     PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::model::worker::UpdateRecord;
-use golem_common::model::Timestamp;
-use golem_wasm::{print_value_and_type, ValueAndType};
+use golem_wasm::{ValueAndType, print_value_and_type};
 use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};

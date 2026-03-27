@@ -15,16 +15,16 @@
 use crate::Tracing;
 use axum::routing::post;
 use axum::{Json, Router};
+use golem_common::model::IdempotencyKey;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
-use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use pretty_assertions::assert_eq;
 
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use http::HeaderMap;
 use log::info;

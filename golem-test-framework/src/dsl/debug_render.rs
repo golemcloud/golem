@@ -21,7 +21,7 @@ use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
     PublicUpdateDescription, StringAttributeValue,
 };
-use golem_wasm::{print_value_and_type, ValueAndType};
+use golem_wasm::{ValueAndType, print_value_and_type};
 use std::fmt::Write;
 
 // backported from golem-cli to help debugging worker executor issues

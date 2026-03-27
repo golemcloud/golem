@@ -63,10 +63,10 @@ impl Builder {
     }
 
     pub fn pop(&mut self) {
-        if let Some(path) = &mut self.path {
-            if !Self::pop_path(path) {
-                self.path = None;
-            }
+        if let Some(path) = &mut self.path
+            && !Self::pop_path(path)
+        {
+            self.path = None;
         }
     }
 

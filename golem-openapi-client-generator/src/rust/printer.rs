@@ -166,7 +166,7 @@ mod tests {
     use indoc::indoc;
 
     use crate::printer::indented;
-    use crate::rust::printer::{line, rust_name, unit, RustContext, RustUse};
+    use crate::rust::printer::{RustContext, RustUse, line, rust_name, unit};
     use std::collections::HashSet;
 
     #[test]

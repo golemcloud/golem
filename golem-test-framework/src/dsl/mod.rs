@@ -17,14 +17,14 @@ pub mod debug_render;
 use self::debug_render::debug_render_oplog_entry;
 use crate::components::redis::Redis;
 use crate::model::IFSEntry;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::v1::agent_error::Error as WorkerGrpcError;
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
-use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
+use golem_api_grpc::proto::golem::worker::{LogEvent, StdErrLog, StdOutLog, log_event};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{AgentId, PromiseId};
 use golem_common::model::account::AccountId;
@@ -57,7 +57,7 @@ use tempfile::{Builder, TempDir};
 use tokio::fs::File;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
-use tracing::{debug, info, Instrument};
+use tracing::{Instrument, debug, info};
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
 
@@ -936,11 +936,11 @@ pub async fn events_to_lines(rx: &mut UnboundedReceiver<LogEvent>) -> Vec<String
         .map(log_event_to_string)
         .collect::<Vec<_>>()
         .join("");
-    let lines = full_output
+
+    full_output
         .lines()
         .map(|s| s.to_string())
-        .collect::<Vec<_>>();
-    lines
+        .collect::<Vec<_>>()
 }
 
 pub fn is_worker_execution_error(

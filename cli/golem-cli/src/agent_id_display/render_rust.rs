@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use golem_common::model::agent::{
-    text_utils::write_json_escaped, BinaryReference, BinarySource, ComponentModelElementValue,
-    DataValue, ElementValue, NamedElementValues, TextReference, TextSource,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+    BinaryReference, BinarySource, ComponentModelElementValue, DataValue, ElementValue,
+    NamedElementValues, TextReference, TextSource, UnstructuredBinaryElementValue,
+    UnstructuredTextElementValue, text_utils::write_json_escaped,
 };
-use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
 use golem_wasm::Value;
+use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use std::fmt::Write;
 
@@ -324,10 +324,8 @@ fn render_type_tuple_rust(tt: &TypeTuple, prefer_name: bool) -> String {
 }
 
 fn render_type_record_rust(tr: &TypeRecord, prefer_name: bool) -> String {
-    if prefer_name {
-        if let Some(name) = &tr.name {
-            return name.to_upper_camel_case();
-        }
+    if prefer_name && let Some(name) = &tr.name {
+        return name.to_upper_camel_case();
     }
     let mut buf = String::from("{ ");
     for (i, field) in tr.fields.iter().enumerate() {
@@ -346,10 +344,8 @@ fn render_type_record_rust(tr: &TypeRecord, prefer_name: bool) -> String {
 }
 
 fn render_type_variant_rust(tv: &TypeVariant, prefer_name: bool) -> String {
-    if prefer_name {
-        if let Some(name) = &tv.name {
-            return name.to_upper_camel_case();
-        }
+    if prefer_name && let Some(name) = &tv.name {
+        return name.to_upper_camel_case();
     }
     let mut buf = String::from("enum { ");
     for (i, case) in tv.cases.iter().enumerate() {
@@ -366,10 +362,8 @@ fn render_type_variant_rust(tv: &TypeVariant, prefer_name: bool) -> String {
 }
 
 fn render_type_enum_rust(te: &TypeEnum, prefer_name: bool) -> String {
-    if prefer_name {
-        if let Some(name) = &te.name {
-            return name.to_upper_camel_case();
-        }
+    if prefer_name && let Some(name) = &te.name {
+        return name.to_upper_camel_case();
     }
     let mut buf = String::from("enum { ");
     for (i, case) in te.cases.iter().enumerate() {
@@ -383,10 +377,8 @@ fn render_type_enum_rust(te: &TypeEnum, prefer_name: bool) -> String {
 }
 
 fn render_type_flags_rust(tf: &TypeFlags, prefer_name: bool) -> String {
-    if prefer_name {
-        if let Some(name) = &tf.name {
-            return name.to_upper_camel_case();
-        }
+    if prefer_name && let Some(name) = &tf.name {
+        return name.to_upper_camel_case();
     }
     let mut buf = String::from("flags { ");
     for (i, flag) in tf.names.iter().enumerate() {

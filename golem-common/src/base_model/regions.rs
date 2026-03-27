@@ -16,8 +16,8 @@ use crate::base_model::OplogIndex;
 use golem_wasm_derive::{FromValue, IntoValue};
 use range_set_blaze::RangeSetBlaze;
 use serde::{Deserialize, Serialize};
-use std::collections::btree_map::{IntoValues, Values};
 use std::collections::BTreeMap;
+use std::collections::btree_map::{IntoValues, Values};
 use std::fmt::{Display, Formatter};
 use std::ops::Bound::{Included, Unbounded};
 use std::ops::RangeInclusive;
@@ -258,8 +258,8 @@ impl Display for DeletedRegions {
 
 #[cfg(feature = "full")]
 pub mod protobuf {
-    use crate::model::regions::OplogRegion;
     use crate::model::OplogIndex;
+    use crate::model::regions::OplogRegion;
 
     impl From<golem_api_grpc::proto::golem::worker::OplogRegion> for OplogRegion {
         fn from(value: golem_api_grpc::proto::golem::worker::OplogRegion) -> Self {

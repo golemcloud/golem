@@ -14,8 +14,8 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use axum::routing::get;
 use axum::Router;
+use axum::routing::get;
 use golem_common::model::agent::{
     ComponentModelElementValue, DataValue, ElementValue, ElementValues,
 };
@@ -35,8 +35,8 @@ use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, Type
 use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
-    start, start_customized, LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_customized,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
@@ -52,7 +52,7 @@ use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, Instrument, Span};
+use tracing::{Instrument, Span, debug, info};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

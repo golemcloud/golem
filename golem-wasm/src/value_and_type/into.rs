@@ -16,7 +16,7 @@ use crate::analysis::analysed_type::{
     bool, case, field, list, option, record, result, result_err, result_ok, str, tuple, u32,
     unit_case, unit_result, variant,
 };
-use crate::analysis::{analysed_type, AnalysedType, NameTypePair};
+use crate::analysis::{AnalysedType, NameTypePair, analysed_type};
 use crate::{UuidRecord, Value, ValueAndType};
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -566,8 +566,8 @@ impl IntoValue for crate::WitNode {
     }
 
     fn get_type() -> AnalysedType {
-        use crate::analysis::analysed_type::{case, variant};
         use crate::NodeIndex;
+        use crate::analysis::analysed_type::{case, variant};
 
         variant(vec![
             case("record-value", list(NodeIndex::get_type())),

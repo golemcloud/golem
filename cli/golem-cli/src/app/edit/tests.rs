@@ -354,12 +354,13 @@ workspace_shared = "2.0"
         .filter_map(|value| value.as_str())
         .collect::<Vec<_>>();
     assert_eq!(new_features, vec!["feat1"]);
-    assert!(deps
-        .get("workspace_dep")
-        .map(table_like)
-        .and_then(|table| table.get("workspace"))
-        .and_then(|item| item.as_bool())
-        .unwrap_or(false));
+    assert!(
+        deps.get("workspace_dep")
+            .map(table_like)
+            .and_then(|table| table.get("workspace"))
+            .and_then(|item| item.as_bool())
+            .unwrap_or(false)
+    );
     assert!(deps.get("skip_me").is_none());
 
     let missing =
@@ -921,10 +922,11 @@ uuid = { version = "1.15.1", features = ["v4"] }
             .and_then(|item| item.as_str()),
         Some("src/lib.rs")
     );
-    assert!(doc
-        .get("dependencies")
-        .and_then(|item| item.get("uuid"))
-        .is_some());
+    assert!(
+        doc.get("dependencies")
+            .and_then(|item| item.get("uuid"))
+            .is_some()
+    );
 }
 
 #[test]
@@ -1927,8 +1929,8 @@ fn merge_json_values(base: JsonValue, update: JsonValue) -> JsonValue {
     }
 }
 
-fn arb_yaml_merge_case(
-) -> impl Strategy<Value = (String, String, String, String, Vec<String>, bool)> {
+fn arb_yaml_merge_case()
+-> impl Strategy<Value = (String, String, String, String, Vec<String>, bool)> {
     // Produces YAML mappings with overlapping keys, list merges, optional
     // missing/new keys, and indentation scaling to stress formatting paths.
     (

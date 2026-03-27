@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use crate::error::ShardManagerError;
-use crate::healthcheck::{get_unhealthy_pods, HealthCheck};
+use crate::healthcheck::{HealthCheck, get_unhealthy_pods};
 use crate::model::{Pod, RoutingTable};
 use crate::persistence::RoutingTablePersistence;
 use crate::rebalancing::Rebalance;
-use crate::worker_executor::{assign_shards, revoke_shards, WorkerExecutorService};
+use crate::worker_executor::{WorkerExecutorService, assign_shards, revoke_shards};
 use async_rwlock::RwLock;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn, Instrument};
+use tracing::{Instrument, debug, info, warn};
 
 #[derive(Clone)]
 pub struct ShardManagement {

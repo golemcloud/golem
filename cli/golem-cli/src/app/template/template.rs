@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::app::template::generator::{
-    generate_agent_by_template, generate_commons_by_template, generate_component_by_template,
-    generate_on_demand_commons_by_template, InMemoryFs, StdFs,
+    InMemoryFs, StdFs, generate_agent_by_template, generate_commons_by_template,
+    generate_component_by_template, generate_on_demand_commons_by_template,
 };
 use crate::app::template::metadata::AppTemplateMetadata;
 use crate::fs;

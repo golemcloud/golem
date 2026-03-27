@@ -15,7 +15,7 @@
 use crate::printer::TreePrinter;
 use crate::rust::lib_gen::ModuleName;
 use crate::rust::model_gen::RefCache;
-use crate::rust::printer::{rust_name, rust_name_with_alias, unit, RustContext};
+use crate::rust::printer::{RustContext, rust_name, rust_name_with_alias, unit};
 use crate::{Error, Result};
 use convert_case::{Case, Casing};
 use openapiv3::{
@@ -263,7 +263,9 @@ fn schema_type(
                     )))
                 }
             } else {
-                Err(Error::unexpected("Cannot resolve the data type for any schema-kind with no details on content_type"))
+                Err(Error::unexpected(
+                    "Cannot resolve the data type for any schema-kind with no details on content_type",
+                ))
             }
         }
     }

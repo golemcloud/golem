@@ -1,8 +1,8 @@
 use crate::analysis::{
-    analysed_type, AnalysedExport, AnalysedFunction, AnalysedFunctionParameter,
-    AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
-    AnalysedType, AnalysisFailure, AnalysisResult, AnalysisWarning,
-    InterfaceCouldNotBeAnalyzedWarning, NameOptionTypePair, NameTypePair, TypeHandle,
+    AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, AnalysisFailure,
+    AnalysisResult, AnalysisWarning, InterfaceCouldNotBeAnalyzedWarning, NameOptionTypePair,
+    NameTypePair, TypeHandle, analysed_type,
 };
 use crate::metadata::Producers;
 use itertools::Itertools;

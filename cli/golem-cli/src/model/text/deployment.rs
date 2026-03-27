@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::model::text::fmt::{
-    format_id, format_main_id, log_table, FieldsBuilder, MessageWithFields, TextView,
+    FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id, log_table,
 };
-use cli_table::format::Justify;
 use cli_table::Table;
+use cli_table::format::Justify;
 use golem_client::model::Deployment;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::deployment::CurrentDeployment;

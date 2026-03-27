@@ -16,8 +16,8 @@ use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::SafeDisplay;
-use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::DBValue;
+use golem_service_base::db::sqlite::SqlitePool;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

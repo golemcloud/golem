@@ -15,9 +15,9 @@
 use async_trait::async_trait;
 use clap::Args;
 use golem_common::config::{DbConfig, DbPostgresConfig, DbSqliteConfig};
+use sqlx::ConnectOptions;
 use sqlx::mysql::MySqlConnectOptions;
 use sqlx::postgres::PgConnectOptions;
-use sqlx::ConnectOptions;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;

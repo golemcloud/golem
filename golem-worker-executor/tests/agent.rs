@@ -19,7 +19,7 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
@@ -62,9 +62,10 @@ async fn agent_self_rpc_is_not_allowed(
         .await;
 
     let err = result.expect_err("Expected an error");
-    assert!(err
-        .to_string()
-        .contains("RPC calls to the same agent are not supported"));
+    assert!(
+        err.to_string()
+            .contains("RPC calls to the same agent are not supported")
+    );
 
     Ok(())
 }
@@ -156,28 +157,28 @@ async fn agent_env_inheritance(
     let mut parent_env_vars = BTreeMap::new();
     let mut child_env_vars = BTreeMap::new();
 
-    if let Ok(data_value) = result {
-        if let Some(Value::Record(fields)) = data_value.into_return_value().as_ref() {
-            let parent = &fields[0];
-            let child = &fields[1];
+    if let Ok(data_value) = result
+        && let Some(Value::Record(fields)) = data_value.into_return_value().as_ref()
+    {
+        let parent = &fields[0];
+        let child = &fields[1];
 
-            if let Value::List(parent_env_vars_list) = parent {
-                for env_var in parent_env_vars_list {
-                    if let Value::Record(env_var_kv) = env_var {
-                        if let Value::String(key) = &env_var_kv[0] {
-                            parent_env_vars.insert(key.clone(), env_var_kv[1].clone());
-                        }
-                    }
+        if let Value::List(parent_env_vars_list) = parent {
+            for env_var in parent_env_vars_list {
+                if let Value::Record(env_var_kv) = env_var
+                    && let Value::String(key) = &env_var_kv[0]
+                {
+                    parent_env_vars.insert(key.clone(), env_var_kv[1].clone());
                 }
             }
+        }
 
-            if let Value::List(child_env_vars_list) = child {
-                for env_var in child_env_vars_list {
-                    if let Value::Record(env_var_kv) = env_var {
-                        if let Value::String(key) = &env_var_kv[0] {
-                            child_env_vars.insert(key.clone(), env_var_kv[1].clone());
-                        }
-                    }
+        if let Value::List(child_env_vars_list) = child {
+            for env_var in child_env_vars_list {
+                if let Value::Record(env_var_kv) = env_var
+                    && let Value::String(key) = &env_var_kv[0]
+                {
+                    child_env_vars.insert(key.clone(), env_var_kv[1].clone());
                 }
             }
         }

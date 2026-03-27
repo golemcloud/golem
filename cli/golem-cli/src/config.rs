@@ -14,10 +14,10 @@
 
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::format::Format;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Utc};
-use golem_client::model::TokenWithSecret;
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
+use golem_client::model::TokenWithSecret;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::{Display, Formatter};
-use std::fs::{create_dir_all, File, OpenOptions};
+use std::fs::{File, OpenOptions, create_dir_all};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -48,15 +48,15 @@ static BUILTIN_LOCAL_URL_ONCE: OnceLock<BuiltinLocalUrlState> = OnceLock::new();
 
 fn builtin_local_url_state() -> &'static BuiltinLocalUrlState {
     BUILTIN_LOCAL_URL_ONCE.get_or_init(|| {
-        if cfg!(debug_assertions) {
-            if let Ok(override_url) = std::env::var(BUILTIN_LOCAL_URL_ENV) {
-                return BuiltinLocalUrlState {
-                    url: Url::parse(&override_url).unwrap_or_else(|err| {
-                        panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")
-                    }),
-                    uses_default: false,
-                };
-            }
+        if cfg!(debug_assertions)
+            && let Ok(override_url) = std::env::var(BUILTIN_LOCAL_URL_ENV)
+        {
+            return BuiltinLocalUrlState {
+                url: Url::parse(&override_url).unwrap_or_else(|err| {
+                    panic!("Failed to parse {BUILTIN_LOCAL_URL_ENV} ({override_url}): {err}")
+                }),
+                uses_default: false,
+            };
         }
 
         BuiltinLocalUrlState {

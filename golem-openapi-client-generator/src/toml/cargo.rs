@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::printer::NewLine;
-use crate::toml::printer::{unit, StringContext};
+use crate::toml::printer::{StringContext, unit};
 
-pub fn gen(name: &str, version: &str) -> String {
+pub fn generate(name: &str, version: &str) -> String {
     #[rustfmt::skip]
     let code = unit() +
         "[package]" + NewLine +

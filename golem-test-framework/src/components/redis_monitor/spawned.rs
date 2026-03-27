@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::ChildProcessLogger;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
-use crate::components::ChildProcessLogger;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use tracing::{info, Level};
+use tracing::{Level, info};
 
 pub struct SpawnedRedisMonitor {
     child: Arc<Mutex<Option<Child>>>,

@@ -17,7 +17,7 @@ use crate::rust::lib_gen::{Module, ModuleDef, ModuleName};
 use crate::rust::model_gen::RefCache;
 use crate::rust::printer::*;
 use crate::rust::types::{
-    ref_or_box_schema_type, ref_or_schema_type, DataType, ModelType, RustPrinter, RustResult,
+    DataType, ModelType, RustPrinter, RustResult, ref_or_box_schema_type, ref_or_schema_type,
 };
 use crate::{Error, Result};
 use convert_case::{Case, Casing};
@@ -333,7 +333,7 @@ fn request_body_params(
         ReferenceOr::Reference { reference } => {
             return Err(Error::unimplemented(format!(
                 "Unexpected ref request body: '{reference}'."
-            )))
+            )));
         }
         ReferenceOr::Item(body) => {
             for (content_type, media_type) in &body.content {
@@ -386,13 +386,13 @@ fn request_body_params(
                 } else if content_type == "multipart/form-data" {
                     match &media_type.schema {
                         None => {
-                            return Err(Error::unimplemented("Multipart content without schema."))
+                            return Err(Error::unimplemented("Multipart content without schema."));
                         }
                         Some(schema) => match schema {
                             ReferenceOr::Reference { reference } => {
                                 return Err(Error::unimplemented(format!(
                                     "Unexpected ref multipart schema: '{reference}'."
-                                )))
+                                )));
                             }
                             ReferenceOr::Item(schema) => match &schema.schema_kind {
                                 SchemaKind::Type(Type::Object(obj)) => {
@@ -430,7 +430,7 @@ fn request_body_params(
                                 _ => {
                                     return Err(Error::unimplemented(
                                         "Object schema expected for multipart request body.",
-                                    ))
+                                    ));
                                 }
                             },
                         },

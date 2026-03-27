@@ -19,7 +19,7 @@ use super::rdb::Rdb;
 use super::registry_service::RegistryService;
 use super::shard_manager::ShardManager;
 use super::{
-    wait_for_startup_grpc, wait_for_startup_http, wait_for_startup_http_any_response, EnvVarBuilder,
+    EnvVarBuilder, wait_for_startup_grpc, wait_for_startup_http, wait_for_startup_http_any_response,
 };
 use async_trait::async_trait;
 use golem_client::api::{AgentClientLive, WorkerClientLive};

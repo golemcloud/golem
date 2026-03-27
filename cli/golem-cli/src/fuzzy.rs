@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use colored::Colorize;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use itertools::{Either, Itertools};
 use std::collections::HashSet;
 use std::fmt::Write;

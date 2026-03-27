@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::http_test_context::{make_test_context, HttpTestContext};
+use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use goldenfile::Mint;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
