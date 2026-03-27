@@ -222,7 +222,9 @@ pub trait RegistryService: Send + Sync {
         service_name: &'static str,
         shutdown_token: Option<CancellationToken>,
         on_event: Box<
-            dyn Fn(golem_common::model::agent::RegistryInvalidationEvent) -> Pin<Box<dyn Future<Output = ()> + Send>>
+            dyn Fn(
+                    golem_common::model::agent::RegistryInvalidationEvent,
+                ) -> Pin<Box<dyn Future<Output = ()> + Send>>
                 + Send
                 + Sync,
         >,
@@ -336,7 +338,9 @@ impl RegistryService for GrpcRegistryService {
         service_name: &'static str,
         shutdown_token: Option<CancellationToken>,
         on_event: Box<
-            dyn Fn(golem_common::model::agent::RegistryInvalidationEvent) -> Pin<Box<dyn Future<Output = ()> + Send>>
+            dyn Fn(
+                    golem_common::model::agent::RegistryInvalidationEvent,
+                ) -> Pin<Box<dyn Future<Output = ()> + Send>>
                 + Send
                 + Sync,
         >,
@@ -357,12 +361,16 @@ impl RegistryService for GrpcRegistryService {
                     }
                 }
             } else {
-                self.subscribe_registry_invalidations(last_seen_event_id).await
+                self.subscribe_registry_invalidations(last_seen_event_id)
+                    .await
             };
 
             match connect_result {
                 Ok(mut stream) => {
-                    info!(service = service_name, "Connected to registry invalidation stream");
+                    info!(
+                        service = service_name,
+                        "Connected to registry invalidation stream"
+                    );
                     backoff = config.initial_backoff;
 
                     loop {
@@ -380,16 +388,16 @@ impl RegistryService for GrpcRegistryService {
 
                         match item {
                             Some(Ok(event)) => {
-                                if let Some(last_seen) = last_seen_event_id {
-                                    if event.event_id() <= last_seen {
-                                        warn!(
-                                            service = service_name,
-                                            event_id = event.event_id(),
-                                            last_seen_event_id = last_seen,
-                                            "Ignoring out-of-order or duplicate registry event"
-                                        );
-                                        continue;
-                                    }
+                                if let Some(last_seen) = last_seen_event_id
+                                    && event.event_id() <= last_seen
+                                {
+                                    warn!(
+                                        service = service_name,
+                                        event_id = event.event_id(),
+                                        last_seen_event_id = last_seen,
+                                        "Ignoring out-of-order or duplicate registry event"
+                                    );
+                                    continue;
                                 }
 
                                 last_seen_event_id = Some(event.event_id());

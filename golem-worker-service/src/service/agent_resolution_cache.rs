@@ -488,7 +488,8 @@ mod tests {
             _on_event: Box<
                 dyn Fn(
                         golem_common::model::agent::RegistryInvalidationEvent,
-                    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                    )
+                        -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                     + Send
                     + Sync,
             >,

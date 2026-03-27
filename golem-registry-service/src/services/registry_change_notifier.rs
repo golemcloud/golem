@@ -736,9 +736,12 @@ mod tests {
         let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
 
         // Historical events exist but should not be replayed in live-only mode.
-        let no_event = tokio::time::timeout(std::time::Duration::from_millis(150), stream.next())
-            .await;
-        assert!(no_event.is_err(), "expected no replayed event in live-only mode");
+        let no_event =
+            tokio::time::timeout(std::time::Duration::from_millis(150), stream.next()).await;
+        assert!(
+            no_event.is_err(),
+            "expected no replayed event in live-only mode"
+        );
 
         repo.push(make_deployment_change_event(3));
         notifier.signal_new_events_available();
