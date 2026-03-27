@@ -235,6 +235,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "set_oplog_index");
         let jump_source = self.state.current_oplog_index().await.next(); // index of the Jump instruction that we will add
         let jump_target = OplogIndex::from_u64(oplog_idx).next(); // we want to jump _after_ reaching the target index
+        let original_target = OplogIndex::from_u64(oplog_idx); // the actual oplog entry the user wants to jump to
         if jump_target > jump_source {
             Err(anyhow!(
                 "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
@@ -242,11 +243,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else if self
             .state
             .replay_state
-            .is_in_skipped_region(jump_target)
+            .is_in_skipped_region(original_target)
             .await
         {
             Err(anyhow!(
-                "Attempted to jump to a deleted region in oplog to index {jump_target} from {jump_source}"
+                "Attempted to jump to a deleted region in oplog to index {original_target} from {jump_source}"
             ))
         } else if self.state.is_live() {
             let jump = OplogRegion {

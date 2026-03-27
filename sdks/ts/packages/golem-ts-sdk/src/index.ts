@@ -48,6 +48,7 @@ export * from './host/hostapi';
 export * from './host/guard';
 export * from './host/result';
 export * from './host/transaction';
+export * from './host/checkpoint';
 export { Config, Secret } from './agentConfig';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
