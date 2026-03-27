@@ -99,9 +99,7 @@ async fn ignite_connection_err_test() {
         .await
         .expect("create() is lazy, always succeeds");
 
-    let result = rdbms
-        .query(&key, &worker_id, "SELECT 1", vec![])
-        .await;
+    let result = rdbms.query(&key, &worker_id, "SELECT 1", vec![]).await;
     assert!(result.is_err(), "query to closed port must fail");
 }
 
