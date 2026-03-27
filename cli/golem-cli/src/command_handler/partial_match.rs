@@ -24,7 +24,7 @@ use crate::log::{log_action, log_error, logln, set_log_output, LogColorize};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::format::Format;
-use crate::model::text::fmt::{log_text_view, NestedTextViewIndent};
+use crate::model::text::fmt::{log_text_view, DecoratedIndent};
 use crate::model::text::help::{AvailableFunctionNamesHelp, EnvironmentNameHelp, WorkerNameHelp};
 use colored::Colorize;
 use indoc::indoc;
@@ -123,7 +123,7 @@ impl ErrorHandler {
                     ),
                 );
                 let agent_name_match = {
-                    let _indent = NestedTextViewIndent::new(Format::Text);
+                    let _indent = DecoratedIndent::new_primary(Format::Text);
                     let agent_name_match = self
                         .ctx
                         .worker_handler()

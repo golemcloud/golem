@@ -119,6 +119,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     fs::write_str(
         &component_manifest_path,
         indoc! { r#"
+            manifestVersion: 1.5.0
+
             app: rust-code-first
 
             environments:
@@ -579,6 +581,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     fs::write_str(
         &component_manifest_path,
         indoc! { r#"
+            manifestVersion: 1.5.0
+
             app: ts-code-first
 
             environments:

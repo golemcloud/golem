@@ -12,8 +12,8 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-log = { version = "0.4.29", features = ["kv"] }
+log = { version = "GOLEM_RUST_LOG_VERSION", features = ["kv"] }
 golem-rust = { GOLEM_RUST_VERSION_OR_PATH, features = ["export_golem_agentic"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-wstd = { version = "=0.6.5", features = ["default", "json"] }
+serde = { version = "GOLEM_RUST_SERDE_VERSION", features = ["derive"] }
+serde_json = "GOLEM_RUST_SERDE_JSON_VERSION"
+wstd = { version = "GOLEM_RUST_WSTD_VERSION", features = ["default", "json"] }

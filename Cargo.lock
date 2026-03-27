@@ -4008,6 +4008,7 @@ dependencies = [
  "reqwest 0.13.2",
  "reqwest-middleware",
  "rustyline",
+ "semver",
  "serde",
  "serde_derive",
  "serde_json",
