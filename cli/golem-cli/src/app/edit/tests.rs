@@ -1269,6 +1269,30 @@ fn agents_md_merge_guides_handles_source_order_not_key_order() {
 }
 
 #[test]
+fn agents_md_extract_managed_guide_returns_only_inner_content() {
+    let source = format!(
+        "# Notes\n\n{}\n{}",
+        make_managed_guide(GuestLanguage::Rust, "# Rust guide\nRust body\n"),
+        make_managed_guide(GuestLanguage::TypeScript, "# TS guide\nTS body\n")
+    );
+
+    let rust = agents_md::extract_managed_guide(&source, GuestLanguage::Rust.id()).unwrap();
+    let ts = agents_md::extract_managed_guide(&source, GuestLanguage::TypeScript.id()).unwrap();
+
+    assert_eq!(rust, "# Rust guide\nRust body");
+    assert_eq!(ts, "# TS guide\nTS body");
+}
+
+#[test]
+fn agents_md_render_managed_guide_uses_expected_markers() {
+    let rendered = agents_md::render_managed_guide(GuestLanguage::Rust.id(), "# Rust guide\nBody");
+
+    assert!(rendered.starts_with("<!-- golem-managed:guide:rust:start -->\n"));
+    assert!(rendered.ends_with("<!-- golem-managed:guide:rust:end -->\n"));
+    assert!(rendered.contains("# Rust guide\nBody\n"));
+}
+
+#[test]
 fn package_json_rejects_json_comments() {
     let source = r#"{
   // comment
