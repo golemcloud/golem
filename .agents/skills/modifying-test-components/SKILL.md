@@ -5,11 +5,11 @@ description: "Building or modifying test WASM components in test-components/. Us
 
 # Modifying Test Components
 
-Worker executor tests and integration tests use pre-compiled WASM files from `test-components/`. These are checked into the repository as binary artifacts.
+Worker executor tests, integration tests, and CLI integration tests use built WASM artifacts from `test-components/`. These `.wasm` files are no longer checked into the repository; compiling the components needed by the selected tests is a separate step before running those tests.
 
 ## Key Rules
 
-1. **Do not rebuild test components unless necessary.** Use existing compiled WASM files.
+1. **Do not rebuild more test components than necessary.** Prefer rebuilding only the components required by the selected tests.
 2. **Only rebuild if the test component has its own `AGENTS.md`** with build instructions. If it doesn't, the component cannot be rebuilt by you.
 3. **SDK changes require rebuilding dependent test components.** If you modify `sdks/rust/` or `sdks/ts/`, you must rebuild any test components that use the changed SDK.
 
@@ -21,7 +21,8 @@ Worker executor tests and integration tests use pre-compiled WASM files from `te
 | Modifying `sdks/rust/` (golem-rust) | Rebuild Rust test components that depend on it |
 | Modifying `sdks/ts/` (golem-ts-sdk) | Rebuild agent template WASM first, then TS test components |
 | Modifying WIT interfaces | Run `cargo make wit`, then rebuild affected components |
-| No source changes | Do not rebuild |
+| Running worker executor / integration / CLI integration tests that depend on missing test-component WASMs | Rebuild the specific components those tests use before running the tests |
+| No source changes and required WASMs already exist | Do not rebuild |
 
 ## Rebuilding a Test Component
 
@@ -95,5 +96,5 @@ To find which test components depend on a specific SDK, check their `Cargo.toml`
 2. If SDK was changed: rebuilt SDK first
 3. If TS SDK was changed: rebuilt agent template WASM before components
 4. Followed the component's specific `AGENTS.md` build instructions
-5. Committed the rebuilt WASM binary
-6. Ran the relevant tests to verify (`cargo make worker-executor-tests` or `cargo make integration-tests`)
+5. Confirmed the expected `.wasm` artifact now exists under `test-components/`
+6. Ran the relevant tests after the rebuild (`cargo make worker-executor-tests`, `cargo make integration-tests`, or `cargo make cli-tests`)

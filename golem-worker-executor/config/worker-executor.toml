@@ -127,6 +127,12 @@ plugin_max_elapsed_time = "5s"
 [oplog.default_snapshotting]
 type = "Disabled"
 
+[oplog.oplog_processor_snapshotting]
+type = "EveryNInvocation"
+
+[oplog.oplog_processor_snapshotting.config]
+count = 10
+
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
@@ -414,6 +420,12 @@ without_time = false
 # [oplog.default_snapshotting]
 # type = "Disabled"
 # 
+# [oplog.oplog_processor_snapshotting]
+# type = "EveryNInvocation"
+# 
+# [oplog.oplog_processor_snapshotting.config]
+# count = 10
+# 
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -648,6 +660,12 @@ without_time = false
 # 
 # [oplog.default_snapshotting]
 # type = "Disabled"
+# 
+# [oplog.oplog_processor_snapshotting]
+# type = "EveryNInvocation"
+# 
+# [oplog.oplog_processor_snapshotting.config]
+# count = 10
 # 
 # [public_worker_api]
 # connect_timeout = "10s"
