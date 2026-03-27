@@ -98,6 +98,7 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::rdbms::ignite::IgniteType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::{
@@ -1982,23 +1983,34 @@ impl Debug for TestOplog {
 
 #[derive(Clone)]
 struct TestRdmsService {
+    ignite: Arc<dyn Rdbms<IgniteType> + Send + Sync>,
     mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync>,
     postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync>,
 }
 
 impl TestRdmsService {
     fn new(rdbms: Arc<dyn rdbms::RdbmsService>, additional_test_deps: AdditionalTestDeps) -> Self {
+        let ignite: Arc<dyn Rdbms<IgniteType> + Send + Sync> =
+            Arc::new(TestRdms::new(rdbms.ignite(), additional_test_deps.clone()));
         let mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync> =
             Arc::new(TestRdms::new(rdbms.mysql(), additional_test_deps.clone()));
         let postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync> = Arc::new(TestRdms::new(
             rdbms.postgres(),
             additional_test_deps.clone(),
         ));
-        Self { mysql, postgres }
+        Self {
+            ignite,
+            mysql,
+            postgres,
+        }
     }
 }
 
 impl rdbms::RdbmsService for TestRdmsService {
+    fn ignite(&self) -> Arc<dyn Rdbms<IgniteType>> {
+        self.ignite.clone()
+    }
+
     fn mysql(&self) -> Arc<dyn Rdbms<MysqlType>> {
         self.mysql.clone()
     }
