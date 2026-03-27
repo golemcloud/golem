@@ -248,7 +248,11 @@ impl AtomicResourceEntry {
         if self.remaining_http_calls() == 0 {
             return false;
         }
-        self.unsynced_http_calls.fetch_add(1, Ordering::AcqRel);
+        self.unsynced_http_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |uhc| {
+                Some(uhc.saturating_add(1))
+            })
+            .ok();
         true
     }
 
@@ -259,7 +263,11 @@ impl AtomicResourceEntry {
         if self.remaining_rpc_calls() == 0 {
             return false;
         }
-        self.unsynced_rpc_calls.fetch_add(1, Ordering::AcqRel);
+        self.unsynced_rpc_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |urc| {
+                Some(urc.saturating_add(1))
+            })
+            .ok();
         true
     }
 }

@@ -3170,13 +3170,13 @@ struct PrivateDurableWorkerState {
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
     http_call_count: u64,
-    /// Per-invocation HTTP call limit from the account's Plan. u64::MAX means unlimited.
+    /// Per-invocation HTTP call limit from the account's Plan.
     per_invocation_http_call_limit: u64,
 
     /// Number of RPC calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
     rpc_call_count: u64,
-    /// Per-invocation RPC call limit from the account's Plan. u64::MAX means unlimited.
+    /// Per-invocation RPC call limit from the account's Plan.
     per_invocation_rpc_call_limit: u64,
 
     /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
@@ -3346,7 +3346,7 @@ impl PrivateDurableWorkerState {
         {
             return Err(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit);
         }
-        self.http_call_count += 1;
+        self.http_call_count = self.http_call_count.saturating_add(1);
         Ok(())
     }
 
@@ -3362,7 +3362,7 @@ impl PrivateDurableWorkerState {
         {
             return Err(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit);
         }
-        self.rpc_call_count += 1;
+        self.rpc_call_count = self.rpc_call_count.saturating_add(1);
         Ok(())
     }
 
