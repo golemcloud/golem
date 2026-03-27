@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use futures::FutureExt;
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
@@ -40,10 +41,9 @@ use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
 };
 use golem_registry_service::services::registry_change_notifier::RegistryChangeNotifier;
+use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::Pool;
-use futures::FutureExt;
 use std::str::FromStr;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;

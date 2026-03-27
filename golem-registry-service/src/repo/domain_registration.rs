@@ -44,7 +44,10 @@ pub trait DomainRegistrationRepo: Send + Sync {
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
-    ) -> Result<Option<RequiresNotificationSignal<DomainRegistrationRecord>>, DomainRegistrationRepoError>;
+    ) -> Result<
+        Option<RequiresNotificationSignal<DomainRegistrationRecord>>,
+        DomainRegistrationRepoError,
+    >;
 
     async fn get_by_id(
         &self,
@@ -88,7 +91,8 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
     async fn create(
         &self,
         record: DomainRegistrationRecord,
-    ) -> Result<RequiresNotificationSignal<DomainRegistrationRecord>, DomainRegistrationRepoError> {
+    ) -> Result<RequiresNotificationSignal<DomainRegistrationRecord>, DomainRegistrationRepoError>
+    {
         let span = Self::span_id(record.domain_registration_id);
         self.repo.create(record).instrument(span).await
     }
@@ -97,7 +101,10 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
-    ) -> Result<Option<RequiresNotificationSignal<DomainRegistrationRecord>>, DomainRegistrationRepoError> {
+    ) -> Result<
+        Option<RequiresNotificationSignal<DomainRegistrationRecord>>,
+        DomainRegistrationRepoError,
+    > {
         let span = Self::span_id(domain_registration_id);
         self.repo
             .delete(domain_registration_id, actor)
@@ -183,7 +190,8 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
     async fn create(
         &self,
         record: DomainRegistrationRecord,
-    ) -> Result<RequiresNotificationSignal<DomainRegistrationRecord>, DomainRegistrationRepoError> {
+    ) -> Result<RequiresNotificationSignal<DomainRegistrationRecord>, DomainRegistrationRepoError>
+    {
         let environment_id = record.environment_id;
         let domain = record.domain.clone();
 
@@ -235,7 +243,10 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
-    ) -> Result<Option<RequiresNotificationSignal<DomainRegistrationRecord>>, DomainRegistrationRepoError> {
+    ) -> Result<
+        Option<RequiresNotificationSignal<DomainRegistrationRecord>>,
+        DomainRegistrationRepoError,
+    > {
         let result = self
             .with_tx_err("delete", |tx| {
                 async move {

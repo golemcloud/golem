@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::REGISTRY_CHANGE_ADVISORY_LOCK_KEY;
+use crate::repo::model::datetime::SqlDateTime;
 use async_trait::async_trait;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -601,8 +601,7 @@ impl DbRegistryChangeRepo<PostgresPool> {
         event: &NewRegistryChangeEvent,
     ) -> RepoResult<ChangeEventId> {
         tx.execute(
-            sqlx::query("SELECT pg_advisory_xact_lock($1)")
-                .bind(REGISTRY_CHANGE_ADVISORY_LOCK_KEY),
+            sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(REGISTRY_CHANGE_ADVISORY_LOCK_KEY),
         )
         .await?;
 

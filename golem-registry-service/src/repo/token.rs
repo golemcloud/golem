@@ -218,8 +218,10 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                 Box::pin(async move {
                     let deleted_row = tx
                         .fetch_optional(
-                            sqlx::query("DELETE FROM tokens WHERE token_id = $1 RETURNING account_id")
-                                .bind(token_id),
+                            sqlx::query(
+                                "DELETE FROM tokens WHERE token_id = $1 RETURNING account_id",
+                            )
+                            .bind(token_id),
                         )
                         .await?;
 
@@ -231,7 +233,8 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
                         .try_get::<Uuid, _>("account_id")
                         .map_err(RepoError::from)?;
 
-                    let event = NewRegistryChangeEvent::account_tokens_invalidated(deleted_account_id);
+                    let event =
+                        NewRegistryChangeEvent::account_tokens_invalidated(deleted_account_id);
                     DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &event)
                         .await?;
                     Ok(Some(deleted_account_id))

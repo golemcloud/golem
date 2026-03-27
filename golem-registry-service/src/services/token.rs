@@ -233,8 +233,7 @@ impl TokenService {
         auth.authorize_account_action(token.account_id, AccountAction::DeleteToken)?;
 
         if let Some(account_id) = self.token_repo.delete(token_id.0).await? {
-            let _ = account_id
-                .signal_new_events_available(&self.registry_change_notifier);
+            let _ = account_id.signal_new_events_available(&self.registry_change_notifier);
         }
 
         Ok(())

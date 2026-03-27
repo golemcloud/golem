@@ -38,12 +38,18 @@ pub trait ResourceDefinitionRepo: Send + Sync {
     async fn create(
         &self,
         args: ResourceDefinitionCreationArgs,
-    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError>;
+    ) -> Result<
+        RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>,
+        ResourceDefinitionRepoError,
+    >;
 
     async fn update(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError>;
+    ) -> Result<
+        RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>,
+        ResourceDefinitionRepoError,
+    >;
 
     async fn delete(
         &self,
@@ -90,7 +96,10 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
     async fn create(
         &self,
         args: ResourceDefinitionCreationArgs,
-    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>,
+        ResourceDefinitionRepoError,
+    > {
         let span = info_span!(
             SPAN_NAME,
             resource_definition_id = %args.revision.resource_definition_id,
@@ -102,7 +111,10 @@ impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefi
     async fn update(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>,
+        ResourceDefinitionRepoError,
+    > {
         let span = info_span!(
             SPAN_NAME,
             resource_definition_id = %revision.resource_definition_id,
@@ -331,7 +343,10 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
     async fn create(
         &self,
         args: ResourceDefinitionCreationArgs,
-    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>,
+        ResourceDefinitionRepoError,
+    > {
         self.with_tx_err("create", |tx| {
             Self::create_within_transaction(tx, args).boxed()
         })
@@ -342,7 +357,10 @@ impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
     async fn update(
         &self,
         revision: ResourceDefinitionRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>, ResourceDefinitionRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<ResourceDefinitionExtRevisionRecord>,
+        ResourceDefinitionRepoError,
+    > {
         self.with_tx_err("update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision).await?;

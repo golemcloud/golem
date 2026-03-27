@@ -102,8 +102,7 @@ async fn dispatch_event(
                 DeploymentRevision::new(*deployment_revision),
                 CurrentDeploymentRevision::new(*current_deployment_revision),
             ) {
-                agent_resolution_cache
-                    .update_latest_revision(*environment_id, rev, current_rev);
+                agent_resolution_cache.update_latest_revision(*environment_id, rev, current_rev);
             }
         }
         RegistryInvalidationEvent::DomainRegistrationChanged {

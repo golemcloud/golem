@@ -533,7 +533,6 @@ impl RegistryServiceGrpcApi {
             current_deployment_revision: resolved.current_deployment_revision.map(|r| r.get()),
         })
     }
-
 }
 
 #[async_trait]

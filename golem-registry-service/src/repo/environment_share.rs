@@ -39,17 +39,26 @@ pub trait EnvironmentShareRepo: Send + Sync {
         environment_id: Uuid,
         revision: EnvironmentShareRevisionRecord,
         grantee_account_id: Uuid,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError>;
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    >;
 
     async fn update(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError>;
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    >;
 
     async fn delete(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError>;
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    >;
 
     async fn get_by_id(
         &self,
@@ -95,7 +104,10 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
         environment_id: Uuid,
         revision: EnvironmentShareRevisionRecord,
         grantee_account_id: Uuid,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    > {
         let span = Self::span_environment_id(environment_id);
         self.repo
             .create(environment_id, revision, grantee_account_id)
@@ -106,7 +118,10 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
     async fn update(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    > {
         let span = Self::span_environment_share_id(revision.environment_share_id);
         self.repo.update(revision).instrument(span).await
     }
@@ -114,7 +129,10 @@ impl<Repo: EnvironmentShareRepo> EnvironmentShareRepo for LoggedEnvironmentShare
     async fn delete(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    > {
         let span = Self::span_environment_share_id(revision.environment_share_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -208,7 +226,10 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         environment_id: Uuid,
         revision: EnvironmentShareRevisionRecord,
         grantee_account_id: Uuid,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    > {
         let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
             async move {
                 let environment_share_record: EnvironmentShareRecord = tx
@@ -249,7 +270,10 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
     async fn update(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    > {
         let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
@@ -291,7 +315,10 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: EnvironmentShareRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>, EnvironmentShareRepoError> {
+    ) -> Result<
+        RequiresNotificationSignal<EnvironmentShareExtRevisionRecord>,
+        EnvironmentShareRepoError,
+    > {
         let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision.clone()).await?;

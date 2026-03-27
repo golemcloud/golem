@@ -100,7 +100,8 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         environment_id: Uuid,
         name: String,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
+    {
         let span = Self::span_environment_id(environment_id);
         self.repo
             .create(environment_id, name, revision)
@@ -112,7 +113,8 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
+    {
         let span = Self::span_security_scheme_id(revision.security_scheme_id);
         self.repo
             .update(environment_id, revision)
@@ -124,7 +126,8 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
+    {
         let span = Self::span_security_scheme_id(revision.security_scheme_id);
         self.repo
             .delete(environment_id, revision)
@@ -239,7 +242,8 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         environment_id: Uuid,
         name: String,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
+    {
         let result = self
             .with_tx_err("create", |tx| {
                 async move {
@@ -288,7 +292,8 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
+    {
         let result = self
             .with_tx_err("update", |tx| {
                 async move {
@@ -335,7 +340,8 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         &self,
         environment_id: Uuid,
         revision: SecuritySchemeRevisionRecord,
-    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError> {
+    ) -> Result<RequiresNotificationSignal<SecuritySchemeExtRevisionRecord>, SecuritySchemeRepoError>
+    {
         let result = self
             .with_tx_err("delete", |tx| {
                 async move {
