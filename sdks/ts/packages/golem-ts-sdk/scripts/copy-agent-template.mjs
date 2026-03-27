@@ -11,7 +11,7 @@ const sourcePath = path.join(
   'target',
   'wasm32-wasip1',
   'release',
-  'agent_guest.wasm'
+  'agent_guest.wasm',
 );
 const targetPath = path.join(packageDir, 'wasm', 'agent_guest.wasm');
 
