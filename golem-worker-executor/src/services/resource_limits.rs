@@ -800,13 +800,8 @@ mod tests {
             &self,
             _service_name: &'static str,
             _shutdown_token: Option<tokio_util::sync::CancellationToken>,
-            _on_event: Box<
-                dyn Fn(
-                        golem_common::model::agent::RegistryInvalidationEvent,
-                    )
-                        -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-                    + Send
-                    + Sync,
+            _handler: std::sync::Arc<
+                dyn golem_service_base::clients::registry::RegistryInvalidationHandler,
             >,
         ) {
             unimplemented!()

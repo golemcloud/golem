@@ -51,6 +51,7 @@ use tracing::Instrument;
 use tracing::{debug, info, warn};
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
+use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 pub use model::{Pod, RoutingTable};
 pub use persistence::{
     RoutingTablePersistence, RoutingTablePostgresPersistence, RoutingTableRedisPersistence,
@@ -241,7 +242,16 @@ pub async fn run(
             &shard_manager_config.resource_definition_fetcher,
         ));
     let quota_service = QuotaService::new(shard_manager_config.quota.clone(), fetcher.clone());
-    registry_event_subscriber::start(registry_service, fetcher, quota_service.clone(), join_set);
+
+    join_set.spawn(async move {
+        ShardManagerRegistryInvalidationHandler::run(
+            registry_service,
+            fetcher,
+            quota_service.clone(),
+        )
+        .await;
+        Ok(())
+    });
 
     let shard_manager = ShardManagerServiceImpl::new(
         persistence_service,

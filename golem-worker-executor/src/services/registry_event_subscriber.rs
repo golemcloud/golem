@@ -15,97 +15,101 @@
 use crate::services::agent_types::AgentTypesService;
 use crate::services::environment_state::EnvironmentStateService;
 use golem_common::model::agent::RegistryInvalidationEvent;
-use golem_service_base::clients::registry::RegistryService;
+use golem_service_base::clients::registry::{
+    RegistryInvalidationHandler, RegistryService,
+};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-pub async fn run_registry_event_subscriber(
-    registry_service: Arc<dyn RegistryService>,
+pub(crate) struct WorkerExecutorRegistryInvalidationHandler {
     environment_state_service: Arc<dyn EnvironmentStateService>,
     agent_types_service: Arc<dyn AgentTypesService>,
-    shutdown_token: CancellationToken,
-) {
-    registry_service
-        .run_registry_invalidation_event_subscriber(
-            "worker-executor",
-            Some(shutdown_token),
-            Box::new(move |event| {
-                let environment_state_service = environment_state_service.clone();
-                let agent_types_service = agent_types_service.clone();
-                Box::pin(async move {
-                    dispatch_event(&event, &*environment_state_service, &*agent_types_service)
-                        .await;
-                })
-            }),
-        )
-        .await;
 }
 
-async fn dispatch_event(
-    event: &RegistryInvalidationEvent,
-    environment_state_service: &dyn EnvironmentStateService,
-    agent_types_service: &dyn AgentTypesService,
-) {
-    match event {
-        RegistryInvalidationEvent::CursorExpired { .. } => {
-            warn!("Registry invalidation cursor expired, flushing all caches");
-            environment_state_service.invalidate_all().await;
-            agent_types_service.invalidate_all().await;
-        }
-        RegistryInvalidationEvent::DeploymentChanged { environment_id, .. } => {
-            debug!(
-                environment_id = %environment_id,
-                "Received deployment changed event, invalidating environment caches"
-            );
-            environment_state_service
-                .invalidate_environment(*environment_id)
-                .await;
-            agent_types_service
-                .invalidate_environment(*environment_id)
-                .await;
-        }
-        RegistryInvalidationEvent::DomainRegistrationChanged { environment_id, .. } => {
-            debug!(
-                environment_id = %environment_id,
-                "Received domain registration changed event, ignoring"
-            );
-        }
-        RegistryInvalidationEvent::AccountTokensInvalidated { account_id, .. } => {
-            debug!(
-                account_id = %account_id,
-                "Received account tokens invalidated event, ignoring"
-            );
-        }
-        RegistryInvalidationEvent::EnvironmentPermissionsChanged {
-            environment_id,
-            grantee_account_id,
-            ..
-        } => {
-            debug!(
-                environment_id = %environment_id,
-                grantee_account_id = %grantee_account_id,
-                "Received environment permissions changed event, ignoring"
-            );
-        }
-        RegistryInvalidationEvent::SecuritySchemeChanged { environment_id, .. } => {
-            debug!(
-                environment_id = %environment_id,
-                "Received security scheme changed event, ignoring"
-            );
-        }
-        RegistryInvalidationEvent::ResourceDefinitionChanged {
-            environment_id,
-            resource_definition_id,
-            resource_name,
-            ..
-        } => {
-            debug!(
-                environment_id = %environment_id,
-                resource_definition_id = %resource_definition_id,
-                resource_name = %resource_name,
-                "Received resource definition changed event, ignoring"
-            );
+impl WorkerExecutorRegistryInvalidationHandler {
+    pub async fn run(
+        registry_service: Arc<dyn RegistryService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
+        shutdown_token: CancellationToken,
+    ) {
+        registry_service
+            .run_registry_invalidation_event_subscriber(
+                "worker-executor",
+                Some(shutdown_token),
+                Arc::new(Self {
+                    environment_state_service,
+                    agent_types_service,
+                }),
+            )
+            .await;
+    }
+}
+
+#[async_trait::async_trait]
+impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
+    async fn on_event(&self, event: RegistryInvalidationEvent) {
+        match &event {
+            RegistryInvalidationEvent::CursorExpired { .. } => {
+                warn!("Registry invalidation cursor expired, flushing all caches");
+                self.environment_state_service.invalidate_all().await;
+                self.agent_types_service.invalidate_all().await;
+            }
+            RegistryInvalidationEvent::DeploymentChanged { environment_id, .. } => {
+                debug!(
+                    environment_id = %environment_id,
+                    "Received deployment changed event, invalidating environment caches"
+                );
+                self.environment_state_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+                self.agent_types_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+            }
+            RegistryInvalidationEvent::DomainRegistrationChanged { environment_id, .. } => {
+                debug!(
+                    environment_id = %environment_id,
+                    "Received domain registration changed event, ignoring"
+                );
+            }
+            RegistryInvalidationEvent::AccountTokensInvalidated { account_id, .. } => {
+                debug!(
+                    account_id = %account_id,
+                    "Received account tokens invalidated event, ignoring"
+                );
+            }
+            RegistryInvalidationEvent::EnvironmentPermissionsChanged {
+                environment_id,
+                grantee_account_id,
+                ..
+            } => {
+                debug!(
+                    environment_id = %environment_id,
+                    grantee_account_id = %grantee_account_id,
+                    "Received environment permissions changed event, ignoring"
+                );
+            }
+            RegistryInvalidationEvent::SecuritySchemeChanged { environment_id, .. } => {
+                debug!(
+                    environment_id = %environment_id,
+                    "Received security scheme changed event, ignoring"
+                );
+            }
+            RegistryInvalidationEvent::ResourceDefinitionChanged {
+                environment_id,
+                resource_definition_id,
+                resource_name,
+                ..
+            } => {
+                debug!(
+                    environment_id = %environment_id,
+                    resource_definition_id = %resource_definition_id,
+                    resource_name = %resource_name,
+                    "Received resource definition changed event, ignoring"
+                );
+            }
         }
     }
 }

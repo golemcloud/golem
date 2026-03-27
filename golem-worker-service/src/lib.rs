@@ -26,6 +26,7 @@ pub mod service;
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
 use crate::mcp::{GolemAgentMcpServer, McpBearerAuth, oauth_proxy_routes};
+use crate::service::registry_event_subscriber::WorkerServiceRegistryInvalidationHandler;
 use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -89,7 +90,7 @@ impl WorkerService {
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
         join_set.spawn(async move {
-            service::registry_event_subscriber::run_registry_event_subscriber(
+            WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,

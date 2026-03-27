@@ -43,7 +43,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
+use golem_common::model::agent::{
+    AgentTypeName, RegisteredAgentType, RegistryInvalidationEvent, ResolvedAgentType,
+};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -58,14 +60,18 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::future::Future;
-use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::{info, warn};
+
+#[async_trait]
+pub trait RegistryInvalidationHandler: Send + Sync {
+    async fn on_event(&self, event: RegistryInvalidationEvent);
+}
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -221,13 +227,7 @@ pub trait RegistryService: Send + Sync {
         &self,
         service_name: &'static str,
         shutdown_token: Option<CancellationToken>,
-        on_event: Box<
-            dyn Fn(
-                    golem_common::model::agent::RegistryInvalidationEvent,
-                ) -> Pin<Box<dyn Future<Output = ()> + Send>>
-                + Send
-                + Sync,
-        >,
+        handler: Arc<dyn RegistryInvalidationHandler>,
     );
 }
 
@@ -337,13 +337,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         service_name: &'static str,
         shutdown_token: Option<CancellationToken>,
-        on_event: Box<
-            dyn Fn(
-                    golem_common::model::agent::RegistryInvalidationEvent,
-                ) -> Pin<Box<dyn Future<Output = ()> + Send>>
-                + Send
-                + Sync,
-        >,
+        handler: Arc<dyn RegistryInvalidationHandler>,
     ) {
         use futures::StreamExt;
 
@@ -401,7 +395,7 @@ impl RegistryService for GrpcRegistryService {
                                 }
 
                                 last_seen_event_id = Some(event.event_id());
-                                on_event(event).await;
+                                handler.on_event(event).await;
                             }
                             Some(Err(e)) => {
                                 warn!(
