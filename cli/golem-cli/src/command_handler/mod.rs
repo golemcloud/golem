@@ -410,7 +410,25 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .await
                 }
                 GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
-            GolemCliSubcommand::Mcp => crate::mcp_server::run_stdio_loop(self.ctx.clone()).await,
+            GolemCliSubcommand::Mcp { serve, serve_port, serve_host } => {
+                    if serve {
+                        #[cfg(feature = "mcp")]
+                        {
+                            crate::mcp_http::run_http_server(&serve_host, serve_port)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("MCP HTTP server error: {e}"))
+                        }
+                        #[cfg(not(feature = "mcp"))]
+                        {
+                            anyhow::bail!(
+                                "HTTP MCP server requires the 'mcp' feature. \
+                                 Build with: cargo build --features mcp"
+                            )
+                        }
+                    } else {
+                        crate::mcp_server::run_stdio_loop(self.ctx.clone()).await
+                    }
+                }
             }
         })
     }

@@ -13,6 +13,7 @@ build = "build.rs"
 [features]
 default = []
 server-commands = []
+mcp = ["dep:rust-mcp-sdk"]
 
 [lib]
 harness = false
@@ -94,6 +95,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }
+
+# MCP HTTP/SSE transport (optional)
+rust-mcp-sdk = { version = "0.8", optional = true, features = ["server", "hyper-server"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }

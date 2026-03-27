@@ -772,8 +772,20 @@ pub enum GolemCliSubcommand {
         /// Selects shell
         shell: clap_complete::Shell,
     },
-    /// Start the Model Context Protocol (MCP) server over stdio
-    Mcp,
+    /// Start the Model Context Protocol (MCP) server.
+    /// Without --serve, runs over stdio (default).
+    /// With --serve, starts an HTTP server with Streamable HTTP + SSE transport.
+    Mcp {
+        /// Enable HTTP server mode instead of stdio
+        #[clap(long)]
+        serve: bool,
+        /// Port for the HTTP MCP server (default: 9007)
+        #[clap(long, default_value = "9007")]
+        serve_port: u16,
+        /// Host to bind the HTTP server to (default: 127.0.0.1)
+        #[clap(long, default_value = "127.0.0.1")]
+        serve_host: String,
+    },
 }
 
 pub mod shared_args {

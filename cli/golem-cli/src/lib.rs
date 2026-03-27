@@ -42,6 +42,8 @@ pub mod fs;
 pub mod fuzzy;
 pub mod log;
 pub mod mcp_server;
+#[cfg(feature = "mcp")]
+pub mod mcp_http;
 pub mod model;
 pub mod process;
 pub mod sdk_overrides;
