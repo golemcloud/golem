@@ -18,9 +18,7 @@ use crate::service::auth::AuthService;
 use golem_common::model::agent::RegistryInvalidationEvent;
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
-use golem_service_base::clients::registry::{
-    RegistryInvalidationHandler, RegistryService,
-};
+use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -79,8 +77,11 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     DeploymentRevision::new(*deployment_revision),
                     CurrentDeploymentRevision::new(*current_deployment_revision),
                 ) {
-                    self.agent_resolution_cache
-                        .update_latest_revision(*environment_id, rev, current_rev);
+                    self.agent_resolution_cache.update_latest_revision(
+                        *environment_id,
+                        rev,
+                        current_rev,
+                    );
                 }
             }
             RegistryInvalidationEvent::DomainRegistrationChanged {

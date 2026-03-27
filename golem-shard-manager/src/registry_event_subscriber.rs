@@ -16,7 +16,6 @@ use crate::quota::{QuotaService, ResourceDefinitionFetcher};
 use golem_common::model::agent::RegistryInvalidationEvent;
 use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
-use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
 pub(crate) struct ShardManagerRegistryInvalidationHandler {

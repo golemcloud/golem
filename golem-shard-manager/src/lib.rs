@@ -243,14 +243,13 @@ pub async fn run(
         ));
     let quota_service = QuotaService::new(shard_manager_config.quota.clone(), fetcher.clone());
 
-    join_set.spawn(async move {
-        ShardManagerRegistryInvalidationHandler::run(
-            registry_service,
-            fetcher,
-            quota_service.clone(),
-        )
-        .await;
-        Ok(())
+    join_set.spawn({
+        let quota_service = quota_service.clone();
+        async move {
+            ShardManagerRegistryInvalidationHandler::run(registry_service, fetcher, quota_service)
+                .await;
+            Ok(())
+        }
     });
 
     let shard_manager = ShardManagerServiceImpl::new(

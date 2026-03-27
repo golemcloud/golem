@@ -15,9 +15,7 @@
 use crate::services::agent_types::AgentTypesService;
 use crate::services::environment_state::EnvironmentStateService;
 use golem_common::model::agent::RegistryInvalidationEvent;
-use golem_service_base::clients::registry::{
-    RegistryInvalidationHandler, RegistryService,
-};
+use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
