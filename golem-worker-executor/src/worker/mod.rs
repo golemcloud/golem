@@ -2737,7 +2737,7 @@ fn resolve_agent_properties<T: HasConfig>(
     } else if is_snapshot_capable_oplog_processor(metadata) {
         // Oplog processor that exports save-snapshot/load-snapshot — use the
         // oplog-processor-specific global config
-        normalize_snapshot_policy(&deps.config().oplog.oplog_processor_snapshotting)
+        deps.config().oplog.oplog_processor_snapshotting.clone()
     } else {
         // Non-agent, non-snapshot-capable-oplog-processor — use default
         resolve_snapshot_policy(&deps.config().oplog.default_snapshotting, None)
@@ -2755,7 +2755,7 @@ fn resolve_snapshot_policy(
 ) -> SnapshotPolicy {
     match agent_snapshotting {
         None | Some(Snapshotting::Enabled(SnapshottingConfig::Default(_))) => {
-            normalize_snapshot_policy(default_config)
+            default_config.clone()
         }
         Some(Snapshotting::Disabled(_)) => SnapshotPolicy::Disabled,
         Some(Snapshotting::Enabled(SnapshottingConfig::Periodic(p))) => {
@@ -2773,28 +2773,6 @@ fn resolve_snapshot_policy(
                 SnapshotPolicy::Disabled
             } else {
                 SnapshotPolicy::EveryNInvocation { count: n.count }
-            }
-        }
-    }
-}
-
-fn normalize_snapshot_policy(policy: &SnapshotPolicy) -> SnapshotPolicy {
-    match policy {
-        SnapshotPolicy::Disabled => SnapshotPolicy::Disabled,
-        SnapshotPolicy::Periodic { period } => {
-            if period.is_zero() {
-                warn!("Snapshot periodic duration is zero, disabling");
-                SnapshotPolicy::Disabled
-            } else {
-                SnapshotPolicy::Periodic { period: *period }
-            }
-        }
-        SnapshotPolicy::EveryNInvocation { count } => {
-            if *count == 0 {
-                warn!("Snapshot every-n-invocation count is zero, disabling");
-                SnapshotPolicy::Disabled
-            } else {
-                SnapshotPolicy::EveryNInvocation { count: *count }
             }
         }
     }

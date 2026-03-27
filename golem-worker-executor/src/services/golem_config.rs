@@ -29,6 +29,7 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
@@ -1156,7 +1157,7 @@ impl SafeDisplay for AgentWebhooksServiceConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", content = "config")]
 #[derive(Default)]
 pub enum SnapshotPolicy {
@@ -1169,6 +1170,59 @@ pub enum SnapshotPolicy {
     EveryNInvocation {
         count: u16,
     },
+}
+
+impl SnapshotPolicy {
+    /// Normalizes the policy by disabling zero-valued configurations.
+    pub fn normalize(self) -> Self {
+        match &self {
+            SnapshotPolicy::Disabled => self,
+            SnapshotPolicy::Periodic { period } => {
+                if period.is_zero() {
+                    warn!("Snapshot periodic duration is zero, disabling");
+                    SnapshotPolicy::Disabled
+                } else {
+                    self
+                }
+            }
+            SnapshotPolicy::EveryNInvocation { count } => {
+                if *count == 0 {
+                    warn!("Snapshot every-n-invocation count is zero, disabling");
+                    SnapshotPolicy::Disabled
+                } else {
+                    self
+                }
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SnapshotPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", content = "config")]
+        enum Raw {
+            Disabled,
+            Periodic {
+                #[serde(with = "humantime_serde")]
+                period: Duration,
+            },
+            EveryNInvocation {
+                count: u16,
+            },
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let policy = match raw {
+            Raw::Disabled => SnapshotPolicy::Disabled,
+            Raw::Periodic { period } => SnapshotPolicy::Periodic { period },
+            Raw::EveryNInvocation { count } => SnapshotPolicy::EveryNInvocation { count },
+        };
+        Ok(policy.normalize())
+    }
 }
 
 impl SafeDisplay for SnapshotPolicy {
