@@ -21,11 +21,18 @@ import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegist
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
+import { AgentClassName } from './agentClassName';
+import { clearAgentValidationError, getAgentValidationError } from './decorators/agent';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
 export { description } from './decorators/description';
-export { agent, AgentDecoratorOptions, SnapshottingOption } from './decorators/agent';
+export {
+  agent,
+  AgentDecoratorOptions,
+  SnapshottingOption,
+  clearAgentValidationError,
+} from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
 export * from './agentClassName';
@@ -98,6 +105,13 @@ async function invoke(
 
 async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
   try {
+    // Check if there were any validation errors during agent registration
+    const validationError = getAgentValidationError();
+    if (validationError) {
+      // Don't return any agent types if there was a validation error
+      throw createCustomError(validationError.message);
+    }
+
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
     // Have to throw RuntimeError, as the discover-agent-types WIT function returns result<list<agent-type>, RuntimeError>
