@@ -410,6 +410,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .await
                 }
                 GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
+            GolemCliSubcommand::Mcp => crate::mcp_server::run_stdio_loop(self.ctx.clone()).await,
             }
         })
     }

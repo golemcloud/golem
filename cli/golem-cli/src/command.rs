@@ -772,6 +772,8 @@ pub enum GolemCliSubcommand {
         /// Selects shell
         shell: clap_complete::Shell,
     },
+    /// Start the Model Context Protocol (MCP) server over stdio
+    Mcp,
 }
 
 pub mod shared_args {
