@@ -31,6 +31,7 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tracing::{debug, Instrument};
 
 use crate::services::golem_config::{FilesystemStorageConfig, MemoryConfig};
+use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -48,6 +49,7 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     worker_memory: Arc<Semaphore>,
     worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
+    concurrent_agents: Arc<ConcurrentAgentsSemaphore>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
 }
@@ -67,6 +69,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 storage_config.worker_filesystem_storage(),
                 storage_config.acquire_retry_delay,
             )),
+            concurrent_agents: Arc::new(ConcurrentAgentsSemaphore::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             priority_allocation_lock: Arc::new(Mutex::new(())),
         }
@@ -286,6 +289,67 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     pub fn filesystem_storage_semaphore(&self) -> Arc<FilesystemStorageSemaphore> {
         self.worker_filesystem_storage.clone()
+    }
+
+    /// Register an account with the per-account concurrent agent semaphore.
+    ///
+    /// Must be called (from `Worker::new`) before any `acquire_concurrent_agent`
+    /// call for the account. Idempotent — safe to call multiple times.
+    pub async fn register_account_concurrency(
+        &self,
+        account_id: AccountId,
+        resource_entry: Arc<AtomicResourceEntry>,
+    ) {
+        self.concurrent_agents
+            .register_account(account_id, resource_entry)
+            .await;
+    }
+
+    /// Blocking acquire of one concurrent-agent permit for `account_id`.
+    ///
+    /// Before blocking, attempts to evict the oldest idle agent belonging to the
+    /// same account to free up a slot. If no idle agent exists, waits until a
+    /// running agent from the same account stops and returns its permit.
+    ///
+    /// Returns immediately (zero-cost permit) for accounts whose plan limit is
+    /// at or above the unlimited sentinel.
+    pub async fn acquire_concurrent_agent(&self, account_id: AccountId) -> OwnedSemaphorePermit {
+        let workers = self.workers.clone();
+        self.concurrent_agents
+            .acquire(account_id, move || async move {
+                Self::try_free_up_concurrent_agent_slot(&workers, account_id).await
+            })
+            .await
+    }
+
+    /// Evict the oldest idle agent belonging to `account_id` to free a
+    /// concurrent-agent slot. Returns `true` if an agent was successfully
+    /// stopped (its permit will be returned to the semaphore via `Drop`).
+    async fn try_free_up_concurrent_agent_slot(
+        workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+        account_id: AccountId,
+    ) -> bool {
+        let mut possibilities = Vec::new();
+
+        for (_agent_id, worker) in workers.iter().await {
+            // Only consider idle agents belonging to the same account.
+            if worker.get_initial_worker_metadata().created_by == account_id
+                && worker.is_currently_idle_but_running().await
+            {
+                let last_changed = worker.last_execution_state_change();
+                possibilities.push((worker, last_changed));
+            }
+        }
+
+        // Evict the oldest idle agent (smallest timestamp).
+        possibilities.sort_by_key(|(_, last_changed)| last_changed.to_millis());
+
+        for (worker, _) in possibilities {
+            if worker.stop_if_idle().await {
+                return true;
+            }
+        }
+        false
     }
 
     async fn try_free_up_filesystem_storage(

@@ -130,7 +130,7 @@ impl ConcurrentAgentsSemaphore {
         try_free_up: F,
     ) -> OwnedSemaphorePermit
     where
-        F: Fn() -> Fut,
+        F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
         let semaphore = match self
@@ -159,44 +159,44 @@ impl ConcurrentAgentsSemaphore {
                 .expect("acquiring 0 permits must always succeed");
         }
 
-        // Attempt eviction of an idle agent first. If one is evicted its permit
-        // is returned to the pool via Drop, so we can grab it immediately.
-        // If nothing is evicted, wait efficiently on the semaphore until a
-        // running agent stops.
-        loop {
-            match semaphore.clone().try_acquire_owned() {
-                Ok(permit) => {
-                    debug!(
-                        "ConcurrentAgentsSemaphore: acquired permit for {account_id}, available: {}",
-                        semaphore.available_permits()
-                    );
-                    break permit;
-                }
-                Err(TryAcquireError::Closed) => {
-                    panic!("concurrent agents semaphore for {account_id} has been closed")
-                }
-                Err(TryAcquireError::NoPermits) => {
-                    debug!(
-                        "ConcurrentAgentsSemaphore: no permits for {account_id}, trying to free one up"
-                    );
-                    if try_free_up().await {
-                        // An idle agent was evicted; its Drop returns the permit
-                        // to the pool. Retry the try_acquire immediately.
-                        debug!(
-                            "ConcurrentAgentsSemaphore: freed a slot for {account_id}, retrying"
-                        );
-                        continue;
+        // First, try to acquire immediately (optimistic path — capacity may already be free).
+        // Then attempt a single eviction if needed, and retry once.
+        // If still no capacity, wait efficiently on the semaphore.
+        match semaphore.clone().try_acquire_owned() {
+            Ok(permit) => {
+                debug!(
+                    "ConcurrentAgentsSemaphore: acquired permit for {account_id} immediately, available: {}",
+                    semaphore.available_permits()
+                );
+                permit
+            }
+            Err(TryAcquireError::Closed) => {
+                panic!("concurrent agents semaphore for {account_id} has been closed")
+            }
+            Err(TryAcquireError::NoPermits) => {
+                debug!(
+                    "ConcurrentAgentsSemaphore: no permits for {account_id}, trying to free one up"
+                );
+                if try_free_up().await {
+                    // An idle agent was evicted; its Drop returns the permit to
+                    // the pool. Attempt a non-blocking acquire — it should now
+                    // succeed, but fall through to acquire_owned if not.
+                    debug!("ConcurrentAgentsSemaphore: freed a slot for {account_id}, retrying");
+                    if let Ok(permit) = semaphore.clone().try_acquire_owned() {
+                        return permit;
                     }
-                    // Nothing to evict — wait until a running agent stops.
-                    debug!("ConcurrentAgentsSemaphore: nothing to free for {account_id}, waiting");
-                    let permit =
-                        semaphore.clone().acquire_owned().await.expect(
-                            "concurrent agents semaphore for {account_id} must not be closed",
-                        );
-                    // Re-sync after waking in case the plan changed while waiting.
-                    self.sync_semaphore_limit(&account_id, &semaphore).await;
-                    break permit;
                 }
+                // Nothing to evict (or eviction raced with another waiter) —
+                // wait efficiently until a running agent stops and returns its permit.
+                debug!("ConcurrentAgentsSemaphore: nothing to free for {account_id}, waiting");
+                let permit = semaphore
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("concurrent agents semaphore for {account_id} must not be closed");
+                // Re-sync after waking in case the plan changed while waiting.
+                self.sync_semaphore_limit(&account_id, &semaphore).await;
+                permit
             }
         }
     }

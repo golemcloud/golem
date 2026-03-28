@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start_with_table_limit, LastUniqueId, PrecompiledComponent, TestContext,
-    WorkerExecutorTestDependencies,
+    start_with_concurrent_agent_limit, start_with_table_limit, LastUniqueId, PrecompiledComponent,
+    TestContext, WorkerExecutorTestDependencies,
 };
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -153,6 +155,156 @@ async fn table_exceeding_limit_not_retried(
             || err_str.contains("AlreadyExists"),
         "expected a relevant error on second attempt, got: {err_str}"
     );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent agent limit tests
+// ---------------------------------------------------------------------------
+
+/// When the concurrent agent limit is not yet reached, agents start immediately
+/// without waiting for a permit.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_not_reached_starts_immediately(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_concurrent_agent_limit(deps, &context, 2).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let a1 = agent_id!("Counter", "concurrent-limit-ok-1");
+    executor.start_agent(&component.id, a1.clone()).await?;
+
+    let a2 = agent_id!("Counter", "concurrent-limit-ok-2");
+    executor.start_agent(&component.id, a2.clone()).await?;
+
+    // Both agents should be invocable.
+    executor
+        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
+        .await?;
+
+    Ok(())
+}
+
+/// When the concurrent agent limit is reached and the running agent becomes
+/// idle, starting a new agent automatically evicts the idle one to free a
+/// slot — no manual deletion required.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_idle_agent_is_evicted_to_make_room(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // Limit of 1: only one agent may hold a permit at a time.
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    // Start a1 — takes the only permit.
+    let a1 = agent_id!("Counter", "concurrent-evict-1");
+    let a1_id = executor.start_agent(&component.id, a1.clone()).await?;
+
+    // Invoke a1 so it runs and then returns to Idle.
+    executor
+        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
+        .await?;
+
+    // Wait until a1 is Idle — it can now be evicted.
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // Spawn a2's start in the background. The permit acquisition will detect
+    // a1 is idle and evict it automatically, without any manual intervention.
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let a2 = agent_id!("Counter", "concurrent-evict-2");
+    let a2_clone = a2.clone();
+    tokio::spawn(async move {
+        executor_clone
+            .start_agent(&component_clone.id, a2_clone)
+            .await
+    });
+
+    // a2's invocation will complete once the eviction unblocks it.
+    // No sleep, no manual delete — eviction is the feature under test.
+    executor
+        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
+        .await?;
+
+    Ok(())
+}
+
+/// When the limit is reached with no idle agents, a new agent waits in
+/// WaitingForPermit until a running agent finishes and its permit is returned.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    // Start a1 — takes the only permit. Keep it busy with an invocation so it
+    // is Running (not Idle) and cannot be evicted.
+    let a1 = agent_id!("Counter", "concurrent-wait-running-1");
+    let a1_id = executor.start_agent(&component.id, a1.clone()).await?;
+
+    // Spawn a2's start while a1 is holding the permit and is not idle.
+    // a2 will block in WaitingForPermit.
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let a2 = agent_id!("Counter", "concurrent-wait-running-2");
+    let a2_clone = a2.clone();
+    tokio::spawn(async move {
+        executor_clone
+            .start_agent(&component_clone.id, a2_clone)
+            .await
+    });
+
+    // Wait for a2 to appear as Idle (registered but waiting for a permit).
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // Now invoke a1 to completion — this returns its permit and unblocks a2.
+    executor
+        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
+        .await?;
+
+    // a2 should now be able to run.
+    executor
+        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
+        .await?;
 
     Ok(())
 }
