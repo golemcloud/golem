@@ -157,7 +157,7 @@ async fn start_components(
     )
     .await?;
 
-    let shard_manager = run_shard_manager(shard_manager_config(args), join_set).await?;
+    let shard_manager = run_shard_manager(shard_manager_config(args, &registry_service), join_set).await?;
 
     let worker_service = run_worker_service(
         worker_service_config(args, &shard_manager, &registry_service),
@@ -271,7 +271,10 @@ fn registry_service_config(
     }
 }
 
-fn shard_manager_config(args: &LaunchArgs) -> ShardManagerConfig {
+fn shard_manager_config(
+    args: &LaunchArgs,
+    registry_service_run_details: &golem_registry_service::SingleExecutableRunDetails,
+) -> ShardManagerConfig {
     use golem_shard_manager::shard_manager_config::{
         FileSystemPersistenceConfig, HealthCheckConfig, PersistenceConfig,
     };
@@ -287,6 +290,11 @@ fn shard_manager_config(args: &LaunchArgs) -> ShardManagerConfig {
         }),
         health_check: HealthCheckConfig {
             silent: true,
+            ..Default::default()
+        },
+        registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
+            host: "localhost".to_string(),
+            port: registry_service_run_details.grpc_port,
             ..Default::default()
         },
         ..Default::default()
