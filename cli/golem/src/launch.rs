@@ -157,7 +157,8 @@ async fn start_components(
     )
     .await?;
 
-    let shard_manager = run_shard_manager(shard_manager_config(args, &registry_service), join_set).await?;
+    let shard_manager =
+        run_shard_manager(shard_manager_config(args, &registry_service), join_set).await?;
 
     let worker_service = run_worker_service(
         worker_service_config(args, &shard_manager, &registry_service),
