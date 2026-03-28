@@ -504,6 +504,12 @@ pub async fn start_customized(
         engine: EngineConfig {
             enable_fs_cache: true,
         },
+        // Use Disabled resource limits so Worker::new() can call
+        // initialize_account without attempting a gRPC connection to a registry
+        // service that does not exist in this test setup. Tests that need custom
+        // resource limits inject their own ResourceLimits implementation via
+        // ProductionContextTestServerBootstrap (which overrides this config).
+        resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
         ..Default::default()
     };
     if let Some(retry) = retry_override {

@@ -301,6 +301,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_failure: None,
         }));
 
+        // Fetch the account's resource entry and register it with the
+        // concurrent-agents semaphore. This must happen before WaitingWorker
+        // can acquire a concurrent-agent permit so that the real plan limit
+        // is enforced from the very first agent startup for this account.
+        // Registration is idempotent — subsequent calls for the same account
+        // on the same executor are instant (OnceCell cache hit in ResourceLimitsGrpc).
+        let resource_entry = deps
+            .resource_limits()
+            .initialize_account(*account_id)
+            .await?;
+        deps.active_workers()
+            .register_account_concurrency(*account_id, resource_entry)
+            .await;
+
         let worker = Worker {
             owned_agent_id,
             parsed_agent_id: agent_id.clone(),
@@ -2180,21 +2194,6 @@ impl WaitingWorker {
             async move {
                 let permit = parent.active_workers().acquire(memory_requirement).await;
                 let account_id = parent.initial_worker_metadata.created_by;
-                // Ensure the account is registered with the concurrent-agents
-                // semaphore. This is idempotent — a second call is a no-op.
-                // Done here (not in Worker::new) so that resource-limit failures
-                // don't prevent earlier errors (e.g. ComponentParseFailed) from
-                // surfacing correctly.
-                if let Ok(resource_entry) = parent
-                    .resource_limits()
-                    .initialize_account(account_id)
-                    .await
-                {
-                    parent
-                        .active_workers()
-                        .register_account_concurrency(account_id, resource_entry)
-                        .await;
-                }
                 let concurrent_agent_permit = parent
                     .active_workers()
                     .acquire_concurrent_agent(account_id)

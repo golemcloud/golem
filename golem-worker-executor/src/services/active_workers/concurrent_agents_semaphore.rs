@@ -140,9 +140,8 @@ impl ConcurrentAgentsSemaphore {
         {
             Some(s) => s,
             None => {
-                // Account not registered — should not happen in production but
-                // defend gracefully: waiting on a 0-permit semaphore will
-                // deadlock, surfacing the bug.
+                // Account not registered — this should not happen in production
+                // surface the bug loudly rather than silently bypassing the limit.
                 debug!("ConcurrentAgentsSemaphore: acquire called for unregistered account {account_id}");
                 Arc::new(Semaphore::new(0))
             }
