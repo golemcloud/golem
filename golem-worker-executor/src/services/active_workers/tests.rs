@@ -379,6 +379,30 @@ async fn concurrent_agents_limit_increase_grows_pool() {
 }
 
 #[test]
+async fn concurrent_agents_unlimited_to_limited_transition_allocates_permits() {
+    let sem = concurrent_agents_semaphore();
+    let acc = account();
+    let entry = unlimited_resource_entry();
+    sem.register_account(acc, entry.clone()).await;
+
+    // Unlimited mode should always acquire immediately.
+    assert!(sem.try_acquire_now(acc).await.is_some());
+
+    // Downgrade from unlimited to a finite limit.
+    entry.set_max_concurrent_agents_per_executor(2);
+
+    // After transition, finite permits must be available.
+    let p1 = sem.try_acquire_now(acc).await;
+    let p2 = sem.try_acquire_now(acc).await;
+    assert!(p1.is_some(), "first finite slot should be available");
+    assert!(p2.is_some(), "second finite slot should be available");
+    assert!(
+        sem.try_acquire_now(acc).await.is_none(),
+        "pool should be exhausted at new finite limit"
+    );
+}
+
+#[test]
 async fn concurrent_agents_limit_decrease_shrinks_available_pool() {
     let sem = concurrent_agents_semaphore();
     let acc = account();

@@ -242,6 +242,12 @@ impl ConcurrentAgentsSemaphore {
                 if is_unlimited(new_limit) {
                     return None;
                 }
+                if is_unlimited(e.current_limit) {
+                    // Unlimited -> limited transition. The placeholder semaphore
+                    // was created with 0 permits, so we must materialize the
+                    // finite pool now.
+                    return Some(new_limit);
+                }
                 if new_limit > e.current_limit {
                     Some(new_limit - e.current_limit)
                 } else {
@@ -263,7 +269,11 @@ impl ConcurrentAgentsSemaphore {
             .update_async(account_id, |_, e| {
                 let new_limit = e.resource_entry.max_concurrent_agents_per_executor();
                 if !is_unlimited(new_limit) {
-                    if new_limit > e.current_limit {
+                    if is_unlimited(e.current_limit) {
+                        // Unlimited -> limited transition initializes the
+                        // finite pool from a zero-permit placeholder.
+                        e.total_issued += new_limit as usize;
+                    } else if new_limit > e.current_limit {
                         e.total_issued += (new_limit - e.current_limit) as usize;
                     }
                     e.current_limit = new_limit;
