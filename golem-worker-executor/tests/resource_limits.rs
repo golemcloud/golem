@@ -291,7 +291,8 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
             .await
     });
 
-    // Wait for a2 to appear as Idle (registered but waiting for a permit).
+    // Wait for a1 to be Idle before triggering the next invocation; this keeps
+    // the ordering deterministic while a2 start is pending.
     executor
         .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
