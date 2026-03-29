@@ -5,6 +5,7 @@ use golem_common::model::account::AccountId;
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::test;
+use tokio::sync::Barrier;
 use uuid::Uuid;
 
 test_r::enable!();
@@ -467,5 +468,47 @@ async fn concurrent_agents_limit_decrease_does_not_affect_running_agents() {
     assert!(
         sem.try_acquire_now(acc).await.is_none(),
         "second new agent must wait at limit=1"
+    );
+}
+
+#[test]
+async fn concurrent_agents_plan_upgrade_does_not_over_add_under_parallel_acquires() {
+    let sem = Arc::new(concurrent_agents_semaphore());
+    let acc = account();
+    let entry = resource_entry_with_agent_limit(1);
+    sem.register_account(acc, entry.clone()).await;
+
+    // Keep one running agent so the upgraded capacity for new acquires is 999.
+    let _held = sem.try_acquire_now(acc).await.unwrap();
+
+    entry.set_max_concurrent_agents_per_executor(1000);
+
+    let task_count = 4000;
+    let barrier = Arc::new(Barrier::new(task_count + 1));
+
+    let mut tasks = Vec::with_capacity(task_count);
+    for _ in 0..task_count {
+        let sem = sem.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            sem.try_acquire_now(acc).await
+        }));
+    }
+
+    barrier.wait().await;
+
+    let mut acquired = Vec::new();
+    for task in tasks {
+        let permit = task.await.unwrap();
+        if let Some(permit) = permit {
+            acquired.push(permit);
+        }
+    }
+
+    assert!(
+        acquired.len() <= 999,
+        "upgraded capacity is 999 new slots (one already running), but got {}",
+        acquired.len()
     );
 }

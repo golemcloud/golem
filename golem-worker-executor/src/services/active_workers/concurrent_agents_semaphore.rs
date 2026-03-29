@@ -234,52 +234,43 @@ impl ConcurrentAgentsSemaphore {
     /// If the limit is at or above the unlimited sentinel the semaphore is not
     /// touched.
     async fn sync_semaphore_limit(&self, account_id: &AccountId, semaphore: &Arc<Semaphore>) {
-        // Step 1: apply plan increase and update current_limit + total_issued.
-        let maybe_increase: Option<u64> = self
+        // Step 1: atomically compute and record any pool growth required for the
+        // current plan. This avoids races where multiple concurrent acquires can
+        // observe the same old limit and all call add_permits(delta).
+        let permits_to_add: usize = self
             .accounts
-            .read_async(account_id, |_, e| {
+            .update_async(account_id, |_, e| {
                 let new_limit = e.resource_entry.max_concurrent_agents_per_executor();
                 if is_unlimited(new_limit) {
-                    return None;
+                    return 0;
                 }
-                if is_unlimited(e.current_limit) {
+
+                let delta = if is_unlimited(e.current_limit) {
                     // Unlimited -> limited transition. The placeholder semaphore
                     // was created with 0 permits, so we must materialize the
                     // finite pool now.
-                    return Some(new_limit);
-                }
-                if new_limit > e.current_limit {
-                    Some(new_limit - e.current_limit)
+                    new_limit as usize
+                } else if new_limit > e.current_limit {
+                    (new_limit - e.current_limit) as usize
                 } else {
-                    None
+                    0
+                };
+
+                if delta > 0 {
+                    e.total_issued += delta;
                 }
+                e.current_limit = new_limit;
+                delta
             })
             .await
-            .flatten();
+            .unwrap_or(0);
 
-        if let Some(delta) = maybe_increase {
-            semaphore.add_permits(delta as usize);
+        if permits_to_add > 0 {
+            semaphore.add_permits(permits_to_add);
             debug!(
-                "ConcurrentAgentsSemaphore: plan upgraded for {account_id}, added {delta} permits"
+                "ConcurrentAgentsSemaphore: plan upgraded for {account_id}, added {permits_to_add} permits"
             );
         }
-
-        // Update current_limit and total_issued atomically.
-        self.accounts
-            .update_async(account_id, |_, e| {
-                let new_limit = e.resource_entry.max_concurrent_agents_per_executor();
-                if !is_unlimited(new_limit) {
-                    if is_unlimited(e.current_limit) {
-                        // Unlimited -> limited transition initializes the
-                        // finite pool from a zero-permit placeholder.
-                        e.total_issued += new_limit as usize;
-                    } else if new_limit > e.current_limit {
-                        e.total_issued += (new_limit - e.current_limit) as usize;
-                    }
-                    e.current_limit = new_limit;
-                }
-            })
-            .await;
 
         // Step 2: cap enforcement — trim available permits that exceed the cap.
         //
