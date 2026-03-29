@@ -2,11 +2,12 @@ use crate::api::common::ApiEndpointError;
 use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
-use golem_common::model::IdempotencyKey;
+use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::model::agent::{AgentTypeName, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -75,6 +76,31 @@ impl AgentsApi {
 
         record.result(response).map(Json)
     }
+
+    #[oai(path = "/create-agent", method = "post", operation_id = "create_agent")]
+    async fn create_agent(
+        &self,
+        request: Json<CreateAgentRequest>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<CreateAgentResponse>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let record = recorded_http_api_request!(
+            "create_agent",
+            app = %request.app_name,
+            env = %request.env_name,
+            agent_type = %request.agent_type_name,
+        );
+
+        let response = self
+            .worker_service
+            .create_agent_rest(request.0, auth)
+            .instrument(record.span.clone())
+            .await
+            .map_err(Into::into);
+
+        record.result(response).map(Json)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Enum)]
@@ -109,4 +135,26 @@ pub struct AgentInvocationRequest {
 pub struct AgentInvocationResult {
     pub result: Option<UntypedJsonDataValue>,
     pub component_revision: Option<ComponentRevision>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAgentRequest {
+    pub app_name: ApplicationName,
+    pub env_name: EnvironmentName,
+    pub agent_type_name: AgentTypeName,
+    pub parameters: UntypedJsonDataValue,
+    pub phantom_id: Option<Uuid>,
+    #[oai(default)]
+    #[serde(default)]
+    pub agent_config: Vec<WorkerAgentConfigEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAgentResponse {
+    pub agent_id: AgentId,
+    pub component_revision: ComponentRevision,
 }

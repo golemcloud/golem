@@ -328,7 +328,13 @@ export class LanguageService {
     const clientDecl = sourceFile.getVariableDeclaration('__client');
     if (!clientDecl) return;
 
-    const clientType = clientDecl.getType();
+    let clientType = clientDecl.getType();
+
+    // If .get() is async, the inferred type is Promise<T>; unwrap to T
+    const typeArgs = clientType.getTypeArguments();
+    if (clientType.getSymbol()?.getName() === 'Promise' && typeArgs.length === 1) {
+      clientType = typeArgs[0];
+    }
     const checker = this.project.getTypeChecker();
 
     return clientType
