@@ -252,6 +252,11 @@ pub trait InvocationManagement {
 
     /// Returns whether we are in replay mode where we are replaying old calls.
     fn is_replay(&self) -> bool;
+
+    /// Validates durable worker state after replay has caught up to the current oplog head.
+    fn validate_state_after_replay_caught_up(&self) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
 }
 
 /// The status management interface of a worker context is responsible for querying and storing

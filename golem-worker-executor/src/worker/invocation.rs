@@ -66,6 +66,16 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
 
     let result = invoke_observed(lowered, &mut store, instance, component_metadata, mode).await;
 
+    if !was_live_before && store.data().is_live() {
+        let should_validate_open_websocket = matches!(
+            &result,
+            Ok(InvokeResult::Succeeded { .. }) | Ok(InvokeResult::Exited { .. })
+        );
+        if should_validate_open_websocket {
+            store.data().validate_state_after_replay_caught_up()?;
+        }
+    }
+
     match &result {
         Err(_) => {
             record_invocation(was_live_before, "failed");
