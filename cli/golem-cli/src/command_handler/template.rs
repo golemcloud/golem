@@ -41,8 +41,7 @@ impl EnvVarRenderer {
 
     /// Renders a single string template, substituting `{{ VAR }}` with host env vars.
     pub fn render_str(&self, template: &str) -> Result<String, minijinja::Error> {
-        self.minijinja_env
-            .render_str(template, &self.proc_env_vars)
+        self.minijinja_env.render_str(template, &self.proc_env_vars)
     }
 
     /// Recursively renders all string values in a JSON value.
@@ -73,11 +72,7 @@ impl EnvVarRenderer {
 
     /// Returns the names of environment variables referenced in the template
     /// that are not present in the host environment.
-    pub fn missing_env_vars(
-        &self,
-        template: &str,
-        err: &minijinja::Error,
-    ) -> Vec<String> {
+    pub fn missing_env_vars(&self, template: &str, err: &minijinja::Error) -> Vec<String> {
         fn is_known_var(
             var: &str,
             env_vars: &HashMap<String, String>,
