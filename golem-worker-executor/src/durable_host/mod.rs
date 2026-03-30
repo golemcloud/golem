@@ -124,6 +124,37 @@ use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
+
+/// A worker's filesystem root directory. Either a random OS temp directory
+/// (the default) or a deterministic path derived from the agent id.
+///
+/// In both cases the directory is removed when this value is dropped.
+enum WorkerDir {
+    /// Random temp dir created by `tempfile`. Auto-deleted on drop.
+    Temp(TempDir),
+    /// Deterministic directory. Deleted explicitly on drop.
+    Deterministic(PathBuf),
+}
+
+impl WorkerDir {
+    fn path(&self) -> &Path {
+        match self {
+            WorkerDir::Temp(td) => td.path(),
+            WorkerDir::Deterministic(p) => p,
+        }
+    }
+}
+
+impl Drop for WorkerDir {
+    fn drop(&mut self) {
+        if let WorkerDir::Deterministic(p) = self {
+            if p.exists() {
+                let _ = std::fs::remove_dir_all(p);
+            }
+        }
+        // WorkerDir::Temp is dropped automatically by TempDir's own Drop impl
+    }
+}
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, info, span, warn};
 use try_match::try_match;
@@ -152,7 +183,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_agent_id: OwnedAgentId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    temp_dir: Arc<TempDir>,
+    worker_dir: Arc<WorkerDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     resource_limits: Arc<AtomicResourceEntry>,
 }
@@ -190,12 +221,35 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
-        let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
-            |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
-        )?);
+        let worker_dir = Arc::new(
+            if let Some(root) = &config.filesystem_storage.deterministic_root_dir {
+                let dir = root
+                    .join(owned_agent_id.environment_id.to_string())
+                    .join(owned_agent_id.agent_id.component_id.to_string())
+                    .join(&owned_agent_id.agent_id.agent_id);
+                std::fs::create_dir_all(&dir).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to create deterministic directory {}: {e}",
+                        dir.display()
+                    ))
+                })?;
+                WorkerDir::Deterministic(dir)
+            } else {
+                WorkerDir::Temp(
+                    tempfile::Builder::new()
+                        .prefix("golem")
+                        .tempdir()
+                        .map_err(|e| {
+                            WorkerExecutorError::runtime(format!(
+                                "Failed to create temporary directory: {e}",
+                            ))
+                        })?,
+                )
+            },
+        );
         debug!(
-            "Created temporary file system root at {:?}",
-            temp_dir.path()
+            "Created file system root at {:?}",
+            worker_dir.path()
         );
 
         debug!(
@@ -218,7 +272,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
-            temp_dir.path(),
+            worker_dir.path(),
             &component_metadata.files,
         )
         .await?;
@@ -269,7 +323,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
-            temp_dir.path().to_path_buf(),
+            worker_dir.path().to_path_buf(),
             stdin,
             stdout,
             stderr,
@@ -329,7 +383,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.last_snapshot_index,
             )
             .await,
-            temp_dir,
+            worker_dir,
             execution_status,
             resource_limits,
         })
@@ -1561,7 +1615,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &mut current_files,
             &self.state.file_loader,
             self.owned_agent_id.environment_id,
-            self.temp_dir.path(),
+            self.worker_dir.path(),
             &new_metadata.files,
         )
         .await?;
@@ -2631,7 +2685,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         &self,
         path: &ComponentFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let root = self.temp_dir.path();
+        let root = self.worker_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -2742,7 +2796,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         &self,
         path: &ComponentFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let root = self.temp_dir.path();
+        let root = self.worker_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
