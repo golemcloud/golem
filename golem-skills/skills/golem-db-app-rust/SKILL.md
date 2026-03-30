@@ -91,14 +91,14 @@ impl ItemAgent for ItemAgentImpl {
         if !self.initialized {
             db.execute(
                 "CREATE TABLE IF NOT EXISTS items (id SERIAL PRIMARY KEY, title TEXT NOT NULL)",
-                &[],
+                vec![],
             ).expect("Failed to create table");
             self.initialized = true;
         }
 
         db.execute(
             "INSERT INTO items (title) VALUES ($1)",
-            &[DbValue::Text(title.clone())],
+            vec![DbValue::Text(title.clone())],
         ).expect("Failed to insert item");
 
         format!("Added: {}", title)
@@ -110,7 +110,7 @@ impl ItemAgent for ItemAgentImpl {
         let db = DbConnection::open(&db_url)
             .expect("Failed to connect to database");
 
-        let result = db.query("SELECT title FROM items ORDER BY id", &[])
+        let result = db.query("SELECT title FROM items ORDER BY id", vec![])
             .expect("Failed to query items");
 
         result.rows.iter().map(|row| {
@@ -139,7 +139,7 @@ All query parameters use the `DbValue` enum. Common variants:
 ### DbResult Structure
 
 ```rust
-let result = db.query("SELECT id, title FROM items", &[]).unwrap();
+let result = db.query("SELECT id, title FROM items", vec![]).unwrap();
 // result.columns: Vec<DbColumn> — column metadata
 // result.rows: Vec<DbRow> — array of rows
 // result.rows[0].values: Vec<DbValue> — values in column order
@@ -150,8 +150,8 @@ let result = db.query("SELECT id, title FROM items", &[]).unwrap();
 ```rust
 let db = DbConnection::open(&db_url).unwrap();
 let tx = db.begin_transaction().unwrap();
-tx.execute("INSERT INTO items (title) VALUES ($1)", &[DbValue::Text("a".into())]).unwrap();
-tx.execute("INSERT INTO items (title) VALUES ($1)", &[DbValue::Text("b".into())]).unwrap();
+tx.execute("INSERT INTO items (title) VALUES ($1)", vec![DbValue::Text("a".into())]).unwrap();
+tx.execute("INSERT INTO items (title) VALUES ($1)", vec![DbValue::Text("b".into())]).unwrap();
 tx.commit().unwrap();
 ```
 

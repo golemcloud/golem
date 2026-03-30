@@ -136,9 +136,6 @@ jobs:
       matrix:
         agent: [claude-code, opencode, codex]
         language: [ts, rust]
-        exclude:
-          - agent: claude-code
-            language: rust
     steps:
       - uses: actions/checkout@v4
 
