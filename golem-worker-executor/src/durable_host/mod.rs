@@ -155,6 +155,8 @@ impl Drop for WorkerDir {
         // WorkerDir::Temp is dropped automatically by TempDir's own Drop impl
     }
 }
+
+
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, info, span, warn};
 use try_match::try_match;
@@ -226,7 +228,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 let dir = root
                     .join(owned_agent_id.environment_id.to_string())
                     .join(owned_agent_id.agent_id.component_id.to_string())
-                    .join(&owned_agent_id.agent_id.agent_id);
+                    .join(owned_agent_id.agent_id.agent_name_encoded());
                 std::fs::create_dir_all(&dir).map_err(|e| {
                     WorkerExecutorError::runtime(format!(
                         "Failed to create deterministic directory {}: {e}",
