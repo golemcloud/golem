@@ -4,7 +4,9 @@ package golem.registry;
 
 import "golem/common/account_id.proto";
 
-message FuelUsageUpdate {
+message ResourceUsageUpdate {
   golem.common.AccountId account_id = 1;
-  int64 value = 2;
+  int64 fuel_delta = 2;
+  uint64 http_call_count_delta = 3;
+  uint64 rpc_call_count_delta = 4;
 }

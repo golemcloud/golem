@@ -145,6 +145,10 @@ pub struct ResourceLimits {
     pub max_memory_per_worker: u64,
     pub max_table_elements_per_worker: u64,
     pub max_disk_space_per_worker: u64,
+    pub per_invocation_http_call_limit: u64,
+    pub per_invocation_rpc_call_limit: u64,
+    pub available_http_calls: u64,
+    pub available_rpc_calls: u64,
 }
 
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
@@ -154,6 +158,10 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
             max_disk_space_per_worker: value.max_disk_space_per_worker,
+            per_invocation_http_call_limit: value.per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit,
+            available_http_calls: value.available_http_calls,
+            available_rpc_calls: value.available_rpc_calls,
         }
     }
 }
@@ -165,6 +173,10 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
             max_disk_space_per_worker: value.max_disk_space_per_worker,
+            per_invocation_http_call_limit: value.per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit,
+            available_http_calls: value.available_http_calls,
+            available_rpc_calls: value.available_rpc_calls,
         }
     }
 }

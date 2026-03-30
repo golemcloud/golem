@@ -40,6 +40,7 @@ use golem_registry_service::repo::plugin::PluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
 };
+use golem_registry_service::services::account_usage::AccountUsageService;
 use golem_registry_service::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
@@ -59,7 +60,7 @@ sequential_suite!(sqlite);
 
 pub struct Deps {
     pub account_repo: Box<dyn AccountRepo>,
-    pub account_usage_repo: Box<dyn AccountUsageRepo>,
+    pub account_usage_repo: std::sync::Arc<dyn AccountUsageRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
     pub plan_repo: Box<dyn PlanRepo>,
@@ -160,6 +161,10 @@ impl Deps {
                 max_memory_per_worker: 4000.into(),
                 max_table_elements_per_worker: 16384.into(),
                 max_disk_space_per_worker: 1073741824.into(),
+                per_invocation_http_call_limit: u64::MAX.into(),
+                per_invocation_rpc_call_limit: u64::MAX.into(),
+                monthly_http_call_limit: 5000.into(),
+                monthly_rpc_call_limit: 5000.into(),
             })
             .await
             .unwrap();
@@ -167,6 +172,10 @@ impl Deps {
 
     pub fn test_plan_id(&self) -> Uuid {
         Uuid::from_str("e449dca1-cf07-4270-a8a2-6bcfc6528038").unwrap()
+    }
+
+    pub fn account_usage_service(&self) -> AccountUsageService {
+        AccountUsageService::new(self.account_usage_repo.clone())
     }
 
     pub async fn create_account(&self) -> AccountExtRevisionRecord {

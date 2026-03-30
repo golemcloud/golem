@@ -417,6 +417,12 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'exceeded-table-limit'
   } |
   {
+    tag: 'exceeded-http-call-limit'
+  } |
+  {
+    tag: 'exceeded-rpc-call-limit'
+  } |
+  {
     tag: 'node-out-of-filesystem-storage'
   } |
   {

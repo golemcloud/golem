@@ -156,6 +156,10 @@ pub enum TestMode {
         registry_service_low_fuel_plan_id: Uuid,
         #[arg(long, default_value = "a2f3b4c5-d6e7-8901-abcd-ef0123456789")]
         registry_service_low_disk_space_plan_id: Uuid,
+        #[arg(long, default_value = "b3c4d5e6-f7a8-9012-bcde-f01234567890")]
+        registry_service_low_http_calls_plan_id: Uuid,
+        #[arg(long, default_value = "c4d5e6f7-a8b9-0123-cdef-012345678901")]
+        registry_service_low_rpc_calls_plan_id: Uuid,
         #[arg(long, default_value = "localhost")]
         component_compilation_service_host: String,
         #[arg(long, default_value = "9092")]
@@ -434,6 +438,8 @@ impl BenchmarkTestDependencies {
                 registry_service_default_plan_id,
                 registry_service_low_fuel_plan_id,
                 registry_service_low_disk_space_plan_id,
+                registry_service_low_http_calls_plan_id,
+                registry_service_low_rpc_calls_plan_id,
                 component_compilation_service_host,
                 component_compilation_service_grpc_port,
                 worker_service_host,
@@ -478,6 +484,8 @@ impl BenchmarkTestDependencies {
                         PlanId(*registry_service_default_plan_id),
                         PlanId(*registry_service_low_fuel_plan_id),
                         PlanId(*registry_service_low_disk_space_plan_id),
+                        PlanId(*registry_service_low_http_calls_plan_id),
+                        PlanId(*registry_service_low_rpc_calls_plan_id),
                     )
                     .await,
                 );

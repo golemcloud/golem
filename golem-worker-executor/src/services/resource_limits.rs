@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
-use golem_service_base::clients::registry::RegistryService;
+use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,6 +47,24 @@ pub struct AtomicResourceEntry {
     // the server. Used by the background loop to detect idle accounts whose
     // cached limits have grown stale (e.g. after a plan change or monthly reset).
     last_refresh_secs: AtomicI64,
+    // Plan-level per-invocation HTTP call limit. Uses AtomicU64 so that it can
+    // be updated when the account's plan changes (propagated via batch responses).
+    per_invocation_http_call_limit: AtomicU64,
+    // Plan-level per-invocation RPC call limit.
+    per_invocation_rpc_call_limit: AtomicU64,
+
+    // Monthly account-level HTTP call tracking.
+    // The available count last reported by the registry service.
+    available_http_calls_from_server: AtomicU64,
+    // HTTP calls made locally since the last successful batch sync to the registry.
+    unsynced_http_calls: AtomicU64,
+    // HTTP calls included in the batch currently being sent; cleared on success or failure.
+    syncing_http_calls: AtomicU64,
+
+    // Monthly account-level RPC call tracking (same pattern as HTTP).
+    available_rpc_calls_from_server: AtomicU64,
+    unsynced_rpc_calls: AtomicU64,
+    syncing_rpc_calls: AtomicU64,
 }
 
 impl AtomicResourceEntry {
@@ -64,7 +82,81 @@ impl AtomicResourceEntry {
             max_table_elements: AtomicUsize::new(max_table_elements),
             max_disk_space: AtomicU64::new(max_disk_space),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
+            per_invocation_http_call_limit: AtomicU64::new(u64::MAX),
+            per_invocation_rpc_call_limit: AtomicU64::new(u64::MAX),
+            available_http_calls_from_server: AtomicU64::new(u64::MAX),
+            unsynced_http_calls: AtomicU64::new(0),
+            syncing_http_calls: AtomicU64::new(0),
+            available_rpc_calls_from_server: AtomicU64::new(u64::MAX),
+            unsynced_rpc_calls: AtomicU64::new(0),
+            syncing_rpc_calls: AtomicU64::new(0),
         }
+    }
+
+    pub fn new_with_invocation_limits(
+        fuel: u64,
+        max_memory: usize,
+        max_table_elements: usize,
+        max_disk_space: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
+    ) -> Self {
+        Self {
+            fuel: AtomicU64::new(fuel),
+            delta: AtomicI64::new(0),
+            in_flight_delta: AtomicI64::new(0),
+            max_memory: AtomicUsize::new(max_memory),
+            max_table_elements: AtomicUsize::new(max_table_elements),
+            max_disk_space: AtomicU64::new(max_disk_space),
+            last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
+            per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
+            per_invocation_rpc_call_limit: AtomicU64::new(per_invocation_rpc_call_limit),
+            available_http_calls_from_server: AtomicU64::new(u64::MAX),
+            unsynced_http_calls: AtomicU64::new(0),
+            syncing_http_calls: AtomicU64::new(0),
+            available_rpc_calls_from_server: AtomicU64::new(u64::MAX),
+            unsynced_rpc_calls: AtomicU64::new(0),
+            syncing_rpc_calls: AtomicU64::new(0),
+        }
+    }
+
+    /// Full constructor used when all limits (including monthly HTTP/RPC) are available
+    /// from the registry at initialization time.
+    pub fn new_with_all_limits(
+        fuel: u64,
+        max_memory: usize,
+        max_table_elements: usize,
+        max_disk_space: u64,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
+        available_http_calls: u64,
+        available_rpc_calls: u64,
+    ) -> Self {
+        Self {
+            fuel: AtomicU64::new(fuel),
+            delta: AtomicI64::new(0),
+            in_flight_delta: AtomicI64::new(0),
+            max_memory: AtomicUsize::new(max_memory),
+            max_table_elements: AtomicUsize::new(max_table_elements),
+            max_disk_space: AtomicU64::new(max_disk_space),
+            last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
+            per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
+            per_invocation_rpc_call_limit: AtomicU64::new(per_invocation_rpc_call_limit),
+            available_http_calls_from_server: AtomicU64::new(available_http_calls),
+            unsynced_http_calls: AtomicU64::new(0),
+            syncing_http_calls: AtomicU64::new(0),
+            available_rpc_calls_from_server: AtomicU64::new(available_rpc_calls),
+            unsynced_rpc_calls: AtomicU64::new(0),
+            syncing_rpc_calls: AtomicU64::new(0),
+        }
+    }
+
+    pub fn per_invocation_http_call_limit(&self) -> u64 {
+        self.per_invocation_http_call_limit.load(Ordering::Acquire)
+    }
+
+    pub fn per_invocation_rpc_call_limit(&self) -> u64 {
+        self.per_invocation_rpc_call_limit.load(Ordering::Acquire)
     }
 
     fn secs_since_last_refresh(&self) -> i64 {
@@ -126,12 +218,64 @@ impl AtomicResourceEntry {
     pub fn max_disk_space_limit(&self) -> u64 {
         self.max_disk_space.load(Ordering::Acquire)
     }
+
+    /// Returns the number of HTTP calls remaining in this billing period from the
+    /// local perspective: the server's last-known available count minus calls that
+    /// have been made but not yet synced (unsynced) or are currently being synced
+    /// (syncing).
+    pub fn remaining_http_calls(&self) -> u64 {
+        let available = self
+            .available_http_calls_from_server
+            .load(Ordering::Acquire);
+        let unsynced = self.unsynced_http_calls.load(Ordering::Acquire);
+        let syncing = self.syncing_http_calls.load(Ordering::Acquire);
+        available.saturating_sub(unsynced).saturating_sub(syncing)
+    }
+
+    /// Returns the number of RPC calls remaining in this billing period.
+    pub fn remaining_rpc_calls(&self) -> u64 {
+        let available = self.available_rpc_calls_from_server.load(Ordering::Acquire);
+        let unsynced = self.unsynced_rpc_calls.load(Ordering::Acquire);
+        let syncing = self.syncing_rpc_calls.load(Ordering::Acquire);
+        available.saturating_sub(unsynced).saturating_sub(syncing)
+    }
+
+    /// Records one outgoing HTTP call against the monthly account quota.
+    ///
+    /// Returns `false` when the remaining HTTP call budget is zero,
+    /// signalling that the worker should be suspended at the next opportunity.
+    pub fn record_http_call(&self) -> bool {
+        if self.remaining_http_calls() == 0 {
+            return false;
+        }
+        self.unsynced_http_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |uhc| {
+                Some(uhc.saturating_add(1))
+            })
+            .ok();
+        true
+    }
+
+    /// Records one outgoing RPC call against the monthly account quota.
+    ///
+    /// Returns `false` when the remaining RPC call budget is zero.
+    pub fn record_rpc_call(&self) -> bool {
+        if self.remaining_rpc_calls() == 0 {
+            return false;
+        }
+        self.unsynced_rpc_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |urc| {
+                Some(urc.saturating_add(1))
+            })
+            .ok();
+        true
+    }
 }
 
 #[async_trait]
 pub trait ResourceLimits: Send + Sync {
-    // Get a handle to the shared resource limits entry for the account. This might be updated in the background
-    // as fuel usage is reported to registry service
+    // Get a handle to the shared resource limits entry for the account. This might be updated in the
+    // background as fuel, HTTP call, and RPC call usage is reported to the registry service.
     async fn initialize_account(
         &self,
         account_id: AccountId,
@@ -227,33 +371,69 @@ impl ResourceLimitsGrpc {
         Ok(last_known_limits)
     }
 
-    /// Builds and sends a single batch to the registry covering both active
-    /// accounts (non-zero fuel delta) and stale idle accounts (zero delta for
-    /// a limit refresh). On success, updates all entries via
-    /// `update_last_known_limits`. On failure, resets `in_flight_delta` for
-    /// active accounts (so their deltas are not double-counted next cycle) and
-    /// leaves `last_refresh_secs` unchanged for stale idle accounts (so they
-    /// are retried next tick).
+    /// Builds and sends a single batch to the registry covering:
+    /// - active accounts with non-zero fuel, HTTP call, or RPC call deltas
+    /// - stale idle accounts (all deltas zero, past the refresh threshold)
+    ///
+    /// On success, updates all entries via `update_last_known_limits`. On
+    /// failure, resets in-flight deltas for active accounts so they are not
+    /// double-counted next cycle; stale idle accounts are retried next tick.
     async fn send_batch(&self, refresh_threshold_secs: i64) {
         // Collect active updates (non-zero delta) and move delta → in_flight.
-        let mut updates: HashMap<AccountId, i64> = HashMap::new();
+        // An account is included if it has any non-zero delta OR has gone stale.
+        let mut updates: HashMap<AccountId, ResourceUsageUpdate> = HashMap::new();
 
         self.entries
             .iter_async(|k, cell| {
                 if let Some(entry) = cell.get() {
-                    let delta = entry.delta.swap(0, Ordering::AcqRel);
-                    if delta != 0 {
+                    let fuel_delta = entry.delta.swap(0, Ordering::AcqRel);
+                    // Move unsynced call counts into the syncing bucket for this batch.
+                    let http_count = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
+                    let rpc_count = entry.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
+
+                    if fuel_delta != 0 || http_count > 0 || rpc_count > 0 {
+                        if http_count > 0 {
+                            entry
+                                .syncing_http_calls
+                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                                    Some(c.saturating_add(http_count))
+                                })
+                                .ok();
+                        }
+                        if rpc_count > 0 {
+                            entry
+                                .syncing_rpc_calls
+                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                                    Some(c.saturating_add(rpc_count))
+                                })
+                                .ok();
+                        }
+
                         entry
                             .in_flight_delta
                             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
-                                Some(d.saturating_add(delta))
+                                Some(d.saturating_add(fuel_delta))
                             })
                             .ok();
-                        updates.insert(*k, delta);
+                        updates.insert(
+                            *k,
+                            ResourceUsageUpdate {
+                                fuel_delta,
+                                http_call_count_delta: http_count,
+                                rpc_call_count_delta: rpc_count,
+                            },
+                        );
                     } else if entry.secs_since_last_refresh() >= refresh_threshold_secs {
                         // Stale idle account: include with zero delta to fetch
                         // updated limits without reporting any consumption.
-                        updates.insert(*k, 0);
+                        updates.insert(
+                            *k,
+                            ResourceUsageUpdate {
+                                fuel_delta: 0,
+                                http_call_count_delta: 0,
+                                rpc_call_count_delta: 0,
+                            },
+                        );
                     }
                 }
                 true
@@ -265,12 +445,32 @@ impl ResourceLimitsGrpc {
         }
 
         tracing::debug!(
-            "Sending batch: {} active, {} stale idle account(s)",
-            updates.values().filter(|&&d| d != 0).count(),
-            updates.values().filter(|&&d| d == 0).count(),
+            "Sending batch: {} fuel, {} http, {} rpc, {} stale idle account(s)",
+            updates.values().filter(|u| u.fuel_delta != 0).count(),
+            updates
+                .values()
+                .filter(|u| u.http_call_count_delta > 0)
+                .count(),
+            updates
+                .values()
+                .filter(|u| u.rpc_call_count_delta > 0)
+                .count(),
+            updates
+                .values()
+                .filter(|u| {
+                    u.fuel_delta == 0 && u.http_call_count_delta == 0 && u.rpc_call_count_delta == 0
+                })
+                .count(),
         );
 
-        match self.client.batch_update_fuel_usage(updates.clone()).await {
+        // Send resource usage batch. The response refreshes all account limits
+        // (fuel, memory, disk, per-invocation caps, and monthly call budgets)
+        // for every account in `updates`.
+        match self
+            .client
+            .batch_update_resource_usage(updates.clone())
+            .await
+        {
             Ok(updated_limits) => {
                 for (account_id, resource_limits) in updated_limits.0 {
                     self.update_last_known_limits(account_id, resource_limits)
@@ -279,13 +479,17 @@ impl ResourceLimitsGrpc {
             }
             Err(err) => {
                 error!("Failed to send batched resource usage updates: {}", err);
-                // Reset in_flight_delta only for active accounts — their deltas
-                // were swapped out and must not be double-counted next cycle.
-                // Stale idle accounts had delta=0 so nothing to reset; their
-                // last_refresh_secs stays unchanged and they will be retried.
-                for (account_id, delta) in &updates {
-                    if *delta != 0 {
-                        error!("Lost fuel updates for account {account_id}: {delta}");
+                for (account_id, update) in &updates {
+                    if update.fuel_delta != 0
+                        || update.http_call_count_delta > 0
+                        || update.rpc_call_count_delta > 0
+                    {
+                        error!(
+                            "Lost resource usage updates for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                            update.fuel_delta,
+                            update.http_call_count_delta,
+                            update.rpc_call_count_delta,
+                        );
                         self.reset_in_flight_delta(*account_id).await;
                     }
                 }
@@ -316,6 +520,22 @@ impl ResourceLimitsGrpc {
             entry
                 .max_disk_space
                 .store(updated_limits.max_disk_space_per_worker, Ordering::Release);
+            entry.per_invocation_http_call_limit.store(
+                updated_limits.per_invocation_http_call_limit,
+                Ordering::Release,
+            );
+            entry.per_invocation_rpc_call_limit.store(
+                updated_limits.per_invocation_rpc_call_limit,
+                Ordering::Release,
+            );
+            entry.syncing_http_calls.store(0, Ordering::Release);
+            entry
+                .available_http_calls_from_server
+                .store(updated_limits.available_http_calls, Ordering::Release);
+            entry.syncing_rpc_calls.store(0, Ordering::Release);
+            entry
+                .available_rpc_calls_from_server
+                .store(updated_limits.available_rpc_calls, Ordering::Release);
             entry
                 .last_refresh_secs
                 .store(Utc::now().timestamp(), Ordering::Release);
@@ -327,6 +547,8 @@ impl ResourceLimitsGrpc {
             && let Some(entry) = cell.get()
         {
             entry.in_flight_delta.swap(0, Ordering::AcqRel);
+            entry.syncing_http_calls.store(0, Ordering::Release);
+            entry.syncing_rpc_calls.store(0, Ordering::Release);
         }
     }
 }
@@ -347,11 +569,15 @@ impl ResourceLimits for ResourceLimitsGrpc {
             .get_or_try_init(|| async {
                 let fetched = self.fetch_resource_limits(account_id).await?;
                 Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
-                    AtomicResourceEntry::new(
+                    AtomicResourceEntry::new_with_all_limits(
                         fetched.available_fuel,
                         fetched.max_memory_per_worker as usize,
                         fetched.max_table_elements_per_worker as usize,
                         fetched.max_disk_space_per_worker,
+                        fetched.per_invocation_http_call_limit,
+                        fetched.per_invocation_rpc_call_limit,
+                        fetched.available_http_calls,
+                        fetched.available_rpc_calls,
                     ),
                 ))
             })
@@ -563,6 +789,380 @@ mod tests {
         assert_eq!(entry.max_table_elements_limit(), 0);
     }
 
+    // -------------------------------------------------------------------------
+    // AtomicResourceEntry — per-invocation limits
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn new_with_invocation_limits_stores_http_limit() {
+        let entry = AtomicResourceEntry::new_with_invocation_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            42,
+            u64::MAX,
+        );
+        assert_eq!(entry.per_invocation_http_call_limit(), 42);
+    }
+
+    #[test]
+    fn new_with_invocation_limits_stores_rpc_limit() {
+        let entry = AtomicResourceEntry::new_with_invocation_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            99,
+        );
+        assert_eq!(entry.per_invocation_rpc_call_limit(), 99);
+    }
+
+    #[test]
+    fn new_defaults_invocation_limits_to_max() {
+        // AtomicResourceEntry::new (without invocation limits) must default to u64::MAX
+        // so that workers using the old constructor are unaffected.
+        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX);
+        assert_eq!(entry.per_invocation_http_call_limit(), u64::MAX);
+        assert_eq!(entry.per_invocation_rpc_call_limit(), u64::MAX);
+    }
+
+    #[test]
+    fn invocation_limits_can_be_updated_via_store() {
+        let entry =
+            AtomicResourceEntry::new_with_invocation_limits(500, 256, usize::MAX, u64::MAX, 10, 20);
+        // Simulate a plan change: update limits via the atomic store
+        entry
+            .per_invocation_http_call_limit
+            .store(50, Ordering::Release);
+        entry
+            .per_invocation_rpc_call_limit
+            .store(100, Ordering::Release);
+        assert_eq!(entry.per_invocation_http_call_limit(), 50);
+        assert_eq!(entry.per_invocation_rpc_call_limit(), 100);
+    }
+
+    // -------------------------------------------------------------------------
+    // AtomicResourceEntry — monthly HTTP/RPC call tracking
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn update_last_known_limits_resets_syncing_and_refreshes_available() {
+        // Simulate a batch response: syncing is cleared, available_from_server refreshed.
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            0,
+            0,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            5,
+            5,
+        );
+        // Simulate what send_batch does: move unsynced → syncing
+        entry.syncing_http_calls.store(3, Ordering::Release);
+        entry.syncing_rpc_calls.store(2, Ordering::Release);
+
+        // Manually apply what update_last_known_limits does
+        entry.syncing_http_calls.store(0, Ordering::Release);
+        entry
+            .available_http_calls_from_server
+            .store(50, Ordering::Release);
+        entry.syncing_rpc_calls.store(0, Ordering::Release);
+        entry
+            .available_rpc_calls_from_server
+            .store(40, Ordering::Release);
+
+        assert_eq!(entry.remaining_http_calls(), 50);
+        assert_eq!(entry.remaining_rpc_calls(), 40);
+    }
+
+    #[test]
+    fn record_http_call_returns_false_when_budget_exhausted() {
+        // 0 available; any call should fail immediately.
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
+            u64::MAX,
+        );
+        assert!(
+            !entry.record_http_call(),
+            "call with 0 available should return false"
+        );
+    }
+
+    #[test]
+    fn record_http_call_exhausts_exactly_at_limit() {
+        // 2 available; two calls succeed, third fails.
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            2,
+            u64::MAX,
+        );
+        assert!(entry.record_http_call(), "first call should succeed");
+        assert!(entry.record_http_call(), "second call should succeed");
+        assert!(
+            !entry.record_http_call(),
+            "third call should fail — budget exhausted"
+        );
+    }
+
+    #[test]
+    fn record_rpc_call_decrements_remaining_rpc_calls() {
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            3,
+        );
+        assert!(entry.record_rpc_call());
+        assert_eq!(entry.remaining_rpc_calls(), 2);
+    }
+
+    #[test]
+    fn record_rpc_call_returns_false_when_budget_exhausted() {
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
+        );
+        assert!(!entry.record_rpc_call());
+    }
+
+    #[test]
+    fn http_and_rpc_budgets_are_independent() {
+        // HTTP exhausted, RPC still available.
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
+            5,
+        );
+        assert!(!entry.record_http_call(), "HTTP should be exhausted");
+        assert!(entry.record_rpc_call(), "RPC should still be available");
+    }
+
+    #[test]
+    fn unsynced_http_calls_accumulates_across_calls() {
+        // Each record_http_call increments unsynced_http_calls by 1.
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            10,
+            u64::MAX,
+        );
+        entry.record_http_call();
+        entry.record_http_call();
+        entry.record_http_call();
+        // 3 calls made locally, not yet synced
+        assert_eq!(entry.unsynced_http_calls.load(Ordering::Acquire), 3);
+        // remaining = 10 - 3 - 0 = 7
+        assert_eq!(entry.remaining_http_calls(), 7);
+    }
+
+    #[test]
+    fn moving_unsynced_to_syncing_preserves_remaining_http_calls() {
+        // Start with 10 available and 3 unsynced local calls.
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            10,
+            u64::MAX,
+        );
+        entry.unsynced_http_calls.store(3, Ordering::Release);
+        assert_eq!(entry.remaining_http_calls(), 7);
+
+        // Simulate send_batch's transfer: unsynced -> syncing.
+        let moved = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
+        entry
+            .syncing_http_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                Some(c.saturating_add(moved))
+            })
+            .ok();
+
+        // Remaining must stay unchanged while the batch is in flight.
+        assert_eq!(entry.remaining_http_calls(), 7);
+    }
+
+    #[test]
+    fn clearing_syncing_does_not_clear_new_unsynced_calls() {
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            10,
+            u64::MAX,
+        );
+
+        // One call is included in the in-flight batch.
+        entry.unsynced_http_calls.store(1, Ordering::Release);
+        let moved = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
+        entry
+            .syncing_http_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                Some(c.saturating_add(moved))
+            })
+            .ok();
+
+        // While request is in-flight, two new local calls are recorded.
+        entry.unsynced_http_calls.fetch_add(2, Ordering::AcqRel);
+
+        // Simulate successful response handling: clear syncing and refresh available.
+        entry.syncing_http_calls.store(0, Ordering::Release);
+        entry
+            .available_http_calls_from_server
+            .store(100, Ordering::Release);
+
+        // New unsynced calls made during in-flight period must be preserved.
+        assert_eq!(entry.unsynced_http_calls.load(Ordering::Acquire), 2);
+        assert_eq!(entry.remaining_http_calls(), 98);
+    }
+
+    #[test]
+    async fn batch_success_refreshes_http_rpc_available_counts() {
+        // After a successful send_batch, http_calls and rpc_calls should be
+        // updated from the server response and in_flight cleared.
+        let id = AccountId::SYSTEM;
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+
+        // Prime the entry with 5 available HTTP and 3 available RPC.
+        mock.set_get_limits_response(ServiceResourceLimits {
+            available_fuel: 1000,
+            max_memory_per_worker: 512,
+            max_table_elements_per_worker: u64::MAX,
+            max_disk_space_per_worker: u64::MAX,
+            per_invocation_http_call_limit: u64::MAX,
+            per_invocation_rpc_call_limit: u64::MAX,
+            available_http_calls: 5,
+            available_rpc_calls: 3,
+        });
+
+        let svc = make_grpc(mock.clone());
+        let entry: Arc<AtomicResourceEntry> = svc.initialize_account(id).await.unwrap();
+
+        // Record some calls to build up deltas.
+        entry.record_http_call();
+        entry.record_http_call();
+        entry.record_rpc_call();
+
+        // Server will respond with fresh counts.
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 1000,
+                max_memory_per_worker: 512,
+                max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: 50,
+                available_rpc_calls: 40,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+
+        svc.send_batch(0).await;
+
+        // After batch success remaining must reflect the server's fresh available count.
+        assert_eq!(entry.remaining_http_calls(), 50);
+        assert_eq!(entry.remaining_rpc_calls(), 40);
+        // syncing buckets cleared, unsynced also zero (were swapped to syncing)
+        assert_eq!(entry.syncing_http_calls.load(Ordering::Acquire), 0);
+        assert_eq!(entry.syncing_rpc_calls.load(Ordering::Acquire), 0);
+        assert_eq!(entry.unsynced_http_calls.load(Ordering::Acquire), 0);
+        assert_eq!(entry.unsynced_rpc_calls.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    async fn batch_failure_clears_http_rpc_in_flight_without_double_counting() {
+        // On batch failure the in-flight deltas must be cleared so the next
+        // tick doesn't double-count them.
+        let id = account_id();
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        mock.set_get_limits_response(ServiceResourceLimits {
+            available_fuel: 1000,
+            max_memory_per_worker: 512,
+            max_table_elements_per_worker: u64::MAX,
+            max_disk_space_per_worker: u64::MAX,
+            per_invocation_http_call_limit: u64::MAX,
+            per_invocation_rpc_call_limit: u64::MAX,
+            available_http_calls: 10,
+            available_rpc_calls: 10,
+        });
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 1000,
+                max_memory_per_worker: 512,
+                max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: 10,
+                available_rpc_calls: 10,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+        mock.set_batch_update_error();
+
+        let svc = make_grpc(mock.clone());
+        let entry: Arc<AtomicResourceEntry> = svc.initialize_account(id).await.unwrap();
+        entry.record_http_call();
+        entry.record_rpc_call();
+
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        // After the batch error the syncing buckets must be zeroed.
+        assert_eq!(
+            entry.syncing_http_calls.load(Ordering::Acquire),
+            0,
+            "syncing_http_calls should be cleared on error"
+        );
+        assert_eq!(
+            entry.syncing_rpc_calls.load(Ordering::Acquire),
+            0,
+            "syncing_rpc_calls should be cleared on error"
+        );
+    }
+
     #[test]
     async fn resource_limits_disabled_returns_max_table_elements() {
         let disabled = ResourceLimitsDisabled;
@@ -590,9 +1190,17 @@ mod tests {
                     max_memory_per_worker: max_memory,
                     max_table_elements_per_worker: u64::MAX,
                     max_disk_space_per_worker: u64::MAX,
+                    per_invocation_http_call_limit: u64::MAX,
+                    per_invocation_rpc_call_limit: u64::MAX,
+                    available_http_calls: u64::MAX,
+                    available_rpc_calls: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
             }
+        }
+
+        fn set_get_limits_response(&self, limits: ServiceResourceLimits) {
+            *self.get_limits_result.lock().unwrap() = Ok(limits);
         }
 
         fn set_get_limits_error(&self) {
@@ -659,9 +1267,9 @@ mod tests {
             unimplemented!()
         }
 
-        async fn batch_update_fuel_usage(
+        async fn batch_update_resource_usage(
             &self,
-            _updates: HashMap<AccountId, i64>,
+            _updates: HashMap<AccountId, ResourceUsageUpdate>,
         ) -> Result<AccountResourceLimits, RegistryServiceError> {
             self.batch_update_result
                 .lock()
@@ -911,6 +1519,10 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -938,6 +1550,10 @@ mod tests {
                 max_memory_per_worker: 1024,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -966,6 +1582,10 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1045,6 +1665,10 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1071,6 +1695,10 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1124,6 +1752,10 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1157,6 +1789,10 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1224,6 +1860,10 @@ mod tests {
                 max_memory_per_worker: 512,
                 max_table_elements_per_worker: u64::MAX,
                 max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));

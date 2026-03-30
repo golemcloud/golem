@@ -115,9 +115,11 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
                             total_app_count, total_env_count, total_component_count, total_worker_count,
                             total_worker_connection_count, total_component_storage_bytes,
-                            monthly_gas_limit, monthly_component_upload_limit_bytes
+                            monthly_gas_limit, monthly_component_upload_limit_bytes,
+                            per_invocation_http_call_limit, per_invocation_rpc_call_limit,
+                            monthly_http_call_limit, monthly_rpc_call_limit
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                         ON CONFLICT (plan_id) DO UPDATE SET
                             name = $2,
                             max_memory_per_worker = $3,
@@ -130,7 +132,11 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             total_worker_connection_count = $10,
                             total_component_storage_bytes = $11,
                             monthly_gas_limit = $12,
-                            monthly_component_upload_limit_bytes = $13
+                            monthly_component_upload_limit_bytes = $13,
+                            per_invocation_http_call_limit = $14,
+                            per_invocation_rpc_call_limit = $15,
+                            monthly_http_call_limit = $16,
+                            monthly_rpc_call_limit = $17
                     "#})
                     .bind(plan.plan_id)
                     .bind(plan.name)
@@ -145,6 +151,10 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     .bind(plan.total_component_storage_bytes)
                     .bind(plan.monthly_gas_limit)
                     .bind(plan.monthly_component_upload_limit_bytes)
+                    .bind(plan.per_invocation_http_call_limit)
+                    .bind(plan.per_invocation_rpc_call_limit)
+                    .bind(plan.monthly_http_call_limit)
+                    .bind(plan.monthly_rpc_call_limit)
                 )
                 .await?;
 
@@ -164,7 +174,9 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                         plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
                         total_app_count, total_env_count, total_component_count, total_worker_count,
                         total_worker_connection_count, total_component_storage_bytes,
-                        monthly_gas_limit, monthly_component_upload_limit_bytes
+                        monthly_gas_limit, monthly_component_upload_limit_bytes,
+                        per_invocation_http_call_limit, per_invocation_rpc_call_limit,
+                        monthly_http_call_limit, monthly_rpc_call_limit
                     FROM plans
                     WHERE plan_id = $1
                 "# })
@@ -186,7 +198,9 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     plan_id, name, max_memory_per_worker, max_table_elements_per_worker, max_disk_space_per_worker,
                     total_app_count, total_env_count, total_component_count, total_worker_count,
                     total_worker_connection_count, total_component_storage_bytes,
-                    monthly_gas_limit, monthly_component_upload_limit_bytes
+                    monthly_gas_limit, monthly_component_upload_limit_bytes,
+                    per_invocation_http_call_limit, per_invocation_rpc_call_limit,
+                    monthly_http_call_limit, monthly_rpc_call_limit
                 FROM plans
             "# }))
             .await?;
