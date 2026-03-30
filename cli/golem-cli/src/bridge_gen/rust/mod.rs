@@ -198,9 +198,7 @@ impl RustBridgeGenerator {
                 if let Some(value) = #param_name {
                     agent_config.push(golem_client::model::WorkerAgentConfigEntry {
                         path: vec![#(#path_segments),*],
-                        value: serde_json::to_value(
-                            golem_wasm::json::OptionallyValueAndTypeJson::try_from(value.into_value_and_type()).unwrap()
-                        ).unwrap(),
+                        value: serde_json::to_value(value).unwrap(),
                     });
                 }
             });
