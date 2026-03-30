@@ -485,9 +485,11 @@ async fn list_visible_environments_filters_by_account_email(
         .list_visible_environments(Some(&user_1.account_email.0), None, None)
         .await?
         .values;
-    assert!(filtered_1
-        .iter()
-        .all(|e| e.account.email == user_1.account_email));
+    assert!(
+        filtered_1
+            .iter()
+            .all(|e| e.account.email == user_1.account_email)
+    );
     assert!(filtered_1.iter().any(|e| e.environment.id == env1.id));
     assert!(filtered_1.iter().all(|e| e.environment.id != env2.id));
 
@@ -496,9 +498,11 @@ async fn list_visible_environments_filters_by_account_email(
         .list_visible_environments(Some(&user_2.account_email.0), None, None)
         .await?
         .values;
-    assert!(filtered_2
-        .iter()
-        .all(|e| e.account.email == user_2.account_email));
+    assert!(
+        filtered_2
+            .iter()
+            .all(|e| e.account.email == user_2.account_email)
+    );
     assert!(filtered_2.iter().any(|e| e.environment.id == env2.id));
     assert!(filtered_2.iter().all(|e| e.environment.id != env1.id));
 

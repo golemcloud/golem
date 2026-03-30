@@ -17,7 +17,7 @@ pub mod spawned;
 
 use super::component_compilation_service::ComponentCompilationService;
 use super::rdb::Rdb;
-use super::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
+use super::{EnvVarBuilder, wait_for_startup_grpc, wait_for_startup_http};
 use async_trait::async_trait;
 use golem_client::api::RegistryServiceClientLive;
 use golem_client::{Context, Security};

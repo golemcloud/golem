@@ -35,7 +35,7 @@ use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
 use std::collections::BTreeMap;
-use tracing::{info, Instrument, Level};
+use tracing::{Instrument, Level, info};
 
 pub struct ThroughputEcho {
     config: RunConfig,

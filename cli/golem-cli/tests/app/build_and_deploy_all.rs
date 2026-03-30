@@ -1,5 +1,5 @@
-use crate::app::{cmd, flag, TestContext};
 use crate::Tracing;
+use crate::app::{TestContext, cmd, flag};
 
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;

@@ -22,7 +22,7 @@ use golem_test_framework::config::{BenchmarkCliParameters, BenchmarkTestDependen
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use tracing::{debug, info, Level};
+use tracing::{Level, debug, info};
 
 type RunFn = Box<
     dyn for<'a> Fn(

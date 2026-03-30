@@ -2,6 +2,8 @@ import {
     BaseAgent,
     agent
 } from '@golemcloud/golem-ts-sdk';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdirSync } from 'node:fs';
 
 @agent()
 class EchoAgent extends BaseAgent {
@@ -65,3 +67,49 @@ class SnapshotCounterAgent extends BaseAgent {
         return this.count;
     }
 }
+
+@agent({ snapshotting: { every: 1 } })
+class SqliteSnapshotAgent extends BaseAgent {
+    private memDb: DatabaseSync;
+    private fileDb: DatabaseSync;
+    private label: string;
+
+    constructor(id: string) {
+        super();
+        this.label = 'initial';
+        this.memDb = new DatabaseSync(':memory:');
+        this.memDb.exec('CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)');
+        try { mkdirSync('/tmp'); } catch (_) {}
+        this.fileDb = new DatabaseSync('/tmp/sqlite-snapshot-test.db');
+        this.fileDb.exec('CREATE TABLE log (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT)');
+    }
+
+    async addItem(value: string): Promise<number> {
+        const stmt = this.memDb.prepare('INSERT INTO items (value) VALUES (?)');
+        stmt.run(value);
+        const row = this.memDb.prepare('SELECT last_insert_rowid() as id').get() as { id: number };
+        return row.id;
+    }
+
+    async addLog(message: string): Promise<number> {
+        const stmt = this.fileDb.prepare('INSERT INTO log (message) VALUES (?)');
+        stmt.run(message);
+        const row = this.fileDb.prepare('SELECT last_insert_rowid() as id').get() as { id: number };
+        return row.id;
+    }
+
+    async setLabel(label: string): Promise<void> {
+        this.label = label;
+    }
+
+    async getState(): Promise<string> {
+        const items = this.memDb.prepare('SELECT value FROM items ORDER BY id').all() as Array<{ value: string }>;
+        const logs = this.fileDb.prepare('SELECT message FROM log ORDER BY id').all() as Array<{ message: string }>;
+        return JSON.stringify({
+            label: this.label,
+            items: items.map(r => r.value),
+            logs: logs.map(r => r.message),
+        });
+    }
+}
+

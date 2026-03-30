@@ -173,10 +173,10 @@ impl PromiseRegistry {
     }
 
     fn get(&mut self, id: &PromiseId) -> Option<PromiseHandle> {
-        if let Some(weak) = self.handles.get(id) {
-            if let Some(inner) = weak.upgrade() {
-                return Some(PromiseHandle { inner });
-            }
+        if let Some(weak) = self.handles.get(id)
+            && let Some(inner) = weak.upgrade()
+        {
+            return Some(PromiseHandle { inner });
         };
         None
     }
@@ -190,14 +190,14 @@ impl PromiseRegistry {
     }
 
     async fn complete(&mut self, id: &PromiseId, data: Vec<u8>) {
-        if let Some(weak) = self.handles.get(id) {
-            if let Some(inner) = weak.upgrade() {
-                tokio::spawn(async move {
-                    let mut state = inner.state.lock().await;
-                    *state = Some(data.clone());
-                    inner.notify.notify_waiters();
-                });
-            }
+        if let Some(weak) = self.handles.get(id)
+            && let Some(inner) = weak.upgrade()
+        {
+            tokio::spawn(async move {
+                let mut state = inner.state.lock().await;
+                *state = Some(data.clone());
+                inner.notify.notify_waiters();
+            });
         }
     }
 

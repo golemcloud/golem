@@ -17,8 +17,8 @@ pub mod fs_semaphore;
 mod tests;
 
 pub use fs_semaphore::{
+    FILESYSTEM_STORAGE_PERMIT_SIZE_KB, FilesystemStorageSemaphore,
     bytes_to_filesystem_storage_permits, filesystem_storage_pool_bytes_to_permits,
-    FilesystemStorageSemaphore, FILESYSTEM_STORAGE_PERMIT_SIZE_KB,
 };
 
 use std::collections::BTreeMap;
@@ -26,10 +26,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
-use tracing::{debug, Instrument};
+use tracing::{Instrument, debug};
 
-use crate::services::golem_config::{FilesystemStorageConfig, MemoryConfig};
 use crate::services::HasAll;
+use crate::services::golem_config::{FilesystemStorageConfig, MemoryConfig};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -151,7 +151,10 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 }
                 Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {
-                    debug!("Not enough memory to allocate {mem32} (available: {}), trying to free some up", self.worker_memory.available_permits());
+                    debug!(
+                        "Not enough memory to allocate {mem32} (available: {}), trying to free some up",
+                        self.worker_memory.available_permits()
+                    );
                     if self.try_free_up_memory(memory).await {
                         debug!("Freed up some memory, retrying");
                         // We have enough memory unless another worker has taken it in the meantime,
@@ -219,11 +222,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             // Collecting the workers which are currently idle but loaded into memory
             let pairs = self.workers.iter().await;
             for (agent_id, worker) in pairs {
-                if worker.is_currently_idle_but_running().await {
-                    if let Ok(mem) = worker.memory_requirement().await {
-                        let last_changed = worker.last_execution_state_change();
-                        possibilities.push((agent_id, worker, mem, last_changed));
-                    }
+                if worker.is_currently_idle_but_running().await
+                    && let Ok(mem) = worker.memory_requirement().await
+                {
+                    let last_changed = worker.last_execution_state_change();
+                    possibilities.push((agent_id, worker, mem, last_changed));
                 }
             }
 
@@ -294,11 +297,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
         debug!("Collecting storage eviction possibilities");
         for (agent_id, worker) in workers.iter().await {
-            if worker.is_currently_idle_but_running().await {
-                if let Ok(storage) = worker.filesystem_storage_requirement().await {
-                    let last_changed = worker.last_execution_state_change();
-                    possibilities.push((agent_id, worker, storage, last_changed));
-                }
+            if worker.is_currently_idle_but_running().await
+                && let Ok(storage) = worker.filesystem_storage_requirement().await
+            {
+                let last_changed = worker.last_execution_state_change();
+                possibilities.push((agent_id, worker, storage, last_changed));
             }
         }
 

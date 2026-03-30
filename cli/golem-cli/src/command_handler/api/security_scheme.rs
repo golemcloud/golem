@@ -15,8 +15,8 @@
 use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
+use crate::error::service::AnyhowMapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::http_api_security::{

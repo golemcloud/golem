@@ -14,12 +14,12 @@
 
 //! Proptest strategies for generating arbitrary `AnalysedType` + `Value` pairs.
 
-use crate::analysis::analysed_type::{
-    bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result, result_err,
-    result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case, unit_result, variant,
-};
-use crate::analysis::AnalysedType;
 use crate::Value;
+use crate::analysis::AnalysedType;
+use crate::analysis::analysed_type::{
+    bool, case, chr, r#enum, f32, f64, field, flags, list, option, record, result, result_err,
+    result_ok, s8, s16, s32, s64, str, tuple, u8, u16, u32, u64, unit_case, unit_result, variant,
+};
 use proptest::prelude::*;
 
 /// Generate a finite f32 value (no NaN/Infinity).
@@ -100,8 +100,8 @@ pub fn arb_type_and_value() -> impl Strategy<Value = (AnalysedType, Value)> {
                 // List (all items same type — use leaf for uniformity)
                 (0..5usize, leaf_type_and_value())
                     .prop_flat_map(|(len, (item_type, _))| {
-                        let gen = arb_leaf_value_for_type(item_type.clone());
-                        (Just(item_type), prop::collection::vec(gen, len..=len))
+                        let generator = arb_leaf_value_for_type(item_type.clone());
+                        (Just(item_type), prop::collection::vec(generator, len..=len))
                     })
                     .prop_map(|(item_type, values)| { (list(item_type), Value::List(values)) }),
                 // Record (1-4 fields)

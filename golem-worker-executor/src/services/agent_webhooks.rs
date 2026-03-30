@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::environment_state::EnvironmentStateService;
+use golem_common::model::PromiseId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::PromiseId;
 use golem_service_base::custom_api::AgentWebhookId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;

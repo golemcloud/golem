@@ -15,7 +15,7 @@
 use crate::context::Context;
 use crate::log::logln;
 use crate::model::format::Format;
-use crate::model::text::fmt::{to_colored_json, to_colored_yaml, NestedTextViewIndent, TextView};
+use crate::model::text::fmt::{DecoratedIndent, TextView, to_colored_json, to_colored_yaml};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -91,7 +91,11 @@ impl LogHandler {
         }
     }
 
-    pub fn nested_text_view_indent(&self) -> NestedTextViewIndent {
-        NestedTextViewIndent::new(self.ctx.format())
+    pub fn decorated_indent_primary(&self) -> DecoratedIndent {
+        DecoratedIndent::new_primary(self.ctx.format())
+    }
+
+    pub fn decorated_indent_secondary(&self) -> DecoratedIndent {
+        DecoratedIndent::new_secondary(self.ctx.format())
     }
 }

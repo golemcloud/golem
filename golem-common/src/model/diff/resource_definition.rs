@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff::{hash_from_serialized_value, Diffable, Hash, Hashable};
+use crate::model::diff::{Diffable, Hash, Hashable, hash_from_serialized_value};
 use crate::model::resource_definition::{EnforcementAction, TimePeriod};
 use serde::Serialize;
 

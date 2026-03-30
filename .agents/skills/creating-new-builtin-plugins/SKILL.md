@@ -86,7 +86,7 @@ environments:
 [package]
 name = "my_plugin"
 version = "0.0.1"
-edition = "2021"
+edition = "2024"
 
 [lib]
 crate-type = ["cdylib"]

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::analysis::analysed_type::{
-    bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, s16, s32, s64, s8, str,
-    tuple, u16, u32, u64, u8, unit_case, variant,
+    bool, case, chr, r#enum, f32, f64, field, flags, list, option, record, s8, s16, s32, s64, str,
+    tuple, u8, u16, u32, u64, unit_case, variant,
 };
 use crate::analysis::{AnalysedType, TypeResult};
 use crate::{Uri, Value};
@@ -22,7 +22,7 @@ use async_recursion::async_recursion;
 use async_trait::async_trait;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use wasmtime::component::{types, ResourceAny, Type, Val};
+use wasmtime::component::{ResourceAny, Type, Val, types};
 
 #[derive(Debug)]
 pub enum EncodingError {
@@ -471,34 +471,34 @@ async fn decode_param_impl(
                 ),
             }),
         },
-        Type::Own(_) => {
-            match param {
-                Value::Handle { uri, resource_id } => {
-                    let uri = Uri { value: uri.clone() };
-                    if resource_store.self_uri() == uri {
-                        match resource_store.get(*resource_id).await {
-                            Some((_, resource)) => Ok(DecodeParamResult {
-                                val: Val::Resource(resource),
-                                resources_to_drop: vec![resource],
-                            }),
-                            None => Err(EncodingError::ValueMismatch {
-                                details: format!("in {context} resource not found"),
-                            }),
-                        }
-                    } else {
-                        Err(EncodingError::ValueMismatch {
-                            details: format!("in {context} cannot resolve handle belonging to a different worker"),
-                        })
+        Type::Own(_) => match param {
+            Value::Handle { uri, resource_id } => {
+                let uri = Uri { value: uri.clone() };
+                if resource_store.self_uri() == uri {
+                    match resource_store.get(*resource_id).await {
+                        Some((_, resource)) => Ok(DecodeParamResult {
+                            val: Val::Resource(resource),
+                            resources_to_drop: vec![resource],
+                        }),
+                        None => Err(EncodingError::ValueMismatch {
+                            details: format!("in {context} resource not found"),
+                        }),
                     }
+                } else {
+                    Err(EncodingError::ValueMismatch {
+                        details: format!(
+                            "in {context} cannot resolve handle belonging to a different worker"
+                        ),
+                    })
                 }
-                _ => Err(EncodingError::ParamTypeMismatch {
-                    details: format!(
-                        "in {context} expected handle, got {}",
-                        param.type_case_name()
-                    ),
-                }),
             }
-        }
+            _ => Err(EncodingError::ParamTypeMismatch {
+                details: format!(
+                    "in {context} expected handle, got {}",
+                    param.type_case_name()
+                ),
+            }),
+        },
         Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
             Err(EncodingError::ParamTypeMismatch {
                 details: format!("in {context} unsupported type (future/stream/error-context)"),

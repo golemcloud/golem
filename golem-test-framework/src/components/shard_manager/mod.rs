@@ -16,12 +16,12 @@ pub mod provided;
 pub mod spawned;
 
 use crate::components::redis::Redis;
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use crate::components::{EnvVarBuilder, wait_for_startup_grpc};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RoutingTable;
 use std::collections::HashMap;
 use std::process::Child;

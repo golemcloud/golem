@@ -126,7 +126,7 @@ pub mod kubernetes {
 
     use golem_common::model::RetryConfig;
 
-    use crate::healthcheck::{health_check_with_retries, HealthCheck, HealthCheckError};
+    use crate::healthcheck::{HealthCheck, HealthCheckError, health_check_with_retries};
 
     #[derive(Clone)]
     pub struct KubernetesHealthCheck {

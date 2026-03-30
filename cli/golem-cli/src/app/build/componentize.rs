@@ -14,7 +14,7 @@
 
 use crate::app::build::command::execute_build_command;
 use crate::app::context::BuildContext;
-use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
+use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 
 pub async fn build_components(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
     log_action("Building", "components");

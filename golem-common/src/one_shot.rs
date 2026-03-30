@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
 ///  Like tokio Notify, but also wakes up future waiters.
@@ -59,10 +59,10 @@ impl OneShotEvent {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
 
     #[test]
     async fn waiters_are_woken_after_set() {
@@ -108,7 +108,7 @@ mod test {
         let event = OneShotEvent::new();
         event.set();
         event.set(); // second call is a no-op
-                     // Should still behave normally
+        // Should still behave normally
         event.wait().await;
     }
 

@@ -14,7 +14,7 @@
 
 mod invocation;
 
-use crate::grpc::invocation::{from_proto_invocation_context, CanStartWorker};
+use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
@@ -69,8 +69,8 @@ use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
     proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
 };
-use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
+use golem_service_base::model::auth::AuthCtx;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -82,7 +82,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::info_span;
-use tracing::{debug, info, warn, Instrument};
+use tracing::{Instrument, debug, info, warn};
 use wasmtime::Error;
 
 /// This is the implementation of the Worker Executor gRPC API
@@ -825,13 +825,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.shard_service().revoke_shards(&shard_ids)?;
 
         for (agent_id, worker_details) in self.active_workers().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err() {
-                if let Some(mut await_interrupted) = worker_details
+            if self.shard_service().check_worker(&agent_id).is_err()
+                && let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
                     .await
-                {
-                    await_interrupted.recv().await.unwrap();
-                }
+            {
+                await_interrupted.recv().await.unwrap();
             }
         }
 
@@ -1010,17 +1009,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if let Ok(agent_id) = ParsedAgentId::parse(
             &owned_agent_id.agent_id.agent_id,
             &component_metadata.metadata,
-        ) {
-            if let Some(agent_type) = component_metadata
-                .metadata
-                .find_agent_type_by_name(&agent_id.agent_type)
-            {
-                if agent_type.mode == AgentMode::Ephemeral {
-                    return Err(WorkerExecutorError::invalid_request(
-                        "Ephemeral workers cannot be updated",
-                    ));
-                }
-            }
+        ) && let Some(agent_type) = component_metadata
+            .metadata
+            .find_agent_type_by_name(&agent_id.agent_type)
+            && agent_type.mode == AgentMode::Ephemeral
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "Ephemeral workers cannot be updated",
+            ));
         }
 
         let disable_wakeup = request.disable_wakeup;

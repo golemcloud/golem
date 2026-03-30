@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::fs;
-use crate::sdk_versions::{GOLEM_RUST_VERSION_DEFAULT, GOLEM_TS_VERSION_DEFAULT};
-use anyhow::{anyhow, bail, Context};
+use crate::versions;
+use anyhow::{Context, anyhow, bail};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
-use toml_edit::{value, Array, Item, Table};
+use toml_edit::{Array, Item, Table, value};
 
 const GOLEM_PATH: &str = "GOLEM_PATH";
 const GOLEM_RUST_PATH: &str = "GOLEM_RUST_PATH";
@@ -87,11 +87,11 @@ impl SdkOverrides {
 
     pub fn ts_package_dep(&self, package_name: &str) -> String {
         match &self.ts_packages_path {
-            Some(ts_packages_path) => format!("{}/{}", ts_packages_path, package_name),
+            Some(ts_packages_path) => format!("file:{}/{}", ts_packages_path, package_name),
             None => self
                 .ts_version
                 .as_deref()
-                .unwrap_or(GOLEM_TS_VERSION_DEFAULT)
+                .unwrap_or(versions::sdk::TS)
                 .to_string(),
         }
     }
@@ -106,7 +106,7 @@ impl SdkOverrides {
             None => RustDependency::Version(
                 self.golem_rust_version
                     .clone()
-                    .unwrap_or_else(|| GOLEM_RUST_VERSION_DEFAULT.to_string()),
+                    .unwrap_or_else(|| versions::sdk::RUST.to_string()),
             ),
         }
     }
@@ -550,6 +550,19 @@ mod tests {
         );
         assert_eq!(item["default-features"].as_bool(), Some(false));
         assert_eq!(item["features"].as_array().map(|a| a.len()), Some(1));
+    }
+
+    #[test]
+    fn ts_package_dep_uses_file_prefix_for_local_path_overrides() {
+        let overrides = SdkOverrides {
+            ts_packages_path: Some("/tmp/repo/sdks/ts/packages".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            overrides.ts_package_dep("golem-ts-sdk"),
+            "file:/tmp/repo/sdks/ts/packages/golem-ts-sdk"
+        );
     }
 
     #[test]

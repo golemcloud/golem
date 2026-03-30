@@ -18,8 +18,8 @@ use crate::log::log_warn_action;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
-use crate::model::{app_raw, GuestLanguage};
-use anyhow::{anyhow, bail, Context};
+use crate::model::{GuestLanguage, app_raw};
+use anyhow::{Context, anyhow, bail};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -78,6 +78,26 @@ pub struct TaskResult {
 pub struct ResolvedExternalCommandMarkerHash<'a> {
     pub build_dir: &'a Path,
     pub command: &'a app_raw::ExternalCommand,
+}
+
+#[derive(Serialize)]
+pub struct NpmInstallDepsMarkerHash<'a> {
+    pub package_json_hash: &'a str,
+    pub package_lock_hash: Option<&'a str>,
+}
+
+impl TaskResultMarkerHashSource for NpmInstallDepsMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "NpmInstallDepsMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some("npm-install-deps".to_string()))
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
 }
 
 impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {

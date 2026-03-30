@@ -21,7 +21,7 @@ use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
     PublicUpdateDescription, StringAttributeValue,
 };
-use golem_wasm::{print_value_and_type, ValueAndType};
+use golem_wasm::{ValueAndType, print_value_and_type};
 use std::fmt::Write;
 
 // backported from golem-cli to help debugging worker executor issues
@@ -425,6 +425,27 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 PublicSnapshotData::Json(data) => {
                     let _ = writeln!(result, "{pad}MIME type:         application/json");
                     let _ = writeln!(result, "{pad}JSON:              {}", data.data);
+                }
+                PublicSnapshotData::Multipart(data) => {
+                    use golem_common::base_model::oplog::MultipartPartData;
+
+                    let _ = writeln!(result, "{pad}MIME type:         {}", data.mime_type);
+                    for part in &data.parts {
+                        let data_summary = match &part.data {
+                            MultipartPartData::Json(json) => {
+                                serde_json::to_string_pretty(&json.data)
+                                    .unwrap_or_else(|_| format!("{:?}", json.data))
+                            }
+                            MultipartPartData::Raw(raw) => {
+                                format!("({} bytes)", raw.data.len())
+                            }
+                        };
+                        let _ = writeln!(
+                            result,
+                            "{pad}part:              {} [{}]: {}",
+                            part.name, part.content_type, data_summary
+                        );
+                    }
                 }
             }
         }

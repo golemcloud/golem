@@ -1,3 +1,6 @@
+<!-- golem-managed:guide:rust:start -->
+<!-- Golem manages this section. Do not edit manually. -->
+
 # Golem Application Development Guide (Rust)
 
 ## Overview
@@ -20,21 +23,30 @@ Key concepts:
 ## Project Structure
 
 ```
-golem.yaml                        # Root application manifest
-Cargo.toml                        # Workspace Cargo.toml
-components-rust/                  # Component crates (each becomes a WASM component)
-  <component-name>/
-    src/lib.rs                    # Agent definitions and implementations
-    Cargo.toml                    # Must use crate-type = ["cdylib"]
-    golem.yaml                    # Component-level manifest (templates, env, dependencies)
-    .wit/wit/                     # WIT interface files (auto-managed)
-common-rust/                      # Shared library crates (not compiled to WASM directly)
-  common-lib/
-    src/lib.rs
-    Cargo.toml
-  golem.yaml                     # Build templates for all Rust components
-.wit/wit/deps/                   # Shared WIT dependencies (auto-managed)
-golem-temp/                      # Build artifacts (gitignored)
+# Single-component app
+golem.yaml                        # Golem Application Manifest (contains components.<name>.dir = ".")
+Cargo.toml                        # Component crate manifest
+src/
+  lib.rs                          # Module entry point; re-exports of agents
+  <agent_name>.rs                 # Agent definitions and implementations
+
+# Multi-component app
+golem.yaml                        # Golem Application Manifest (components map with explicit dir per component)
+<component-a>/
+  Cargo.toml                      # Component crate manifest (must use crate-type = ["cdylib"])
+  src/
+    lib.rs                        # Module entry point; re-exports of agents
+    <agent_name>.rs               # Agent definitions and implementations
+<component-b>/
+  Cargo.toml                      # Component crate manifest (must use crate-type = ["cdylib"])
+  src/
+    lib.rs                        # Module entry point; re-exports of agents
+    <agent_name>.rs               # Agent definitions and implementations
+
+golem-temp/                       # Build artifacts (gitignored)
+  common/                         # Shared Golem templates (generated on-demand)
+    rust/                         # Shared Golem Rust templates
+      golem.yaml                  # Build templates for all Rust components
 ```
 
 ## Prerequisites
@@ -263,8 +275,6 @@ pub struct MyData {
 }
 ```
 
-Shared types can be placed in `common-rust/common-lib/` and used across components.
-
 ### Method annotations
 
 ```rust
@@ -369,35 +379,104 @@ tx.execute(op1, "input".to_string());
 });
 ```
 
-## Adding New Components
+## Using `golem new`
+
+Use `golem new` to create new applications and to add new components or agents to existing applications.
+
+### Create a new application
 
 ```shell
-golem component new rust my:new-component
+golem new my-app --template rust
 ```
 
-This creates a new directory under `components-rust/` with the standard structure.
+This creates a new application directory, initializes `golem.yaml`, and creates the first Rust component with a default agent template.
+
+You can also run `golem new .` in an empty directory to initialize the current folder as a new application.
+
+If the folder name is not a valid Golem application name (lowercase kebab-case), specify one explicitly:
+
+```shell
+golem new . --application-name my-app --template rust
+```
+
+### Add to an existing application
+
+From inside an existing application, use `.` as the path:
+
+```shell
+golem new . --template rust
+```
+
+By default this applies the Rust template to a matching Rust component, or creates one if needed.
+
+### Create or target a specific component
+
+```shell
+golem new . --template rust --component-name my-app:billing
+```
+
+- If `my-app:billing` exists and is Rust, the template is applied there.
+- If it does not exist, `golem new` creates the component and applies the template.
+
+### Applying multiple templates
+
+You can apply multiple templates to the same component in one command:
+
+```shell
+golem new . --template rust --template my:agent-template --component-name my-app:billing
+```
+
+You can also apply templates incrementally by running `golem new` multiple times for the same component.
+
+If multiple templates affect the same files, `golem new` merges the changes and shows the planned updates before applying them.
+
+### Component directory behavior
+
+- If the application has exactly one component, its `dir` in `golem.yaml` is `.`.
+- If the application has multiple components, each component has an explicit `dir` in `golem.yaml`.
+- When needed, `golem new` can promote an existing root component layout into explicit per-component directories.
+
+### Choosing one vs multiple components
+
+In most cases, prefer a single component with multiple agents.
+
+Use multiple components only when you have a technical reason, for example:
+- using different guest languages in the same application (for example Rust + TypeScript)
+- separating components with distinct operational or ownership constraints
+
+### Useful flags
+
+- `--template <name>`: can be used multiple times to apply and merge several templates into one component (in non-interactive mode, at least one template is required)
+- `--component-name <namespace:name>`: target or create a specific component
+- `--application-name <name>`: set the application name when creating a new application
+
+To discover available templates:
+
+```shell
+golem templates
+```
 
 ## Application Manifest (golem.yaml)
 
-- Root `golem.yaml`: app name, includes, witDeps, environments
-- `common-rust/golem.yaml`: build templates (debug/release profiles) shared by all Rust components
-- `components-rust/<name>/golem.yaml`: component-specific config (templates reference, env vars, dependencies)
+- Root `golem.yaml`: app name, includes, witDeps, environments, and `components` entries
+- `golem-temp/common/rust/golem.yaml`: generated on-demand build templates (debug/release profiles) shared by all Rust components
 
-Key fields in component manifest:
+Key fields in each `components.<name>` entry:
+- `dir`: component directory (`"."` for single-component apps)
 - `templates`: references a template from common golem.yaml (e.g., `rust`)
 - `env`: environment variables passed to agents at runtime
 - `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
 
 ## Available Libraries
 
-From workspace `Cargo.toml`:
+From your component (or shared workspace) `Cargo.toml`:
 - `golem-rust` (with `export_golem_agentic` feature) — agent framework, durability, transactions
 - `wstd` — WASI standard library (HTTP client via `wstd::http`, async I/O, etc.)
 - `log` — logging (uses `wasi-logger` backend, logs visible via `golem agent stream`)
 - `serde` / `serde_json` — serialization
 - Optional: `golem-wasi-http` — advanced HTTP client alternative
 
-To enable AI features, uncomment `golem_ai` feature in workspace `Cargo.toml` and uncomment the relevant provider dependency in the component's `golem.yaml`.
+To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
 
 ## Debugging
 
@@ -416,13 +495,12 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 - All agent method parameters passed by value (no references)
 - All custom types need `Schema` derive (plus `IntoValue` and `FromValueAndType`, which `Schema` implies)
 - `proc-macro-enable` must be true in rust-analyzer settings (already configured in `.vscode/settings.json`)
-- Do not manually edit files in `.wit/` directories — they are auto-managed by the build tooling
-- `golem-temp/` and `target/` are gitignored build artifacts
+- `golem-temp/` and `target/` are gitignored build artifacts, do not manually edit files in those directories
 
 ## Formatting and Linting
 
 ```shell
-cargo fmt                        # Format code
+cargo fmt                            # Format code
 cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
 ```
 
@@ -431,3 +509,5 @@ cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
 - App manifest reference: https://learn.golem.cloud/app-manifest
 - Full docs: https://learn.golem.cloud
 - golem-rust SDK: https://docs.rs/golem-rust
+<!-- golem-managed:guide:rust:end -->
+

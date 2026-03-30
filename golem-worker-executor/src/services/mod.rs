@@ -243,41 +243,41 @@ pub trait HasAll<Ctx: WorkerCtx>:
 }
 
 impl<
-        Ctx: WorkerCtx,
-        T: HasActiveWorkers<Ctx>
-            + HasAgentTypesService
-            + HasAgentWebhooksService
-            + HasComponentService
-            + HasConfig
-            + HasWorkerForkService
-            + HasWorkerService
-            + HasWorkerEnumerationService
-            + HasRunningWorkerEnumerationService
-            + HasPromiseService
-            + HasWasmtimeEngine<Ctx>
-            + HasKeyValueService
-            + HasBlobStoreService
-            + HasRdbmsService
-            + HasOplogService
-            + HasRpc
-            + HasSchedulerService
-            + HasWorkerActivator<Ctx>
-            + HasWorkerProxy
-            + HasEvents
-            + HasShardManagerService
-            + HasShardService
-            + HasFileLoader
-            + HasOplogProcessorPlugin
-            + HasResourceLimits
-            + HasShutdownToken
-            + HasHttpConnectionPool
-            + HasWebSocketConnectionPool
-            + HasEnvironmentStateService
-            + HasExtraDeps<Ctx>
-            + HasLeakSentinel
-            + Clone
-            + Sync,
-    > HasAll<Ctx> for T
+    Ctx: WorkerCtx,
+    T: HasActiveWorkers<Ctx>
+        + HasAgentTypesService
+        + HasAgentWebhooksService
+        + HasComponentService
+        + HasConfig
+        + HasWorkerForkService
+        + HasWorkerService
+        + HasWorkerEnumerationService
+        + HasRunningWorkerEnumerationService
+        + HasPromiseService
+        + HasWasmtimeEngine<Ctx>
+        + HasKeyValueService
+        + HasBlobStoreService
+        + HasRdbmsService
+        + HasOplogService
+        + HasRpc
+        + HasSchedulerService
+        + HasWorkerActivator<Ctx>
+        + HasWorkerProxy
+        + HasEvents
+        + HasShardManagerService
+        + HasShardService
+        + HasFileLoader
+        + HasOplogProcessorPlugin
+        + HasResourceLimits
+        + HasShutdownToken
+        + HasHttpConnectionPool
+        + HasWebSocketConnectionPool
+        + HasEnvironmentStateService
+        + HasExtraDeps<Ctx>
+        + HasLeakSentinel
+        + Clone
+        + Sync,
+> HasAll<Ctx> for T
 {
 }
 

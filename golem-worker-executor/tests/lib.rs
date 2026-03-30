@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use golem_worker_executor_test_utils::{
-    test_component, LastUniqueId, PrecompiledComponent, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, WorkerExecutorTestDependencies, test_component,
 };
 use std::fmt::Debug;
 use std::path::Path;
@@ -30,6 +30,7 @@ pub mod durability;
 pub mod fuel;
 pub mod hot_update;
 pub mod http;
+pub mod ignite_service;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
@@ -66,6 +67,7 @@ tag_suite!(wasi, group3);
 tag_suite!(scalability, group3);
 tag_suite!(revert, group3);
 
+tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 tag_suite!(storage_quota, group1);

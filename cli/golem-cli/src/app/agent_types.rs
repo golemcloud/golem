@@ -109,32 +109,32 @@ impl AgentTypeRegistry {
         // Validate first, before mutating the index
         for agent_type in agent_types {
             let wrapper_name = agent_type.type_name.0.clone();
-            if let Some(existing) = index.agent_type_wrapper_name_sources.get(&wrapper_name) {
-                if !existing.contains(component_name) {
-                    let mut all = existing.clone();
-                    all.insert(component_name.clone());
-                    bail!(
-                        "Wrapper agent type name {} is defined by multiple components: {}",
-                        wrapper_name.log_color_highlight(),
-                        all.iter()
-                            .map(|s| s.as_str().log_color_highlight())
-                            .join(", ")
-                    );
-                }
+            if let Some(existing) = index.agent_type_wrapper_name_sources.get(&wrapper_name)
+                && !existing.contains(component_name)
+            {
+                let mut all = existing.clone();
+                all.insert(component_name.clone());
+                bail!(
+                    "Wrapper agent type name {} is defined by multiple components: {}",
+                    wrapper_name.log_color_highlight(),
+                    all.iter()
+                        .map(|s| s.as_str().log_color_highlight())
+                        .join(", ")
+                );
             }
 
-            if let Some(existing) = index.agent_type_name_sources.get(&agent_type.type_name) {
-                if !existing.contains(component_name) {
-                    let mut all = existing.clone();
-                    all.insert(component_name.clone());
-                    bail!(
-                        "Agent type name {} is defined by multiple components: {}",
-                        agent_type.type_name.as_str().log_color_highlight(),
-                        all.iter()
-                            .map(|s| s.as_str().log_color_highlight())
-                            .join(", ")
-                    );
-                }
+            if let Some(existing) = index.agent_type_name_sources.get(&agent_type.type_name)
+                && !existing.contains(component_name)
+            {
+                let mut all = existing.clone();
+                all.insert(component_name.clone());
+                bail!(
+                    "Agent type name {} is defined by multiple components: {}",
+                    agent_type.type_name.as_str().log_color_highlight(),
+                    all.iter()
+                        .map(|s| s.as_str().log_color_highlight())
+                        .join(", ")
+                );
             }
         }
 

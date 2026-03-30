@@ -94,7 +94,7 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
                 let mime_type_val = match &fields[1] {
                     crate::Value::Option(Some(inner)) => inner.as_ref(),
                     crate::Value::Option(None) => {
-                        return Err("Mime type restriction is required for inline binary".into())
+                        return Err("Mime type restriction is required for inline binary".into());
                     }
                     _ => return Err("Expected Option for mime type restriction".into()),
                 };

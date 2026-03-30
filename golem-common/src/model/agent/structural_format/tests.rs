@@ -21,8 +21,8 @@ use crate::model::agent::{
     UnstructuredTextElementValue, Url,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result, result_err,
-    result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case, unit_result, variant,
+    bool, case, chr, r#enum, f32, f64, field, flags, list, option, record, result, result_err,
+    result_ok, s8, s16, s32, s64, str, tuple, u8, u16, u32, u64, unit_case, unit_result, variant,
 };
 use golem_wasm::analysis::proptest_strategies;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, TypeHandle};

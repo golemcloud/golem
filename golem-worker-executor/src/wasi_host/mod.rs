@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::workerctx::WorkerCtx;
-use wasmtime::component::{HasSelf, Linker};
 use wasmtime::Engine;
+use wasmtime::component::{HasSelf, Linker};
 use wasmtime_wasi::cli::{StdinStream, StdoutStream};
 use wasmtime_wasi::{DirPerms, FilePerms, IoCtx, ResourceTable, WasiCtx, WasiCtxBuilder};
 
@@ -204,6 +204,10 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         get,
     )?;
 
+    crate::preview2::golem::rdbms::ignite2::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+        &mut linker,
+        get,
+    )?;
     crate::preview2::golem::rdbms::mysql::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
         &mut linker,
         get,

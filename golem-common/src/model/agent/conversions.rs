@@ -19,6 +19,7 @@ use super::{
     SystemVariableSegment,
 };
 use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
+use crate::model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
     AgentTypeName, BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource,
@@ -30,7 +31,6 @@ use crate::model::agent::{
     UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
     Url,
 };
-use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
 

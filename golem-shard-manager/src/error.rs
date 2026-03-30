@@ -123,18 +123,35 @@ impl From<QuotaError> for golem::shardmanager::v1::QuotaError {
     fn from(value: QuotaError) -> golem::shardmanager::v1::QuotaError {
         use golem::shardmanager::v1::quota_error as grpc_quota_error;
         match value {
-            QuotaError::LeaseNotFound { resource_definition_id } =>
-                golem::shardmanager::v1::QuotaError {
-                    error: Some(grpc_quota_error::Error::LeaseNotFound(golem::common::ErrorBody { error: format!("Did not find lease for {resource_definition_id}") })),
-                },
-            QuotaError::StaleEpoch { resource_definition_id, current, provided } =>
-                golem::shardmanager::v1::QuotaError {
-                    error: Some(grpc_quota_error::Error::StaleEpoch(golem::common::ErrorBody { error: format!("Stale epoch provided for {resource_definition_id} (provided: {provided}, current: {current}) ") })),
-                },
-            QuotaError::InternalError(_) =>
-                golem::shardmanager::v1::QuotaError {
-                    error: Some(grpc_quota_error::Error::Internal(golem::common::ErrorBody { error: value.to_string() })),
-                },
+            QuotaError::LeaseNotFound {
+                resource_definition_id,
+            } => golem::shardmanager::v1::QuotaError {
+                error: Some(grpc_quota_error::Error::LeaseNotFound(
+                    golem::common::ErrorBody {
+                        error: format!("Did not find lease for {resource_definition_id}"),
+                    },
+                )),
+            },
+            QuotaError::StaleEpoch {
+                resource_definition_id,
+                current,
+                provided,
+            } => golem::shardmanager::v1::QuotaError {
+                error: Some(grpc_quota_error::Error::StaleEpoch(
+                    golem::common::ErrorBody {
+                        error: format!(
+                            "Stale epoch provided for {resource_definition_id} (provided: {provided}, current: {current}) "
+                        ),
+                    },
+                )),
+            },
+            QuotaError::InternalError(_) => golem::shardmanager::v1::QuotaError {
+                error: Some(grpc_quota_error::Error::Internal(
+                    golem::common::ErrorBody {
+                        error: value.to_string(),
+                    },
+                )),
+            },
         }
     }
 }
