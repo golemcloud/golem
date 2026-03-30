@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::config::ProfileConfig;
-use crate::log::{logln, LogColorize};
-use crate::model::text::fmt::*;
+use crate::log::{LogColorize, logln};
 use crate::model::ProfileView;
+use crate::model::text::fmt::*;
 use colored::Colorize;
 
 impl TextView for Vec<ProfileView> {

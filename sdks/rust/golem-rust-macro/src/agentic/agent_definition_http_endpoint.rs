@@ -155,7 +155,7 @@ pub fn extract_http_endpoints(
                 return Err(syn::Error::new_spanned(
                     list,
                     "Endpoint must specify HTTP method and path",
-                ))
+                ));
             }
         };
 

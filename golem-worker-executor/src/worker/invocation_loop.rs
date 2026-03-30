@@ -18,7 +18,7 @@ use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
-    invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
+    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::{
     FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
@@ -33,12 +33,12 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
-    invocation_context::{AttributeValue, InvocationContextStack},
-    AgentStatusRecord, OplogIndex, Timestamp,
-};
-use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
     IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
+};
+use golem_common::model::{
+    AgentStatusRecord, OplogIndex, Timestamp,
+    invocation_context::{AttributeValue, InvocationContextStack},
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -47,15 +47,15 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_common::model::agent::structural_format::format_structural;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
-use tracing::{debug, span, warn, Instrument, Level, Span};
-use wasmtime::component::Instance;
+use tracing::{Instrument, Level, Span, debug, span, warn};
 use wasmtime::Store;
+use wasmtime::component::Instance;
 
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
@@ -1244,7 +1244,7 @@ fn snapshot_action_at(
 
 #[cfg(test)]
 mod tests {
-    use super::{snapshot_action_at, snapshot_baseline_timestamp, PeriodicSnapshotAction};
+    use super::{PeriodicSnapshotAction, snapshot_action_at, snapshot_baseline_timestamp};
     use golem_common::model::Timestamp;
     use std::time::Duration;
     use test_r::test;

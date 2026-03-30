@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::client::check_http_response_success;
-use crate::log::{log_action, LogColorize, LogIndent};
+use crate::log::{LogColorize, LogIndent, log_action};
 use crate::model::app::{ComponentFilePathWithPermissions, InitialComponentFile};
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -25,8 +25,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::fs::File;
-use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReadDirStream;
 use url::Url;
 
 #[derive(Debug, Clone)]

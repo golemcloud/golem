@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::launch::{launch_golem_services, LaunchArgs};
+use crate::launch::{LaunchArgs, launch_golem_services};
 use anyhow::anyhow;
 use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::{RunArgs, ServerSubcommand};

@@ -19,17 +19,17 @@ use crate::command::shared_args::{
     AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
 };
 use crate::command::worker::AgentSubcommand;
-use crate::command_handler::worker::stream::WorkerConnection;
 use crate::command_handler::Handlers;
+use crate::command_handler::worker::stream::WorkerConnection;
 use crate::context::Context;
-use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
+use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
-    LogColorize, LogIndent,
+    LogColorize, LogIndent, log_action, log_error, log_error_action, log_failed_to, log_warn,
+    log_warn_action, logln,
 };
-use crate::model::component::{show_exported_agent_constructors, ComponentNameMatchKind};
+use crate::model::component::{ComponentNameMatchKind, show_exported_agent_constructors};
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
@@ -37,10 +37,10 @@ use crate::model::text::help::{
     AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp, WorkerNameHelp,
 };
 use crate::model::text::worker::{
-    format_agent_name_match, format_timestamp, FileNodeView, WorkerCreateView, WorkerFilesView,
-    WorkerGetView,
+    FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView, format_agent_name_match,
+    format_timestamp,
 };
-use anyhow::{anyhow, bail, Context as AnyhowContext};
+use anyhow::{Context as AnyhowContext, anyhow, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 
@@ -896,7 +896,9 @@ impl WorkerCommandHandler {
                     .join(", ")
             ));
             logln("");
-            logln("Switch to an application directory with only one component or explicitly specify the requested component name.");
+            logln(
+                "Switch to an application directory with only one component or explicitly specify the requested component name.",
+            );
             logln("");
             bail!(NonSuccessfulExit);
         }
@@ -931,12 +933,11 @@ impl WorkerCommandHandler {
 
                 let mut view = AgentMetadataView::from(w);
 
-                if source_language.is_known() {
-                    if let Ok(parsed) = ParsedAgentId::parse(&raw_agent_name, &component.metadata) {
-                        view.agent_name =
-                            crate::agent_id_display::render_agent_id(&parsed, &source_language)
-                                .into();
-                    }
+                if source_language.is_known()
+                    && let Ok(parsed) = ParsedAgentId::parse(&raw_agent_name, &component.metadata)
+                {
+                    view.agent_name =
+                        crate::agent_id_display::render_agent_id(&parsed, &source_language).into();
                 }
 
                 view.with_source_language(source_language)
@@ -1537,7 +1538,9 @@ impl WorkerCommandHandler {
                         "Agent update",
                         "is not pending anymore, but no outcome has been found",
                     );
-                    return Err(anyhow!("Unexpected agent state: update is not pending anymore, but no outcome has been found"));
+                    return Err(anyhow!(
+                        "Unexpected agent state: update is not pending anymore, but no outcome has been found"
+                    ));
                 }
             }
         }

@@ -24,7 +24,7 @@ mod shard_management;
 pub mod shard_manager_config;
 mod worker_executor;
 
-use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
+use crate::healthcheck::{GrpcHealthCheck, HealthCheck, get_unhealthy_pods};
 use crate::persistence::RoutingTableFileSystemPersistence;
 use crate::quota::{GrpcResourceDefinitionFetcher, QuotaService};
 use crate::shard_manager_config::{HealthCheckK8sConfig, HealthCheckMode, PersistenceConfig};

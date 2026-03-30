@@ -22,10 +22,10 @@ use golem_common::model::{AgentId, RdbmsPoolKey, TransactionId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
-use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
-use golem_worker_executor::services::rdbms::postgres::types::Range;
-use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
 use golem_worker_executor::services::rdbms::RdbmsService;
+use golem_worker_executor::services::rdbms::mysql::{MysqlType, types as mysql_types};
+use golem_worker_executor::services::rdbms::postgres::types::Range;
+use golem_worker_executor::services::rdbms::postgres::{PostgresType, types as postgres_types};
 use golem_worker_executor::services::rdbms::{DbResult, DbRow, RdbmsError, RdbmsTransactionStatus};
 use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use mac_address::MacAddress;
@@ -39,7 +39,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{test, test_dep};
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 use uuid::Uuid;
 
 #[test_dep]
@@ -2764,15 +2764,19 @@ fn check_test_results<T: RdbmsType>(
                     Some(Ok(StatementResult::Execute(result))) => {
                         if let Some(expected) = expected.expected {
                             assert_eq!(
-                                result,
-                                expected,
+                                result, expected,
                                 "execute result for worker {agent_id} and test statement with index {i} match"
                             );
                         }
                     }
                     v => {
-                        info!("execute result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        panic!("execute result for worker {agent_id} and test statement with index {i} is error or not found");
+                        info!(
+                            "execute result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}",
+                            st.statement, v
+                        );
+                        panic!(
+                            "execute result for worker {agent_id} and test statement with index {i} is error or not found"
+                        );
                     }
                 }
             }
@@ -2782,15 +2786,26 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            assert_eq!(result.columns, expected_columns, "query result columns for worker {agent_id} and test statement with index {i} match");
+                            assert_eq!(
+                                result.columns, expected_columns,
+                                "query result columns for worker {agent_id} and test statement with index {i} match"
+                            );
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            assert_eq!(result.rows, expected_rows, "query result rows for worker {agent_id} and test statement with index {i} match");
+                            assert_eq!(
+                                result.rows, expected_rows,
+                                "query result rows for worker {agent_id} and test statement with index {i} match"
+                            );
                         }
                     }
                     v => {
-                        info!("query result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        panic!("query result for worker {agent_id} and test statement with index {i} is error or not found");
+                        info!(
+                            "query result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}",
+                            st.statement, v
+                        );
+                        panic!(
+                            "query result for worker {agent_id} and test statement with index {i} is error or not found"
+                        );
                     }
                 }
             }
@@ -2800,15 +2815,26 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            assert_eq!(result.columns, expected_columns, "query stream result columns for worker {agent_id} and test statement with index {i} match");
+                            assert_eq!(
+                                result.columns, expected_columns,
+                                "query stream result columns for worker {agent_id} and test statement with index {i} match"
+                            );
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            assert_eq!(result.rows, expected_rows, "query stream result rows for worker {agent_id} and test statement with index {i} match");
+                            assert_eq!(
+                                result.rows, expected_rows,
+                                "query stream result rows for worker {agent_id} and test statement with index {i} match"
+                            );
                         }
                     }
                     v => {
-                        info!("query stream result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        panic!("query stream result for worker {agent_id} and test statement with index {i} is error or not found");
+                        info!(
+                            "query stream result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}",
+                            st.statement, v
+                        );
+                        panic!(
+                            "query stream result for worker {agent_id} and test statement with index {i} is error or not found"
+                        );
                     }
                 }
             }

@@ -62,10 +62,10 @@ struct CacheState<K, PV, V, E> {
 }
 
 impl<
-        K: Eq + Hash + Clone + Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        E: Clone + Send + Sync + 'static,
-    > SimpleCache<K, V, E> for Cache<K, (), V, E>
+    K: Eq + Hash + Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    E: Clone + Send + Sync + 'static,
+> SimpleCache<K, V, E> for Cache<K, (), V, E>
 {
     /// Gets a cached value for a given key, or inserts a new one with the given async function. If a value is pending,
     /// it is awaited instead of recreating it.
@@ -78,11 +78,11 @@ impl<
 }
 
 impl<
-        K: Eq + Hash + Clone + Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        PV: Clone + Send + Sync + 'static,
-        E: Clone + Send + Sync + 'static,
-    > Cache<K, PV, V, E>
+    K: Eq + Hash + Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    PV: Clone + Send + Sync + 'static,
+    E: Clone + Send + Sync + 'static,
+> Cache<K, PV, V, E>
 {
     pub fn new(
         capacity: Option<usize>,
@@ -382,7 +382,7 @@ impl<
         self.state.items.contains_async(key).await
     }
 
-    pub fn create_weak_remover(&self, key: K) -> impl FnOnce() {
+    pub fn create_weak_remover(&self, key: K) -> impl FnOnce() + use<K, V, PV, E> {
         let weak_state = Arc::downgrade(&self.state);
         let name = self.name;
         move || {

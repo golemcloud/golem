@@ -2,8 +2,8 @@ use crate::golem_core_1_5_x::types::NamedWitTypeNode;
 use crate::{ResourceMode, Uri, Value, WitNode, WitType, WitTypeNode, WitValue};
 use desert_rust::adt::{AdtMetadata, AdtSerializer};
 use desert_rust::{
-    deserialize_iterator, serialize_iterator, BinaryDeserializer, BinaryInput, BinaryOutput,
-    BinarySerializer, DeserializationContext, Evolution, SerializationContext,
+    BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
+    Evolution, SerializationContext, deserialize_iterator, serialize_iterator,
 };
 use lazy_static::lazy_static;
 use std::borrow::Cow;

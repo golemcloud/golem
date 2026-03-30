@@ -1,7 +1,7 @@
 [package]
 name = "golem-shard-manager"
 version = "0.0.0"
-edition = "2021"
+ edition = "2024"
 autotests = false
 
 license-file = "../LICENSE"

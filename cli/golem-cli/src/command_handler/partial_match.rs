@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use crate::command::{
-    builtin_exec_subcommands, help_target_to_command, GolemCliCommandPartialMatch,
-    GolemCliGlobalFlags,
+    GolemCliCommandPartialMatch, GolemCliGlobalFlags, builtin_exec_subcommands,
+    help_target_to_command,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
 use crate::log::Output::Stdout;
-use crate::log::{log_action, log_error, logln, set_log_output, LogColorize};
+use crate::log::{LogColorize, log_action, log_error, logln, set_log_output};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::format::Format;
-use crate::model::text::fmt::{log_text_view, DecoratedIndent};
+use crate::model::text::fmt::{DecoratedIndent, log_text_view};
 use crate::model::text::help::{AvailableFunctionNamesHelp, EnvironmentNameHelp, WorkerNameHelp};
 use colored::Colorize;
 use indoc::indoc;
@@ -271,7 +271,9 @@ impl ErrorHandler {
     ) -> anyhow::Result<()> {
         match hint_error {
             ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags => {
-                log_error("Cannot use short (name only) environment reference with --local or --cloud flags!");
+                log_error(
+                    "Cannot use short (name only) environment reference with --local or --cloud flags!",
+                );
                 logln("");
                 log_text_view(&EnvironmentNameHelp);
                 Ok(())

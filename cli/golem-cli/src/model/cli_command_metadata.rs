@@ -101,7 +101,7 @@ impl CliCommandMetadata {
             })
             .collect::<Vec<_>>();
 
-        let metadata = CliCommandMetadata {
+        CliCommandMetadata {
             path: path.clone(),
             name: command.get_name().to_string(),
             display_name: command.get_display_name().map(|s| s.to_string()),
@@ -114,9 +114,7 @@ impl CliCommandMetadata {
                 .collect(),
             args,
             subcommands,
-        };
-
-        metadata
+        }
     }
 
     fn collect_arg_metadata(arg: &Arg) -> CliArgMetadata {

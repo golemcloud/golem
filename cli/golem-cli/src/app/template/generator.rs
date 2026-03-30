@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::template::AppTemplate;
 use crate::app::template::repo::TEMPLATES_DIR;
 use crate::app::template::snippet::{APP_MANIFEST_HEADER, DEP_ENV_VARS_DOC};
-use crate::app::template::AppTemplate;
 use crate::fs;
 use crate::sdk_overrides::sdk_overrides;
 use crate::versions;
@@ -477,7 +477,7 @@ fn replace_all(input: &str, replacements: &BTreeMap<&'static str, String>) -> St
         let remaining = &input[index..];
         let matched = replacements
             .iter()
-            .find(|(&key, _)| remaining.starts_with(key));
+            .find(|&(key, _)| remaining.starts_with(key));
 
         if let Some((key, value)) = matched {
             out.push_str(value);

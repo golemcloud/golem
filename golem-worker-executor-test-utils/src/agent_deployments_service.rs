@@ -17,8 +17,8 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::AgentDeploymentDetails;
+use golem_service_base::model::agent_secret::AgentSecret;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use std::collections::HashMap;
 

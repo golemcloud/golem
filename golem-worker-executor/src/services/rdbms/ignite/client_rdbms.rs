@@ -14,7 +14,7 @@
 
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::ignite::types::{DbColumn, DbValue};
-use crate::services::rdbms::ignite::{IgniteType, IGNITE};
+use crate::services::rdbms::ignite::{IGNITE, IgniteType};
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, DbTransaction, Rdbms, RdbmsError, RdbmsStatus,
     RdbmsTransactionStatus,
@@ -28,8 +28,8 @@ use ignite_client::{
     Transaction as IgniteTransaction,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};

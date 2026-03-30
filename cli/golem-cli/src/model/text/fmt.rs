@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use crate::fuzzy::Match;
-use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
+use crate::log::{LogColorize, LogIndent, log_warn_action, logln};
 use crate::model::app::ComponentLayerId;
 use crate::model::format::Format;
 use crate::model::text::component::is_sensitive_env_var_name;
 use anyhow::anyhow;
 use cli_table::{Row, Title, WithTitle};
-use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
-use golem_common::model::component::{InitialComponentFile, InstalledPlugin};
+use colored::control::SHOULD_COLORIZE;
 use golem_common::model::AgentStatus;
+use golem_common::model::component::{InitialComponentFile, InstalledPlugin};
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
@@ -546,12 +546,11 @@ pub fn to_colored_json<T: Serialize>(value: &T) -> anyhow::Result<String> {
                 TokOpt::Some(text, kind) => {
                     let mut style_kind = kind.as_str();
 
-                    if kind == "string" {
-                        if let Some(TokOpt::None(next)) = tokens.peek() {
-                            if next.trim_start().starts_with(':') {
-                                style_kind = "key";
-                            }
-                        }
+                    if kind == "string"
+                        && let Some(TokOpt::None(next)) = tokens.peek()
+                        && next.trim_start().starts_with(':')
+                    {
+                        style_kind = "key";
                     }
 
                     match style_kind {

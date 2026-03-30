@@ -311,10 +311,9 @@ fn validate_constructor_params_are_http_safe(
             for (param_name, param_schema) in name_and_schemas {
                 if let ElementSchema::UnstructuredBinary(_) = param_schema {
                     return Err(format!(
-                            "Agent '{}' constructor parameter '{}' cannot be of type 'UnstructuredBinary' when used with HTTP mount",
-                            agent_class_name,
-                            param_name,
-                        ));
+                        "Agent '{}' constructor parameter '{}' cannot be of type 'UnstructuredBinary' when used with HTTP mount",
+                        agent_class_name, param_name,
+                    ));
                 }
             }
         }
@@ -361,8 +360,7 @@ fn validate_mount_variables_exist_in_constructor(
             if !constructor_vars.contains(variable_name) {
                 return Err(format!(
                     "HTTP mount path variable '{}' (in path segment {}) is not defined in the agent constructor.",
-                    variable_name,
-                    segment_index,
+                    variable_name, segment_index,
                 ));
             }
         }

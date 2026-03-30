@@ -14,18 +14,18 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
+use axum::Router;
 use axum::extract::Path;
 use axum::routing::{delete, get, post};
-use axum::Router;
 use bytes::Bytes;
 use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{
-    drain_connection, stdout_event_starting_with, stdout_events, TestDsl,
+    TestDsl, drain_connection, stdout_event_starting_with, stdout_events,
 };
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinHandle;
 use tracing::info;
-use tracing::{debug, instrument, Instrument};
+use tracing::{Instrument, debug, instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

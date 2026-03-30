@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{builtin_local_url, NamedProfile, CLOUD_URL};
+use crate::config::{CLOUD_URL, NamedProfile, builtin_local_url};
 use crate::model::app_raw::{BuiltinServer, Environment, Server};
 use colored::Colorize;
 

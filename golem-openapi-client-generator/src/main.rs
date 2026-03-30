@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser};
 
-use golem_openapi_client_generator::{gen, parse_openapi_specs};
+use golem_openapi_client_generator::{generate, parse_openapi_specs};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None, rename_all = "kebab-case")]
@@ -57,7 +57,7 @@ fn main() {
     match command {
         Cli::Generate(args) => {
             let openapi_specs = parse_openapi_specs(&args.spec_yaml).unwrap();
-            gen(
+            generate(
                 openapi_specs,
                 &args.output_directory,
                 &args.name,

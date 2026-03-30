@@ -18,10 +18,10 @@ use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
-use golem_test_framework::dsl::{update_counts, TestDsl};
+use golem_test_framework::dsl::{TestDsl, update_counts};
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use log::info;
 use pretty_assertions::{assert_eq, assert_ne};

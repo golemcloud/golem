@@ -60,16 +60,16 @@ pub fn find_resource_site(
         Some(result)
     } else {
         for export in exports {
-            if let AnalysedExport::Instance(instance) = export {
-                if let Some(result) = find_resource_site_impl(
+            if let AnalysedExport::Instance(instance) = export
+                && let Some(result) = find_resource_site_impl(
                     ParsedFunctionSite::Interface {
                         name: instance.name.clone(),
                     },
                     &instance.functions,
                     resource_name,
-                ) {
-                    return Some(result);
-                }
+                )
+            {
+                return Some(result);
             }
         }
 

@@ -15,22 +15,22 @@
 use super::*;
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::OplogArchiveService;
+use crate::storage::indexed::IndexedStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
-use crate::storage::indexed::IndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
+use golem_common::model::AgentInvocationPayload;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AgentError, LogLevel};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::AgentInvocationPayload;
 use golem_common::model::{AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId};
 use golem_common::redis::RedisPool;
-use golem_common::tracing::{init_tracing, TracingConfig};
+use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_wasm::{FromValue, FromValueAndType, IntoValue, IntoValueAndType};
@@ -1717,7 +1717,9 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                 let r = MultiLayerOplog::try_archive_blocking(&oplog).await;
 
                 if i % 2 == 1 {
-                    debug!("Adding more oplog entries to primary going to be moved to the secondary layer");
+                    debug!(
+                        "Adding more oplog entries to primary going to be moved to the secondary layer"
+                    );
                     oplog
                         .add_and_commit(OplogEntry::log(
                             LogLevel::Debug,

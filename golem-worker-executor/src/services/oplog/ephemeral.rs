@@ -17,10 +17,10 @@ use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CommitLevel, Oplog};
 use async_lock::Mutex;
 use async_trait::async_trait;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
-use golem_common::model::OwnedAgentId;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};

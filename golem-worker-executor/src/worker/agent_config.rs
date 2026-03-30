@@ -18,9 +18,9 @@ use golem_common::model::worker::{ParsedWorkerAgentConfigEntry, WorkerAgentConfi
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::{AgentConfigEntry, Component};
+use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::ValueAndType;
 use std::collections::HashMap;
 
 pub fn ensure_required_agent_secrets_are_configured(
@@ -69,7 +69,7 @@ pub fn ensure_required_agent_secrets_are_configured(
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Required agent secret {} does not exist",
                     config_entry.path.join(".")
-                )))
+                )));
             }
         }
     }
@@ -186,7 +186,7 @@ pub fn validate_agent_config(
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Config {} was not provided a value",
                     entry.path.join(".")
-                )))
+                )));
             }
         }
     }

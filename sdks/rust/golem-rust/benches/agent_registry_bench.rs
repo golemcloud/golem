@@ -25,9 +25,9 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 mod bench {
     use golem_rust::agentic::{
-        get_constructor_parameter_type, get_enriched_agent_type_by_name, get_method_parameter_type,
-        register_agent_type, AgentTypeName, EnrichedAgentMethod, EnrichedElementSchema,
-        ExtendedAgentConstructor, ExtendedAgentType, ExtendedDataSchema,
+        AgentTypeName, EnrichedAgentMethod, EnrichedElementSchema, ExtendedAgentConstructor,
+        ExtendedAgentType, ExtendedDataSchema, get_constructor_parameter_type,
+        get_enriched_agent_type_by_name, get_method_parameter_type, register_agent_type,
     };
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, ElementSchema, Snapshotting};
     use golem_wasm::golem_core_1_5_x::types::{NamedWitTypeNode, WitType, WitTypeNode};

@@ -18,7 +18,7 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
 use crate::services::oplog::{
-    downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
+    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, downcast_oplog,
 };
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
-use tracing::{debug, error, info, span, warn, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, debug, error, info, span, warn};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
@@ -607,7 +607,9 @@ impl MultiLayerOplog {
                     mut keep_alive,
                     done,
                 } => {
-                    info!("Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer");
+                    info!(
+                        "Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer"
+                    );
                     debug!("Reading entries from the primary oplog");
 
                     if let Some(primary) = primary.upgrade() {
@@ -635,7 +637,9 @@ impl MultiLayerOplog {
                     mut keep_alive,
                     done,
                 } => {
-                    info!("Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer");
+                    info!(
+                        "Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer"
+                    );
                     debug!("Reading entries from oplog layer {source}");
 
                     let transfer = BackgroundTransferBetweenLowers::new(
@@ -770,7 +774,9 @@ impl Oplog for MultiLayerOplog {
         let last_transferred_idx = self.last_transfer_point.get();
         let count: u64 = u64::from(last_committed_idx) - u64::from(last_transferred_idx);
         if count >= self.multi_layer_oplog_service.entry_count_limit {
-            debug!("Enqueuing transfer of {count} oplog entries from the primary oplog to the next layer up to {last_committed_idx}");
+            debug!(
+                "Enqueuing transfer of {count} oplog entries from the primary oplog to the next layer up to {last_committed_idx}"
+            );
             let _ = self.transfer.send(TransferFromPrimary {
                 last_transferred_idx: last_committed_idx,
                 keep_alive: None,
@@ -954,7 +960,10 @@ impl OplogArchive for WrappedOplogArchive {
             let old_count = self.entry_count.fetch_add(1, Ordering::AcqRel); // Note: the whole chunk is stored as one entry, so incrementing only by one
             let count = old_count + 1;
             if count >= self.entry_count_limit {
-                debug!("Enqueuing transfer of oplog entries from the oplog layer {} to the next layer up to {last_idx}", self.layer);
+                debug!(
+                    "Enqueuing transfer of oplog entries from the oplog layer {} to the next layer up to {last_idx}",
+                    self.layer
+                );
                 let _ = self.transfer.send(TransferFromLower {
                     source: self.layer,
                     last_transferred_idx: last_idx,

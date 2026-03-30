@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::GOLEM_EVCXR_REPL;
 use crate::evcxr_repl::config::{ClientConfig, ReplResolvedConfig};
 use crate::evcxr_repl::log::logln;
 use crate::model::cli_command_metadata::{CliArgMetadata, CliCommandMetadata};
-use crate::GOLEM_EVCXR_REPL;
 use anyhow::Context;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -128,17 +128,17 @@ impl CliReplInterop {
         }
 
         let next_positional = command.positional_args.get(parsed.positional_values.len());
-        if !current_token.is_empty() {
-            if let Some(next_positional) = next_positional {
-                let result = self.complete_arg_value(next_positional, &current_token);
-                if result.values.is_empty() {
-                    return None;
-                }
-                return Some(CompletionResult {
-                    start: pos.saturating_sub(current_token.len()),
-                    values: result.values,
-                });
+        if !current_token.is_empty()
+            && let Some(next_positional) = next_positional
+        {
+            let result = self.complete_arg_value(next_positional, &current_token);
+            if result.values.is_empty() {
+                return None;
             }
+            return Some(CompletionResult {
+                start: pos.saturating_sub(current_token.len()),
+                values: result.values,
+            });
         }
 
         let positional_values_list = if let Some(next_positional) = next_positional {

@@ -21,22 +21,23 @@ use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
     BuildArgs, ForceBuildArg, OptionalComponentNames, PostDeployArgs,
 };
+use crate::command_handler::Handlers;
 use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
 };
 use crate::command_handler::app::template::TemplateHandler;
-use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
-    log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
-    logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
+    LogColorize, LogIndent, LogOutput, Output, log_action, log_error, log_failed_to,
+    log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
+    logged_failed_to, logged_finished_or_failed_to, logln,
 };
+use crate::model::GuestLanguage;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
 };
@@ -51,15 +52,14 @@ use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
-use crate::model::GuestLanguage;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -966,7 +966,9 @@ impl AppCommandHandler {
         let Some(diff) =
             diffable_current_deployment.diff_with_new(&deploy_quick_diff.diffable_local_deployment)
         else {
-            bail!(anyhow!("The environment was changed concurrently while diffing. Retry planning and deploying!"))
+            bail!(anyhow!(
+                "The environment was changed concurrently while diffing. Retry planning and deploying!"
+            ))
         };
 
         let diff_stage =
@@ -1193,7 +1195,9 @@ impl AppCommandHandler {
 
         let Some(diff) = diffable_target_deployment.diff_with_current(&diffable_current_deployment)
         else {
-            bail!("Illegal state: empty diff between current and target deployment after fetching summaries")
+            bail!(
+                "Illegal state: empty diff between current and target deployment after fetching summaries"
+            )
         };
 
         Ok(RollbackDiff {

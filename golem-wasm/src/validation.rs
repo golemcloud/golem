@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::analysis::AnalysedType;
 use crate::Value;
+use crate::analysis::AnalysedType;
 
 /// Validates that a `Value` is structurally compatible with the given `AnalysedType`.
 ///
