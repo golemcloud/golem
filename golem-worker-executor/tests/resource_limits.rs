@@ -16,8 +16,8 @@ use crate::Tracing;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start_with_invocation_limits, start_with_table_limit, LastUniqueId, PrecompiledComponent,
-    TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    start_with_invocation_limits, start_with_table_limit,
 };
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test, timeout};
@@ -137,8 +137,8 @@ async fn http_call_limit_exceeded_traps_invocation(
     _tracing: &Tracing,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use axum::routing::post;
     use axum::Router;
+    use axum::routing::post;
     use tokio::spawn;
     use tracing::Instrument;
 
