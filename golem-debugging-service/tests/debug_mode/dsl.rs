@@ -1,7 +1,7 @@
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
 use async_trait::async_trait;
-use golem_common::model::oplog::OplogIndex;
 use golem_common::model::AgentId;
+use golem_common::model::oplog::OplogIndex;
 use golem_debugging_service::model::params::{
     ConnectParams, ConnectResult, ForkParams, ForkResult, PlaybackOverride, PlaybackParams,
     PlaybackResult, RewindParams, RewindResult,

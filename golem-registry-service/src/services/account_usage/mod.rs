@@ -17,11 +17,11 @@ pub mod error;
 use self::error::LimitExceededError;
 use crate::repo::account_usage::AccountUsageRepo;
 use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageType};
-use crate::repo::model::datetime::SqlDateTime;
 use crate::services::account_usage::error::AccountUsageError;
 use golem_common::model::account::AccountId;
 use golem_service_base::model::auth::{AccountAction, AuthCtx};
 use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
+use golem_service_base::repo::SqlDateTime;
 use std::collections::HashMap;
 use std::sync::Arc;
 

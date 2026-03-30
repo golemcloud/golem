@@ -1,4 +1,4 @@
-use crate::app::{cmd, flag, merge_into_manifest, replace_strings_in_file, TestContext};
+use crate::app::{TestContext, cmd, flag, merge_into_manifest, replace_strings_in_file};
 use crate::crate_path;
 use std::path::PathBuf;
 

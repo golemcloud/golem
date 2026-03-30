@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::Empty;
 use crate::base_model::agent::{
     Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
 };
-use crate::base_model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentMode, AgentType, AgentTypeName, AgentTypeResolver, BinaryDescriptor,
     BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
@@ -1342,8 +1342,8 @@ fn agent_id_vs_phantom_agent_id() {
 
 #[test]
 fn agent_id_too_long_rejected() {
-    use crate::base_model::component::ComponentId;
     use crate::base_model::AgentId;
+    use crate::base_model::component::ComponentId;
 
     let component_id = ComponentId(Uuid::nil());
     let long_string = "a".repeat(600);
@@ -1371,8 +1371,8 @@ fn agent_id_too_long_rejected() {
 
 #[test]
 fn agent_id_at_max_length_accepted() {
-    use crate::base_model::component::ComponentId;
     use crate::base_model::AgentId;
+    use crate::base_model::component::ComponentId;
 
     let component_id = ComponentId(Uuid::nil());
     // Format is: t("aaa...aaa") → 1 + 1 + 1 + N + 1 + 1 = N + 5, so N = 507 for total 512

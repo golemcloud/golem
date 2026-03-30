@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::PrimaryOplogService;
+use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
 };

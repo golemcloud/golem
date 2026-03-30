@@ -44,8 +44,6 @@ service RegistryService {
   // agent types api
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
-  rpc ResolveLatestAgentTypeByNames (ResolveLatestAgentTypeByNamesRequest) returns (ResolveLatestAgentTypeByNamesResponse);
-  rpc ResolveAgentTypeAtDeployment (ResolveAgentTypeAtDeploymentRequest) returns (ResolveAgentTypeAtDeploymentResponse);
   rpc ResolveAgentTypeByNames(ResolveAgentTypeByNamesRequest)
       returns (ResolveAgentTypeByNamesResponse);
 
@@ -262,47 +260,12 @@ message GetAgentTypeSuccessResponse {
   RegisteredAgentType agent_type = 1;
 }
 
-message ResolveLatestAgentTypeByNamesRequest {
-  golem.common.AccountId accountId = 1;
-  string app_name = 2;
-  string environment_name = 3;
-  string agent_type_name = 4;
-}
-
-message ResolveLatestAgentTypeByNamesResponse {
-  oneof result {
-    ResolveLatestAgentTypeByNamesSuccessResponse success = 1;
-    RegistryServiceError error = 2;
-  }
-}
-
-message ResolveLatestAgentTypeByNamesSuccessResponse {
-  RegisteredAgentType agent_type = 1;
-}
-
-message ResolveAgentTypeAtDeploymentRequest {
-  golem.common.AccountId accountId = 1;
-  string app_name = 2;
-  string environment_name = 3;
-  string agent_type_name = 4;
-  uint64 deployment_revision = 5;
-}
-
-message ResolveAgentTypeAtDeploymentResponse {
-  oneof result {
-    ResolveAgentTypeAtDeploymentSuccessResponse success = 1;
-    RegistryServiceError error = 2;
-  }
-}
-
-message ResolveAgentTypeAtDeploymentSuccessResponse {
-  RegisteredAgentType agent_type = 1;
-}
-
 message ResolveAgentTypeByNamesRequest {
   string app_name = 1;
   string environment_name = 2;
   string agent_type_name = 3;
+  // If set, resolves at this concrete deployment revision. If omitted,
+  // resolves at the latest current deployment.
   optional uint64 deployment_revision = 4;
   optional string owner_account_email = 5;
   golem.auth.AuthCtx auth_ctx = 6;
@@ -319,6 +282,8 @@ message ResolveAgentTypeByNamesSuccessResponse {
   RegisteredAgentType agent_type = 1;
   golem.common.EnvironmentId environment_id = 2;
   uint64 deployment_revision = 3;
+  // Present only when request.deployment_revision is not set.
+  optional uint64 current_deployment_revision = 4;
 }
 
 message GetActiveRoutesForDomainRequest {
@@ -428,6 +393,7 @@ message CursorExpiredEvent {}
 message DeploymentChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
   uint64 deployment_revision = 2;
+  uint64 current_deployment_revision = 3;
 }
 
 // Sent when domain registrations change (create/delete).

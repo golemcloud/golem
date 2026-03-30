@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
@@ -22,8 +21,9 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::model::agent_secret::AgentSecret;
+use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
-use golem_service_base::repo::blob::Blob;
+use golem_service_base::repo::SqlDateTime;
 use golem_wasm::analysis::AnalysedType;
 use sqlx::FromRow;
 use sqlx::types::Json;

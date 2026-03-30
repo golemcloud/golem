@@ -15,8 +15,8 @@
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::ComponentFilePath;
@@ -30,10 +30,10 @@ use golem_common::model::{
     OwnedAgentId, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::component::Component;
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_service_base::model::component::Component;
 use golem_wasm::Uri;
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -64,7 +64,7 @@ use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{worker_enumeration, HasAll};
+use golem_worker_executor::services::{HasAll, worker_enumeration};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,

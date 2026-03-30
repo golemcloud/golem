@@ -14,13 +14,13 @@
 
 use test_r::test;
 
+use crate::model::Timestamp;
 use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
     SerializableDateTime, SerializableHttpErrorCode, SerializableHttpVersion,
     SerializableIpAddress, SerializableIpAddresses, SerializableStreamError,
 };
-use crate::model::Timestamp;
 use http::Version;
 use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
@@ -30,14 +30,14 @@ use proptest::strategy::LazyJust;
 use std::num::NonZeroU64;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
-use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
 use wasmtime_wasi::StreamError;
+use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
 };
 
-fn datetime_strat(
-) -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
+fn datetime_strat()
+-> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
     (0..(u64::MAX / 1_000_000_000), 0..999_999_999u32).prop_map(|(seconds, nanoseconds)| {
         wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
             seconds,

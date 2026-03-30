@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{api, Error};
+use crate::{Error, api};
 
 #[derive(Debug, Clone)]
 pub enum ClientError {

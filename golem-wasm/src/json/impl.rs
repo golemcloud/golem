@@ -534,7 +534,7 @@ fn get_result(
                 ))
             }
             None => Err(vec![
-                "Failed to retrieve either ok value or err value".to_string()
+                "Failed to retrieve either ok value or err value".to_string(),
             ]),
         },
     }
@@ -794,11 +794,11 @@ mod tests {
 
     use std::collections::HashSet;
 
-    use crate::analysis::analysed_type::{
-        bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result, s16, s32,
-        s64, s8, str, tuple, u16, u32, u64, u8, variant,
-    };
     use crate::analysis::AnalysedType;
+    use crate::analysis::analysed_type::{
+        bool, case, chr, r#enum, f32, f64, field, flags, list, option, record, result, s8, s16,
+        s32, s64, str, tuple, u8, u16, u32, u64, variant,
+    };
     use proptest::prelude::*;
     use serde_json::{Number, Value as JsonValue};
 

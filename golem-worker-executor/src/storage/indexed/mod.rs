@@ -188,7 +188,7 @@ pub trait IndexedStorage: Debug + Sync {
 
 pub trait IndexedStorageLabelledApi<T: IndexedStorage + ?Sized> {
     fn with(&self, svc_name: &'static str, api_name: &'static str)
-        -> LabelledIndexedStorage<'_, T>;
+    -> LabelledIndexedStorage<'_, T>;
 
     fn with_entity(
         &self,

@@ -20,8 +20,8 @@ use golem_common::model::agent::{
     NamedElementValues, TextReference, TextSource, UnstructuredBinaryElementValue,
     UnstructuredTextElementValue,
 };
-use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
 use golem_wasm::Value;
+use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::fmt::Write;
 
@@ -324,10 +324,8 @@ fn render_type_tuple_ts(tt: &TypeTuple, prefer_name: bool) -> String {
 }
 
 fn render_type_record_ts(tr: &TypeRecord, prefer_name: bool) -> String {
-    if prefer_name {
-        if let Some(name) = &tr.name {
-            return name.to_upper_camel_case();
-        }
+    if prefer_name && let Some(name) = &tr.name {
+        return name.to_upper_camel_case();
     }
     let mut buf = String::from("{ ");
     for (i, field) in tr.fields.iter().enumerate() {
@@ -347,10 +345,8 @@ fn render_type_record_ts(tr: &TypeRecord, prefer_name: bool) -> String {
 }
 
 fn render_type_variant_ts(tv: &TypeVariant, prefer_name: bool) -> String {
-    if prefer_name {
-        if let Some(name) = &tv.name {
-            return name.to_upper_camel_case();
-        }
+    if prefer_name && let Some(name) = &tv.name {
+        return name.to_upper_camel_case();
     }
     if tv.cases.is_empty() {
         return "never".to_string();
@@ -372,10 +368,8 @@ fn render_type_variant_ts(tv: &TypeVariant, prefer_name: bool) -> String {
 }
 
 fn render_type_enum_ts(te: &TypeEnum, prefer_name: bool) -> String {
-    if prefer_name {
-        if let Some(name) = &te.name {
-            return name.to_upper_camel_case();
-        }
+    if prefer_name && let Some(name) = &te.name {
+        return name.to_upper_camel_case();
     }
     if te.cases.is_empty() {
         return "never".to_string();
@@ -392,10 +386,8 @@ fn render_type_enum_ts(te: &TypeEnum, prefer_name: bool) -> String {
 }
 
 fn render_type_flags_ts(tf: &TypeFlags, prefer_name: bool) -> String {
-    if prefer_name {
-        if let Some(name) = &tf.name {
-            return name.to_upper_camel_case();
-        }
+    if prefer_name && let Some(name) = &tf.name {
+        return name.to_upper_camel_case();
     }
     let mut buf = String::from("{ ");
     for (i, flag) in tf.names.iter().enumerate() {

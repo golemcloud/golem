@@ -16,18 +16,18 @@ use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use chrono::Utc;
-use golem_common::model::account::AccountId;
 use golem_common::SafeDisplay;
+use golem_common::model::account::AccountId;
 use golem_service_base::clients::registry::{RegistryService, ResourceUsageUpdate};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use tracing::{error, span, Instrument, Level};
+use tracing::{Instrument, Level, error, span};
 
 #[derive(Debug)]
 pub struct AtomicResourceEntry {
@@ -502,56 +502,53 @@ impl ResourceLimitsGrpc {
         account_id: AccountId,
         updated_limits: golem_service_base::model::ResourceLimits,
     ) {
-        if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await {
-            if let Some(entry) = cell.get() {
-                entry.in_flight_delta.store(0, Ordering::Release);
-                entry
-                    .fuel
-                    .store(updated_limits.available_fuel, Ordering::Release);
-                entry.max_memory.store(
-                    updated_limits.max_memory_per_worker as usize,
-                    Ordering::Release,
-                );
-                entry.max_table_elements.store(
-                    updated_limits.max_table_elements_per_worker as usize,
-                    Ordering::Release,
-                );
-                entry
-                    .max_disk_space
-                    .store(updated_limits.max_disk_space_per_worker, Ordering::Release);
-                entry.per_invocation_http_call_limit.store(
-                    updated_limits.per_invocation_http_call_limit,
-                    Ordering::Release,
-                );
-                entry.per_invocation_rpc_call_limit.store(
-                    updated_limits.per_invocation_rpc_call_limit,
-                    Ordering::Release,
-                );
-                // Refresh monthly HTTP/RPC available counts from the server response.
-                // The server already incorporated our reported counts, so we reset
-                // syncing to 0 and update the server-side available count.
-                entry.syncing_http_calls.store(0, Ordering::Release);
-                entry
-                    .available_http_calls_from_server
-                    .store(updated_limits.available_http_calls, Ordering::Release);
-                entry.syncing_rpc_calls.store(0, Ordering::Release);
-                entry
-                    .available_rpc_calls_from_server
-                    .store(updated_limits.available_rpc_calls, Ordering::Release);
-                entry
-                    .last_refresh_secs
-                    .store(Utc::now().timestamp(), Ordering::Release);
-            }
+        if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
+            && let Some(entry) = cell.get()
+        {
+            entry.in_flight_delta.store(0, Ordering::Release);
+            entry
+                .fuel
+                .store(updated_limits.available_fuel, Ordering::Release);
+            entry.max_memory.store(
+                updated_limits.max_memory_per_worker as usize,
+                Ordering::Release,
+            );
+            entry.max_table_elements.store(
+                updated_limits.max_table_elements_per_worker as usize,
+                Ordering::Release,
+            );
+            entry
+                .max_disk_space
+                .store(updated_limits.max_disk_space_per_worker, Ordering::Release);
+            entry.per_invocation_http_call_limit.store(
+                updated_limits.per_invocation_http_call_limit,
+                Ordering::Release,
+            );
+            entry.per_invocation_rpc_call_limit.store(
+                updated_limits.per_invocation_rpc_call_limit,
+                Ordering::Release,
+            );
+            entry.syncing_http_calls.store(0, Ordering::Release);
+            entry
+                .available_http_calls_from_server
+                .store(updated_limits.available_http_calls, Ordering::Release);
+            entry.syncing_rpc_calls.store(0, Ordering::Release);
+            entry
+                .available_rpc_calls_from_server
+                .store(updated_limits.available_rpc_calls, Ordering::Release);
+            entry
+                .last_refresh_secs
+                .store(Utc::now().timestamp(), Ordering::Release);
         }
     }
 
     async fn reset_in_flight_delta(&self, account_id: AccountId) {
-        if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await {
-            if let Some(entry) = cell.get() {
-                entry.in_flight_delta.swap(0, Ordering::AcqRel);
-                entry.syncing_http_calls.store(0, Ordering::Release);
-                entry.syncing_rpc_calls.store(0, Ordering::Release);
-            }
+        if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
+            && let Some(entry) = cell.get()
+        {
+            entry.in_flight_delta.swap(0, Ordering::AcqRel);
+            entry.syncing_http_calls.store(0, Ordering::Release);
+            entry.syncing_rpc_calls.store(0, Ordering::Release);
         }
     }
 }
@@ -610,6 +607,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::AgentId;
     use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::auth::TokenSecret;
@@ -620,7 +618,6 @@ mod tests {
     use golem_common::model::resource_definition::{
         ResourceDefinition, ResourceDefinitionId, ResourceName,
     };
-    use golem_common::model::AgentId;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::custom_api::CompiledRoutes;
     use golem_service_base::mcp::CompiledMcp;
@@ -1340,27 +1337,6 @@ mod tests {
             unimplemented!()
         }
 
-        async fn resolve_latest_agent_type_by_names(
-            &self,
-            _account_id: &AccountId,
-            _app_name: &ApplicationName,
-            _environment_name: &EnvironmentName,
-            _agent_type_name: &AgentTypeName,
-        ) -> Result<RegisteredAgentType, RegistryServiceError> {
-            unimplemented!()
-        }
-
-        async fn resolve_agent_type_at_deployment(
-            &self,
-            _account_id: &AccountId,
-            _app_name: &ApplicationName,
-            _environment_name: &EnvironmentName,
-            _agent_type_name: &AgentTypeName,
-            _deployment_revision: DeploymentRevision,
-        ) -> Result<RegisteredAgentType, RegistryServiceError> {
-            unimplemented!()
-        }
-
         async fn resolve_agent_type_by_names(
             &self,
             _app_name: &ApplicationName,
@@ -1425,6 +1401,17 @@ mod tests {
             >,
             RegistryServiceError,
         > {
+            unimplemented!()
+        }
+
+        async fn run_registry_invalidation_event_subscriber(
+            &self,
+            _service_name: &'static str,
+            _shutdown_token: Option<tokio_util::sync::CancellationToken>,
+            _handler: std::sync::Arc<
+                dyn golem_service_base::clients::registry::RegistryInvalidationHandler,
+            >,
+        ) {
             unimplemented!()
         }
     }

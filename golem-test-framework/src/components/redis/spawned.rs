@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
 use crate::components::ChildProcessLogger;
+use crate::components::redis::Redis;
 use async_trait::async_trait;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{info, Level};
+use tracing::{Level, info};
 
 pub struct SpawnedRedis {
     port: u16,

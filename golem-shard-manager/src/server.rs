@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_common::SafeDisplay;
-use golem_shard_manager::shard_manager_config::{make_config_loader, ShardManagerConfig};
+use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_shard_manager::config::{ShardManagerConfig, make_config_loader};
 use prometheus::default_registry;
 use tokio::task::JoinSet;
 use tracing::info;

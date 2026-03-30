@@ -15,20 +15,20 @@
 use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
-use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
+use crate::app::error::{AppValidationError, CustomCommandError, format_warns};
 use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
 use crate::fs;
-use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
+use crate::log::{LogColorize, LogIndent, LogOutput, Output, log_action, logln};
 use crate::model::app::{
-    includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
-    ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig,
-    CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps,
-    WithSource,
+    AppBuildStep, Application, ApplicationComponentSelectMode, ApplicationConfig,
+    ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig, CleanMode,
+    ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps, WithSource,
+    includes_from_yaml_file,
 };
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
-use crate::model::{app_raw, GuestLanguage};
+use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::anyhow;
 use colored::Colorize;

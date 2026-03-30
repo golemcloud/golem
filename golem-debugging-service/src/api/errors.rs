@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::services::auth::AuthServiceError;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::SafeDisplay;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 

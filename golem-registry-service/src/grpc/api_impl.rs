@@ -48,12 +48,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetResourceDefinitionByIdSuccessResponse, GetResourceDefinitionByNameRequest,
     GetResourceDefinitionByNameResponse, GetResourceDefinitionByNameSuccessResponse,
     GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
-    RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeAtDeploymentRequest,
-    ResolveAgentTypeAtDeploymentResponse, ResolveAgentTypeAtDeploymentSuccessResponse,
-    ResolveAgentTypeByNamesRequest, ResolveAgentTypeByNamesResponse,
-    ResolveAgentTypeByNamesSuccessResponse, ResolveComponentRequest, ResolveComponentResponse,
-    ResolveComponentSuccessResponse, ResolveLatestAgentTypeByNamesRequest,
-    ResolveLatestAgentTypeByNamesResponse, ResolveLatestAgentTypeByNamesSuccessResponse,
+    RegistryInvalidationEvent, RegistryServiceError, ResolveAgentTypeByNamesRequest,
+    ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
+    ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
     authenticate_token_response, batch_update_resource_usage_response, download_component_response,
@@ -63,8 +60,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_component_metadata_response, get_current_environment_state_response,
     get_deployed_component_metadata_response, get_resource_definition_by_id_response,
     get_resource_definition_by_name_response, get_resource_limits_response, registry_service_error,
-    resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
-    resolve_component_response, resolve_latest_agent_type_by_names_response,
+    resolve_agent_type_by_names_response, resolve_component_response,
     update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
@@ -508,34 +504,6 @@ impl RegistryServiceGrpcApi {
         })
     }
 
-    async fn resolve_latest_agent_type_by_names_internal(
-        &self,
-        request: ResolveLatestAgentTypeByNamesRequest,
-    ) -> Result<ResolveLatestAgentTypeByNamesSuccessResponse, GrpcApiError> {
-        let account_id = request
-            .account_id
-            .ok_or("missing account_id field")?
-            .try_into()?;
-        let app_name = ApplicationName(request.app_name);
-        let environment_name = EnvironmentName(request.environment_name);
-        let agent_type_name = AgentTypeName(request.agent_type_name);
-
-        let agent_type = self
-            .deployment_service
-            .get_latest_deployed_agent_type_by_names(
-                account_id,
-                &app_name,
-                &environment_name,
-                &agent_type_name,
-                &AuthCtx::System,
-            )
-            .await?;
-
-        Ok(ResolveLatestAgentTypeByNamesSuccessResponse {
-            agent_type: Some(RegisteredAgentType::from(agent_type).into()),
-        })
-    }
-
     async fn resolve_agent_type_by_names_internal(
         &self,
         request: ResolveAgentTypeByNamesRequest,
@@ -569,37 +537,7 @@ impl RegistryServiceGrpcApi {
             agent_type: Some(resolved.registered_agent_type.into()),
             environment_id: Some(resolved.environment_id.into()),
             deployment_revision: resolved.deployment_revision.get(),
-        })
-    }
-
-    async fn resolve_agent_type_at_deployment_internal(
-        &self,
-        request: ResolveAgentTypeAtDeploymentRequest,
-    ) -> Result<ResolveAgentTypeAtDeploymentSuccessResponse, GrpcApiError> {
-        let account_id = request
-            .account_id
-            .ok_or("missing account_id field")?
-            .try_into()?;
-        let app_name = ApplicationName(request.app_name);
-        let environment_name = EnvironmentName(request.environment_name);
-        let agent_type_name = AgentTypeName(request.agent_type_name);
-        let deployment_revision =
-            DeploymentRevision::try_from(request.deployment_revision).map_err(|e| e.to_string())?;
-
-        let agent_type = self
-            .deployment_service
-            .get_agent_type_by_names_at_deployment(
-                account_id,
-                &app_name,
-                &environment_name,
-                &agent_type_name,
-                deployment_revision,
-                &AuthCtx::System,
-            )
-            .await?;
-
-        Ok(ResolveAgentTypeAtDeploymentSuccessResponse {
-            agent_type: Some(RegisteredAgentType::from(agent_type).into()),
+            current_deployment_revision: resolved.current_deployment_revision.map(|r| r.get()),
         })
     }
 }
@@ -947,63 +885,6 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetAgentTypeResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn resolve_latest_agent_type_by_names(
-        &self,
-        request: Request<ResolveLatestAgentTypeByNamesRequest>,
-    ) -> Result<Response<ResolveLatestAgentTypeByNamesResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "resolve_latest_agent_type_by_names",
-            account_id = AccountId::render_proto(request.account_id),
-            app_name = &request.app_name,
-            environment_name = &request.environment_name,
-            agent_type_name = &request.agent_type_name,
-        );
-
-        let response = match self
-            .resolve_latest_agent_type_by_names_internal(request)
-            .instrument(record.span.clone())
-            .await
-            .apply(|r| record.result(r))
-        {
-            Ok(result) => resolve_latest_agent_type_by_names_response::Result::Success(result),
-            Err(error) => resolve_latest_agent_type_by_names_response::Result::Error(error.into()),
-        };
-
-        Ok(Response::new(ResolveLatestAgentTypeByNamesResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn resolve_agent_type_at_deployment(
-        &self,
-        request: Request<ResolveAgentTypeAtDeploymentRequest>,
-    ) -> Result<Response<ResolveAgentTypeAtDeploymentResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "resolve_agent_type_at_deployment",
-            account_id = AccountId::render_proto(request.account_id),
-            app_name = &request.app_name,
-            environment_name = &request.environment_name,
-            agent_type_name = &request.agent_type_name,
-            deployment_revision = request.deployment_revision,
-        );
-
-        let response = match self
-            .resolve_agent_type_at_deployment_internal(request)
-            .instrument(record.span.clone())
-            .await
-            .apply(|r| record.result(r))
-        {
-            Ok(result) => resolve_agent_type_at_deployment_response::Result::Success(result),
-            Err(error) => resolve_agent_type_at_deployment_response::Result::Error(error.into()),
-        };
-
-        Ok(Response::new(ResolveAgentTypeAtDeploymentResponse {
             result: Some(response),
         }))
     }

@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use crate::Tracing;
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use golem_common::model::AgentStatus;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor_test_utils::{
-    start, start_customized, start_with_oplog_config, LastUniqueId, PrecompiledComponent,
-    TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    start_customized, start_with_oplog_config,
 };
 use pretty_assertions::assert_eq;
 use std::future::Future;
@@ -32,7 +32,7 @@ use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

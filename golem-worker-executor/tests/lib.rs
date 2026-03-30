@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use golem_worker_executor_test_utils::{
-    test_component, LastUniqueId, PrecompiledComponent, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, WorkerExecutorTestDependencies, test_component,
 };
 use std::fmt::Debug;
 use std::path::Path;

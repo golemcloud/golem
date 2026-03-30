@@ -20,11 +20,11 @@ pub mod dsl_impl;
 use self::agent_deployments_service::DisabledEnvironmentStateService;
 use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataRequest, get_running_workers_metadata_response,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::RedisConfig;
@@ -51,22 +51,22 @@ use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_service_base::model::component::Component;
-use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,
 };
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_test_framework::components::redis::spawned::SpawnedRedis;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
+use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_wasm::Uri;
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -119,7 +119,7 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
+use golem_worker_executor::services::{All, HasAll, rdbms, resource_limits};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
@@ -143,7 +143,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
-use tracing::{debug, info, Level};
+use tracing::{Level, debug, info};
 use uuid::Uuid;
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};

@@ -187,7 +187,7 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
                             return Err(format!(
                                 "Expected ComponentModel schema, got: {:?}",
                                 schema
-                            ))
+                            ));
                         }
                     },
                 };

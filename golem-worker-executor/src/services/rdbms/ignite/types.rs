@@ -366,7 +366,7 @@ impl TryFrom<SerializableDbValue> for DbValue {
             other => {
                 return Err(format!(
                     "unsupported SerializableDbValueNode for Ignite: {other:?}"
-                ))
+                ));
             }
         };
         Ok(v)

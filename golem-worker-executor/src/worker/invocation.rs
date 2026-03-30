@@ -39,9 +39,9 @@ pub enum InvocationMode {
     Replay,
 }
 use golem_wasm::validate_value_matches_type;
-use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
+use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};
 use golem_wasm::{FromValue, IntoValue, Value};
-use tracing::{debug, span, Instrument, Level};
+use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 

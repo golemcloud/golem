@@ -23,7 +23,6 @@ members = [
 ]
 
 exclude = [
-    "cli/desktop-app/src-tauri",
     "test-components",
     "sdks/golem-rust"
 ]
@@ -122,7 +121,6 @@ futures-concurrency = "7.6.3"
 futures-util = "0.3.31"
 fuzzy-matcher = "0.3.7"
 gag = "1.0.0"
-gethostname = "1.0.0"
 ignite-v2-client = "0.2.0"
 git-version = "0.3.9"
 goldenfile = "1.8.0"

@@ -17,8 +17,8 @@ test_r::enable!();
 #[test_r::sequential]
 mod tests {
     use async_trait::async_trait;
-    use axum::routing::post;
     use axum::Router;
+    use axum::routing::post;
     use bytes::Bytes;
     use golem_api_grpc::proto::golem::worker;
     use golem_client::api::RegistryServiceClient;
@@ -29,7 +29,7 @@ mod tests {
         OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
     };
     use golem_common::model::{AgentStatus, IdempotencyKey};
-    use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+    use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
@@ -45,7 +45,7 @@ mod tests {
     use test_r::{flaky, test, test_dep, timeout};
     use tokio::sync::mpsc;
     use tokio::task::{JoinHandle, JoinSet};
-    use tracing::{error, info, Instrument};
+    use tracing::{Instrument, error, info};
     use uuid::Uuid;
 
     pub struct Tracing;
@@ -67,6 +67,7 @@ mod tests {
     pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
         let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
             number_of_shards_override: Some(16),
+            db_type: golem_test_framework::config::DbType::Sqlite,
             ..EnvBasedTestDependenciesConfig::new()
         })
         .await
@@ -366,6 +367,7 @@ mod tests {
         async fn start_shard_manager(&self, number_of_shards: Option<usize>);
         async fn stop_shard_manager(&self);
         async fn restart_shard_manager(&self);
+        async fn clean_shard_manager_sqlite(&self);
         fn flush_redis_db(&self);
     }
 
@@ -380,6 +382,7 @@ mod tests {
             info!("Reset started");
             self.stop_all_worker_executors().await;
             self.stop_shard_manager().await;
+            self.clean_shard_manager_sqlite().await;
             self.flush_redis_db();
             self.start_shard_manager(Some(number_of_shards)).await;
             self.start_all_worker_executors().await;
@@ -559,6 +562,20 @@ mod tests {
 
         fn flush_redis_db(&self) {
             self.redis().flush_db(0);
+        }
+
+        async fn clean_shard_manager_sqlite(&self) {
+            let sqlite_files = [
+                "golem_shard_manager.db",
+                "golem_shard_manager.db-shm",
+                "golem_shard_manager.db-wal",
+            ];
+
+            for file in sqlite_files {
+                tokio::fs::remove_file(self.temp_directory().join("sqlite").join(file))
+                    .await
+                    .unwrap()
+            }
         }
     }
 

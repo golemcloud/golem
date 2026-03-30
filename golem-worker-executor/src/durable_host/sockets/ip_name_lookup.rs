@@ -21,11 +21,11 @@ use golem_common::model::oplog::types::{SerializableIpAddresses, SerializableSoc
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestSocketsResolveName, HostResponseSocketsResolveName,
 };
+use wasmtime_wasi::p2::SocketError;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::{
     Host, HostResolveAddressStream, IpAddress, Network, ResolveAddressStream,
 };
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
-use wasmtime_wasi::p2::SocketError;
 use wasmtime_wasi::sockets::WasiSocketsView as _;
 use wasmtime_wasi::{DynPollable, Pollable};
 

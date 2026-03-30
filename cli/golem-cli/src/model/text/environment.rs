@@ -16,9 +16,9 @@ use crate::log::LogColorize;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
-use crate::model::text::fmt::{log_table, TextView};
-use cli_table::format::Justify;
+use crate::model::text::fmt::{TextView, log_table};
 use cli_table::Table;
+use cli_table::format::Justify;
 use golem_client::model::EnvironmentWithDetails;
 
 pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIdentity) -> String {

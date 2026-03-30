@@ -14,9 +14,8 @@
 
 use super::model::domain_registration::{DomainRegistrationRecord, DomainRegistrationRepoError};
 use crate::repo::model::BindFields;
-use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -24,6 +23,7 @@ use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::repo::SqlDateTime;
 use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
 use std::fmt::Debug;
@@ -33,19 +33,21 @@ use uuid::Uuid;
 #[async_trait]
 pub trait DomainRegistrationRepo: Send + Sync {
     /// Create a domain registration and record a change event in the same transaction.
-    /// Returns the created record and the outbox event_id.
     async fn create(
         &self,
         record: DomainRegistrationRecord,
-    ) -> Result<(DomainRegistrationRecord, ChangeEventId), DomainRegistrationRepoError>;
+    ) -> Result<RequiresNotificationSignal<DomainRegistrationRecord>, DomainRegistrationRepoError>;
 
     /// Delete a domain registration and record a change event in the same transaction.
-    /// Returns the deleted record and the outbox event_id, or None if not found.
+    /// Returns the deleted record, or None if not found.
     async fn delete(
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
-    ) -> Result<Option<(DomainRegistrationRecord, ChangeEventId)>, DomainRegistrationRepoError>;
+    ) -> Result<
+        Option<RequiresNotificationSignal<DomainRegistrationRecord>>,
+        DomainRegistrationRepoError,
+    >;
 
     async fn get_by_id(
         &self,
@@ -89,7 +91,8 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
     async fn create(
         &self,
         record: DomainRegistrationRecord,
-    ) -> Result<(DomainRegistrationRecord, ChangeEventId), DomainRegistrationRepoError> {
+    ) -> Result<RequiresNotificationSignal<DomainRegistrationRecord>, DomainRegistrationRepoError>
+    {
         let span = Self::span_id(record.domain_registration_id);
         self.repo.create(record).instrument(span).await
     }
@@ -98,8 +101,10 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
-    ) -> Result<Option<(DomainRegistrationRecord, ChangeEventId)>, DomainRegistrationRepoError>
-    {
+    ) -> Result<
+        Option<RequiresNotificationSignal<DomainRegistrationRecord>>,
+        DomainRegistrationRepoError,
+    > {
         let span = Self::span_id(domain_registration_id);
         self.repo
             .delete(domain_registration_id, actor)
@@ -185,7 +190,8 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
     async fn create(
         &self,
         record: DomainRegistrationRecord,
-    ) -> Result<(DomainRegistrationRecord, ChangeEventId), DomainRegistrationRepoError> {
+    ) -> Result<RequiresNotificationSignal<DomainRegistrationRecord>, DomainRegistrationRepoError>
+    {
         let environment_id = record.environment_id;
         let domain = record.domain.clone();
 
@@ -218,29 +224,29 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
                         environment_id,
                         vec![domain],
                     );
-                    let event_id = DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
                         tx,
                         &change_event,
                     )
                     .await?;
 
-                    Ok::<_, DomainRegistrationRepoError>((created, event_id))
+                    Ok::<_, DomainRegistrationRepoError>(created)
                 }
                 .boxed()
             })
             .await?;
 
-        self.db_pool.notify_change_event(result.1).await;
-
-        Ok(result)
+        Ok(result.requires_notification_signal())
     }
 
     async fn delete(
         &self,
         domain_registration_id: Uuid,
         actor: Uuid,
-    ) -> Result<Option<(DomainRegistrationRecord, ChangeEventId)>, DomainRegistrationRepoError>
-    {
+    ) -> Result<
+        Option<RequiresNotificationSignal<DomainRegistrationRecord>>,
+        DomainRegistrationRepoError,
+    > {
         let result = self
             .with_tx_err("delete", |tx| {
                 async move {
@@ -271,13 +277,12 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
                                 record.environment_id,
                                 vec![record.domain.clone()],
                             );
-                            let event_id =
-                                DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
-                                    tx,
-                                    &change_event,
-                                )
-                                .await?;
-                            Ok::<_, DomainRegistrationRepoError>(Some((record, event_id)))
+                            DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                                tx,
+                                &change_event,
+                            )
+                            .await?;
+                            Ok::<_, DomainRegistrationRepoError>(Some(record))
                         }
                         None => Ok(None),
                     }
@@ -286,11 +291,7 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
             })
             .await?;
 
-        if let Some((_, event_id)) = &result {
-            self.db_pool.notify_change_event(*event_id).await;
-        }
-
-        Ok(result)
+        Ok(result.map(RequiresSignalExt::requires_notification_signal))
     }
 
     async fn get_by_id(

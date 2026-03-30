@@ -14,8 +14,8 @@
 
 use crate::client::check_http_response_success;
 use crate::fs;
-use crate::log::{log_action, log_warn_action, LogColorize};
-use anyhow::{anyhow, Context};
+use crate::log::{LogColorize, log_action, log_warn_action};
+use anyhow::{Context, anyhow};
 use std::path::PathBuf;
 use url::Url;
 

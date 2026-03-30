@@ -13,31 +13,31 @@
 // limitations under the License.
 
 use crate::benchmark::BenchmarkConfig;
+use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
-use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
 use crate::components::rdb::{PostgresInfo, Rdb};
+use crate::components::redis::Redis;
 use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
-use crate::components::redis::Redis;
-use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::redis_monitor::RedisMonitor;
+use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
+use crate::components::registry_service::RegistryService;
 use crate::components::registry_service::provided::ProvidedRegistryService;
 use crate::components::registry_service::spawned::SpawnedRegistryService;
-use crate::components::registry_service::RegistryService;
-use crate::components::service::spawned::SpawnedService;
 use crate::components::service::Service;
+use crate::components::service::spawned::SpawnedService;
+use crate::components::shard_manager::ShardManager;
 use crate::components::shard_manager::provided::ProvidedShardManager;
 use crate::components::shard_manager::spawned::SpawnedShardManager;
-use crate::components::shard_manager::ShardManager;
+use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_executor_cluster::provided::ProvidedWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
-use crate::components::worker_executor_cluster::WorkerExecutorCluster;
+use crate::components::worker_service::WorkerService;
 use crate::components::worker_service::provided::ProvidedWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
-use crate::components::worker_service::WorkerService;
 use crate::config::TestDependencies;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
@@ -45,10 +45,10 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use golem_common::tracing::directive::warn;
-use golem_common::tracing::{init_tracing_returning_provider, TracingConfig};
+use golem_common::tracing::{TracingConfig, init_tracing_returning_provider};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -349,7 +349,8 @@ impl BenchmarkTestDependencies {
                 None,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
-                redis.clone(),
+                rdb.clone(),
+                registry_service.clone(),
                 verbosity,
                 out_level,
                 Level::ERROR,

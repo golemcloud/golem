@@ -19,8 +19,8 @@ use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationService as GrpcCompilationServer;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
-    component_compilation_error, component_compilation_response, ComponentCompilationError,
-    ComponentCompilationRequest, ComponentCompilationResponse,
+    ComponentCompilationError, ComponentCompilationRequest, ComponentCompilationResponse,
+    component_compilation_error, component_compilation_response,
 };
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::ComponentId;

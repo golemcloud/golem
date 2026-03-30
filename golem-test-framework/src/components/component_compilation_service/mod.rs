@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use crate::components::{EnvVarBuilder, wait_for_startup_grpc};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::process::Child;

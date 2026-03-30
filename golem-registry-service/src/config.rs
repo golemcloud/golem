@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
-use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
+use golem_common::config::{ConfigLoader, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -186,7 +186,10 @@ impl Default for RegistryServiceConfig {
             workspace: "release".to_string(),
             http_port: 8081,
             grpc: GrpcApiConfig::default(),
-            db: DbConfig::default(),
+            db: DbConfig::Sqlite(DbSqliteConfig {
+                database: "golem_registry_service.db".to_string(),
+                ..Default::default()
+            }),
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             component_compilation: ComponentCompilationConfig::default(),

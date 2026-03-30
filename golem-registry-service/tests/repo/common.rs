@@ -40,7 +40,6 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentRepoError, ComponentRevisionRecord,
 };
-use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::deployment::{
     DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
 };
@@ -58,10 +57,12 @@ use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
 };
+use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
 use golem_registry_service::services::registry_change_notifier::{
-    LocalRegistryChangeNotifier, RegistryChangeNotifier,
+    RegistryChangeNotifier, SqliteRegistryChangeNotifier,
 };
-use golem_service_base::repo::blob::Blob;
+use golem_service_base::repo::Blob;
+use golem_service_base::repo::SqlDateTime;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
@@ -1289,7 +1290,8 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
     deps.full_deployment_repo
         .deploy(deployment_creation, false)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
 
     ResolveTestEnv {
         owner_account_id,
@@ -1350,7 +1352,8 @@ pub async fn test_resolve_agent_type_shared_with_email(deps: &Deps) {
             grantee_account_id,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
 
     // Grantee resolves using owner's email
     let result = deps
@@ -1695,26 +1698,20 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
 
     // Record first event
     let id1 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id1, 1))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id1, 1, 1))
+        .await;
     assert!(id1 > baseline);
 
     // Record second event
     let id2 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id2, 2))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id2, 2, 2))
+        .await;
     assert!(id2 > id1);
 
     // Record third event for same environment
     let id3 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id1, 3))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id1, 3, 3))
+        .await;
     assert!(id3 > id2);
 
     // get_latest_event_id returns latest
@@ -1769,19 +1766,17 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
 
 pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     let env_id = new_repo_uuid();
-    let notifier = LocalRegistryChangeNotifier::new(64);
+    let notifier = SqliteRegistryChangeNotifier::new(64, deps.registry_change_repo_for_notifier());
+    let mut join_set = tokio::task::JoinSet::new();
+    notifier.start_background_tasks(&mut join_set);
 
     // Insert some events in the DB (simulating past deployments)
     let id1 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 10))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 10, 10))
+        .await;
     let id2 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 20))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 20, 20))
+        .await;
 
     // Simulate replay from cursor: get_events_since(id1 - 1) should include id1 and id2
     let replayed = deps
@@ -1814,19 +1809,26 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
 
     // Simulate a new deployment: record in DB and notify
     let id3 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 30))
-        .await
-        .unwrap();
-    notifier.notify(RegistryChangeEvent::DeploymentChanged {
-        event_id: id3,
-        environment_id: env_id,
-        deployment_revision_id: 30,
-    });
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 30, 30))
+        .await;
+    notifier.signal_new_events_available();
 
-    // Verify we receive the live event
-    let received = rx.recv().await.unwrap();
-    assert!(received.event_id() == id3);
+    // Verify we eventually receive the new live event.
+    // Depending on local notifier cursor state, older events can still be emitted first.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let received = loop {
+        let now = tokio::time::Instant::now();
+        assert!(now < deadline, "timed out waiting for event id {}", id3.0);
+
+        let next = tokio::time::timeout(deadline - now, rx.recv())
+            .await
+            .expect("timeout while waiting for broadcast event")
+            .expect("broadcast channel closed");
+
+        if next.event_id() == id3 {
+            break next;
+        }
+    };
     assert!(matches!(
         received,
         RegistryChangeEvent::DeploymentChanged { environment_id, deployment_revision_id: 30, .. }
@@ -1845,6 +1847,7 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .collect();
     assert!(our_events.len() == 1);
     assert!(our_events[0].event_id() == id3);
+    join_set.abort_all();
 }
 
 pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
@@ -1852,15 +1855,11 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
 
     // Insert events
     let id1 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 10))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 10, 10))
+        .await;
     let id2 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 20))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 20, 20))
+        .await;
 
     // Normal case: events exist after cursor, so no cursor_expired
     let events = deps
@@ -1917,10 +1916,8 @@ pub async fn test_registry_change_cleanup(deps: &Deps) {
 
     // Record an event
     let id = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 1))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 1, 1))
+        .await;
 
     // Cleanup with large retention should not delete the freshly created event
     let deleted = deps
@@ -1956,28 +1953,22 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
 
     // Record deployment changed event
     let id1 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 1))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 1, 1))
+        .await;
 
     // Record account tokens invalidated event
     let _id2 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::account_tokens_invalidated(
+        .record_registry_change_event(NewRegistryChangeEvent::account_tokens_invalidated(
             account_id,
         ))
-        .await
-        .unwrap();
+        .await;
 
     // Record environment permissions changed event
     let _id3 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::environment_permissions_changed(
+        .record_registry_change_event(NewRegistryChangeEvent::environment_permissions_changed(
             env_id, grantee_id,
         ))
-        .await
-        .unwrap();
+        .await;
 
     // Fetch all events since baseline
     let events = deps

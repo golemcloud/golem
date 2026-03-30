@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::datetime::SqlDateTime;
 use crate::model::security_scheme::SecurityScheme;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use anyhow::anyhow;
@@ -23,6 +22,7 @@ use golem_common::model::security_scheme::{
     Provider, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
 };
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::SqlDateTime;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use sqlx::FromRow;
 use std::str::FromStr;

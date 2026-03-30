@@ -14,7 +14,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
 pub fn derive_multimodal(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -25,7 +25,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
         _ => {
             return syn::Error::new_spanned(input.ident, "Multimodal derive only supports enums")
                 .to_compile_error()
-                .into()
+                .into();
         }
     };
 
@@ -87,7 +87,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                     "Multimodal derive only supports single-field tuple variants",
                 )
                 .to_compile_error()
-                .into()
+                .into();
             }
         }
     }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput, Fields, Ident};
+use syn::{DeriveInput, Fields, Ident, parse_macro_input};
 
 pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);

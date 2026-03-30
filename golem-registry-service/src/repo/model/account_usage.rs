@@ -14,7 +14,7 @@
 
 use crate::repo::model::plan::PlanRecord;
 use golem_service_base::model::ResourceLimits;
-use golem_service_base::repo::numeric::NumericU64;
+use golem_service_base::repo::NumericU64;
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum_macros::EnumIter;

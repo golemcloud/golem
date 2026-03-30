@@ -14,7 +14,7 @@
 
 use crate::repo::model::account_usage::UsageType;
 use golem_common::model::plan::{Plan, PlanId, PlanName};
-use golem_service_base::repo::numeric::NumericU64;
+use golem_service_base::repo::NumericU64;
 use sqlx::FromRow;
 use uuid::Uuid;
 

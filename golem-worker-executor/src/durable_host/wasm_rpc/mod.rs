@@ -18,9 +18,9 @@ use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, RpcError,
 };
+use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError as InternalRpcError};
-use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
@@ -55,7 +55,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tracing::{error, Instrument};
+use tracing::{Instrument, error};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 

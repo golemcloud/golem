@@ -39,7 +39,7 @@ type = "Disabled"
 type = "Sqlite"
 
 [db.config]
-database = "golem_service.db"
+database = "golem_registry_service.db"
 foreign_keys = false
 max_connections = 10
 

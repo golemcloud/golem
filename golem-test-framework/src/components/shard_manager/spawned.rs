@@ -13,16 +13,17 @@
 // limitations under the License.
 
 use super::wait_for_startup;
-use crate::components::redis::Redis;
-use crate::components::shard_manager::ShardManager;
 use crate::components::ChildProcessLogger;
+use crate::components::rdb::Rdb;
+use crate::components::registry_service::RegistryService;
+use crate::components::shard_manager::ShardManager;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::info;
 use tracing::Level;
+use tracing::info;
 
 pub struct SpawnedShardManager {
     http_port: u16,
@@ -32,7 +33,8 @@ pub struct SpawnedShardManager {
     logger: Arc<Mutex<Option<ChildProcessLogger>>>,
     executable: PathBuf,
     working_directory: PathBuf,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
+    rdb: Arc<dyn Rdb>,
+    registry_service: Arc<dyn RegistryService>,
     verbosity: Level,
     out_level: Level,
     err_level: Level,
@@ -46,7 +48,8 @@ impl SpawnedShardManager {
         number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        rdb: Arc<dyn Rdb>,
+        registry_service: Arc<dyn RegistryService>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
@@ -64,7 +67,8 @@ impl SpawnedShardManager {
             number_of_shards_override,
             http_port,
             grpc_port,
-            redis.clone(),
+            &rdb,
+            &registry_service,
             verbosity,
             out_level,
             err_level,
@@ -80,7 +84,8 @@ impl SpawnedShardManager {
             logger: Arc::new(Mutex::new(Some(logger))),
             executable: executable.to_path_buf(),
             working_directory: working_directory.to_path_buf(),
-            redis,
+            rdb,
+            registry_service,
             verbosity,
             out_level,
             err_level,
@@ -94,7 +99,8 @@ impl SpawnedShardManager {
         number_of_shards_override: Option<usize>,
         http_port: u16,
         grpc_port: u16,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
+        rdb: &Arc<dyn Rdb>,
+        registry_service: &Arc<dyn RegistryService>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
@@ -107,7 +113,9 @@ impl SpawnedShardManager {
                     number_of_shards_override,
                     http_port,
                     grpc_port,
-                    redis,
+                    rdb,
+                    false,
+                    registry_service,
                     verbosity,
                     otlp,
                 )
@@ -175,7 +183,8 @@ impl ShardManager for SpawnedShardManager {
             number_of_shards_override,
             self.http_port,
             self.grpc_port,
-            self.redis.clone(),
+            &self.rdb,
+            &self.registry_service,
             self.verbosity,
             self.out_level,
             self.err_level,

@@ -17,6 +17,7 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateComponentError, RegistryServiceGetComponentError,
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
 };
+use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
     ComponentModelElementSchema, DataSchema, DeployedRegisteredAgentType, ElementSchema,
@@ -33,7 +34,6 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreatio
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
-use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};

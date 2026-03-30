@@ -19,9 +19,9 @@ use crate::services::rdbms::{
     RdbmsTransactionStatus, RdbmsType,
 };
 use async_trait::async_trait;
+use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
-use futures::StreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::{AgentId, RdbmsPoolKey, TransactionId};
 use itertools::Either;
@@ -906,11 +906,11 @@ where
     DB: Database,
 {
     fn drop(&mut self) {
-        if let Some(mut tx_conn) = self.tx_connection.0.try_lock() {
-            if tx_conn.open {
-                DB::TransactionManager::start_rollback(&mut tx_conn.connection);
-                tx_conn.open = false;
-            }
+        if let Some(mut tx_conn) = self.tx_connection.0.try_lock()
+            && tx_conn.open
+        {
+            DB::TransactionManager::start_rollback(&mut tx_conn.connection);
+            tx_conn.open = false;
         }
     }
 }

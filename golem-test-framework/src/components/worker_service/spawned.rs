@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::ChildProcessLogger;
 use crate::components::new_reqwest_client_with_tracing;
 use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::{wait_for_startup, WorkerService};
-use crate::components::ChildProcessLogger;
+use crate::components::worker_service::{WorkerService, wait_for_startup};
 use async_trait::async_trait;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::OnceCell;
-use tracing::info;
 use tracing::Level;
+use tracing::info;
 
 pub struct SpawnedWorkerService {
     http_port: u16,
