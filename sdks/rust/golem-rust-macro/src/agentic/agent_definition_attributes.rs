@@ -64,49 +64,49 @@ pub fn parse_agent_definition_attributes(
             }
         }
 
-        if let Expr::Assign(assign) = expr {
-            if let Expr::Path(left) = &*assign.left {
-                if left.path.is_ident("mode") {
-                    if let Expr::Lit(ExprLit {
-                        lit: Lit::Str(lit), ..
-                    }) = &*assign.right
-                    {
-                        mode = match lit.value().as_str() {
-                            "ephemeral" => {
-                                quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral }
-                            }
-                            "durable" => {
-                                quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable }
-                            }
-                            other => {
-                                return Err(Error::new_spanned(
-                                    lit,
-                                    format!("invalid mode `{}`", other),
-                                ))
-                            }
-                        };
-                        continue;
-                    } else {
-                        return Err(Error::new_spanned(
-                            &assign.right,
-                            "mode must be a string literal",
-                        ));
-                    }
+        if let Expr::Assign(assign) = expr
+            && let Expr::Path(left) = &*assign.left
+        {
+            if left.path.is_ident("mode") {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = &*assign.right
+                {
+                    mode = match lit.value().as_str() {
+                        "ephemeral" => {
+                            quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral }
+                        }
+                        "durable" => {
+                            quote! { golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable }
+                        }
+                        other => {
+                            return Err(Error::new_spanned(
+                                lit,
+                                format!("invalid mode `{}`", other),
+                            ));
+                        }
+                    };
+                    continue;
+                } else {
+                    return Err(Error::new_spanned(
+                        &assign.right,
+                        "mode must be a string literal",
+                    ));
                 }
+            }
 
-                if left.path.is_ident("snapshotting") {
-                    if let Expr::Lit(ExprLit {
-                        lit: Lit::Str(lit), ..
-                    }) = &*assign.right
-                    {
-                        snapshotting = parse_snapshotting_value(lit)?;
-                        continue;
-                    } else {
-                        return Err(Error::new_spanned(
-                            &assign.right,
-                            "snapshotting must be a string literal",
-                        ));
-                    }
+            if left.path.is_ident("snapshotting") {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = &*assign.right
+                {
+                    snapshotting = parse_snapshotting_value(lit)?;
+                    continue;
+                } else {
+                    return Err(Error::new_spanned(
+                        &assign.right,
+                        "snapshotting must be a string literal",
+                    ));
                 }
             }
         }
@@ -152,92 +152,91 @@ struct ParsedHttpMount {
 }
 
 fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> {
-    if let Expr::Assign(assign) = expr {
-        if let Expr::Path(left) = &*assign.left {
-            if let Some(ident) = left.path.get_ident() {
-                match ident.to_string().as_str() {
-                    "mount" => {
-                        return if let Expr::Lit(ExprLit {
-                            lit: Lit::Str(lit), ..
-                        }) = &*assign.right
-                        {
-                            out.mount = Some(lit.clone());
-                            Ok(())
-                        } else {
-                            Err(Error::new_spanned(
-                                &assign.right,
-                                "mount must be a string literal",
-                            ))
-                        }
-                    }
-                    "webhook_suffix" => {
-                        return if let Expr::Lit(ExprLit {
-                            lit: Lit::Str(lit), ..
-                        }) = &*assign.right
-                        {
-                            out.webhook_suffix = Some(lit.clone());
-                            Ok(())
-                        } else {
-                            Err(Error::new_spanned(
-                                &assign.right,
-                                "webhook-suffix must be a string literal",
-                            ))
-                        }
-                    }
-                    "auth" => {
-                        return if let Expr::Lit(ExprLit {
-                            lit: Lit::Bool(b), ..
-                        }) = &*assign.right
-                        {
-                            out.auth = b.value;
-                            Ok(())
-                        } else {
-                            Err(Error::new_spanned(
-                                &assign.right,
-                                "auth must be a boolean literal",
-                            ))
-                        }
-                    }
-                    "phantom_agent" => {
-                        return if let Expr::Lit(ExprLit {
-                            lit: Lit::Bool(b), ..
-                        }) = &*assign.right
-                        {
-                            out.phantom_agent = b.value;
-                            Ok(())
-                        } else {
-                            Err(Error::new_spanned(
-                                &assign.right,
-                                "phantom-agent must be a boolean literal",
-                            ))
-                        }
-                    }
-                    "cors" => {
-                        return if let Expr::Array(ExprArray { elems, .. }) = &*assign.right {
-                            for elem in elems {
-                                if let Expr::Lit(ExprLit {
-                                    lit: Lit::Str(lit), ..
-                                }) = elem
-                                {
-                                    out.cors.push(lit.clone());
-                                } else {
-                                    return Err(Error::new_spanned(
-                                        elem,
-                                        "cors entries must be string literals",
-                                    ));
-                                }
-                            }
-                            Ok(())
-                        } else {
-                            Err(Error::new_spanned(
-                                &assign.right,
-                                "cors must be an array of string literals",
-                            ))
-                        }
-                    }
-                    _ => {}
-                }
+    if let Expr::Assign(assign) = expr
+        && let Expr::Path(left) = &*assign.left
+        && let Some(ident) = left.path.get_ident()
+    {
+        match ident.to_string().as_str() {
+            "mount" => {
+                return if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = &*assign.right
+                {
+                    out.mount = Some(lit.clone());
+                    Ok(())
+                } else {
+                    Err(Error::new_spanned(
+                        &assign.right,
+                        "mount must be a string literal",
+                    ))
+                };
             }
+            "webhook_suffix" => {
+                return if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = &*assign.right
+                {
+                    out.webhook_suffix = Some(lit.clone());
+                    Ok(())
+                } else {
+                    Err(Error::new_spanned(
+                        &assign.right,
+                        "webhook-suffix must be a string literal",
+                    ))
+                };
+            }
+            "auth" => {
+                return if let Expr::Lit(ExprLit {
+                    lit: Lit::Bool(b), ..
+                }) = &*assign.right
+                {
+                    out.auth = b.value;
+                    Ok(())
+                } else {
+                    Err(Error::new_spanned(
+                        &assign.right,
+                        "auth must be a boolean literal",
+                    ))
+                };
+            }
+            "phantom_agent" => {
+                return if let Expr::Lit(ExprLit {
+                    lit: Lit::Bool(b), ..
+                }) = &*assign.right
+                {
+                    out.phantom_agent = b.value;
+                    Ok(())
+                } else {
+                    Err(Error::new_spanned(
+                        &assign.right,
+                        "phantom-agent must be a boolean literal",
+                    ))
+                };
+            }
+            "cors" => {
+                return if let Expr::Array(ExprArray { elems, .. }) = &*assign.right {
+                    for elem in elems {
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(lit), ..
+                        }) = elem
+                        {
+                            out.cors.push(lit.clone());
+                        } else {
+                            return Err(Error::new_spanned(
+                                elem,
+                                "cors entries must be string literals",
+                            ));
+                        }
+                    }
+                    Ok(())
+                } else {
+                    Err(Error::new_spanned(
+                        &assign.right,
+                        "cors must be an array of string literals",
+                    ))
+                };
+            }
+            _ => {}
         }
     }
 
@@ -293,7 +292,10 @@ fn parse_snapshotting_value(lit: &syn::LitStr) -> Result<TokenStream, Error> {
             } else {
                 Err(Error::new_spanned(
                     lit,
-                    format!("invalid snapshotting value `{}`. Valid values are: disabled, enabled, periodic(<duration>), every(<count>)", other),
+                    format!(
+                        "invalid snapshotting value `{}`. Valid values are: disabled, enabled, periodic(<duration>), every(<count>)",
+                        other
+                    ),
                 ))
             }
         }

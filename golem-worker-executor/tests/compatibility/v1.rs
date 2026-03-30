@@ -20,8 +20,8 @@
 //! the test for A only contains an example value of B but there exists a separate test that tests the serialization of B.
 
 use desert_rust::BinaryCodec;
-use goldenfile::differs::Differ;
 use goldenfile::Mint;
+use goldenfile::differs::Differ;
 use golem_common::serialization::{deserialize, serialize};
 use golem_wasm::{Value, WitValue};
 use std::fmt::Debug;

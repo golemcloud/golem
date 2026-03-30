@@ -23,8 +23,8 @@ pub mod proto {
         SerializationContext,
     };
     use golem_wasm::analysis::{
-        analysed_type, AnalysedExport, AnalysedFunction, AnalysedFunctionParameter,
-        AnalysedFunctionResult, AnalysedInstance, AnalysedType,
+        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+        AnalysedInstance, AnalysedType, analysed_type,
     };
     use golem_wasm::{FromValue, IntoValue, Value};
 

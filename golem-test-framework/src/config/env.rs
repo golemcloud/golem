@@ -12,29 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 use crate::components::component_compilation_service::ComponentCompilationService;
+use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
+use crate::components::rdb::Rdb;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::sqlite::SqliteRdb;
-use crate::components::rdb::Rdb;
+use crate::components::redis::Redis;
 use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
-use crate::components::redis::Redis;
-use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::redis_monitor::RedisMonitor;
-use crate::components::registry_service::spawned::SpawnedRegistryService;
+use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::registry_service::RegistryService;
-use crate::components::shard_manager::spawned::SpawnedShardManager;
+use crate::components::registry_service::spawned::SpawnedRegistryService;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
+use crate::components::shard_manager::spawned::SpawnedShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
-use crate::components::worker_service::spawned::SpawnedWorkerService;
+use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::config::{DbType, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

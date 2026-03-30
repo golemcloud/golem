@@ -15,11 +15,11 @@
 use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
-    build_ifs_archive, rename_component_if_needed, EnvironmentOptions, TestDsl, TestDslExtended,
-    WorkerLogEventStream,
+    EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream, build_ifs_archive,
+    rename_component_if_needed,
 };
 use crate::model::IFSEntry;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use applying::Apply;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -64,9 +64,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Payload;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, trace};
 use uuid::Uuid;
@@ -1090,14 +1090,14 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
                             serde_json::from_str::<AgentEvent>(payload.as_str())?
                                 .try_into()
                                 .map_err(|error: String| anyhow!(error))?,
-                        ))
+                        ));
                     }
                     Message::Binary(payload) => {
                         return Ok(Some(
                             serde_json::from_slice::<AgentEvent>(payload.as_slice())?
                                 .try_into()
                                 .map_err(|error: String| anyhow!(error))?,
-                        ))
+                        ));
                     }
                     Message::Ping(_) | Message::Pong(_) => continue,
                     Message::Close(_) => return Ok(None),

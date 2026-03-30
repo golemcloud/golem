@@ -164,9 +164,9 @@ impl AgentTypesService for CachedAgentTypes {
 mod grpc {
     use crate::services::agent_types::AgentTypesService;
     use async_trait::async_trait;
+    use golem_common::SafeDisplay;
     use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::SafeDisplay;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
 

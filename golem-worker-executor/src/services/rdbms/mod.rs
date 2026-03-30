@@ -23,10 +23,10 @@ use crate::services::rdbms::ignite::IgniteType;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
+use golem_common::model::AgentId;
 use golem_common::model::oplog::types::{
     SerializableDbColumn, SerializableDbResult, SerializableDbValue, SerializableRdbmsError,
 };
-use golem_common::model::AgentId;
 use golem_common::model::{RdbmsPoolKey, TransactionId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use itertools::Itertools;

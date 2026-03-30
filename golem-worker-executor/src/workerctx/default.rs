@@ -40,7 +40,7 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, NoAdditionalDeps};
+use crate::services::{HasAll, NoAdditionalDeps, worker_enumeration};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
@@ -48,8 +48,8 @@ use crate::workerctx::{
 };
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
@@ -64,8 +64,8 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::component::Component;
 use golem_service_base::model::GetFileSystemNodeResult;
+use golem_service_base::model::component::Component;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{Uri, WitType};
 use std::collections::HashSet;

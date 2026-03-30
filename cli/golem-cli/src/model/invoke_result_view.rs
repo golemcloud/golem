@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agent_id_display::{render_value_and_type, SourceLanguage};
+use crate::agent_id_display::{SourceLanguage, render_value_and_type};
 use crate::log::log_error;
 use anyhow::{anyhow, bail};
 use golem_client::model::AgentInvocationResult;
-use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementSchema};
 use golem_common::model::IdempotencyKey;
+use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementSchema};
 use golem_wasm::ValueAndType;
 use serde::{Deserialize, Serialize};
 

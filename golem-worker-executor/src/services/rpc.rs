@@ -22,15 +22,15 @@ use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
-    rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
     HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
     HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasRdbmsService,
     HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
     HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
     HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
-    HasWorkerService,
+    HasWorkerService, active_workers, agent_types, blob_store, component, golem_config, key_value,
+    oplog, promise, rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
+    worker_fork,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;

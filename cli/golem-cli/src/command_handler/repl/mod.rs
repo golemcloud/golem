@@ -14,19 +14,19 @@
 
 use crate::app::context::ApplicationContext;
 use crate::command::shared_args::PostDeployArgs;
+use crate::command_handler::Handlers;
 use crate::command_handler::repl::rust::RustRepl;
 use crate::command_handler::repl::typescript::TypeScriptRepl;
-use crate::command_handler::Handlers;
 use crate::config::{builtin_local_url, uses_default_builtin_local_url};
 use crate::context::Context;
 use crate::fs;
+use crate::model::GuestLanguage;
 use crate::model::app::{ApplicationComponentSelectMode, BuildConfig};
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::DeployConfig;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
-use crate::model::GuestLanguage;
 use anyhow::bail;
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use golem_common::model::component::ComponentName;

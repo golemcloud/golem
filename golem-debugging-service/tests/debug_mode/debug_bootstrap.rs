@@ -11,6 +11,7 @@ use golem_debugging_service::{create_debug_wasmtime_linker, run_debug_worker_exe
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_worker_executor::services::All;
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
@@ -23,8 +24,8 @@ use golem_worker_executor::services::golem_config::{
     EnvironmentStateServiceConfig, GolemConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
-use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
+use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms;
 use golem_worker_executor::services::resource_limits;
@@ -39,18 +40,17 @@ use golem_worker_executor::services::worker_enumeration::{
 };
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::All;
 use golem_worker_executor::{Bootstrap, RunDetails};
+use golem_worker_executor_test_utils::TestWorkerExecutor;
 use golem_worker_executor_test_utils::agent_deployments_service::DisabledEnvironmentStateService;
 use golem_worker_executor_test_utils::component_service::ComponentServiceLocalFileSystem;
-use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use wasmtime::component::Linker;
 use wasmtime::Engine;
+use wasmtime::component::Linker;
 
 // A test bootstrap which depends on the original
 // bootstrap (inner) as much as possible except for auth service

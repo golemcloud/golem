@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::model::text::fmt::{
-    format_id, format_main_id, format_message_highlight, log_table, FieldsBuilder,
-    MessageWithFields, TextView,
+    FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id,
+    format_message_highlight, log_table,
 };
 use cli_table::Table;
 use golem_common::model::plugin_registration::PluginRegistrationDto;

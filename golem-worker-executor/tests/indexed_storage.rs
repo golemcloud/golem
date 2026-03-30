@@ -14,8 +14,8 @@
 
 use async_trait::async_trait;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
-use golem_common::model::component::ComponentId;
 use golem_common::model::AgentId;
+use golem_common::model::component::ComponentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;

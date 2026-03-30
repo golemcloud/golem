@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::error::PipedExitCode;
-use crate::log::{logln, LogColorize, LogIndent};
-use anyhow::{anyhow, Context};
+use crate::log::{LogColorize, LogIndent, logln};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
-use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
+use colored::control::SHOULD_COLORIZE;
 use gag::BufferRedirect;
 use std::collections::HashMap;
 use std::io::Read;
@@ -234,10 +234,11 @@ pub trait CommandExt {
                     had_any_output = true;
                 }
 
-                if color && had_any_output {
-                    if let Some(bottom_frame) = &bottom_frame {
-                        logln(bottom_frame);
-                    }
+                if color
+                    && had_any_output
+                    && let Some(bottom_frame) = &bottom_frame
+                {
+                    logln(bottom_frame);
                 }
             }
         });
@@ -284,11 +285,7 @@ pub enum HiddenOutput {
 
 impl HiddenOutput {
     pub fn hide_stderr_if(cond: bool) -> Self {
-        if cond {
-            Self::Stderr
-        } else {
-            Self::None
-        }
+        if cond { Self::Stderr } else { Self::None }
     }
 
     fn should_hide_stdout(&self) -> bool {

@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::app::build::check::requirements::{
-    typescript_tsconfig_requirements, TsConfigSettingRequirement,
+    TsConfigSettingRequirement, typescript_tsconfig_requirements,
 };
 use crate::app::build::check::{
-    evaluate_dependency_spec_compliance, expected_dependency_value, DependencyFixStep,
-    DependencyMatcherSemantics, DependencySpecCompliance, ExpectedDependencyKind,
+    DependencyFixStep, DependencyMatcherSemantics, DependencySpecCompliance,
+    ExpectedDependencyKind, evaluate_dependency_spec_compliance, expected_dependency_value,
 };
 use crate::app::context::BuildContext;
 use crate::app::edit;
@@ -285,7 +285,7 @@ fn dep_base_version(spec: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use super::{typescript_sdk_requirements, PackageJsonSection};
+    use super::{PackageJsonSection, typescript_sdk_requirements};
     use crate::sdk_overrides::sdk_overrides;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeSet;

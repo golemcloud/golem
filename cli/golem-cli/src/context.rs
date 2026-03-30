@@ -14,17 +14,17 @@
 
 use crate::app::context::ApplicationContext;
 use crate::app::template::AppTemplateRepo;
-use crate::client::{new_reqwest_client, GolemClients};
-use crate::command::shared_args::PostDeployArgs;
+use crate::client::{GolemClients, new_reqwest_client};
 use crate::command::GolemCliGlobalFlags;
+use crate::command::shared_args::PostDeployArgs;
 use crate::command_handler::interactive::InteractiveHandler;
-use crate::config::{builtin_local_url, ClientConfig, ProfileName};
 use crate::config::{
     ApplicationEnvironmentConfigId, AuthenticationConfig, AuthenticationConfigWithSource,
     AuthenticationSource, Config, NamedProfile,
 };
+use crate::config::{ClientConfig, ProfileName, builtin_local_url};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
-use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
+use crate::log::{LogColorize, LogOutput, Output, log_action, set_log_output};
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app::{
     ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName, WithSource,
@@ -52,7 +52,7 @@ use golem_common::model::http_api_deployment::{
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{debug, enabled, Level};
+use tracing::{Level, debug, enabled};
 use url::Url;
 
 // Context is responsible for storing the CLI state,
@@ -223,19 +223,19 @@ impl Context {
 
         let mut yes = global_flags.yes;
         let mut post_deploy_args = PostDeployArgs::none();
-        if let Some(selected_manifest_environment) = &manifest_environment {
-            if let Some(cli) = selected_manifest_environment.environment.cli.as_ref() {
-                if cli.auto_confirm == Some(Marker) {
-                    yes = true;
-                }
+        if let Some(selected_manifest_environment) = &manifest_environment
+            && let Some(cli) = selected_manifest_environment.environment.cli.as_ref()
+        {
+            if cli.auto_confirm == Some(Marker) {
+                yes = true;
+            }
 
-                if cli.redeploy_agents == Some(Marker) {
-                    post_deploy_args.redeploy_agents = true;
-                }
+            if cli.redeploy_agents == Some(Marker) {
+                post_deploy_args.redeploy_agents = true;
+            }
 
-                if cli.reset == Some(Marker) {
-                    post_deploy_args.reset = true;
-                }
+            if cli.reset == Some(Marker) {
+                post_deploy_args.reset = true;
             }
         }
 
@@ -467,7 +467,9 @@ impl Context {
                 }
                 Some(Server::Builtin(BuiltinServer::Cloud)) => {
                     if !self.profile.name.is_builtin_cloud() {
-                        panic!("when using the builtin cloud environment, the selected profile must be the builtin cloud profile");
+                        panic!(
+                            "when using the builtin cloud environment, the selected profile must be the builtin cloud profile"
+                        );
                     }
                     Ok(AuthenticationConfigWithSource {
                         authentication: self.profile.profile.auth.clone(),
@@ -759,14 +761,12 @@ impl ApplicationContextState {
             .map_err(Arc::new),
         );
 
-        if !self.silent_init {
-            if let Some(Ok(Some(app_ctx))) = &self.app_context {
-                if app_ctx.loaded_with_warnings()
-                    && !InteractiveHandler::confirm_manifest_app_warning(self.yes)?
-                {
-                    bail!(NonSuccessfulExit)
-                }
-            }
+        if !self.silent_init
+            && let Some(Ok(Some(app_ctx))) = &self.app_context
+            && app_ctx.loaded_with_warnings()
+            && !InteractiveHandler::confirm_manifest_app_warning(self.yes)?
+        {
+            bail!(NonSuccessfulExit)
         }
 
         Ok(())

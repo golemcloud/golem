@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bridge_gen::type_naming::analyzed_type_ext::AnalysedTypeExt;
 use crate::bridge_gen::type_naming::TypeName;
+use crate::bridge_gen::type_naming::analyzed_type_ext::AnalysedTypeExt;
 use golem_wasm::analysis::AnalysedType;
 use heck::ToUpperCamelCase;
 use itertools::Itertools;

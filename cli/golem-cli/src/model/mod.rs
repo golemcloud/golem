@@ -34,7 +34,7 @@ pub mod worker;
 use crate::app::template::{AppTemplate, AppTemplateName};
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};

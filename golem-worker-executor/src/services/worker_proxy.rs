@@ -18,12 +18,12 @@ use chrono::{DateTime, Utc};
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    agent_error, complete_promise_response, fork_worker_response, invoke_agent_response,
-    launch_new_worker_response, resume_worker_response, revert_worker_response,
-    update_worker_response, AgentError, CompletePromiseRequest, CompletePromiseResponse,
-    ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    AgentError, CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest,
+    InvokeAgentRequest, InvokeAgentResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, agent_error, complete_promise_response,
+    fork_worker_response, invoke_agent_response, launch_new_worker_response,
+    resume_worker_response, revert_worker_response, update_worker_response,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;

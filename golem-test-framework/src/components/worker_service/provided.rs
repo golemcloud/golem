@@ -33,7 +33,9 @@ impl ProvidedWorkerService {
         grpc_port: u16,
         custom_request_port: u16,
     ) -> Self {
-        info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}, custom request port: {custom_request_port}");
+        info!(
+            "Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}, custom request port: {custom_request_port}"
+        );
         Self {
             host: host.clone(),
             http_port,

@@ -23,7 +23,6 @@ members = [
 ]
 
 exclude = [
-    "cli/desktop-app/src-tauri",
     "test-components",
     "sdks/golem-rust"
 ]

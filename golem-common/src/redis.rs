@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::{atomic, Arc};
+use std::sync::{Arc, atomic};
 use std::time::Instant;
 
 use desert_rust::{BinaryDeserializer, BinarySerializer};
@@ -23,7 +23,7 @@ use fred::cmd;
 use fred::prelude::{Pool as FredRedisPool, *};
 use fred::types::config::TlsConnector;
 use fred::types::{InfoKind, Limit, Map, MultipleKeys, MultipleValues};
-use tracing::{debug, Level};
+use tracing::{Level, debug};
 
 use crate::metrics::redis::{record_redis_failure, record_redis_success};
 use crate::serialization::{deserialize, serialize};

@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::Tracing;
-use axum::routing::post;
 use axum::Router;
+use axum::routing::post;
 use bytes::Bytes;
 use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
@@ -452,9 +452,10 @@ async fn outgoing_http_contains_idempotency_key(
     http_server.abort();
 
     assert_eq!(
-        result, data_value!(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"15f8d7f6-663b-584d-b597-23d46a929eed\") }"
-            )
+        result,
+        data_value!(
+            "200 ExampleResponse { percentage: 0.0, message: Some(\"15f8d7f6-663b-584d-b597-23d46a929eed\") }"
+        )
     );
     Ok(())
 }

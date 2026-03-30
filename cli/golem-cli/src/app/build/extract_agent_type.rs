@@ -16,7 +16,7 @@ use crate::app::build::task_result_marker::ExtractAgentTypeMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
 use crate::fs;
-use crate::log::{log_action, log_skipping_up_to_date, LogColorize};
+use crate::log::{LogColorize, log_action, log_skipping_up_to_date};
 use anyhow::Context;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;

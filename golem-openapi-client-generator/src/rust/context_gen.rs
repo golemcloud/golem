@@ -38,11 +38,10 @@ fn security_gen(name: &str, ref_or_sec: &ReferenceOr<SecurityScheme>) -> Result<
         ReferenceOr::Reference { .. } => Err(Error::unimplemented(format!(
             "$ref in security_schemes[{name}]"
         ))),
-        ReferenceOr::Item(sec) => {
-            match sec {
-                SecurityScheme::HTTP { scheme, .. } => {
-                    if scheme == "bearer" {
-                        #[rustfmt::skip]
+        ReferenceOr::Item(sec) => match sec {
+            SecurityScheme::HTTP { scheme, .. } => {
+                if scheme == "bearer" {
+                    #[rustfmt::skip]
                         let typedef = unit() +
                             line("#[derive(Debug, Clone)]") +
                             line("pub enum Security {") +
@@ -58,14 +57,14 @@ fn security_gen(name: &str, ref_or_sec: &ReferenceOr<SecurityScheme>) -> Result<
                             ) +
                             line("}");
 
-                        let field_name = format!(
-                            "security_{}",
-                            name.from_case(Case::UpperCamel).to_case(Case::Snake)
-                        );
+                    let field_name = format!(
+                        "security_{}",
+                        name.from_case(Case::UpperCamel).to_case(Case::Snake)
+                    );
 
-                        let filed = line(unit() + "pub " + &field_name + ": Security,");
+                    let filed = line(unit() + "pub " + &field_name + ": Security,");
 
-                        #[rustfmt::skip]
+                    #[rustfmt::skip]
                         let methods = unit() +
                             line("pub fn bearer_token(&self) -> Option<&str> {") +
                               indented(
@@ -78,20 +77,21 @@ fn security_gen(name: &str, ref_or_sec: &ReferenceOr<SecurityScheme>) -> Result<
                               ) +
                             line("}");
 
-                        Ok(Security {
-                            typedef,
-                            filed,
-                            methods,
-                        })
-                    } else {
-                        Err(Error::unimplemented(format!("Unsupported http security_schemes[{name}], only bearer is implemented.")))
-                    }
+                    Ok(Security {
+                        typedef,
+                        filed,
+                        methods,
+                    })
+                } else {
+                    Err(Error::unimplemented(format!(
+                        "Unsupported http security_schemes[{name}], only bearer is implemented."
+                    )))
                 }
-                _ => Err(Error::unimplemented(format!(
-                    "Unsupported security_schemes[{name}], only http is implemented."
-                ))),
             }
-        }
+            _ => Err(Error::unimplemented(format!(
+                "Unsupported security_schemes[{name}], only http is implemented."
+            ))),
+        },
     }
 }
 

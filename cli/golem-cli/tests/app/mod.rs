@@ -33,19 +33,19 @@ sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
 
-use crate::{crate_path, workspace_path, Tracing};
+use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
 use expectrl::Expect;
 use golem_cli::app::edit;
 use golem_cli::fs;
 use golem_cli::sdk_overrides::sdk_overrides;
-use golem_client::api::HealthCheckClient;
 use golem_client::Security;
+use golem_client::api::HealthCheckClient;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

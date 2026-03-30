@@ -14,12 +14,12 @@
 
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
+use crate::services::HasOplog;
 use crate::services::oplog::{MultiLayerOplog, Oplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_activator::WorkerActivator;
-use crate::services::HasOplog;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
@@ -38,7 +38,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, span, warn, Instrument, Level};
+use tracing::{Instrument, Level, error, info, span, warn};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
@@ -456,12 +456,12 @@ mod tests {
     use async_trait::async_trait;
     use chrono::DateTime;
     use desert_rust::BinarySerializer;
+    use golem_common::model::AgentStatusRecord;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::AgentStatusRecord;
     use golem_common::model::{
         AgentId, AgentInvocation, OwnedAgentId, PromiseId, ScheduledAction, ShardId,
     };

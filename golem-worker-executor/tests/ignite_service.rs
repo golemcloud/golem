@@ -22,11 +22,11 @@
 //!   cargo test -p golem-worker-executor --test integration ignite_service \
 //!     -- --nocapture
 
-use golem_common::model::component::ComponentId;
 use golem_common::model::AgentId;
+use golem_common::model::component::ComponentId;
 use golem_test_framework::components::rdb::docker_ignite::DockerIgniteRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
-use golem_worker_executor::services::rdbms::ignite::{types as ignite_types, IgniteType};
+use golem_worker_executor::services::rdbms::ignite::{IgniteType, types as ignite_types};
 use golem_worker_executor::services::rdbms::{
     Rdbms, RdbmsService, RdbmsServiceDefault, RdbmsTransactionStatus,
 };

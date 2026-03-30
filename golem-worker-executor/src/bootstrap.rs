@@ -24,8 +24,8 @@ use crate::services::events::Events;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
-use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
+use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use crate::services::scheduler::SchedulerService;
@@ -38,7 +38,7 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_fork::DefaultWorkerFork;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{rdbms, resource_limits, All, NoAdditionalDeps};
+use crate::services::{All, NoAdditionalDeps, rdbms, resource_limits};
 use crate::wasi_host::create_linker;
 use crate::workerctx::default::Context;
 use crate::{Bootstrap, RunDetails};
@@ -49,9 +49,9 @@ use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
+use wasmtime::Engine;
 use wasmtime::component::HasSelf;
 use wasmtime::component::Linker;
-use wasmtime::Engine;
 
 #[cfg(test)]
 test_r::enable!();

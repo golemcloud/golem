@@ -18,9 +18,9 @@ mod rust;
 mod ts;
 
 use crate::app::build::check::requirements::{
-    tool_requirements_for_language, ToolRequirement, ToolRequirementCheck, VersionRange,
+    ToolRequirement, ToolRequirementCheck, VersionRange, tool_requirements_for_language,
 };
-use crate::app::context::{validated_to_anyhow, BuildContext};
+use crate::app::context::{BuildContext, validated_to_anyhow};
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::GuestLanguage;
@@ -505,8 +505,8 @@ fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
 #[cfg(test)]
 mod test {
     use super::{
-        evaluate_dependency_spec_compliance, verify_semantic_version_compatibility,
         DependencyMatcherSemantics, DependencySpecCompliance, ExpectedDependencyKind,
+        evaluate_dependency_spec_compliance, verify_semantic_version_compatibility,
     };
     use pretty_assertions::assert_eq;
     use test_r::test;
@@ -525,32 +525,38 @@ mod test {
 
     #[test]
     fn dependency_version_check_rejects_semantic_incompatible_version() {
-        assert!(verify_semantic_version_compatibility(
-            "2.0.0",
-            "3.0.0",
-            DependencyMatcherSemantics::Rust,
-        )
-        .is_err());
+        assert!(
+            verify_semantic_version_compatibility(
+                "2.0.0",
+                "3.0.0",
+                DependencyMatcherSemantics::Rust,
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn dependency_version_check_rejects_semantic_incompatible_requirement() {
-        assert!(verify_semantic_version_compatibility(
-            "2.0.0",
-            "~1.9.0",
-            DependencyMatcherSemantics::Rust,
-        )
-        .is_err());
+        assert!(
+            verify_semantic_version_compatibility(
+                "2.0.0",
+                "~1.9.0",
+                DependencyMatcherSemantics::Rust,
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn dependency_version_check_applies_typescript_bare_exact_semantics() {
-        assert!(verify_semantic_version_compatibility(
-            "2.0.0",
-            "2.0.1",
-            DependencyMatcherSemantics::TypeScript,
-        )
-        .is_err());
+        assert!(
+            verify_semantic_version_compatibility(
+                "2.0.0",
+                "2.0.1",
+                DependencyMatcherSemantics::TypeScript,
+            )
+            .is_err()
+        );
     }
 
     #[test]

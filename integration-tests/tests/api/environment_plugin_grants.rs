@@ -555,12 +555,14 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
     let result_owner = client_owner
         .list_environment_plugin_grants(&env.id.0)
         .await?;
-    assert!(result_owner
-        .values
-        .iter()
-        .map(|epg| epg.id)
-        .collect::<Vec<_>>()
-        .contains(&grant.id));
+    assert!(
+        result_owner
+            .values
+            .iter()
+            .map(|epg| epg.id)
+            .collect::<Vec<_>>()
+            .contains(&grant.id)
+    );
 
     Ok(())
 }

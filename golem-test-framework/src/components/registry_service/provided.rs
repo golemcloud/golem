@@ -46,7 +46,9 @@ impl ProvidedRegistryService {
         low_fuel_plan_id: PlanId,
         low_disk_space_plan_id: PlanId,
     ) -> Self {
-        info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
+        info!(
+            "Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}"
+        );
         Self {
             host: host.clone(),
             http_port,

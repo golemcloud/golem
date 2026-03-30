@@ -14,13 +14,13 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
+use axum::Router;
 use axum::extract::Query;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
-use axum::Router;
 use bytes::Bytes;
 use futures_concurrency::future::Join;
-use golem_api_grpc::proto::golem::worker::{log_event, LogEvent};
+use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId};
@@ -33,7 +33,7 @@ use golem_common::model::{
 };
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{update_counts, TestDsl, TestDslExtended, WorkerLogEventStream};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerLogEventStream, update_counts};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{FromValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -1518,10 +1518,9 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
             if let Some(LogEvent {
                 event: Some(log_event::Event::Stdout(inner)),
             }) = event
+                && inner.message.contains("Iteration 100")
             {
-                if inner.message.contains("Iteration 100") {
-                    break true;
-                }
+                break true;
             }
             tokio::time::sleep(Duration::from_millis(10)).await
         }

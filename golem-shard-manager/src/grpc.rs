@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ShardManagerServiceImpl;
 use crate::error::ShardManagerTraceErrorKind;
 use crate::model::Pod;
-use crate::ShardManagerServiceImpl;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
 use golem_common::recorded_grpc_api_request;

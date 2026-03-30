@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::{logln, LogColorize};
+use crate::log::{LogColorize, logln};
 use crate::model::text::fmt::TextView;
 use colored::Colorize;
 use golem_common::model::diff::{BTreeMapDiffValue, DeploymentDiff, DiffForHashOf, VecDiffValue};

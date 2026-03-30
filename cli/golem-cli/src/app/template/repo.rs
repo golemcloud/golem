@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::template::AppTemplateName;
 use crate::app::template::metadata::AppTemplateMetadata;
 use crate::app::template::template::{
     AppTemplate, AppTemplateAgent, AppTemplateCommon, AppTemplateCommonOnDemand,
     AppTemplateComponent, AppTemplatesForLanguage,
 };
-use crate::app::template::AppTemplateName;
 use crate::fs;
 use crate::model::GuestLanguage;
-use anyhow::{anyhow, bail, Context};
-use include_dir::{include_dir, Dir};
+use anyhow::{Context, anyhow, bail};
+use include_dir::{Dir, include_dir};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
@@ -135,7 +135,7 @@ impl AppTemplateRepo {
 
         self.templates
             .iter()
-            .filter(|(&lang, _)| language.is_none_or(|l| lang == l))
+            .filter(|&(&lang, _)| language.is_none_or(|l| lang == l))
             .map(|(lang, lang_templates)| {
                 (
                     *lang,

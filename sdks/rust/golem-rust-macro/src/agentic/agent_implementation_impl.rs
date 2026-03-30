@@ -17,8 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_asyncness, has_agent_config_attr, has_async_trait_attr, is_constructor_method,
-    is_static_method, trim_type_parameter, AgentConfigAttrRemover, Asyncness, FunctionOutputInfo,
+    AgentConfigAttrRemover, Asyncness, FunctionOutputInfo, get_asyncness, has_agent_config_attr,
+    has_async_trait_attr, is_constructor_method, is_static_method, trim_type_parameter,
 };
 use syn::visit_mut::VisitMut;
 
@@ -336,7 +336,7 @@ fn generate_method_param_extraction(
         let ident_result = format_ident!("{}_result", ident);
         quote! {
            let #ident_result = match &mut __input_variant {
-               __InputVariant::Tuple(ref mut values) => {
+               __InputVariant::Tuple(values) => {
                     let enriched_schema = __param_schemas.get(#original_method_param_idx)
                         .cloned()
                         .ok_or_else(|| {
@@ -375,7 +375,7 @@ fn generate_method_param_extraction(
                         }
                     }
                 },
-              __InputVariant::Multimodal(ref mut elements) => {
+              __InputVariant::Multimodal(elements) => {
                    let deserialized_value = golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::Multimodal(elements.take().unwrap_or_default()), golem_rust::agentic::StructuredSchema::Multimodal(vec![])).map_err(|e| {
                    golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #original_method_param_idx, #method_name, e))
                  })?;
@@ -498,7 +498,7 @@ fn generate_constructor_extraction(
             let ident_result = format_ident!("{}_result", ident);
             quote! {
                 let #ident_result = match &mut __ctor_input {
-                    __CtorInputVariant::Tuple(ref mut values) => {
+                    __CtorInputVariant::Tuple(values) => {
                         let enriched_schema = golem_rust::agentic::get_constructor_parameter_type(
                             &__agent_type_name,
                             #constructor_param_index,

@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::{error_forwarding, SafeDisplay};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;

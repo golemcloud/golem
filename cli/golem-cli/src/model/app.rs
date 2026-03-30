@@ -18,13 +18,13 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
 use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::Property;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
-use crate::model::cascade::property::Property;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
-use crate::model::{app_raw, GuestLanguage};
+use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
@@ -1485,7 +1485,7 @@ mod app_builder {
         Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerApplyContext,
         ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
         ComponentPresetName, ComponentPresetSelector, ComponentProperties,
-        PartitionedComponentPresets, WithSource, TEMP_DIR,
+        PartitionedComponentPresets, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -1885,8 +1885,8 @@ mod app_builder {
                         }
                     }
 
-                    if let Some(bridge) = app.application.bridge {
-                        if self
+                    if let Some(bridge) = app.application.bridge
+                        && self
                             .add_entity_source(UniqueSourceCheckedEntityKey::Bridge, app_source_dir)
                         {
                             self.bridge_sdks =
@@ -1932,7 +1932,6 @@ mod app_builder {
                                 );
                             }
                         }
-                    }
                 });
         }
 
@@ -1944,22 +1943,22 @@ mod app_builder {
             validation.with_context(
                 vec![("source", app.source.to_string_lossy().to_string())],
                 |validation| {
-                    if let Some(app_name) = &app.application.app {
-                        if self.add_entity_source(UniqueSourceCheckedEntityKey::App, &app.source) {
-                            let app_name = match app_name.parse::<ApplicationName>() {
-                                Ok(app_name) => app_name,
-                                Err(err) => {
-                                    validation.add_error(format!(
-                                        "Invalid application name: {}, {}",
-                                        app_name.log_color_highlight(),
-                                        err.log_color_error_highlight()
-                                    ));
-                                    ApplicationName(app_name.to_string())
-                                }
-                            };
+                    if let Some(app_name) = &app.application.app
+                        && self.add_entity_source(UniqueSourceCheckedEntityKey::App, &app.source)
+                    {
+                        let app_name = match app_name.parse::<ApplicationName>() {
+                            Ok(app_name) => app_name,
+                            Err(err) => {
+                                validation.add_error(format!(
+                                    "Invalid application name: {}, {}",
+                                    app_name.log_color_highlight(),
+                                    err.log_color_error_highlight()
+                                ));
+                                ApplicationName(app_name.to_string())
+                            }
+                        };
 
-                            self.app = Some(WithSource::new(app.source.clone(), app_name));
-                        }
+                        self.app = Some(WithSource::new(app.source.clone(), app_name));
                     }
 
                     for (environment_name, environment) in &app.application.environments {
@@ -2410,8 +2409,8 @@ mod app_builder {
 mod test {
     use crate::fs;
     use crate::model::app::{
-        includes_from_yaml_file, Application, ApplicationNameAndEnvironments,
-        ComponentPresetSelector,
+        Application, ApplicationNameAndEnvironments, ComponentPresetSelector,
+        includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use indoc::indoc;

@@ -14,11 +14,11 @@
 
 use crate::fs;
 use crate::versions;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
-use toml_edit::{value, Array, Item, Table};
+use toml_edit::{Array, Item, Table, value};
 use tracing::debug;
 
 const GOLEM_PATH: &str = "GOLEM_PATH";

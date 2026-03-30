@@ -14,7 +14,7 @@
 
 use anyhow::anyhow;
 use std::collections::BTreeMap;
-use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DependencySpec {
@@ -411,27 +411,27 @@ fn merge_items(base: &mut Item, update: &Item) {
         (base.as_table_like_mut(), update.as_table_like())
     {
         for (key, update_item) in update_table.iter() {
-            if key == "features" {
-                if let (Some(base_features), Some(update_features)) = (
+            if key == "features"
+                && let (Some(base_features), Some(update_features)) = (
                     base_table.get("features").and_then(|it| it.as_array()),
                     update_item.as_array(),
-                ) {
-                    let existing = base_features
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .map(str::to_string)
-                        .collect::<Vec<_>>();
-                    let update = update_features
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .map(str::to_string)
-                        .collect::<Vec<_>>();
-                    base_table.insert(
-                        "features",
-                        value(features_to_array(merge_features(existing, &update))),
-                    );
-                    continue;
-                }
+                )
+            {
+                let existing = base_features
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                let update = update_features
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                base_table.insert(
+                    "features",
+                    value(features_to_array(merge_features(existing, &update))),
+                );
+                continue;
             }
 
             if let Some(base_item) = base_table.get_mut(key) {

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::oplog::SpanData;
 use crate::model::Timestamp;
+use crate::model::oplog::SpanData;
 use desert_rust::adt::{AdtDeserializer, AdtMetadata, AdtSerializer};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
@@ -388,10 +388,10 @@ impl InvocationContextSpan {
                         None => {
                             if inherit {
                                 // First look in the linked context
-                                if let Some(linked_context) = &state.linked_context {
-                                    if let Some(value) = linked_context.get_attribute(key, false) {
-                                        break Some(value);
-                                    }
+                                if let Some(linked_context) = &state.linked_context
+                                    && let Some(value) = linked_context.get_attribute(key, false)
+                                {
+                                    break Some(value);
                                 }
 
                                 // Otherwise recurse to the parent
@@ -421,10 +421,10 @@ impl InvocationContextSpan {
                         result.push(value.clone());
                     }
                     // Add value from the linked context
-                    if let Some(linked_context) = &state.linked_context {
-                        if let Some(value) = linked_context.get_attribute(key, false) {
-                            result.push(value.clone());
-                        }
+                    if let Some(linked_context) = &state.linked_context
+                        && let Some(value) = linked_context.get_attribute(key, false)
+                    {
+                        result.push(value.clone());
                     }
                     match state.parent.as_ref() {
                         Some(parent) => parent.clone(),
@@ -1084,10 +1084,10 @@ mod protobuf {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::Timestamp;
     use crate::model::invocation_context::{
         AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
     };
-    use crate::model::Timestamp;
     use crate::serialization::{deserialize, serialize};
     use std::collections::HashSet;
     use test_r::test;

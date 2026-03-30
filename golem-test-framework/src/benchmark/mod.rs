@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{info, Instrument, Level};
+use tracing::{Instrument, Level, info};
 
 #[derive(Debug, Clone)]
 pub struct BenchmarkRecorder {

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::error::{HealthCheckError, ShardManagerError};
-use crate::model::{pod_shard_assignments_to_string, Assignments, Pod, Unassignments};
+use crate::model::{Assignments, Pod, Unassignments, pod_shard_assignments_to_string};
 use crate::shard_manager_config::WorkerExecutorServiceConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem;
@@ -26,9 +26,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
+use tonic::Response;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tonic::Response;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};

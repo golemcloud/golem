@@ -64,7 +64,7 @@ use crate::model::oplog::{
     AgentResourceId, OplogEntry, RawSnapshotData, TimestampedUpdateDescription,
 };
 use crate::model::regions::DeletedRegions;
-use crate::{grpc_uri, SafeDisplay};
+use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -212,10 +212,8 @@ pub trait PoemTypeRequirements:
 }
 
 impl<
-        T: poem_openapi::types::Type
-            + poem_openapi::types::ParseFromJSON
-            + poem_openapi::types::ToJSON,
-    > PoemTypeRequirements for T
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> PoemTypeRequirements for T
 {
 }
 

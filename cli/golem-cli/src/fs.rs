@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::{log_warn_action, LogColorize};
-use anyhow::{anyhow, bail, Context, Error};
+use crate::log::{LogColorize, log_warn_action};
+use anyhow::{Context, Error, anyhow, bail};
 use serde_json::Value as JsonValue;
 use std::cmp::PartialEq;
 use std::collections::BTreeSet;
