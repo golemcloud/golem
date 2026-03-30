@@ -1,0 +1,9 @@
+# golem-app-manifest-header
+
+components:
+  componentname:
+    dir: "componentDir"
+    templates: scala
+
+    # golem-app-manifest-env-doc
+    env:

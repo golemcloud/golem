@@ -117,6 +117,9 @@ async fn build_mixed_language_app() {
             GuestLanguage::Rust => {
                 vec!["rust/json", "rust/snapshotting"]
             }
+            GuestLanguage::Scala => {
+                vec!["scala"]
+            }
         })
         .collect::<Vec<_>>();
 

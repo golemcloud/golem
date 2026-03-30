@@ -270,6 +270,90 @@ jobs:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  scala-sdk-integration-tests:
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-ts
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-binstall: 'true'
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
+
+      - name: Cache scala dependencies
+        uses: coursier/cache-action@v8
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: Install cargo-component
+        run: cargo binstall --force cargo-component@0.21.1
+      - name: Install wasm-rquickjs
+        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+
+      - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+
+      - name: Restore built TS SDK
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install TS SDK dependencies
+        working-directory: sdks/ts
+        run: pnpm install --frozen-lockfile
+
+      - name: Add golem to PATH
+        run: echo "${{ github.workspace }}/target/debug" >> $GITHUB_PATH
+
+      - name: Publish Scala SDK locally
+        working-directory: sdks/scala
+        run: |
+          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal'
+
+      - name: Copy agent_guest.wasm
+        run: |
+          mkdir -p sdks/scala/test-agents/.generated
+          cp sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm sdks/scala/test-agents/.generated/agent_guest.wasm
+
+      - name: Run Scala SDK integration tests
+        working-directory: sdks/scala
+        env:
+          GOLEM_TS_PACKAGES_PATH: ${{ github.workspace }}/sdks/ts/packages
+        run: sbt -batch "++3.8.2; integrationTests/test"
+        timeout-minutes: 20
+
   wasm-rpc-stub:
     runs-on: blacksmith
     env:

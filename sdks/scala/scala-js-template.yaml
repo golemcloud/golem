@@ -1,0 +1,14 @@
+componentTemplates:
+  scala.js:
+    build:
+    - command: sbt -batch -no-colors -Dsbt.supershell=false "golemBuildComponent {{ component_name }} .golem/scala.js"
+      sources:
+      - src
+      targets:
+      - .golem/scala.js
+    - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+      module: .golem/scala.js
+      moduleWasm: .golem/agents/{{ component_name | to_snake_case }}.module.wasm
+      into: .golem/agents/{{ component_name | to_snake_case }}.dynamic.wasm
+    componentWasm: .golem/agents/{{ component_name | to_snake_case }}.dynamic.wasm
+    outputWasm: .golem/agents/{{ component_name | to_snake_case }}.wasm

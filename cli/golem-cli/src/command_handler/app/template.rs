@@ -685,6 +685,18 @@ impl TemplateHandler {
                     });
                 }
             }
+            GuestLanguage::Scala => {
+                let target_root = application_path.join(new_component_dir);
+
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: application_path.join("build.sbt"),
+                    target: target_root.join("build.sbt"),
+                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: application_path.join("src"),
+                    target: target_root.join("src"),
+                });
+            }
         }
 
         Ok(upgrade_plan)

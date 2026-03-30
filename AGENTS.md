@@ -66,6 +66,10 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `sdk-development` | Working on the Rust or TypeScript SDKs in `sdks/` |
+| `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
+| `golem-scala-integration-tests` | Running and debugging Scala SDK integration tests |
+| `golem-scala-base-image` | WIT folder structure and regenerating `agent_guest.wasm` for the Scala SDK |
+| `golem-scala-code-generation` | Writing Scala code generators for the Scala SDK |
 | `investigating-executor-performance` | Investigating worker-executor performance with OTLP tracing and Jaeger |
 | `pre-pr-checklist` | Final checks before submitting a pull request |
 

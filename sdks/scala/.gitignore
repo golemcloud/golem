@@ -1,0 +1,29 @@
+# sbt
+target/
+project/target/
+project/project/target/
+.bsp/
+.bloop/
+
+# IDE
+.idea/
+*.iml
+.metals/
+.vscode/
+metals.sbt
+
+# Node
+node_modules/
+package-lock.json
+
+# Golem
+.golem/
+.golem-local/
+.golem-apps/
+.golem-local-run/
+.golem-template-test/
+.generated/
+golem-temp/
+
+# WIT lock file (no longer used)
+wit/deps.lock

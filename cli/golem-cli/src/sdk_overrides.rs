@@ -96,6 +96,10 @@ impl SdkOverrides {
         }
     }
 
+    pub fn scala_sdk_dep(&self) -> String {
+        versions::sdk::SCALA.to_string()
+    }
+
     pub fn golem_rust_dep(&self) -> String {
         self.golem_rust_dependency().as_dep_string()
     }
