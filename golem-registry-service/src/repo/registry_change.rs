@@ -21,6 +21,7 @@ use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, RepoResult};
 use indoc::indoc;
 use sqlx::Row;
+use tracing::warn;
 use uuid::Uuid;
 
 /// Newtype for registry change event IDs.
@@ -255,6 +256,29 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
     }
 }
 
+/// Maps raw registry event rows to typed events.
+///
+/// This mapping layer is also where we keep temporary compatibility handling for
+/// legacy rows during rolling deployments that introduce breaking event-shape
+/// changes.
+fn try_map_registry_change_event_row(
+    row: RegistryChangeEventRow,
+) -> RepoResult<Option<RegistryChangeEvent>> {
+    if matches!(row.event_type, RegistryEventType::DeploymentChanged)
+        && row.current_deployment_revision_id.is_none()
+    {
+        warn!(
+            event_id = row.event_id.0,
+            deployment_revision_id = ?row.deployment_revision_id,
+            "Skipping legacy DeploymentChanged registry event without current_deployment_revision_id"
+        );
+        // TODO: remove this compatibility skip path in some of the next release cycles.
+        return Ok(None);
+    }
+
+    RegistryChangeEvent::try_from(row).map(Some)
+}
+
 /// Data for inserting a new registry change event (no event_id yet).
 #[derive(Debug, Clone)]
 pub struct NewRegistryChangeEvent {
@@ -422,34 +446,36 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
             )
             .await?;
 
-        rows.iter()
-            .map(|row| {
-                let event_type_raw: i16 = row.try_get("event_type").map_err(RepoError::from)?;
-                let domains: Option<Vec<String>> =
-                    row.try_get("domains").map_err(RepoError::from)?;
-                RegistryChangeEventRow {
-                    event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
-                    event_type: RegistryEventType::try_from(event_type_raw)?,
-                    environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
-                    deployment_revision_id: row
-                        .try_get("deployment_revision_id")
-                        .map_err(RepoError::from)?,
-                    current_deployment_revision_id: row
-                        .try_get("current_deployment_revision_id")
-                        .map_err(RepoError::from)?,
-                    account_id: row.try_get("account_id").map_err(RepoError::from)?,
-                    grantee_account_id: row
-                        .try_get("grantee_account_id")
-                        .map_err(RepoError::from)?,
-                    domains: domains.unwrap_or_default(),
-                    resource_definition_id: row
-                        .try_get("resource_definition_id")
-                        .map_err(RepoError::from)?,
-                    resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
-                }
-                .try_into()
-            })
-            .collect()
+        let mut events = Vec::with_capacity(rows.len());
+
+        for row in &rows {
+            let event_type_raw: i16 = row.try_get("event_type").map_err(RepoError::from)?;
+            let domains: Option<Vec<String>> = row.try_get("domains").map_err(RepoError::from)?;
+            let parsed_row = RegistryChangeEventRow {
+                event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
+                event_type: RegistryEventType::try_from(event_type_raw)?,
+                environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
+                deployment_revision_id: row
+                    .try_get("deployment_revision_id")
+                    .map_err(RepoError::from)?,
+                current_deployment_revision_id: row
+                    .try_get("current_deployment_revision_id")
+                    .map_err(RepoError::from)?,
+                account_id: row.try_get("account_id").map_err(RepoError::from)?,
+                grantee_account_id: row.try_get("grantee_account_id").map_err(RepoError::from)?,
+                domains: domains.unwrap_or_default(),
+                resource_definition_id: row
+                    .try_get("resource_definition_id")
+                    .map_err(RepoError::from)?,
+                resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
+            };
+
+            if let Some(event) = try_map_registry_change_event_row(parsed_row)? {
+                events.push(event);
+            }
+        }
+
+        Ok(events)
     }
 
     async fn get_latest_event_id(&self) -> RepoResult<Option<ChangeEventId>> {
@@ -510,42 +536,42 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
             )
             .await?;
 
-        rows.iter()
-            .map(|row| {
-                let event_type_raw: i16 = row.try_get("event_type").map_err(RepoError::from)?;
-                let domains_json: Option<String> =
-                    row.try_get("domains").map_err(RepoError::from)?;
-                let domains: Vec<String> = match domains_json {
-                    Some(json) if !json.is_empty() => serde_json::from_str(&json).map_err(|e| {
-                        RepoError::InternalError(anyhow::anyhow!(
-                            "Failed to deserialize domains: {e}"
-                        ))
-                    })?,
-                    _ => Vec::new(),
-                };
-                RegistryChangeEventRow {
-                    event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
-                    event_type: RegistryEventType::try_from(event_type_raw)?,
-                    environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
-                    deployment_revision_id: row
-                        .try_get("deployment_revision_id")
-                        .map_err(RepoError::from)?,
-                    current_deployment_revision_id: row
-                        .try_get("current_deployment_revision_id")
-                        .map_err(RepoError::from)?,
-                    account_id: row.try_get("account_id").map_err(RepoError::from)?,
-                    grantee_account_id: row
-                        .try_get("grantee_account_id")
-                        .map_err(RepoError::from)?,
-                    domains,
-                    resource_definition_id: row
-                        .try_get("resource_definition_id")
-                        .map_err(RepoError::from)?,
-                    resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
-                }
-                .try_into()
-            })
-            .collect()
+        let mut events = Vec::with_capacity(rows.len());
+
+        for row in &rows {
+            let event_type_raw: i16 = row.try_get("event_type").map_err(RepoError::from)?;
+            let domains_json: Option<String> = row.try_get("domains").map_err(RepoError::from)?;
+            let domains: Vec<String> = match domains_json {
+                Some(json) if !json.is_empty() => serde_json::from_str(&json).map_err(|e| {
+                    RepoError::InternalError(anyhow::anyhow!("Failed to deserialize domains: {e}"))
+                })?,
+                _ => Vec::new(),
+            };
+            let parsed_row = RegistryChangeEventRow {
+                event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
+                event_type: RegistryEventType::try_from(event_type_raw)?,
+                environment_id: row.try_get("environment_id").map_err(RepoError::from)?,
+                deployment_revision_id: row
+                    .try_get("deployment_revision_id")
+                    .map_err(RepoError::from)?,
+                current_deployment_revision_id: row
+                    .try_get("current_deployment_revision_id")
+                    .map_err(RepoError::from)?,
+                account_id: row.try_get("account_id").map_err(RepoError::from)?,
+                grantee_account_id: row.try_get("grantee_account_id").map_err(RepoError::from)?,
+                domains,
+                resource_definition_id: row
+                    .try_get("resource_definition_id")
+                    .map_err(RepoError::from)?,
+                resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
+            };
+
+            if let Some(event) = try_map_registry_change_event_row(parsed_row)? {
+                events.push(event);
+            }
+        }
+
+        Ok(events)
     }
 
     async fn get_latest_event_id(&self) -> RepoResult<Option<ChangeEventId>> {
@@ -676,5 +702,157 @@ impl DbRegistryChangeRepo<SqlitePool> {
         Ok(ChangeEventId(
             row.try_get("event_id").map_err(RepoError::from)?,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn current_event_rows_decode_successfully() {
+        let event_id = ChangeEventId(1);
+        let environment_id = Uuid::new_v4();
+        let account_id = Uuid::new_v4();
+        let grantee_account_id = Uuid::new_v4();
+        let resource_definition_id = Uuid::new_v4();
+
+        let cases = vec![
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::DeploymentChanged,
+                environment_id: Some(environment_id),
+                deployment_revision_id: Some(42),
+                current_deployment_revision_id: Some(41),
+                account_id: None,
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::AccountTokensInvalidated,
+                environment_id: None,
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: Some(account_id),
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::EnvironmentPermissionsChanged,
+                environment_id: Some(environment_id),
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: None,
+                grantee_account_id: Some(grantee_account_id),
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::DomainRegistrationChanged,
+                environment_id: Some(environment_id),
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: None,
+                grantee_account_id: None,
+                domains: vec!["example.com".to_string()],
+                resource_definition_id: None,
+                resource_name: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::SecuritySchemeChanged,
+                environment_id: Some(environment_id),
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: None,
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::ResourceDefinitionChanged,
+                environment_id: Some(environment_id),
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: None,
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: Some(resource_definition_id),
+                resource_name: Some("res-name".to_string()),
+            },
+        ];
+
+        for row in cases {
+            let decoded = RegistryChangeEvent::try_from(row);
+            assert!(decoded.is_ok(), "expected row to decode, got {decoded:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_deployment_row_without_current_revision_is_skipped() {
+        let event_id = ChangeEventId(1);
+        let environment_id = Uuid::new_v4();
+
+        let legacy_row = RegistryChangeEventRow {
+            event_id: ChangeEventId(2),
+            event_type: RegistryEventType::DeploymentChanged,
+            environment_id: Some(environment_id),
+            deployment_revision_id: Some(43),
+            current_deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+        };
+
+        let valid_row = RegistryChangeEventRow {
+            event_id,
+            event_type: RegistryEventType::DeploymentChanged,
+            environment_id: Some(environment_id),
+            deployment_revision_id: Some(42),
+            current_deployment_revision_id: Some(41),
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+        };
+
+        let skipped = try_map_registry_change_event_row(legacy_row).expect("row mapping failed");
+        let decoded = try_map_registry_change_event_row(valid_row).expect("row mapping failed");
+
+        assert!(skipped.is_none());
+        assert_eq!(decoded.expect("expected valid row").event_id(), event_id);
+    }
+
+    #[test]
+    fn malformed_non_legacy_rows_still_error() {
+        let malformed_row = RegistryChangeEventRow {
+            event_id: ChangeEventId(3),
+            event_type: RegistryEventType::AccountTokensInvalidated,
+            environment_id: None,
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+        };
+
+        let result = try_map_registry_change_event_row(malformed_row);
+        assert!(result.is_err(), "expected malformed row to error");
     }
 }
