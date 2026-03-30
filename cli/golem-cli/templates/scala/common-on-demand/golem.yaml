@@ -10,17 +10,11 @@ componentTemplates:
       - .golem/scala.js
     - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
       module: .golem/scala.js
-      moduleWasm: .golem/agents/{{ component_name | to_snake_case }}.module.wasm
-      into: .golem/agents/{{ component_name | to_snake_case }}.dynamic.wasm
-    - generateAgentWrapper: .golem/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-      basedOnCompiledWasm: .golem/agents/{{ component_name | to_snake_case }}.dynamic.wasm
-    - composeAgentWrapper: .golem/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-      withAgent: .golem/agents/{{ component_name | to_snake_case }}.dynamic.wasm
-      to: .golem/agents/{{ component_name | to_snake_case }}.static.wasm
-    sourceWit: .generated/agent_guest.wasm
-    generatedWit: .golem/agents/{{ component_name | to_snake_case }}/wit-generated
-    componentWasm: .golem/agents/{{ component_name | to_snake_case }}.static.wasm
-    linkedWasm: .golem/agents/{{ component_name | to_snake_case }}.wasm
+      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+    - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+    componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
 customCommands:
   scala-prepare:
   - command: sbt -batch -no-colors -Dsbt.supershell=false golemPrepare

@@ -8,7 +8,8 @@ componentTemplates:
       - .golem/scala.js
     - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
       module: .golem/scala.js
-      moduleWasm: .golem/agents/{{ component_name | to_snake_case }}.module.wasm
-      into: .golem/agents/{{ component_name | to_snake_case }}.dynamic.wasm
-    componentWasm: .golem/agents/{{ component_name | to_snake_case }}.dynamic.wasm
-    outputWasm: .golem/agents/{{ component_name | to_snake_case }}.wasm
+      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+    - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+    componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

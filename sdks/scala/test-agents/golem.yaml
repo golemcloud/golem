@@ -19,7 +19,6 @@ components:
       - .golem/scala.js
     - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
       module: .golem/scala.js
-      moduleWasm: .golem/agents/scala_examples.module.wasm
       into: .golem/agents/scala_examples.dynamic.wasm
 
     agents:

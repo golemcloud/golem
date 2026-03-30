@@ -9,8 +9,8 @@ set -euo pipefail
 #
 # This script:
 # 1) stages a WIT package for `golem:agent-guest` (using wit/main.wit + wit/deps/)
-# 2) runs `wasm-rquickjs generate-wrapper-crate` (injecting `@composition` for golem-cli)
-#    Note: unlike the TS SDK, we do NOT embed a separate SDK JS module here.
+# 2) runs `wasm-rquickjs generate-wrapper-crate` with a `@slot` for user JS injection.
+#    Unlike the TS SDK, we do NOT embed a separate SDK JS module here.
 #    Scala.js bundles the SDK into the user's `scala.js`, which golem-cli injects later.
 # 3) builds the component with `cargo component`
 # 4) updates embedded plugin resources (used by sbt/mill plugins).
@@ -81,8 +81,7 @@ rm -rf "$wrapper_dir"
 wasm-rquickjs generate-wrapper-crate \
   --wit "$agent_wit_root" \
   --world golem:agent-guest/agent-guest \
-  --js-modules "golem-scala-sdk=$gen_dir/golem-scala-sdk.mjs" \
-  --js-modules "user=@composition" \
+  --js-modules "user=@slot" \
   --output "$wrapper_dir"
 
 echo "[agent-guest] Building guest runtime (cargo component build --release)..." >&2
