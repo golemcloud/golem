@@ -412,6 +412,7 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
 pub struct ResolvedAgentTypeRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
+    pub current_deployment_revision_id: Option<i64>,
     pub agent_type_name: String,
     pub canonical_agent_type_name: String,
     pub component_id: Uuid,
