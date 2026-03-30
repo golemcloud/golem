@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod quota_lease;
-pub mod quota_repo;
-mod quota_service;
-#[cfg(test)]
-mod quota_service_tests;
-mod quota_state;
-pub mod resource_definition_fetcher;
+pub mod error;
+pub mod healthcheck;
+pub mod healthcheck_loop;
+mod model;
+pub mod persistence;
+pub mod rebalancing;
+pub mod shard_management;
+pub mod worker_executor;
 
-pub use quota_repo::{DbQuotaRepo, QuotaRepo};
-pub use quota_service::{QuotaError, QuotaService};
-pub use resource_definition_fetcher::{GrpcResourceDefinitionFetcher, ResourceDefinitionFetcher};
+pub use model::{PodState, RoutingTable, RoutingTableEntry};

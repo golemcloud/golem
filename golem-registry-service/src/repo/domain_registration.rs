@@ -14,7 +14,6 @@
 
 use super::model::domain_registration::{DomainRegistrationRecord, DomainRegistrationRepoError};
 use crate::repo::model::BindFields;
-use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
@@ -24,6 +23,7 @@ use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::repo::SqlDateTime;
 use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
 use std::fmt::Debug;

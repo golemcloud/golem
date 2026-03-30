@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::repo::REGISTRY_CHANGE_ADVISORY_LOCK_KEY;
-use crate::repo::model::datetime::SqlDateTime;
 use async_trait::async_trait;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::repo::SqlDateTime;
 use golem_service_base::repo::{RepoError, RepoResult};
 use indoc::indoc;
 use sqlx::Row;

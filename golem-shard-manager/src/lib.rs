@@ -12,33 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod error;
+pub mod config;
+pub mod error;
 mod grpc;
-mod healthcheck;
-mod model;
-mod persistence;
 mod quota;
-mod rebalancing;
 mod registry_event_subscriber;
-mod shard_management;
-pub mod shard_manager_config;
-mod worker_executor;
+pub(crate) mod sharding;
 
-use crate::healthcheck::{GrpcHealthCheck, HealthCheck, get_unhealthy_pods};
-use crate::persistence::RoutingTableFileSystemPersistence;
-use crate::quota::{GrpcResourceDefinitionFetcher, QuotaService};
-use crate::shard_manager_config::{HealthCheckK8sConfig, HealthCheckMode, PersistenceConfig};
-use error::ShardManagerError;
+use self::grpc::ShardManagerServiceImpl;
+use self::sharding::worker_executor::WorkerExecutorService;
+use crate::config::{HealthCheckK8sConfig, HealthCheckMode};
+use crate::quota::{DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
+use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
+use crate::sharding::healthcheck::{GrpcHealthCheck, HealthCheck};
+use crate::sharding::shard_management::ShardManagement;
+use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
+use config::ShardManagerConfig;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
-use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
 use golem_service_base::clients::registry::GrpcRegistryService;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use include_dir::include_dir;
 use prometheus::Registry;
-use shard_management::ShardManagement;
-use shard_manager_config::ShardManagerConfig;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+pub use sharding::persistence::{DbRoutingTablePersistence, RoutingTablePersistence};
+pub use sharding::{PodState, RoutingTable, RoutingTableEntry};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -48,115 +47,16 @@ use tonic::transport::Server;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;
-use tracing::{debug, info, warn};
-use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
-
-use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
-pub use model::{Pod, RoutingTable};
-pub use persistence::{
-    RoutingTablePersistence, RoutingTablePostgresPersistence, RoutingTableRedisPersistence,
-};
+use tracing::{debug, info};
 
 #[cfg(test)]
 test_r::enable!();
 
+pub static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
+
 pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
-}
-
-pub struct ShardManagerServiceImpl {
-    shard_management: ShardManagement,
-    shard_manager_config: Arc<ShardManagerConfig>,
-    health_check: Arc<dyn HealthCheck + Send + Sync>,
-    quota_service: Arc<QuotaService>,
-}
-
-impl ShardManagerServiceImpl {
-    async fn new(
-        persistence_service: Arc<dyn RoutingTablePersistence + Send + Sync>,
-        worker_executor_service: Arc<dyn WorkerExecutorService + Send + Sync>,
-        shard_manager_config: Arc<ShardManagerConfig>,
-        health_check: Arc<dyn HealthCheck + Send + Sync>,
-        quota_service: Arc<QuotaService>,
-    ) -> Result<ShardManagerServiceImpl, ShardManagerError> {
-        let shard_management = ShardManagement::new(
-            persistence_service.clone(),
-            worker_executor_service,
-            health_check.clone(),
-            shard_manager_config.rebalance_threshold,
-        )
-        .await?;
-
-        let shard_manager_service = ShardManagerServiceImpl {
-            shard_management,
-            shard_manager_config,
-            health_check,
-            quota_service,
-        };
-
-        shard_manager_service.start_health_check();
-
-        Ok(shard_manager_service)
-    }
-
-    async fn get_routing_table_internal(&self) -> RoutingTable {
-        let routing_table = self.shard_management.current_snapshot().await;
-        debug!("Providing routing table: {}", routing_table);
-        routing_table
-    }
-
-    async fn register_internal(
-        &self,
-        source_ip: Option<SocketAddr>,
-        request: golem::shardmanager::v1::RegisterRequest,
-    ) -> Result<(), ShardManagerError> {
-        let source_ip = source_ip.ok_or(ShardManagerError::NoSourceIpForPod)?.ip();
-
-        let pod = Pod::from_register_request(source_ip, request)?;
-        debug!("Received request to register pod: {}", pod);
-        self.shard_management.register_pod(pod).await;
-        Ok(())
-    }
-
-    fn start_health_check(&self) {
-        let delay = self.shard_manager_config.health_check.delay;
-        let shard_management = self.shard_management.clone();
-        let health_check = self.health_check.clone();
-
-        tokio::spawn(
-            async move {
-                loop {
-                    tokio::time::sleep(delay).await;
-                    Self::health_check(shard_management.clone(), health_check.clone()).await
-                }
-            }
-            .in_current_span(),
-        );
-    }
-
-    async fn health_check(
-        shard_management: ShardManagement,
-        health_check: Arc<dyn HealthCheck + Send + Sync>,
-    ) {
-        debug!("Scheduled to conduct health check");
-        let routing_table = shard_management.current_snapshot().await;
-        debug!("Checking health of registered pods...");
-        let failed_pods = get_unhealthy_pods(health_check, &routing_table.get_pods()).await;
-        if failed_pods.is_empty() {
-            debug!("All registered pods are healthy")
-        } else {
-            warn!(
-                "The following pods were found to be unhealthy: {:?}",
-                failed_pods
-            );
-            for failed_pod in failed_pods {
-                shard_management.unregister_pod(failed_pod).await;
-            }
-        }
-
-        debug!("Finished checking health of registered pods");
-    }
 }
 
 pub async fn run(
@@ -185,52 +85,69 @@ pub async fn run(
 
     let shard_manager_config = Arc::new(shard_manager_config.clone());
 
-    let persistence_service: Arc<dyn RoutingTablePersistence + Send + Sync> =
-        match &shard_manager_config.persistence {
-            PersistenceConfig::Redis(redis) => {
-                let pool = golem_common::redis::RedisPool::configured(redis).await?;
-                Arc::new(RoutingTableRedisPersistence::new(
-                    &pool,
-                    shard_manager_config.number_of_shards,
-                ))
+    let (persistence_service, quota_repo): (
+        Arc<dyn RoutingTablePersistence>,
+        Arc<dyn crate::quota::QuotaRepo>,
+    ) = {
+        use golem_common::config::DbConfig;
+        use golem_service_base::db;
+        use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+        use include_dir::include_dir;
+
+        static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
+        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+
+        match &shard_manager_config.db {
+            DbConfig::Postgres(postgres) => {
+                db::postgres::migrate(postgres, migrations.postgres_migrations()).await?;
+                let pool =
+                    golem_service_base::db::postgres::PostgresPool::configured(postgres).await?;
+
+                let persistence = Arc::new(
+                    crate::sharding::persistence::DbRoutingTablePersistence::new(
+                        pool.clone(),
+                        shard_manager_config.number_of_shards,
+                    ),
+                );
+                let quota_repo = Arc::new(DbQuotaRepo::logged(pool));
+                (persistence, quota_repo)
             }
-            PersistenceConfig::Postgres(postgres) => Arc::new(
-                crate::persistence::RoutingTablePostgresPersistence::configured(
-                    postgres,
-                    shard_manager_config.number_of_shards,
-                )
-                .await?,
-            ),
-            PersistenceConfig::FileSystem(fs) => Arc::new(
-                RoutingTableFileSystemPersistence::new(
-                    &fs.path,
-                    shard_manager_config.number_of_shards,
-                )
-                .await?,
-            ),
-        };
+            DbConfig::Sqlite(sqlite) => {
+                db::sqlite::migrate(sqlite, migrations.sqlite_migrations()).await?;
+                let pool = golem_service_base::db::sqlite::SqlitePool::configured(sqlite).await?;
+
+                let persistence = Arc::new(
+                    crate::sharding::persistence::DbRoutingTablePersistence::new(
+                        pool.clone(),
+                        shard_manager_config.number_of_shards,
+                    ),
+                );
+                let quota_repo = Arc::new(DbQuotaRepo::logged(pool));
+                (persistence, quota_repo)
+            }
+        }
+    };
     let worker_executors = Arc::new(WorkerExecutorServiceDefault::new(
         shard_manager_config.worker_executors.clone(),
     ));
 
-    let health_check: Arc<dyn HealthCheck + Send + Sync> =
-        match &shard_manager_config.health_check.mode {
-            HealthCheckMode::Grpc(_) => Arc::new(GrpcHealthCheck::new(
-                worker_executors.clone(),
+    let health_check: Arc<dyn HealthCheck> = match &shard_manager_config.health_check.mode {
+        HealthCheckMode::Grpc(_) => Arc::new(GrpcHealthCheck::new(
+            worker_executors.clone(),
+            shard_manager_config.worker_executors.retries.clone(),
+            shard_manager_config.health_check.silent,
+        )),
+        #[cfg(feature = "kubernetes")]
+        HealthCheckMode::K8s(HealthCheckK8sConfig { namespace }) => Arc::new(
+            crate::sharding::healthcheck::kubernetes::KubernetesHealthCheck::new(
+                namespace.clone(),
                 shard_manager_config.worker_executors.retries.clone(),
                 shard_manager_config.health_check.silent,
-            )),
-            #[cfg(feature = "kubernetes")]
-            HealthCheckMode::K8s(HealthCheckK8sConfig { namespace }) => Arc::new(
-                healthcheck::kubernetes::KubernetesHealthCheck::new(
-                    namespace.clone(),
-                    shard_manager_config.worker_executors.retries.clone(),
-                    shard_manager_config.health_check.silent,
-                )
-                .await
-                .expect("Failed to initialize K8s health checker"),
-            ),
-        };
+            )
+            .await
+            .expect("Failed to initialize K8s health checker"),
+        ),
+    };
 
     let registry_service = Arc::new(GrpcRegistryService::new(
         &shard_manager_config.registry_service,
@@ -241,7 +158,13 @@ pub async fn run(
             registry_service.clone(),
             &shard_manager_config.resource_definition_fetcher,
         ));
-    let quota_service = QuotaService::new(shard_manager_config.quota.clone(), fetcher.clone());
+
+    let quota_service = QuotaService::new(
+        shard_manager_config.quota.clone(),
+        fetcher.clone(),
+        quota_repo,
+    );
+    quota_service.restore_state().await?;
 
     join_set.spawn({
         let quota_service = quota_service.clone();
@@ -252,14 +175,25 @@ pub async fn run(
         }
     });
 
-    let shard_manager = ShardManagerServiceImpl::new(
-        persistence_service,
-        worker_executors,
-        shard_manager_config.clone(),
-        health_check,
-        quota_service,
-    )
-    .await?;
+    let shard_management = Arc::new(
+        ShardManagement::new(
+            persistence_service.clone(),
+            worker_executors.clone(),
+            health_check.clone(),
+            shard_manager_config.rebalance_threshold,
+            join_set,
+        )
+        .await?,
+    );
+
+    self::sharding::healthcheck_loop::start_health_check_loop(
+        shard_management.clone(),
+        health_check.clone(),
+        &shard_manager_config.health_check,
+        join_set,
+    );
+
+    let shard_manager = ShardManagerServiceImpl::new(shard_management, quota_service);
 
     let service = ShardManagerServiceServer::new(shard_manager);
 

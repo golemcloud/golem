@@ -3790,16 +3790,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gethostname"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
-dependencies = [
- "rustix 1.1.4",
- "windows-link",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4189,7 +4179,6 @@ dependencies = [
  "axum-jrpc",
  "chrono",
  "futures",
- "gethostname",
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
@@ -4397,9 +4386,9 @@ dependencies = [
  "anyhow",
  "async-rwlock",
  "async-trait",
- "bytes",
+ "chrono",
+ "conditional-trait-gen",
  "desert_rust",
- "fred",
  "futures",
  "golem-api-grpc",
  "golem-common",
@@ -4408,14 +4397,17 @@ dependencies = [
  "http 1.4.0",
  "humantime-serde",
  "include_dir",
+ "indoc",
  "itertools 0.14.0",
  "k8s-openapi",
  "kube",
  "prometheus",
+ "prost-types",
  "rustls 0.23.37",
  "scc",
  "serde",
  "sqlx",
+ "tempfile",
  "test-r",
  "thiserror 2.0.18",
  "tokio",
@@ -4562,7 +4554,6 @@ dependencies = [
  "fs-set-times",
  "futures",
  "futures-concurrency",
- "gethostname",
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
