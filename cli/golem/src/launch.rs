@@ -294,7 +294,7 @@ fn shard_manager_config(
             ..Default::default()
         },
         registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
-            host: "localhost".to_string(),
+            host: args.router_addr.clone(),
             port: registry_service_run_details.grpc_port,
             ..Default::default()
         },
