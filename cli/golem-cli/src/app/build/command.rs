@@ -26,7 +26,7 @@ use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
-use crate::process::{normalized_program_name, which, CommandExt};
+use crate::process::{CommandExt, normalized_program_name, which};
 use anyhow::{Context as AnyhowContext, anyhow};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;

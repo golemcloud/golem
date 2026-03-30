@@ -24,7 +24,7 @@ use crate::log::{LogIndent, Output, log_action, log_skipping_up_to_date, logln, 
 use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
-use crate::process::{which, CommandExt, ExitStatusExt};
+use crate::process::{CommandExt, ExitStatusExt, which};
 use crate::sdk_overrides::sdk_overrides;
 use crate::{binary_path_to_string, fs};
 use golem_common::model::agent::DataSchema;
