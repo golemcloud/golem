@@ -796,7 +796,7 @@ mod tests {
         use tokio_stream::StreamExt;
 
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        // Pre-populate events 1..=5 so replay can find them
+        // Pre-populate historical events; live-only subscriptions should not replay these.
         for i in 1..=5 {
             repo.push(make_deployment_change_event(i));
         }
@@ -805,17 +805,18 @@ mod tests {
         let notifier = LocalRegistryChangeNotifier::new(2, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
-        let mut stream = subscribe_registry_invalidations(repo, &notifier, None);
+        let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
 
         // Give the spawned task time to start listening
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        // Burst 5 events to overflow the capacity-2 broadcast
-        for _ in 1..=5 {
+        // Add live events after subscription and burst signals to overflow capacity.
+        for i in 6..=10 {
+            repo.push(make_deployment_change_event(i));
             notifier.signal_new_events_available();
         }
 
-        // The stream should eventually deliver all 5 events (via lag recovery replay)
+        // The stream should eventually deliver all live events via lag-recovery replay.
         let mut seen = std::collections::HashSet::new();
         for _ in 0..5 {
             let ev = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
@@ -826,7 +827,7 @@ mod tests {
             seen.insert(ev.event_id);
         }
 
-        for i in 1..=5u64 {
+        for i in 6..=10u64 {
             assert!(seen.contains(&i), "missing event_id {i}");
         }
         join_set.abort_all();

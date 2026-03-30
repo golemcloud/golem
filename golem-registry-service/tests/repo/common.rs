@@ -1811,9 +1811,22 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .await;
     notifier.signal_new_events_available();
 
-    // Verify we receive the live event
-    let received = rx.recv().await.unwrap();
-    assert!(received.event_id() == id3);
+    // Verify we eventually receive the new live event.
+    // Depending on local notifier cursor state, older events can still be emitted first.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let received = loop {
+        let now = tokio::time::Instant::now();
+        assert!(now < deadline, "timed out waiting for event id {}", id3.0);
+
+        let next = tokio::time::timeout(deadline - now, rx.recv())
+            .await
+            .expect("timeout while waiting for broadcast event")
+            .expect("broadcast channel closed");
+
+        if next.event_id() == id3 {
+            break next;
+        }
+    };
     assert!(matches!(
         received,
         RegistryChangeEvent::DeploymentChanged { environment_id, deployment_revision_id: 30, .. }
