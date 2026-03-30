@@ -132,11 +132,12 @@ impl WorkerService {
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
         join_set.spawn(async move {
-            service::registry_event_subscriber::run_registry_event_subscriber(
+            WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                None,
             )
             .await;
             Ok(())
