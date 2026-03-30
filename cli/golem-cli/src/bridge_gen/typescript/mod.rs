@@ -30,9 +30,8 @@ use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
-    AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentMode, AgentType,
-    BinaryDescriptor, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
-    TextDescriptor,
+    AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
