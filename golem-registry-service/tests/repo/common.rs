@@ -60,7 +60,7 @@ use golem_registry_service::repo::registry_change::{
 };
 use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
 use golem_registry_service::services::registry_change_notifier::{
-    LocalRegistryChangeNotifier, RegistryChangeNotifier,
+    SqliteRegistryChangeNotifier, RegistryChangeNotifier,
 };
 use golem_service_base::repo::blob::Blob;
 use heck::ToKebabCase;
@@ -1764,7 +1764,7 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
 
 pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     let env_id = new_repo_uuid();
-    let notifier = LocalRegistryChangeNotifier::new(64, deps.registry_change_repo_for_notifier());
+    let notifier = SqliteRegistryChangeNotifier::new(64, deps.registry_change_repo_for_notifier());
     let mut join_set = tokio::task::JoinSet::new();
     notifier.start_background_tasks(&mut join_set);
 

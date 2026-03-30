@@ -61,7 +61,7 @@ use crate::services::mcp_deployment::McpDeploymentService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use crate::services::registry_change_notifier::{
-    LocalRegistryChangeNotifier, PostgresRegistryChangeNotifier, RegistryChangeNotifier,
+    PostgresRegistryChangeNotifier, RegistryChangeNotifier, SqliteRegistryChangeNotifier,
 };
 use crate::services::reports::ReportsService;
 use crate::services::resource_definition::ResourceDefinitionService;
@@ -173,7 +173,7 @@ impl Services {
                 repos.registry_change_repo.clone(),
                 pg_config,
             )),
-            _ => Arc::new(LocalRegistryChangeNotifier::new(
+            _ => Arc::new(SqliteRegistryChangeNotifier::new(
                 1024,
                 repos.registry_change_repo.clone(),
             )),

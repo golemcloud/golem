@@ -77,17 +77,17 @@ impl<T> RequiresNotificationSignalExt<T> for RequiresNotificationSignal<T> {
     }
 }
 
-/// Local in-process notifier for single-node deployments (e.g., SQLite).
+/// Local in-process notifier for single-node SQLite deployments (e.g.: golem server run)
 /// Signal calls enqueue local processing and a background worker fetches and broadcasts
 /// concrete registry change events.
-pub struct LocalRegistryChangeNotifier {
+pub struct SqliteRegistryChangeNotifier {
     sender: broadcast::Sender<RegistryChangeEvent>,
     repo: Arc<dyn RegistryChangeRepo>,
     signal_tx: mpsc::Sender<()>,
     signal_rx: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
 }
 
-impl LocalRegistryChangeNotifier {
+impl SqliteRegistryChangeNotifier {
     pub fn new(capacity: usize, repo: Arc<dyn RegistryChangeRepo>) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         let (signal_tx, signal_rx) = mpsc::channel(1);
@@ -100,7 +100,7 @@ impl LocalRegistryChangeNotifier {
     }
 }
 
-impl RegistryChangeNotifier for LocalRegistryChangeNotifier {
+impl RegistryChangeNotifier for SqliteRegistryChangeNotifier {
     fn signal_new_events_available(&self) {
         if let Err(err) = self.signal_tx.try_send(()) {
             match err {
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     async fn test_broadcast_single_subscriber() {
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         let mut rx = notifier.subscribe();
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     async fn test_broadcast_multiple_subscribers() {
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         let mut rx1 = notifier.subscribe();
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn test_signal_no_receivers() {
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        let notifier = LocalRegistryChangeNotifier::new(16, repo);
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo);
         // Should not panic even with no subscribers
         notifier.signal_new_events_available();
     }
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn test_subscribe_after_signal() {
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        let notifier = LocalRegistryChangeNotifier::new(16, repo);
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo);
 
         notifier.signal_new_events_available();
 
@@ -676,7 +676,7 @@ mod tests {
         repo.push(make_deployment_change_event(2));
         repo.push(make_deployment_change_event(3));
 
-        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         let mut stream = subscribe_registry_invalidations(repo, &notifier, Some(1));
@@ -702,7 +702,7 @@ mod tests {
         use tokio_stream::StreamExt;
 
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
@@ -730,7 +730,7 @@ mod tests {
         repo.push(make_deployment_change_event(1));
         repo.push(make_deployment_change_event(2));
 
-        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
@@ -763,7 +763,7 @@ mod tests {
         repo.push(make_deployment_change_event(1));
         repo.push(make_deployment_change_event(2));
 
-        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         // Subscribe with cursor 0, so replay returns events 1 and 2
@@ -802,7 +802,7 @@ mod tests {
         }
 
         // Capacity 2 — will lag when we burst
-        let notifier = LocalRegistryChangeNotifier::new(2, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(2, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
@@ -842,7 +842,7 @@ mod tests {
         // but latest_event_id is 100 (events existed and were cleaned up).
         repo.set_latest_event_id_override(ChangeEventId(100));
 
-        let notifier = LocalRegistryChangeNotifier::new(16, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         // Subscribe with cursor 5 — events 6..100 were purged
@@ -866,7 +866,7 @@ mod tests {
     async fn test_lagged_receiver() {
         // Create notifier with capacity of 2
         let repo = Arc::new(MockRegistryChangeRepo::new());
-        let notifier = LocalRegistryChangeNotifier::new(2, repo.clone());
+        let notifier = SqliteRegistryChangeNotifier::new(2, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         let mut rx = notifier.subscribe();
