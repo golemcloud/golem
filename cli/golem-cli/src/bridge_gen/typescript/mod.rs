@@ -818,7 +818,8 @@ impl TypeScriptBridgeGenerator {
 
     /// Generates a public getter for the agent's identity
     fn generate_ts_agent_id_getter(&self, writer: &mut TsWriter) {
-        writer.write_doc("Returns the agent's identity, containing the component ID and agent name.");
+        writer
+            .write_doc("Returns the agent's identity, containing the component ID and agent name.");
         let mut get_agent_id = writer.begin_method("get agentId");
         get_agent_id.result("base.AgentId");
         get_agent_id.write_line("return this._agentId;");
