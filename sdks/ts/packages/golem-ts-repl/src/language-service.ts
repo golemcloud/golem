@@ -319,8 +319,11 @@ export class LanguageService {
   ): Array<{ name: string; signature: string }> | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
 
+    // Use Awaited<> to unwrap Promise if .get() is async
     const sourceText =
-      this.snippetImports + `const __client = ${agentTypeName}.get();\n` + 'void __client;\n';
+      this.snippetImports +
+      `const __client = null! as Awaited<ReturnType<typeof ${agentTypeName}.get>>;\n` +
+      'void __client;\n';
     const sourceFile = this.project.createSourceFile('__client_info__.ts', sourceText, {
       overwrite: true,
     });
@@ -328,13 +331,7 @@ export class LanguageService {
     const clientDecl = sourceFile.getVariableDeclaration('__client');
     if (!clientDecl) return;
 
-    let clientType = clientDecl.getType();
-
-    // If .get() is async, the inferred type is Promise<T>; unwrap to T
-    const typeArgs = clientType.getTypeArguments();
-    if (clientType.getSymbol()?.getName() === 'Promise' && typeArgs.length === 1) {
-      clientType = typeArgs[0];
-    }
+    const clientType = clientDecl.getType();
     const checker = this.project.getTypeChecker();
 
     return clientType
