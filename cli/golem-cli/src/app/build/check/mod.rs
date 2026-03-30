@@ -24,6 +24,7 @@ use crate::app::context::{BuildContext, validated_to_anyhow};
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::GuestLanguage;
+use crate::process::which;
 use crate::sdk_overrides::sdk_overrides;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
@@ -165,7 +166,7 @@ fn check_command_version(
     command: &str,
     args: &[&str],
 ) -> anyhow::Result<()> {
-    let output = Command::new(command)
+    let output = Command::new(which(command)?)
         .current_dir(project_dir)
         .args(args)
         .output()
@@ -232,7 +233,7 @@ fn check_rust_target(
     requirement: ToolRequirement,
     target: &str,
 ) -> anyhow::Result<()> {
-    let output = Command::new("rustup")
+    let output = Command::new(which("rustup")?)
         .current_dir(project_dir)
         .args(["target", "list", "--installed"])
         .output()
