@@ -20,7 +20,6 @@ mod registry_event_subscriber;
 pub(crate) mod sharding;
 
 use self::grpc::ShardManagerServiceImpl;
-use self::sharding::worker_executor::WorkerExecutorService;
 use crate::config::{HealthCheckK8sConfig, HealthCheckMode};
 use crate::quota::{DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
