@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::model::login::{OAuth2WebflowState, OAuth2WebflowStateMetadata};
-use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::token::TokenRecord;
+use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use sqlx::types::Json;
 use uuid::Uuid;

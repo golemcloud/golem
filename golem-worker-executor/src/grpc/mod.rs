@@ -36,7 +36,6 @@ use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, Utc};
 use futures::Stream;
 use futures::StreamExt;
-use gethostname::gethostname;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::{Cursor, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
@@ -132,21 +131,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ctx: PhantomData,
         };
 
-        let host = gethostname().to_string_lossy().to_string();
-
-        info!(host, port, "Registering worker executor");
+        info!(port, "Registering worker executor");
 
         let shard_assignment = worker_executor
             .shard_manager_service()
-            .register(host, port)
+            .register(port)
             .await?;
+
+        info!(
+            "Received initial shard assignment (n_shards={}, assigned_shards={:?})",
+            shard_assignment.number_of_shards, shard_assignment.shard_ids
+        );
 
         worker_executor.shard_service().register(
             shard_assignment.number_of_shards,
             &shard_assignment.shard_ids,
         );
-
-        info!("Registered worker executor, waiting for shard assignment...");
 
         Ctx::on_shard_assignment_changed(&worker_executor)
             .await

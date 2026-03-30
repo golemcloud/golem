@@ -29,7 +29,6 @@ use std::ops::{Deref, Sub};
 /// of timestamps are different between the OS (used by Rust) and the DB timestamp type.
 ///
 /// Note that above means that SqlDateTime MUST NOT implement Eq.
-
 #[derive(Debug, Clone, PartialOrd)]
 pub struct SqlDateTime {
     utc: DateTime<Utc>,

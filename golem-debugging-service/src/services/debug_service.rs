@@ -18,7 +18,6 @@ use crate::debug_session::PlaybackOverridesInternal;
 use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
 use crate::model::params::*;
 use async_trait::async_trait;
-use gethostname::gethostname;
 use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
@@ -198,19 +197,14 @@ impl DebugServiceDefault {
                 )
             })?;
 
-        let host = gethostname().to_string_lossy().to_string();
-
         let port = self.all.config().grpc.port;
 
-        info!(
-            "Registering worker {} with host {} and port {}",
-            agent_id, host, port
-        );
+        info!("Registering worker {} with port {}", agent_id, port);
 
         let shard_assignment = self
             .all
             .shard_manager_service()
-            .register(host, port)
+            .register(port)
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
