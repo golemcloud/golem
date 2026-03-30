@@ -135,7 +135,7 @@ jobs:
       fail-fast: false
       matrix:
         agent: [claude-code, opencode, codex]
-        language: [ts]
+        language: [ts, rust]
         exclude:
           - agent: claude-code
             language: rust
