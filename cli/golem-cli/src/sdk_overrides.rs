@@ -18,7 +18,7 @@ use anyhow::{Context, anyhow, bail};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
-use toml_edit::{Array, Item, Table, value};
+use toml_edit::{Array, Item, Table, Value, value};
 use tracing::debug;
 
 const GOLEM_PATH: &str = "GOLEM_PATH";
@@ -289,8 +289,8 @@ impl SdkOverrides {
 impl RustDependency {
     pub fn as_dep_string(&self) -> String {
         match self {
-            RustDependency::Path(path) => format!(r#"path = "{}""#, path.to_string_lossy()),
-            RustDependency::Version(version) => format!(r#"version = "{}""#, version),
+            RustDependency::Path(path) => format!("path = {}", toml_string(path.to_string_lossy())),
+            RustDependency::Version(version) => format!("version = {}", toml_string(version)),
         }
     }
 
@@ -316,6 +316,10 @@ impl RustDependency {
 
         entry
     }
+}
+
+fn toml_string(value: impl Into<String>) -> String {
+    Value::from(value.into()).to_string()
 }
 
 pub fn workspace_root() -> anyhow::Result<PathBuf> {
