@@ -400,6 +400,69 @@ jobs:
       - name: Build golem-client (dependencies in features=client mode)
         run: cargo build -p golem-client
 
+  build-golem-scala:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
+
+      - name: Cache scala dependencies
+        uses: coursier/cache-action@v8
+
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install WASI SDK
+        run: |
+          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
+          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
+
+      - name: Install cargo-component
+        run: cargo binstall --force cargo-component@0.21.1
+
+      - name: Install wasm-rquickjs
+        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+
+      - name: Build agent_guest.wasm
+        working-directory: sdks/scala
+        run: ./scripts/generate-agent-guest-wasm.sh
+
+      - name: Verify agent_guest.wasm is committed
+        working-directory: sdks/scala
+        run: |
+          if ! git diff --exit-code sbt/src/main/resources/golem/wasm/agent_guest.wasm mill/resources/golem/wasm/agent_guest.wasm wit/dts/; then
+            echo "❌ The agent_guest.wasm or wit/dts/ files differ from the committed version."
+            echo "Please run './scripts/generate-agent-guest-wasm.sh' from sdks/scala/ and commit the updated files."
+            exit 1
+          fi
+
+      - name: Run Golem tests (Scala 3.8.2)
+        working-directory: sdks/scala
+        run: sbt "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; testAgents/fastLinkJS"
+
+      - name: Run Golem tests (Scala 2.13.18)
+        working-directory: sdks/scala
+        run: sbt "++2.13.18; modelJVM/test; modelJS/test; core/test; macros/test; testAgents/fastLinkJS"
+
+      - name: Test codegen (Scala 3.3.7)
+        working-directory: sdks/scala
+        run: sbt "++3.3.7; codegen/test"
+
+      - name: Compile sbt plugin (Scala 2.12)
+        working-directory: sdks/scala
+        run: sbt "++2.12.21!; sbtPlugin/compile"
+
   build-golem-rust:
     runs-on: blacksmith
     steps:
