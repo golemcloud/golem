@@ -68,6 +68,16 @@ pub struct LaunchArgs {
     pub data_dir: PathBuf,
 }
 
+impl LaunchArgs {
+    fn host_for_service_connect(&self) -> String {
+        match self.router_addr.as_str() {
+            "0.0.0.0" => "127.0.0.1".to_string(),
+            "::" => "::1".to_string(),
+            host => host.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StartupPorts {
@@ -213,7 +223,7 @@ fn registry_service_config(
         cors_origin_regex: ".*".to_string(),
         component_compilation: golem_registry_service::config::ComponentCompilationConfig::Enabled(
             Box::new(ComponentCompilationEnabledConfig {
-                host: args.router_addr.clone(),
+                host: args.host_for_service_connect(),
                 port: component_compilation_service.grpc_port,
                 ..Default::default()
             }),
@@ -294,7 +304,7 @@ fn shard_manager_config(
             ..Default::default()
         },
         registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
-            host: "localhost".to_string(),
+            host: args.host_for_service_connect(),
             port: registry_service_run_details.grpc_port,
             ..Default::default()
         },
@@ -347,13 +357,13 @@ fn worker_executor_config(
         ),
         shard_manager_service: ShardManagerServiceConfig::Grpc(Box::new(
             ShardManagerServiceGrpcConfig {
-                host: args.router_addr.clone(),
+                host: args.host_for_service_connect(),
                 port: shard_manager_run_details.grpc_port,
                 ..ShardManagerServiceGrpcConfig::default()
             },
         )),
         registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
-            host: args.router_addr.clone(),
+            host: args.host_for_service_connect(),
             port: registry_service_run_details.grpc_port,
             ..Default::default()
         },
@@ -367,7 +377,7 @@ fn worker_executor_config(
             },
         ),
         public_worker_api: WorkerServiceGrpcConfig {
-            host: args.router_addr.clone(),
+            host: args.host_for_service_connect(),
             port: worker_service_run_details.grpc_port,
             client_config: GrpcClientConfig::default(),
         },
@@ -415,12 +425,12 @@ fn worker_service_config(
             },
         ),
         routing_table: RoutingTableConfig {
-            host: args.router_addr.clone(),
+            host: args.host_for_service_connect(),
             port: shard_manager_run_details.grpc_port,
             ..RoutingTableConfig::default()
         },
         registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
-            host: args.router_addr.clone(),
+            host: args.host_for_service_connect(),
             port: registry_service_run_details.grpc_port,
             ..Default::default()
         },
