@@ -32,6 +32,7 @@ use crate::model::oplog::types::{
     SerializableStreamError,
 };
 use crate::model::worker::RevertWorkerTarget;
+use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::{AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId};
 use crate::oplog_payload;
 use crate::serialization::serialize;
@@ -198,6 +199,14 @@ oplog_payload! {
         WebsocketClose {
             code: Option<u16>,
             reason: Option<String>,
+        },
+        GolemRetryPolicyByName {
+            name: String
+        },
+        GolemRetryResolvePolicy {
+            verb: String,
+            noun_uri: String,
+            properties: Vec<(String, PredicateValue)>
         },
     }
 }
@@ -375,6 +384,15 @@ oplog_payload! {
         },
         StreamWriteZeroes {
             result: Result<u64, SerializableStreamError>
+        },
+        GolemRetryPolicies {
+            policies: Vec<NamedRetryPolicy>
+        },
+        GolemRetryNamedPolicy {
+            policy: Option<NamedRetryPolicy>
+        },
+        GolemRetryResolvedPolicy {
+            policy: Option<RetryPolicy>
         }
     }
 }
@@ -494,7 +512,10 @@ pub mod host_functions {
         (WebsocketClientSend => "golem:websocket/client", "send", WebsocketSend, WebsocketSendResponse),
         (WebsocketClientReceive => "golem:websocket/client", "receive", WebsocketReceive, WebsocketReceiveResponse),
         (WebsocketClientReceiveWithTimeout => "golem:websocket/client", "receive-with-timeout", WebsocketReceiveWithTimeout, WebsocketReceiveWithTimeoutResponse),
-        (WebsocketClientClose => "golem:websocket/client", "close", WebsocketClose, WebsocketCloseResponse)
+        (WebsocketClientClose => "golem:websocket/client", "close", WebsocketClose, WebsocketCloseResponse),
+        (GolemApiRetryGetRetryPolicies => "golem::api::retry", "get_retry_policies", NoInput, GolemRetryPolicies),
+        (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
+        (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy)
     }
 }
 

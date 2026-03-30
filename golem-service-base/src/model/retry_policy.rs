@@ -39,3 +39,18 @@ impl From<StoredRetryPolicy> for golem_common::model::retry_policy::RetryPolicyD
         }
     }
 }
+
+impl TryFrom<StoredRetryPolicy> for golem_common::model::retry_policy::NamedRetryPolicy {
+    type Error = String;
+
+    fn try_from(value: StoredRetryPolicy) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name,
+            priority: value.priority,
+            predicate: serde_json::from_str(&value.predicate_json)
+                .map_err(|e| format!("Invalid predicate JSON for retry policy '{}': {e}", value.id))?,
+            policy: serde_json::from_str(&value.policy_json)
+                .map_err(|e| format!("Invalid policy JSON for retry policy '{}': {e}", value.id))?,
+        })
+    }
+}

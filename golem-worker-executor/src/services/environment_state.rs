@@ -17,6 +17,7 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
@@ -40,6 +41,11 @@ pub trait EnvironmentStateService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError>;
+
+    async fn get_retry_policies(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError>;
 
     async fn invalidate_environment(&self, _environment_id: EnvironmentId) {}
     async fn invalidate_all(&self) {}
@@ -115,6 +121,14 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
     ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
         let environment_state = self.get_environment_state(environment_id).await?;
         Ok(environment_state.agent_secrets.clone())
+    }
+
+    async fn get_retry_policies(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError> {
+        let environment_state = self.get_environment_state(environment_id).await?;
+        Ok(environment_state.retry_policies.clone())
     }
 
     async fn invalidate_environment(&self, environment_id: EnvironmentId) {

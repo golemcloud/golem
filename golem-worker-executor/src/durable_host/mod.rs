@@ -321,6 +321,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             HashMap::new()
         };
 
+        let environment_retry_policies = environment_state_service
+            .get_retry_policies(owned_agent_id.environment_id)
+            .await
+            .unwrap_or_else(|e| {
+                warn!("Failed to load environment retry policies: {e}");
+                vec![]
+            });
+
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
@@ -382,6 +390,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 config_vars,
                 worker_config.initial_agent_config,
                 agent_config,
+                environment_retry_policies,
                 shard_service,
                 pending_update,
                 original_phantom_id,
@@ -3509,6 +3518,10 @@ struct PrivateDurableWorkerState {
     /// invalidated whenever `agent_config` is reassigned.
     cached_named_retry_policies: Option<Vec<NamedRetryPolicy>>,
 
+    /// Environment-level retry policies loaded at bootstrap. These are merged with agent_config
+    /// policies and runtime overlay in `named_retry_policies()`.
+    environment_retry_policies: Vec<NamedRetryPolicy>,
+
     /// Runtime overlay of named retry policy mutations applied via oplog entries.
     /// `Some(policy)` = set/overwrite, `None` = tombstone (removed).
     /// Applied on top of base policies from agent_config during `named_retry_policies()`.
@@ -3590,6 +3603,7 @@ impl PrivateDurableWorkerState {
         config_vars: BTreeMap<String, String>,
         initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
+        environment_retry_policies: Vec<NamedRetryPolicy>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -3668,6 +3682,7 @@ impl PrivateDurableWorkerState {
             initial_agent_config,
             agent_config,
             cached_named_retry_policies: None,
+            environment_retry_policies,
             runtime_retry_policy_mutations: std::collections::BTreeMap::new(),
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
@@ -3685,12 +3700,16 @@ impl PrivateDurableWorkerState {
     /// caching the result. Cache is invalidated when overlay or agent_config changes.
     pub fn named_retry_policies(&mut self) -> &[NamedRetryPolicy] {
         if self.cached_named_retry_policies.is_none() {
-            let raw = collect_named_retry_policies(&self.agent_config);
             let mut deduped = std::collections::BTreeMap::new();
-            for policy in raw {
+            // Lowest precedence: agent config policies
+            for policy in collect_named_retry_policies(&self.agent_config) {
                 deduped.insert(policy.name.clone(), policy);
             }
-            // Apply runtime overlay: set/overwrite or tombstone
+            // Middle precedence: environment-level policies
+            for policy in &self.environment_retry_policies {
+                deduped.insert(policy.name.clone(), policy.clone());
+            }
+            // Highest precedence: runtime overlay (set/overwrite or tombstone)
             for (name, mutation) in &self.runtime_retry_policy_mutations {
                 match mutation {
                     Some(policy) => {

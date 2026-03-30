@@ -373,6 +373,7 @@ impl Services {
         let environment_state_service = Arc::new(EnvironmentStateService::new(
             deployment_service.clone(),
             agent_secret_service.clone(),
+            retry_policy_service.clone(),
         ));
 
         Ok(Self {
