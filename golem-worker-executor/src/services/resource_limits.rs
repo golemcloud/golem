@@ -392,6 +392,23 @@ impl ResourceLimitsGrpc {
                     let rpc_count = entry.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
 
                     if fuel_delta != 0 || http_count > 0 || rpc_count > 0 {
+                        if http_count > 0 {
+                            entry
+                                .syncing_http_calls
+                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                                    Some(c.saturating_add(http_count))
+                                })
+                                .ok();
+                        }
+                        if rpc_count > 0 {
+                            entry
+                                .syncing_rpc_calls
+                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                                    Some(c.saturating_add(rpc_count))
+                                })
+                                .ok();
+                        }
+
                         entry
                             .in_flight_delta
                             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
@@ -972,6 +989,72 @@ mod tests {
         assert_eq!(entry.unsynced_http_calls.load(Ordering::Acquire), 3);
         // remaining = 10 - 3 - 0 = 7
         assert_eq!(entry.remaining_http_calls(), 7);
+    }
+
+    #[test]
+    fn moving_unsynced_to_syncing_preserves_remaining_http_calls() {
+        // Start with 10 available and 3 unsynced local calls.
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            10,
+            u64::MAX,
+        );
+        entry.unsynced_http_calls.store(3, Ordering::Release);
+        assert_eq!(entry.remaining_http_calls(), 7);
+
+        // Simulate send_batch's transfer: unsynced -> syncing.
+        let moved = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
+        entry
+            .syncing_http_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                Some(c.saturating_add(moved))
+            })
+            .ok();
+
+        // Remaining must stay unchanged while the batch is in flight.
+        assert_eq!(entry.remaining_http_calls(), 7);
+    }
+
+    #[test]
+    fn clearing_syncing_does_not_clear_new_unsynced_calls() {
+        let entry = AtomicResourceEntry::new_with_all_limits(
+            1000,
+            512,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            10,
+            u64::MAX,
+        );
+
+        // One call is included in the in-flight batch.
+        entry.unsynced_http_calls.store(1, Ordering::Release);
+        let moved = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
+        entry
+            .syncing_http_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+                Some(c.saturating_add(moved))
+            })
+            .ok();
+
+        // While request is in-flight, two new local calls are recorded.
+        entry.unsynced_http_calls.fetch_add(2, Ordering::AcqRel);
+
+        // Simulate successful response handling: clear syncing and refresh available.
+        entry.syncing_http_calls.store(0, Ordering::Release);
+        entry
+            .available_http_calls_from_server
+            .store(100, Ordering::Release);
+
+        // New unsynced calls made during in-flight period must be preserved.
+        assert_eq!(entry.unsynced_http_calls.load(Ordering::Acquire), 2);
+        assert_eq!(entry.remaining_http_calls(), 98);
     }
 
     #[test]
