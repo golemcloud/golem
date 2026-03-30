@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use self::api::agent_secret::AgentSecretSubcommand;
+use self::api::retry_policy::RetryPolicySubcommand;
 use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
@@ -762,6 +763,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: AgentSecretSubcommand,
     },
+    /// Manage Retry Policies
+    RetryPolicy {
+        #[clap(subcommand)]
+        subcommand: RetryPolicySubcommand,
+    },
     /// Generate shell completion
     Completion {
         /// Selects shell
@@ -1319,6 +1325,69 @@ pub mod api {
 
             /// List Agent Secrets
             List,
+        }
+    }
+
+    pub mod retry_policy {
+        use clap::Subcommand;
+        use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+
+        #[derive(Debug, Subcommand)]
+        pub enum RetryPolicySubcommand {
+            /// Create a retry policy in the environment
+            Create {
+                /// Name of the retry policy
+                #[arg(long)]
+                name: String,
+                /// Priority (higher = checked first)
+                #[arg(long)]
+                priority: u32,
+                /// Predicate as JSON string
+                #[arg(long)]
+                predicate_json: String,
+                /// Policy as JSON string
+                #[arg(long)]
+                policy_json: String,
+            },
+
+            /// List retry policies in the environment
+            List,
+
+            /// Get a retry policy by ID
+            Get {
+                /// ID of the retry policy
+                #[arg(long)]
+                id: RetryPolicyId,
+            },
+
+            /// Update a retry policy
+            Update {
+                /// ID of the retry policy to update
+                #[arg(long)]
+                id: RetryPolicyId,
+                /// Current revision of the retry policy
+                #[arg(long)]
+                current_revision: RetryPolicyRevision,
+                /// New priority (optional)
+                #[arg(long)]
+                priority: Option<u32>,
+                /// New predicate as JSON string (optional)
+                #[arg(long)]
+                predicate_json: Option<String>,
+                /// New policy as JSON string (optional)
+                #[arg(long)]
+                policy_json: Option<String>,
+            },
+
+            /// Delete a retry policy
+            Delete {
+                /// ID of the retry policy to delete
+                #[arg(long)]
+                id: RetryPolicyId,
+                /// Current revision of the retry policy
+                #[arg(long)]
+                current_revision: RetryPolicyRevision,
+            },
         }
     }
 

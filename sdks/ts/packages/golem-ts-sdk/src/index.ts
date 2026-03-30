@@ -50,6 +50,7 @@ export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
 export * from './host/guard';
+export * from './host/retry';
 export * from './host/result';
 export * from './host/transaction';
 export * from './host/checkpoint';

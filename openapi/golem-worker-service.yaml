@@ -30,6 +30,7 @@ tags:
 - name: RegistryService
 - name: Reports
 - name: Resources
+- name: RetryPolicies
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
@@ -3484,6 +3485,29 @@ components:
             $ref: '#/components/schemas/PublicAttribute'
         inherited:
           type: boolean
+    PublicNamedRetryPolicy:
+      type: object
+      title: PublicNamedRetryPolicy
+      description: API-facing representation of a named retry policy for public oplog entries.
+      required:
+      - name
+      - priority
+      - predicateJson
+      - policyJson
+      properties:
+        name:
+          type: string
+          description: Human-readable identifier for this policy.
+        priority:
+          type: integer
+          format: uint32
+          description: Selection priority — higher values are evaluated first.
+        predicateJson:
+          type: string
+          description: The predicate serialized as a JSON string.
+        policyJson:
+          type: string
+          description: The retry policy serialized as a JSON string.
     PublicOplogEntry:
       type: object
       oneOf:
@@ -3497,7 +3521,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#JumpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ChangeRetryPolicyParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
@@ -3527,6 +3550,8 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SetRetryPolicyParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#RemoveRetryPolicyParams'
       discriminator:
         propertyName: type
         mapping:
@@ -3540,7 +3565,6 @@ components:
           Jump: '#/components/schemas/PublicOplogEntry_r#JumpParams'
           Interrupted: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
           Exited: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
-          ChangeRetryPolicy: '#/components/schemas/PublicOplogEntry_r#ChangeRetryPolicyParams'
           BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
           EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
           BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
@@ -3570,6 +3594,8 @@ components:
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
           Snapshot: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
           OplogProcessorCheckpoint: '#/components/schemas/PublicOplogEntry_r#OplogProcessorCheckpointParams'
+          SetRetryPolicy: '#/components/schemas/PublicOplogEntry_r#SetRetryPolicyParams'
+          RemoveRetryPolicy: '#/components/schemas/PublicOplogEntry_r#RemoveRetryPolicyParams'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -3678,18 +3704,6 @@ components:
             - ChangePersistenceLevel
             example: ChangePersistenceLevel
       - $ref: '#/components/schemas/r#ChangePersistenceLevelParams'
-    PublicOplogEntry_r#ChangeRetryPolicyParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ChangeRetryPolicy
-            example: ChangeRetryPolicy
-      - $ref: '#/components/schemas/r#ChangeRetryPolicyParams'
     PublicOplogEntry_r#CommittedRemoteTransactionParams:
       allOf:
       - type: object
@@ -3966,6 +3980,18 @@ components:
             - PreRollbackRemoteTransaction
             example: PreRollbackRemoteTransaction
       - $ref: '#/components/schemas/r#PreRollbackRemoteTransactionParams'
+    PublicOplogEntry_r#RemoveRetryPolicyParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - RemoveRetryPolicy
+            example: RemoveRetryPolicy
+      - $ref: '#/components/schemas/r#RemoveRetryPolicyParams'
     PublicOplogEntry_r#RestartParams:
       allOf:
       - type: object
@@ -4002,6 +4028,18 @@ components:
             - RolledBackRemoteTransaction
             example: RolledBackRemoteTransaction
       - $ref: '#/components/schemas/r#RolledBackRemoteTransactionParams'
+    PublicOplogEntry_r#SetRetryPolicyParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SetRetryPolicy
+            example: SetRetryPolicy
+      - $ref: '#/components/schemas/r#SetRetryPolicyParams'
     PublicOplogEntry_r#SetSpanAttributeParams:
       allOf:
       - type: object
@@ -4062,30 +4100,197 @@ components:
             - Suspend
             example: Suspend
       - $ref: '#/components/schemas/r#SuspendParams'
-    PublicRetryConfig:
+    PublicRetryPolicyState:
       type: object
-      title: PublicRetryConfig
+      description: |-
+        API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
+        exposed through the public REST/OpenAPI interface.
+      oneOf:
+      - $ref: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStateCounter'
+      - $ref: '#/components/schemas/PublicRetryPolicyState_Empty'
+      - $ref: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStateWrapper'
+      - $ref: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStateCountBox'
+      - $ref: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStateAndThen'
+      - $ref: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStatePair'
+      discriminator:
+        propertyName: type
+        mapping:
+          Counter: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStateCounter'
+          Terminal: '#/components/schemas/PublicRetryPolicyState_Empty'
+          Wrapper: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStateWrapper'
+          CountBox: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStateCountBox'
+          AndThen: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStateAndThen'
+          Pair: '#/components/schemas/PublicRetryPolicyState_PublicRetryPolicyStatePair'
+    PublicRetryPolicyStateAndThen:
+      type: object
+      title: PublicRetryPolicyStateAndThen
+      description: API-facing and-then state tracking left/right sub-states and which side is active.
       required:
-      - maxAttempts
-      - minDelay
-      - maxDelay
-      - multiplier
+      - left
+      - right
+      - on_right
       properties:
-        maxAttempts:
+        left:
+          description: State of the first (left) policy.
+          allOf:
+          - $ref: '#/components/schemas/PublicRetryPolicyState'
+          - description: State of the first (left) policy.
+        right:
+          description: State of the second (right) policy.
+          allOf:
+          - $ref: '#/components/schemas/PublicRetryPolicyState'
+          - description: State of the second (right) policy.
+        on_right:
+          type: boolean
+          description: Whether execution has moved to the right policy.
+    PublicRetryPolicyStateCountBox:
+      type: object
+      title: PublicRetryPolicyStateCountBox
+      description: API-facing count-box state that tracks both an attempt count and an inner state.
+      required:
+      - attempts
+      - inner
+      properties:
+        attempts:
           type: integer
           format: uint32
-        minDelay:
-          type: string
-          format: duration
-        maxDelay:
-          type: string
-          format: duration
-        multiplier:
-          type: number
-          format: double
-        maxJitterFactor:
-          type: number
-          format: double
+          description: Number of attempts consumed so far.
+        inner:
+          description: The inner retry policy state.
+          allOf:
+          - $ref: '#/components/schemas/PublicRetryPolicyState'
+          - description: The inner retry policy state.
+    PublicRetryPolicyStateCounter:
+      type: object
+      title: PublicRetryPolicyStateCounter
+      description: API-facing counter state for a retry policy.
+      required:
+      - count
+      properties:
+        count:
+          type: integer
+          format: uint32
+          description: Number of retry attempts recorded so far.
+    PublicRetryPolicyStatePair:
+      type: object
+      title: PublicRetryPolicyStatePair
+      description: API-facing pair state tracking two independent sub-states (for union/intersect).
+      required:
+      - first
+      - second
+      properties:
+        first:
+          description: State of the first sub-policy.
+          allOf:
+          - $ref: '#/components/schemas/PublicRetryPolicyState'
+          - description: State of the first sub-policy.
+        second:
+          description: State of the second sub-policy.
+          allOf:
+          - $ref: '#/components/schemas/PublicRetryPolicyState'
+          - description: State of the second sub-policy.
+    PublicRetryPolicyStateWrapper:
+      type: object
+      title: PublicRetryPolicyStateWrapper
+      description: API-facing wrapper state that delegates to an inner retry policy state.
+      required:
+      - inner
+      properties:
+        inner:
+          description: The wrapped inner retry policy state.
+          allOf:
+          - $ref: '#/components/schemas/PublicRetryPolicyState'
+          - description: The wrapped inner retry policy state.
+    PublicRetryPolicyState_Empty:
+      description: |-
+        API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
+        exposed through the public REST/OpenAPI interface.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Terminal
+            example: Terminal
+      - $ref: '#/components/schemas/Empty'
+    PublicRetryPolicyState_PublicRetryPolicyStateAndThen:
+      description: |-
+        API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
+        exposed through the public REST/OpenAPI interface.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AndThen
+            example: AndThen
+      - $ref: '#/components/schemas/PublicRetryPolicyStateAndThen'
+    PublicRetryPolicyState_PublicRetryPolicyStateCountBox:
+      description: |-
+        API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
+        exposed through the public REST/OpenAPI interface.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CountBox
+            example: CountBox
+      - $ref: '#/components/schemas/PublicRetryPolicyStateCountBox'
+    PublicRetryPolicyState_PublicRetryPolicyStateCounter:
+      description: |-
+        API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
+        exposed through the public REST/OpenAPI interface.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Counter
+            example: Counter
+      - $ref: '#/components/schemas/PublicRetryPolicyStateCounter'
+    PublicRetryPolicyState_PublicRetryPolicyStatePair:
+      description: |-
+        API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
+        exposed through the public REST/OpenAPI interface.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Pair
+            example: Pair
+      - $ref: '#/components/schemas/PublicRetryPolicyStatePair'
+    PublicRetryPolicyState_PublicRetryPolicyStateWrapper:
+      description: |-
+        API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
+        exposed through the public REST/OpenAPI interface.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Wrapper
+            example: Wrapper
+      - $ref: '#/components/schemas/PublicRetryPolicyStateWrapper'
     PublicSnapshotData:
       type: object
       oneOf:
@@ -4968,18 +5173,6 @@ components:
           format: date-time
         persistenceLevel:
           $ref: '#/components/schemas/PersistenceLevel'
-    r#ChangeRetryPolicyParams:
-      type: object
-      title: r#ChangeRetryPolicyParams
-      required:
-      - timestamp
-      - newPolicy
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        newPolicy:
-          $ref: '#/components/schemas/PublicRetryConfig'
     r#CommittedRemoteTransactionParams:
       type: object
       title: r#CommittedRemoteTransactionParams
@@ -5145,6 +5338,8 @@ components:
           format: uint64
         insideAtomicRegion:
           type: boolean
+        retryPolicyState:
+          $ref: '#/components/schemas/PublicRetryPolicyState'
     r#ExitedParams:
       type: object
       title: r#ExitedParams
@@ -5357,6 +5552,18 @@ components:
         beginIndex:
           type: integer
           format: uint64
+    r#RemoveRetryPolicyParams:
+      type: object
+      title: r#RemoveRetryPolicyParams
+      required:
+      - timestamp
+      - name
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        name:
+          type: string
     r#RestartParams:
       type: object
       title: r#RestartParams
@@ -5391,6 +5598,18 @@ components:
         beginIndex:
           type: integer
           format: uint64
+    r#SetRetryPolicyParams:
+      type: object
+      title: r#SetRetryPolicyParams
+      required:
+      - timestamp
+      - policy
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        policy:
+          $ref: '#/components/schemas/PublicNamedRetryPolicy'
     r#SetSpanAttributeParams:
       type: object
       title: r#SetSpanAttributeParams

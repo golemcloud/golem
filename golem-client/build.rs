@@ -100,6 +100,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AgentSecretUpdate",
                 "golem_common::model::agent_secret::AgentSecretUpdate",
             ),
+            // retry policy
+            (
+                "RetryPolicyDto",
+                "golem_common::model::retry_policy::RetryPolicyDto",
+            ),
+            (
+                "RetryPolicyCreation",
+                "golem_common::model::retry_policy::RetryPolicyCreation",
+            ),
+            (
+                "RetryPolicyUpdate",
+                "golem_common::model::retry_policy::RetryPolicyUpdate",
+            ),
             // auth
             ("Token", "golem_common::model::auth::Token"),
             ("TokenCreation", "golem_common::model::auth::TokenCreation"),
