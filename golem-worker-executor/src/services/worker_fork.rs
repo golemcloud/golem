@@ -32,9 +32,9 @@ use crate::services::{
     HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService,
     HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
     HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
-    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, HasWebSocketConnectionPool,
-    active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
-    scheduler, shard_manager, worker, worker_activator, worker_enumeration,
+    HasWebSocketConnectionPool, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy,
+    HasWorkerService, active_workers, agent_types, blob_store, component, golem_config, key_value,
+    oplog, promise, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
 };
 use crate::services::{HasOplog, HasRdbmsService, HasWorkerForkService, rdbms};
 use crate::worker::Worker;

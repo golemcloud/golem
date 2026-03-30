@@ -22,7 +22,7 @@ use futures::{SinkExt, StreamExt};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite;
-use tokio_tungstenite::{connect_async, MaybeTlsStream};
+use tokio_tungstenite::{MaybeTlsStream, connect_async};
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
@@ -176,7 +176,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     return Ok(Err(Error::Closed(Some(CloseInfo {
                         code: 1000,
                         reason: "Connection closed".to_string(),
-                    }))))
+                    }))));
                 }
                 Err(_) => return Ok(Ok(None)), // overall timeout expired
             }
@@ -281,7 +281,7 @@ async fn read_next_user_or_close(stream: &mut SplitStream<WsStream>) -> Result<M
                 return Err(Error::Closed(Some(CloseInfo {
                     code: 1000,
                     reason: "Connection closed".to_string(),
-                })))
+                })));
             }
         }
     }
