@@ -60,7 +60,7 @@ use golem_registry_service::repo::registry_change::{
 };
 use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
 use golem_registry_service::services::registry_change_notifier::{
-    SqliteRegistryChangeNotifier, RegistryChangeNotifier,
+    RegistryChangeNotifier, SqliteRegistryChangeNotifier,
 };
 use golem_service_base::repo::blob::Blob;
 use heck::ToKebabCase;
