@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::fs;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -70,16 +70,15 @@ fn plug(
         let mut cache = Default::default();
         let mut checker = SubtypeChecker::new(&mut cache);
         for (name, plug_ty) in &graph.types()[graph[*plug_package_id].ty()].exports {
-            if let Some(socket_ty) = graph.types()[graph[socket].ty()].imports.get(name) {
-                if checker
+            if let Some(socket_ty) = graph.types()[graph[socket].ty()].imports.get(name)
+                && checker
                     .is_subtype(*plug_ty, graph.types(), *socket_ty, graph.types())
                     .is_ok()
-                {
-                    plug_exports_to_plug
-                        .entry(name.clone())
-                        .or_default()
-                        .push((plug, *plug_package_id));
-                }
+            {
+                plug_exports_to_plug
+                    .entry(name.clone())
+                    .or_default()
+                    .push((plug, *plug_package_id));
             }
         }
     }

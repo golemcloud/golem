@@ -22,9 +22,9 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::compiled_component;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
-use golem_service_base::storage::blob::BlobStorage;
 use grpc::CompileGrpcService;
 use prometheus::Registry;
 use service::ComponentCompilationService;
@@ -35,7 +35,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 use wasmtime::WasmBacktraceDetails;
 
 pub mod config;
@@ -58,22 +58,18 @@ pub async fn run(
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<RunDetails> {
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
-        BlobStorageConfig::S3(config) => {
-            Arc::new(S3BlobStorage::new(config.clone()).await)
-        }
-        BlobStorageConfig::LocalFileSystem(config) => {
-            Arc::new(
-                golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
-                    .await
-                    .expect("Failed to create file system blob storage"),
-            )
-        }
+        BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
+        BlobStorageConfig::LocalFileSystem(config) => Arc::new(
+            golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                .await
+                .expect("Failed to create file system blob storage"),
+        ),
         BlobStorageConfig::InMemory(_) => {
             Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
-        BlobStorageConfig::KVStoreSqlite(_) => {
-            Err(anyhow!("KVStoreSqlite configuration option is not supported - use an explicit Sqlite configuration instead"))?
-        }
+        BlobStorageConfig::KVStoreSqlite(_) => Err(anyhow!(
+            "KVStoreSqlite configuration option is not supported - use an explicit Sqlite configuration instead"
+        ))?,
         BlobStorageConfig::Sqlite(sqlite) => {
             let pool = SqlitePool::configured(sqlite)
                 .await

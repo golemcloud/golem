@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::router::start_router;
 use crate::StartedComponents;
+use crate::router::start_router;
 use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
+use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
-use golem_common::model::Empty;
+use golem_registry_service::RegistryService;
 use golem_registry_service::config::{
     BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount,
     PrecreatedPlan, RegistryServiceConfig,
 };
-use golem_registry_service::RegistryService;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
@@ -41,10 +41,10 @@ use golem_worker_executor::services::golem_config::{
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
     ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
 };
+use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
     RouteResolverConfig, SqliteSessionStoreConfig, WorkerServiceConfig,
 };
-use golem_worker_service::WorkerService;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use serde::Serialize;
@@ -53,7 +53,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
@@ -157,7 +157,8 @@ async fn start_components(
     )
     .await?;
 
-    let shard_manager = run_shard_manager(shard_manager_config(args), join_set).await?;
+    let shard_manager =
+        run_shard_manager(shard_manager_config(args, &registry_service), join_set).await?;
 
     let worker_service = run_worker_service(
         worker_service_config(args, &shard_manager, &registry_service),
@@ -271,7 +272,10 @@ fn registry_service_config(
     }
 }
 
-fn shard_manager_config(args: &LaunchArgs) -> ShardManagerConfig {
+fn shard_manager_config(
+    args: &LaunchArgs,
+    registry_service_run_details: &golem_registry_service::SingleExecutableRunDetails,
+) -> ShardManagerConfig {
     use golem_shard_manager::shard_manager_config::{
         FileSystemPersistenceConfig, HealthCheckConfig, PersistenceConfig,
     };
@@ -287,6 +291,11 @@ fn shard_manager_config(args: &LaunchArgs) -> ShardManagerConfig {
         }),
         health_check: HealthCheckConfig {
             silent: true,
+            ..Default::default()
+        },
+        registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
+            host: "localhost".to_string(),
+            port: registry_service_run_details.grpc_port,
             ..Default::default()
         },
         ..Default::default()

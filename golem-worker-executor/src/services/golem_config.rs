@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use anyhow::Context;
-use figment::providers::{Format, Toml};
 use figment::Figment;
+use figment::providers::{Format, Toml};
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::base64::Base64;
 use golem_common::model::RetryConfig;
+use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
-use golem_common::{grpc_uri, SafeDisplay};
+use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
@@ -33,6 +33,7 @@ use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tracing::warn;
 
 /// The shared global Golem executor configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -453,15 +454,15 @@ impl GolemConfig {
     }
 
     pub fn add_port_to_tracing_file_name_if_enabled(&mut self) {
-        if self.tracing_file_name_with_port {
-            if let Some(file_name) = &self.tracing.file_name {
-                let elems: Vec<&str> = file_name.split('.').collect();
-                self.tracing.file_name = {
-                    if elems.len() == 2 {
-                        Some(format!("{}.{}.{}", elems[0], self.grpc.port, elems[1]))
-                    } else {
-                        Some(format!("{}.{}", file_name, self.grpc.port))
-                    }
+        if self.tracing_file_name_with_port
+            && let Some(file_name) = &self.tracing.file_name
+        {
+            let elems: Vec<&str> = file_name.split('.').collect();
+            self.tracing.file_name = {
+                if elems.len() == 2 {
+                    Some(format!("{}.{}.{}", elems[0], self.grpc.port, elems[1]))
+                } else {
+                    Some(format!("{}.{}", file_name, self.grpc.port))
                 }
             }
         }
@@ -521,6 +522,7 @@ pub struct OplogConfig {
     #[serde(with = "humantime_serde")]
     pub archive_interval: Duration,
     pub default_snapshotting: SnapshotPolicy,
+    pub oplog_processor_snapshotting: SnapshotPolicy,
     /// Maximum number of oplog commits before the ForwardingOplog flushes
     /// buffered entries to oplog processor plugins.
     pub plugin_max_commit_count: usize,
@@ -561,6 +563,12 @@ impl SafeDisplay for OplogConfig {
             &mut result,
             "{}",
             self.default_snapshotting.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "oplog processor snapshotting:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.oplog_processor_snapshotting.to_safe_string_indented()
         );
         let _ = writeln!(
             &mut result,
@@ -1149,7 +1157,7 @@ impl SafeDisplay for AgentWebhooksServiceConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", content = "config")]
 #[derive(Default)]
 pub enum SnapshotPolicy {
@@ -1162,6 +1170,59 @@ pub enum SnapshotPolicy {
     EveryNInvocation {
         count: u16,
     },
+}
+
+impl SnapshotPolicy {
+    /// Normalizes the policy by disabling zero-valued configurations.
+    pub fn normalize(self) -> Self {
+        match &self {
+            SnapshotPolicy::Disabled => self,
+            SnapshotPolicy::Periodic { period } => {
+                if period.is_zero() {
+                    warn!("Snapshot periodic duration is zero, disabling");
+                    SnapshotPolicy::Disabled
+                } else {
+                    self
+                }
+            }
+            SnapshotPolicy::EveryNInvocation { count } => {
+                if *count == 0 {
+                    warn!("Snapshot every-n-invocation count is zero, disabling");
+                    SnapshotPolicy::Disabled
+                } else {
+                    self
+                }
+            }
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SnapshotPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", content = "config")]
+        enum Raw {
+            Disabled,
+            Periodic {
+                #[serde(with = "humantime_serde")]
+                period: Duration,
+            },
+            EveryNInvocation {
+                count: u16,
+            },
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let policy = match raw {
+            Raw::Disabled => SnapshotPolicy::Disabled,
+            Raw::Periodic { period } => SnapshotPolicy::Periodic { period },
+            Raw::EveryNInvocation { count } => SnapshotPolicy::EveryNInvocation { count },
+        };
+        Ok(policy.normalize())
+    }
 }
 
 impl SafeDisplay for SnapshotPolicy {
@@ -1264,6 +1325,7 @@ impl Default for OplogConfig {
             entry_count_limit: 1024,
             archive_interval: Duration::from_secs(60 * 60 * 24), // 24 hours
             default_snapshotting: SnapshotPolicy::default(),
+            oplog_processor_snapshotting: SnapshotPolicy::EveryNInvocation { count: 10 },
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
         }

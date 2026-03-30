@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{is_unit_case, parse_wit_field_attribute, parse_wit_type_attrs, WitField};
+use crate::{WitField, is_unit_case, parse_wit_field_attribute, parse_wit_type_attrs};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Attribute, Data, DeriveInput, Fields, Type};

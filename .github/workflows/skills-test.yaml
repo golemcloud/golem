@@ -94,7 +94,7 @@ jobs:
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "lts/*"
           cache: 'npm'
           cache-dependency-path: golem-skills/tests/harness/package.json
 
@@ -145,7 +145,7 @@ jobs:
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "lts/*"
           cache: 'npm'
           cache-dependency-path: golem-skills/tests/harness/package.json
 

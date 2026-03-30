@@ -252,17 +252,17 @@ impl WitValueBuilder {
 
     pub(crate) fn finish_child(&mut self, child: NodeIndex, target_idx: NodeIndex) {
         match &mut self.nodes[target_idx as usize] {
-            WitNode::OptionValue(ref mut result_item) => match result_item {
+            WitNode::OptionValue(result_item) => match result_item {
                 Some(idx) => *idx = child,
                 None => panic!("finish_child called on None option"),
             },
-            WitNode::ResultValue(ref mut result_item) => match result_item {
+            WitNode::ResultValue(result_item) => match result_item {
                 Ok(Some(idx)) => *idx = child,
                 Ok(None) => panic!("finish_child called on Ok(None) result"),
                 Err(Some(idx)) => *idx = child,
                 Err(None) => panic!("finish_child called on Err(None) result"),
             },
-            WitNode::VariantValue((_, ref mut result_item)) => match result_item {
+            WitNode::VariantValue((_, result_item)) => match result_item {
                 Some(idx) => *idx = child,
                 None => panic!("finish_child called on variant with no inner value"),
             },
@@ -276,13 +276,13 @@ impl WitValueBuilder {
 
     pub(crate) fn finish_seq(&mut self, items: Vec<NodeIndex>, target_idx: NodeIndex) {
         match &mut self.nodes[target_idx as usize] {
-            WitNode::RecordValue(ref mut result_items) => {
+            WitNode::RecordValue(result_items) => {
                 *result_items = items;
             }
-            WitNode::TupleValue(ref mut result_items) => {
+            WitNode::TupleValue(result_items) => {
                 *result_items = items;
             }
-            WitNode::ListValue(ref mut result_items) => {
+            WitNode::ListValue(result_items) => {
                 *result_items = items;
             }
             _ => {

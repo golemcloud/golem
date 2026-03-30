@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{validated_to_anyhow, BuildContext};
+use crate::app::context::{BuildContext, validated_to_anyhow};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
+use crate::command_handler::Handlers;
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
-use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_action, log_error, log_warn_action, logln, LogColorize, LogIndent};
+use crate::error::service::AnyhowMapServiceError;
+use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
+use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::{
@@ -39,9 +40,8 @@ use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::worker::AgentUpdateMode;
-use crate::model::GuestLanguage;
 use crate::validation::ValidationBuilder;
-use anyhow::{anyhow, bail, Context as AnyhowContext};
+use anyhow::{Context as AnyhowContext, anyhow, bail};
 use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
@@ -100,9 +100,6 @@ impl ComponentCommandHandler {
                 ComponentSubcommand::RedeployAgents { component_name } => {
                     self.cmd_redeploy_workers(component_name.component_name)
                         .await
-                }
-                ComponentSubcommand::Diagnose { component_name } => {
-                    self.cmd_diagnose(component_name).await
                 }
                 ComponentSubcommand::ManifestTrace { component_name } => {
                     self.cmd_manifest_trace(component_name).await
@@ -167,7 +164,9 @@ impl ComponentCommandHandler {
                     .join(", ")
             ));
             logln("");
-            logln("Specify the requested component name or switch to an application directory with exactly one component!");
+            logln(
+                "Specify the requested component name or switch to an application directory with exactly one component!",
+            );
             logln("");
             bail!(NonSuccessfulExit);
         }
@@ -304,16 +303,6 @@ impl ComponentCommandHandler {
         Ok(components)
     }
 
-    async fn cmd_diagnose(&self, component_names: OptionalComponentNames) -> anyhow::Result<()> {
-        self.ctx
-            .app_handler()
-            .diagnose(
-                component_names.component_name,
-                &ApplicationComponentSelectMode::CurrentDir,
-            )
-            .await
-    }
-
     async fn cmd_manifest_trace(
         &self,
         _component_names: OptionalComponentNames,
@@ -334,7 +323,7 @@ impl ComponentCommandHandler {
                     component_name.as_str().log_color_highlight()
                 ),
             );
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
             self.ctx.log_handler().log_serializable(
                 &app_ctx
                     .application()
@@ -589,7 +578,9 @@ impl ComponentCommandHandler {
         };
 
         if selected_component_names.is_empty() && component_name.is_none() && !allow_no_matches {
-            log_error("No components were selected based on the current directory an no component was requested.");
+            log_error(
+                "No components were selected based on the current directory an no component was requested.",
+            );
             logln("");
             logln(
                 "Please specify a requested component name or switch to an application directory!",
@@ -872,7 +863,9 @@ impl ComponentCommandHandler {
                             component_name.0.log_color_highlight()
                         ));
                         logln("");
-                        logln("Check if the plugin is registered and granted for the application environment!");
+                        logln(
+                            "Check if the plugin is registered and granted for the application environment!",
+                        );
                         bail!(NonSuccessfulExit);
                     };
                     plugins_by_grant_id.insert(

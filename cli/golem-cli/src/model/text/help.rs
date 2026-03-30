@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agent_id_display::{render_type_for_language, SourceLanguage};
-use crate::log::{logln, LogColorize};
+use crate::agent_id_display::{SourceLanguage, render_type_for_language};
+use crate::log::{LogColorize, logln};
 use crate::model::text::fmt::{
-    format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
-    TextView,
+    FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextView, format_export,
+    log_table,
 };
 use cli_table::Table;
 use colored::Colorize;

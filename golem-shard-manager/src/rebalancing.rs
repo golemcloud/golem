@@ -81,8 +81,7 @@ impl Rebalance {
 
                 trace!(
                     "Assigning shard to originally empty pod: {} to {}",
-                    shard,
-                    target_idx
+                    shard, target_idx
                 );
                 assignments.assign(routing_table_entry.pod.clone(), shard);
                 routing_table_entry.shard_ids.insert(shard);
@@ -153,9 +152,7 @@ impl Rebalance {
                             // this is guaranteed by check (**)
                             trace!(
                                 "Moving first shard from {} to {}: {}",
-                                source_idx,
-                                target_idx,
-                                shard_id
+                                source_idx, target_idx, shard_id
                             );
                             routing_table_entries[source_idx]
                                 .shard_ids

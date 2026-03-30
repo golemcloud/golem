@@ -21,8 +21,8 @@ mod config;
 mod log;
 mod repl;
 
-pub use config::ReplConfig;
 pub use config::REPL_CONFIG_FILE_NAME;
+pub use config::ReplConfig;
 
 pub fn main() -> ExitCode {
     match Repl::run() {

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{wait_for_startup, RegistryService};
+use super::{RegistryService, wait_for_startup};
+use crate::components::ChildProcessLogger;
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::new_reqwest_client_with_tracing;
 use crate::components::rdb::Rdb;
-use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
@@ -26,8 +26,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::OnceCell;
-use tracing::info;
 use tracing::Level;
+use tracing::info;
 use uuid::uuid;
 
 pub struct SpawnedRegistryService {

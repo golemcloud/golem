@@ -28,7 +28,7 @@ use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, T
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
-use crate::services::oplog::{downcast_oplog, CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
@@ -44,9 +44,11 @@ use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
-use futures::channel::oneshot;
 use futures::FutureExt;
+use futures::channel::oneshot;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::AgentStatus;
+use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
@@ -57,8 +59,6 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
-use golem_common::model::AgentStatus;
-use golem_common::model::RetryConfig;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, AgentMetadata,
     AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
@@ -71,15 +71,15 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, span, warn, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, debug, info, span, warn};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
@@ -340,20 +340,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // if the worker is an agent, we need to ensure the initialize invocation is the first enqueued action.
         // We might have crashed between creating the oplog and writing it, so just check here for it.
-        if let Some(agent_id) = &agent_id {
-            if last_oplog_idx <= OplogIndex::from_u64(2) {
-                let init_idempotency_key =
-                    IdempotencyKey::new(format!("init-{}", worker.agent_id()));
-                worker
-                    .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
-                        idempotency_key: init_idempotency_key,
-                        input: agent_id.parameters.clone().into(),
-                        invocation_context: invocation_context_stack.clone(),
-                        principal,
-                    })
-                    .await
-                    .expect("Failed enqueuing initial agent invocations to worker");
-            }
+        if let Some(agent_id) = &agent_id
+            && last_oplog_idx <= OplogIndex::from_u64(2)
+        {
+            let init_idempotency_key = IdempotencyKey::new(format!("init-{}", worker.agent_id()));
+            worker
+                .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
+                    idempotency_key: init_idempotency_key,
+                    input: agent_id.parameters.clone().into(),
+                    invocation_context: invocation_context_stack.clone(),
+                    principal,
+                })
+                .await
+                .expect("Failed enqueuing initial agent invocations to worker");
         };
         Ok(worker)
     }
@@ -787,7 +786,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
                 let has_invocations = !self.pending_invocations().await.is_empty();
-                debug!("Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}", self.owned_agent_id);
+                debug!(
+                    "Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}",
+                    self.owned_agent_id
+                );
                 waiting_for_command && !has_invocations
             }
             WorkerInstance::WaitingForPermit(_) => {
@@ -831,7 +833,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // Should only be called from invocation loop
     pub async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
         match &mut *self.instance.lock().await {
-            WorkerInstance::Running(ref mut running) => {
+            WorkerInstance::Running(running) => {
                 if let Some(new_permits) = self.active_workers().try_acquire(delta).await {
                     running.merge_extra_permits(new_permits);
                     Ok(())
@@ -859,20 +861,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if permits_to_release == 0 {
             return;
         }
-        if let WorkerInstance::Running(ref mut running) = &mut *self.instance.lock().await {
-            if let Some(ref mut permit) = running.filesystem_storage_permit {
-                // Split off `permits_to_release` permits and drop them.
-                // Dropping an OwnedSemaphorePermit returns its permits to the
-                // semaphore automatically — no separate add_permits needed.
-                let n = permits_to_release as usize;
-                let to_drop = if permit.num_permits() >= n {
-                    permit.split(n)
-                } else {
-                    // Defensive: releasing more than we hold — drop all.
-                    permit.split(permit.num_permits())
-                };
-                drop(to_drop); // returns permits to the semaphore
-            }
+        if let WorkerInstance::Running(running) = &mut *self.instance.lock().await
+            && let Some(ref mut permit) = running.filesystem_storage_permit
+        {
+            // Split off `permits_to_release` permits and drop them.
+            // Dropping an OwnedSemaphorePermit returns its permits to the
+            // semaphore automatically — no separate add_permits needed.
+            let n = permits_to_release as usize;
+            let to_drop = if permit.num_permits() >= n {
+                permit.split(n)
+            } else {
+                // Defensive: releasing more than we hold — drop all.
+                permit.split(permit.num_permits())
+            };
+            drop(to_drop); // returns permits to the semaphore
         }
     }
 
@@ -883,7 +885,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Should only be called from the invocation loop.
     pub async fn acquire_filesystem_storage_space(&self, new_bytes: u64) -> anyhow::Result<()> {
         match &mut *self.instance.lock().await {
-            WorkerInstance::Running(ref mut running) => {
+            WorkerInstance::Running(running) => {
                 if let Some(permit) = self
                     .active_workers()
                     .try_acquire_filesystem_storage(new_bytes)
@@ -928,7 +930,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(());
         }
         match &mut *self.instance.lock().await {
-            WorkerInstance::Running(ref mut running) => {
+            WorkerInstance::Running(running) => {
                 if let Some(permit) = self
                     .active_workers()
                     .try_acquire_filesystem_storage(total_bytes)
@@ -1159,11 +1161,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .commit_oplog_and_update_state_internal(CommitLevel::Always)
             .await;
 
-        if changed {
-            if let WorkerInstance::Running(running) = &**instance_guard {
-                running.sender.send(WorkerCommand::Unblock).unwrap();
-            };
-        }
+        if changed && let WorkerInstance::Running(running) = &**instance_guard {
+            running.sender.send(WorkerCommand::Unblock).unwrap();
+        };
 
         result
     }
@@ -1615,10 +1615,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .iter()
             .filter_map(|inv| inv.invocation.idempotency_key().cloned())
             .collect();
-        if let Some(current_key) = &status.current_idempotency_key {
-            if !keys_to_fail.contains(current_key) {
-                keys_to_fail.push(current_key.clone());
-            }
+        if let Some(current_key) = &status.current_idempotency_key
+            && !keys_to_fail.contains(current_key)
+        {
+            keys_to_fail.push(current_key.clone());
         }
 
         let mut invocation_results = self.invocation_results.write().await;
@@ -2253,14 +2253,6 @@ impl Drop for WaitingWorker {
     }
 }
 
-impl Drop for RunningWorker {
-    fn drop(&mut self) {
-        if let Some(task) = self.snapshot_task.take() {
-            task.abort();
-        }
-    }
-}
-
 #[derive(Debug)]
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
@@ -2274,7 +2266,6 @@ struct RunningWorker {
     filesystem_storage_permit: Option<OwnedSemaphorePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
-    snapshot_task: Option<JoinHandle<()>>,
 }
 
 impl RunningWorker {
@@ -2306,10 +2297,6 @@ impl RunningWorker {
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
-        let snapshot_policy = parent.snapshot_policy().clone();
-        let snapshot_queue = queue.clone();
-        let snapshot_sender = sender.clone();
-
         let handle = tokio::task::spawn(
             async move {
                 RunningWorker::invocation_loop(
@@ -2327,28 +2314,6 @@ impl RunningWorker {
             .in_current_span(),
         );
 
-        let snapshot_task = if let SnapshotPolicy::Periodic { period } = snapshot_policy {
-            let snapshot_pending = Arc::new(AtomicBool::new(false));
-            Some(tokio::task::spawn(async move {
-                let mut interval = tokio::time::interval(period);
-                interval.tick().await;
-                loop {
-                    interval.tick().await;
-                    if !snapshot_pending.swap(true, Ordering::AcqRel) {
-                        snapshot_queue
-                            .write()
-                            .await
-                            .push_back(QueuedWorkerInvocation::SaveSnapshot);
-                        if snapshot_sender.send(WorkerCommand::Unblock).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }))
-        } else {
-            None
-        };
-
         RunningWorker {
             handle: Some(handle),
             sender,
@@ -2357,7 +2322,6 @@ impl RunningWorker {
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
-            snapshot_task,
         }
     }
 
@@ -2376,9 +2340,6 @@ impl RunningWorker {
     }
 
     pub fn stop(mut self) -> JoinHandle<()> {
-        if let Some(task) = self.snapshot_task.take() {
-            task.abort();
-        }
         self.handle.take().unwrap()
     }
 
@@ -2478,19 +2439,17 @@ impl RunningWorker {
         if let Some(snapshot_idx) = worker_metadata
             .last_known_status
             .last_automatic_snapshot_index
+            && pending_update.is_none()
+            && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
         {
-            if pending_update.is_none()
-                && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
-            {
-                let snapshot_skip =
-                    DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                        OplogIndex::INITIAL.next()..=snapshot_idx,
-                    )])
-                    .build();
-                skipped_regions.set_override(snapshot_skip);
+            let snapshot_skip =
+                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                    OplogIndex::INITIAL.next()..=snapshot_idx,
+                )])
+                .build();
+            skipped_regions.set_override(snapshot_skip);
 
-                last_snapshot_index = Some(snapshot_idx);
-            }
+            last_snapshot_index = Some(snapshot_idx);
         }
 
         let context = Ctx::create(
@@ -2671,9 +2630,17 @@ impl InvocationResult {
             let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
-                OplogEntry::AgentInvocationFinished { result, consumed_fuel, component_revision, .. } => {
-                    let invocation_result: AgentInvocationResult =
-                        services.oplog().download_payload(result).await.expect("failed to deserialize function response payload");
+                OplogEntry::AgentInvocationFinished {
+                    result,
+                    consumed_fuel,
+                    component_revision,
+                    ..
+                } => {
+                    let invocation_result: AgentInvocationResult = services
+                        .oplog()
+                        .download_payload(result)
+                        .await
+                        .expect("failed to deserialize function response payload");
                     Ok(AgentInvocationOutput {
                         result: invocation_result,
                         consumed_fuel: Some(consumed_fuel as u64),
@@ -2681,13 +2648,26 @@ impl InvocationResult {
                         component_revision: Some(component_revision),
                     })
                 }
-                OplogEntry::Error { error, retry_from, .. } => {
+                OplogEntry::Error {
+                    error, retry_from, ..
+                } => {
                     let stderr = recover_stderr_logs(services, owned_agent_id, oplog_idx).await;
-                    Err(FailedInvocationResult { trap_type: TrapType::Error { error, retry_from }, stderr })
+                    Err(FailedInvocationResult {
+                        trap_type: TrapType::Error { error, retry_from },
+                        stderr,
+                    })
                 }
-                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())), stderr: "".to_string() }),
-                OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string() }),
-                _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_agent_id:?}")
+                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult {
+                    trap_type: TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())),
+                    stderr: "".to_string(),
+                }),
+                OplogEntry::Exited { .. } => Err(FailedInvocationResult {
+                    trap_type: TrapType::Exit,
+                    stderr: "".to_string(),
+                }),
+                _ => panic!(
+                    "Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_agent_id:?}"
+                ),
             };
 
             *self = Self::Cached { result }
@@ -2727,10 +2707,20 @@ fn resolve_agent_properties<T: HasConfig>(
         .as_ref()
         .map_or(AgentMode::Durable, |at| at.mode);
 
-    let snapshot_policy = resolve_snapshot_policy(
-        &deps.config().oplog.default_snapshotting,
-        resolved_agent_type.as_ref().map(|at| &at.snapshotting),
-    );
+    let snapshot_policy = if let Some(agent_type) = resolved_agent_type.as_ref() {
+        // Agent with explicit metadata — use agent-level snapshotting config
+        resolve_snapshot_policy(
+            &deps.config().oplog.default_snapshotting,
+            Some(&agent_type.snapshotting),
+        )
+    } else if is_snapshot_capable_oplog_processor(metadata) {
+        // Oplog processor that exports save-snapshot/load-snapshot — use the
+        // oplog-processor-specific global config
+        deps.config().oplog.oplog_processor_snapshotting.clone()
+    } else {
+        // Non-agent, non-snapshot-capable-oplog-processor — use default
+        resolve_snapshot_policy(&deps.config().oplog.default_snapshotting, None)
+    };
 
     ResolvedAgentProperties {
         agent_mode,
@@ -2767,6 +2757,39 @@ fn resolve_snapshot_policy(
     }
 }
 
+/// Returns true if the component is an oplog processor that also exports
+/// save-snapshot and load-snapshot functions, making it eligible for
+/// automatic snapshot-based recovery.
+fn is_snapshot_capable_oplog_processor(
+    metadata: &golem_common::model::component_metadata::ComponentMetadata,
+) -> bool {
+    let has_oplog_processor = match metadata.oplog_processor() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            warn!("Failed to check oplog processor export: {err}");
+            false
+        }
+    };
+    let has_save = match metadata.save_snapshot() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            warn!("Failed to check save-snapshot export: {err}");
+            false
+        }
+    };
+    let has_load = match metadata.load_snapshot() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            warn!("Failed to check load-snapshot export: {err}");
+            false
+        }
+    };
+    has_oplog_processor && has_save && has_load
+}
+
 #[derive(Debug)]
 enum WorkerCommand {
     Unblock,
@@ -2794,7 +2817,6 @@ pub enum QueuedWorkerInvocation {
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
-    // Triggers a periodic snapshot save for the worker
     SaveSnapshot,
 }
 

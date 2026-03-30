@@ -18,26 +18,26 @@ use std::io::{stderr, stdout};
 use std::path::Path;
 use std::sync::Arc;
 
-use figment::providers::Serialized;
 use figment::Figment;
+use figment::providers::Serialized;
 use opentelemetry::global;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::{Protocol, WithExportConfig};
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracer;
-use opentelemetry_sdk::Resource;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
-use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::fmt::MakeWriter;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
+use crate::SafeDisplay;
 use crate::config::env_config_provider;
 use crate::tracing::format::JsonFlattenSpanFormatter;
-use crate::SafeDisplay;
 
 pub enum Output {
     Stdout,
@@ -428,14 +428,14 @@ pub mod directive {
 }
 
 pub mod filter {
-    use tracing_subscriber::layer::Filter;
     use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::Filter;
 
     pub type Boxed = Box<dyn Filter<Registry> + 'static + Send + Sync>;
 
     pub mod boxed {
-        use tracing_subscriber::filter::Directive;
         use tracing_subscriber::EnvFilter;
+        use tracing_subscriber::filter::Directive;
 
         use crate::tracing::directive;
         use crate::tracing::filter::Boxed;
@@ -501,8 +501,8 @@ pub mod filter {
     pub mod for_all_outputs {
         use tracing_subscriber::filter::Directive;
 
-        use crate::tracing::filter::{boxed, Boxed};
         use crate::tracing::Output;
+        use crate::tracing::filter::{Boxed, boxed};
 
         /// For OTLP, uses a permissive debug-level filter with
         /// `otel::tracing=trace` so that context-propagation spans created
@@ -730,8 +730,8 @@ pub(crate) mod format {
     use std::{fmt, io};
 
     use serde::ser::{SerializeMap, Serializer as _};
-    use serde_json::value::RawValue;
     use serde_json::Serializer;
+    use serde_json::value::RawValue;
     use tracing::{Event, Subscriber};
     use tracing_serde::AsSerde;
     use tracing_subscriber::fmt::format::Writer;
@@ -848,7 +848,7 @@ mod test {
         use test_r::test;
 
         use tracing;
-        use tracing::{field, info, span, Level};
+        use tracing::{Level, field, info, span};
         use tracing_subscriber::FmtSubscriber;
 
         use crate::tracing::format::JsonFlattenSpanFormatter;

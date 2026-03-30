@@ -23,7 +23,6 @@ members = [
 ]
 
 exclude = [
-    "cli/desktop-app/src-tauri",
     "test-components",
     "sdks/golem-rust"
 ]
@@ -123,6 +122,7 @@ futures-util = "0.3.31"
 fuzzy-matcher = "0.3.7"
 gag = "1.0.0"
 gethostname = "1.0.0"
+ignite-v2-client = "0.2.0"
 git-version = "0.3.9"
 goldenfile = "1.8.0"
 half = "2"
@@ -288,7 +288,7 @@ walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.244.0"
 wasm-metadata = { version = "0.244.0", features = ["oci"] }
-wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs.git", tag = "v0.1.3", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs.git", tag = "v0.1.4", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.244"
 wasmparser = "0.244.0"
 wasmprinter = "0.244.0"

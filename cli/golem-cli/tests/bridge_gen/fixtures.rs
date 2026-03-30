@@ -14,14 +14,14 @@
 
 use crate::workspace_path;
 use golem_cli::model::GuestLanguage;
+use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
     NamedElementSchemas, Snapshotting, TextDescriptor,
 };
-use golem_common::model::Empty;
 use golem_wasm::analysis::analysed_type::{
-    case, field, list, option, r#enum, record, str, u32, unit_case, variant,
+    case, r#enum, field, list, option, record, str, u32, unit_case, variant,
 };
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {

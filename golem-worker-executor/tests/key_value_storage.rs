@@ -16,9 +16,9 @@ use crate::WorkerExecutorTestDependencies;
 use async_trait::async_trait;
 use golem_common::config::DbPostgresConfig;
 use golem_common::config::RedisConfig;
+use golem_common::model::AgentId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::AgentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use url::Url;
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
 #[async_trait]
 trait GetKeyValueStorage: Debug {

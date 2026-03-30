@@ -16,7 +16,7 @@ use super::redis::Redis;
 use super::registry_service::RegistryService;
 use super::shard_manager::ShardManager;
 use super::worker_service::WorkerService;
-use super::{wait_for_startup_grpc, EnvVarBuilder};
+use super::{EnvVarBuilder, wait_for_startup_grpc};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::process::Child;

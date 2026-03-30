@@ -14,7 +14,7 @@
 
 use crate::model::agent::view::AgentTypeView;
 use crate::model::text::fmt::{
-    format_message_highlight, log_table, FieldsBuilder, MessageWithFields, TextView,
+    FieldsBuilder, MessageWithFields, TextView, format_message_highlight, log_table,
 };
 use golem_common::model::agent::DeployedRegisteredAgentType;
 

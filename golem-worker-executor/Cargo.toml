@@ -1,7 +1,7 @@
 [package]
 name = "golem-worker-executor"
 version = "0.0.0"
-edition = "2021"
+ edition = "2024"
 
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
@@ -47,6 +47,7 @@ bytes = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
+dashmap = { workspace = true }
 desert_rust = { workspace = true }
 drop-stream = { workspace = true }
 evicting_cache_map = { workspace = true }
@@ -58,6 +59,7 @@ gethostname = { workspace = true }
 half = { workspace = true }
 heck = { workspace = true }
 hex = { workspace = true }
+ignite-v2-client = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }

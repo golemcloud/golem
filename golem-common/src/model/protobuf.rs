@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{diff, AgentConfigVarsFilter, AgentResourceDescription, InvocationStatus};
+use super::{AgentConfigVarsFilter, AgentResourceDescription, InvocationStatus, diff};
 use crate::model::component::{ComponentFileContentHash, ComponentFilePath, InitialComponentFile};
 use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{

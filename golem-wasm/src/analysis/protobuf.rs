@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::analysis::analysed_type::{
-    bool, chr, f32, f64, field, flags, handle, list, option, r#enum, record, s16, s32, s64, s8,
-    str, tuple, u16, u32, u64, u8, variant,
+    bool, chr, r#enum, f32, f64, field, flags, handle, list, option, record, s8, s16, s32, s64,
+    str, tuple, u8, u16, u32, u64, variant,
 };
 use crate::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType};
 use crate::protobuf::{
-    r#type, NameOptionTypePair, NameTypePair, PrimitiveType, Type, TypeEnum, TypeFlags, TypeHandle,
-    TypeList, TypeOption, TypePrimitive, TypeRecord, TypeResult, TypeTuple, TypeVariant,
+    NameOptionTypePair, NameTypePair, PrimitiveType, Type, TypeEnum, TypeFlags, TypeHandle,
+    TypeList, TypeOption, TypePrimitive, TypeRecord, TypeResult, TypeTuple, TypeVariant, r#type,
 };
 use std::ops::Deref;
 

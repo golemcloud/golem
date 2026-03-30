@@ -64,7 +64,7 @@ use crate::model::oplog::{
     AgentResourceId, OplogEntry, RawSnapshotData, TimestampedUpdateDescription,
 };
 use crate::model::regions::DeletedRegions;
-use crate::{grpc_uri, SafeDisplay};
+use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -212,10 +212,8 @@ pub trait PoemTypeRequirements:
 }
 
 impl<
-        T: poem_openapi::types::Type
-            + poem_openapi::types::ParseFromJSON
-            + poem_openapi::types::ToJSON,
-    > PoemTypeRequirements for T
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> PoemTypeRequirements for T
 {
 }
 
@@ -719,6 +717,8 @@ pub struct AgentStatusRecord {
     /// Agent will call load_snapshot on this payload before starting replay. If the load_snapshot
     /// fails this will be ignored and a full replay from last_manual_snapshot_index will performed.
     pub last_automatic_snapshot_index: Option<OplogIndex>,
+    /// Timestamp of the last automatic snapshot entry in the oplog.
+    pub last_automatic_snapshot_timestamp: Option<Timestamp>,
 }
 
 impl Default for AgentStatusRecord {
@@ -746,6 +746,7 @@ impl Default for AgentStatusRecord {
             current_retry_count: HashMap::new(),
             last_manual_update_snapshot_index: None,
             last_automatic_snapshot_index: None,
+            last_automatic_snapshot_timestamp: None,
         }
     }
 }

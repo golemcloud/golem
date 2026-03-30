@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::{
-    apply_naming, is_unit_case, parse_wit_field_attribute, parse_wit_type_attrs, variant_case_name,
-    WitField, WitTypeAttrs,
+    WitField, WitTypeAttrs, apply_naming, is_unit_case, parse_wit_field_attribute,
+    parse_wit_type_attrs, variant_case_name,
 };
 use heck::*;
 use proc_macro::TokenStream;

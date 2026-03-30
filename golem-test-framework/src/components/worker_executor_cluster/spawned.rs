@@ -15,8 +15,8 @@
 use crate::components::redis::Redis;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
 use crate::components::worker_executor::WorkerExecutor;
+use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
-use tracing::{info, Instrument, Level};
+use tracing::{Instrument, Level, info};
 
 pub struct SpawnedWorkerExecutorCluster {
     worker_executors: Vec<Arc<dyn WorkerExecutor>>,

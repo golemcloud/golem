@@ -35,7 +35,6 @@ pub mod command_handler;
 pub mod composition;
 pub mod config;
 pub mod context;
-pub mod diagnose;
 pub mod error;
 pub mod evcxr_repl;
 pub mod fs;
@@ -44,24 +43,18 @@ pub mod log;
 pub mod model;
 pub mod process;
 pub mod sdk_overrides;
-pub mod sdk_versions;
 pub mod validation;
+pub mod versions;
 
 #[cfg(test)]
 test_r::enable!();
 
 shadow!(build);
 
-#[macro_export]
-macro_rules! app_manifest_version {
-    () => {
-        "1.5.0-dev.1"
-    };
-}
 static APP_MANIFEST_JSON_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../schema.golem.cloud/app/golem/",
-    app_manifest_version!(),
+    manifest_schema_version!(),
     "/golem.schema.json"
 ));
 

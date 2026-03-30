@@ -66,7 +66,7 @@ impl Error {
 pub type Result<T> = result::Result<T, Error>;
 
 #[allow(clippy::too_many_arguments)]
-pub fn gen(
+pub fn generate(
     openapi_specs: Vec<OpenAPI>,
     target: &Path,
     name: &str,
@@ -174,7 +174,7 @@ pub fn gen(
     std::fs::write(src.join("lib.rs"), lib).unwrap();
 
     if overwrite_cargo {
-        let cargo = toml::cargo::gen(name, version);
+        let cargo = toml::cargo::generate(name, version);
         std::fs::write(target.join("Cargo.toml"), cargo).unwrap();
     }
 

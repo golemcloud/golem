@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app_manifest_version;
-use crate::sdk_versions::{GOLEM_AI_SUFFIX, GOLEM_AI_VERSION};
+use crate::versions;
 use indoc::formatdoc;
 use std::sync::LazyLock;
 
@@ -45,7 +44,7 @@ pub static APP_MANIFEST_HEADER: LazyLock<String> = LazyLock::new(|| {
             # Field reference: https://learn.golem.cloud/app-manifest#field-reference
             # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
         ",
-        version = app_manifest_version!()
+        version = crate::manifest_schema_version!()
     }
 });
 
@@ -53,7 +52,9 @@ pub static DOC_DEPENDENCIES: LazyLock<Vec<DocDependencyGroup>> = LazyLock::new(|
     fn golem_ai(name: &str) -> String {
         format!(
             "https://github.com/golemcloud/golem-ai/releases/download/{}/{}{}",
-            GOLEM_AI_VERSION, name, GOLEM_AI_SUFFIX
+            versions::ai::VERSION,
+            name,
+            versions::ai::SUFFIX
         )
     }
 

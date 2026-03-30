@@ -16,8 +16,8 @@ use crate::Tracing;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start_with_table_limit, LastUniqueId, PrecompiledComponent, TestContext,
-    WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    start_with_table_limit,
 };
 use test_r::{inherit_test_dep, test, timeout};
 
