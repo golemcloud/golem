@@ -26,6 +26,7 @@ use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
 use crate::services::resource_definition::{ResourceDefinitionError, ResourceDefinitionService};
+use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use crate::services::security_scheme::SecuritySchemeService;
 use futures::TryFutureExt;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -99,7 +100,8 @@ error_forwarding!(
     HttpApiDeploymentError,
     McpDeploymentError,
     AgentSecretError,
-    ResourceDefinitionError
+    ResourceDefinitionError,
+    RetryPolicyError
 );
 
 pub struct DeploymentWriteService {
@@ -112,6 +114,7 @@ pub struct DeploymentWriteService {
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     security_scheme_service: Arc<SecuritySchemeService>,
     resource_definition_service: Arc<ResourceDefinitionService>,
+    retry_policy_service: Arc<RetryPolicyService>,
 }
 
 impl DeploymentWriteService {
@@ -125,6 +128,7 @@ impl DeploymentWriteService {
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         security_scheme_service: Arc<SecuritySchemeService>,
         resource_definition_service: Arc<ResourceDefinitionService>,
+        retry_policy_service: Arc<RetryPolicyService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
@@ -136,6 +140,7 @@ impl DeploymentWriteService {
             registry_change_notifier,
             security_scheme_service,
             resource_definition_service,
+            retry_policy_service,
         }
     }
 
@@ -176,6 +181,7 @@ impl DeploymentWriteService {
             .as_ref()
             .map(|ld| ld.deployment_hash)
             && data.expected_deployment_hash == current_deployment_hash
+            && data.retry_policy_defaults.is_empty()
         {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
@@ -198,6 +204,7 @@ impl DeploymentWriteService {
             mcp_deployments,
             agent_secrets_in_environment,
             resource_definitions_in_environment,
+            retry_policies_in_environment,
         ) = tokio::try_join!(
             self.component_service
                 .list_staged_components_for_environment(&environment, auth)
@@ -214,15 +221,19 @@ impl DeploymentWriteService {
             self.resource_definition_service
                 .list_in_fetched_environment(&environment, auth)
                 .map_err(DeploymentWriteError::from),
+            self.retry_policy_service
+                .list_in_fetched_environment(&environment, auth)
+                .map_err(DeploymentWriteError::from),
         )?;
 
         tracing::info!(
-            "Fetched staged deployment data for environment: {environment_id}, components: {}, http api deployments: {}, mcp deployments: {}, agent_secrets: {}, resource_definitions: {}",
+            "Fetched staged deployment data for environment: {environment_id}, components: {}, http api deployments: {}, mcp deployments: {}, agent_secrets: {}, resource_definitions: {}, retry_policies: {}",
             components.len(),
             http_api_deployments.len(),
             mcp_deployments.len(),
             agent_secrets_in_environment.len(),
             resource_definitions_in_environment.len(),
+            retry_policies_in_environment.len(),
         );
 
         let account_id = environment.owner_account_id;
@@ -292,6 +303,13 @@ impl DeploymentWriteService {
             &mut errors,
         );
 
+        let new_retry_policies = deployment_context.deployment_retry_policy_creations(
+            retry_policies_in_environment,
+            data.retry_policy_defaults,
+            auth.account_id(),
+            &mut errors,
+        );
+
         if !errors.is_empty() {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         }
@@ -317,6 +335,7 @@ impl DeploymentWriteService {
             new_agent_secrets,
             updated_agent_secrets,
             new_resource_definitions,
+            new_retry_policies,
             auth.account_id(),
         )?;
 
@@ -329,6 +348,13 @@ impl DeploymentWriteService {
                     tracing::warn!(
                         "Failing deployment due to secret conflict for path {}",
                         path.join(".")
+                    );
+                    DeploymentWriteError::ConcurrentDeployment
+                }
+                DeployRepoError::RetryPolicyConflict { name } => {
+                    tracing::warn!(
+                        "Failing deployment due to retry policy conflict for name {}",
+                        name
                     );
                     DeploymentWriteError::ConcurrentDeployment
                 }

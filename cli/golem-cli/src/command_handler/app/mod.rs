@@ -1471,13 +1471,17 @@ impl AppCommandHandler {
         &self,
         deploy_diff: &DeployDiff,
     ) -> anyhow::Result<CurrentDeployment> {
-        let agent_secret_defaults = {
+        let (agent_secret_defaults, retry_policy_defaults) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let defaults = app_ctx
                 .some_or_err()?
                 .application()
                 .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
-            resolve_secret_defaults(defaults)?
+            let app = app_ctx.some_or_err()?.application();
+            (
+                resolve_secret_defaults(defaults)?,
+                app.deployment_retry_policy_defaults(&deploy_diff.environment.environment_name),
+            )
         };
 
         let clients = self.ctx.golem_clients().await?;
@@ -1495,6 +1499,7 @@ impl AppCommandHandler {
                     agent_secret_defaults,
                     // TODO (quota)
                     quota_resource_defaults: Vec::new(),
+                    retry_policy_defaults,
                 },
             )
             .await

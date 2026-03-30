@@ -360,6 +360,7 @@ impl Services {
             registry_change_notifier.clone(),
             security_scheme_service.clone(),
             resource_definition_service.clone(),
+            retry_policy_service.clone(),
         ));
 
         let deployed_routes_service =
