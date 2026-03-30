@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::task::JoinSet;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Utf8Payload;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 pub type DebugServiceClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub type DebugWrite = SplitSink<DebugServiceClient, Message>;
@@ -87,7 +87,7 @@ impl DebugWorkerExecutorClient {
                                         break Ok(result); // Break out of the loop with a Result
                                     }
                                     JsonRpcAnswer::Error(_) => {
-                                        break Err(anyhow::anyhow!("Error response"))
+                                        break Err(anyhow::anyhow!("Error response"));
                                     }
                                 }
                             }

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmark::config::RunConfig;
 use crate::benchmark::BenchmarkRecorder;
+use crate::benchmark::config::RunConfig;
 use chrono::{DateTime, Utc};
 use cli_table::format::{Border, Justify, Separator};
 use cli_table::{Cell, CellStruct, Style, Table};
@@ -21,7 +21,7 @@ use colored::Colorize;
 use itertools::Itertools;
 use serde::de::{Error, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_with::{serde_as, DurationMilliSecondsWithFrac};
+use serde_with::{DurationMilliSecondsWithFrac, serde_as};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;

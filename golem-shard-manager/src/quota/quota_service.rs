@@ -16,11 +16,11 @@ use super::quota_lease::QuotaLease;
 use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
 use crate::model::Pod;
 use crate::shard_manager_config::QuotaServiceConfig;
+use golem_common::SafeDisplay;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::resource_definition::{
     ResourceDefinition, ResourceDefinitionId, ResourceLimit, ResourceName, TimePeriod,
 };
-use golem_common::SafeDisplay;
 use golem_service_base::model::quota_lease::{LeaseEpoch, QuotaAllocation};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -441,7 +441,7 @@ impl QuotaService {
             None => {
                 return Err(QuotaError::LeaseNotFound {
                     resource_definition_id,
-                })
+                });
             }
         };
 
@@ -486,7 +486,7 @@ impl QuotaService {
             None => {
                 return Err(QuotaError::LeaseNotFound {
                     resource_definition_id,
-                })
+                });
             }
         };
 

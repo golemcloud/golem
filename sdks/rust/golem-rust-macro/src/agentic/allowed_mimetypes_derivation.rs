@@ -15,7 +15,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::quote;
-use syn::{parse_macro_input, Attribute, Data, DeriveInput, Lit};
+use syn::{Attribute, Data, DeriveInput, Lit, parse_macro_input};
 
 pub fn derive_allowed_mime_types(
     input: TokenStream,
@@ -82,10 +82,10 @@ pub fn derive_allowed_mime_types(
     expanded.into()
 }
 fn parse_mime_type_attr(attr: &Attribute) -> Option<String> {
-    if attr.path().is_ident("mime_type") {
-        if let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>() {
-            return Some(lit_str.value());
-        }
+    if attr.path().is_ident("mime_type")
+        && let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>()
+    {
+        return Some(lit_str.value());
     }
     None
 }

@@ -23,11 +23,11 @@ use golem_common::agent_id;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
 use golem_common::model::{AgentStatus, IdempotencyKey};
-use golem_test_framework::dsl::{drain_connection, stderr_events, stdout_events, TestDsl};
+use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
@@ -41,7 +41,7 @@ use tokio::spawn;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
-use tracing::{debug, info, Instrument};
+use tracing::{Instrument, debug, info};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

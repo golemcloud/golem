@@ -63,20 +63,21 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{
-    rdbms, shard_manager, All, HasActiveWorkers, HasAgentTypesService, HasComponentService,
-    HasConfig, HasEnvironmentStateService, HasOplogService, HasWorkerActivator, HasWorkerService,
+    All, HasActiveWorkers, HasAgentTypesService, HasComponentService, HasConfig,
+    HasEnvironmentStateService, HasOplogService, HasWorkerActivator, HasWorkerService, rdbms,
+    shard_manager,
 };
+use crate::storage::indexed::IndexedStorage;
 use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use crate::storage::indexed::postgres::PostgresIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
-use crate::storage::indexed::IndexedStorage;
+use crate::storage::keyvalue::KeyValueStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
-use crate::storage::keyvalue::KeyValueStorage;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -89,17 +90,17 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
-use golem_service_base::storage::blob::BlobStorage;
-use humansize::{ISizeFormatter, BINARY};
+use humansize::{BINARY, ISizeFormatter};
 use log::debug;
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
@@ -109,7 +110,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
 
@@ -447,13 +448,11 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             let pool = RedisPool::configured(redis).await?;
             Arc::new(RedisIndexedStorage::new(pool.clone()))
         }
-        IndexedStorageConfig::Postgres(postgres) => {
-            Arc::new(
-                PostgresIndexedStorage::configured(postgres)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            )
-        }
+        IndexedStorageConfig::Postgres(postgres) => Arc::new(
+            PostgresIndexedStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?,
+        ),
         IndexedStorageConfig::KVStoreSqlite(_) => {
             let sqlite = sqlite
                 .clone()
@@ -464,17 +463,18 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
                     .map_err(|err| anyhow!(err))?,
             )
         }
-        IndexedStorageConfig::KVStoreMultiSqlite(_) => {
-            match &golem_config.key_value_storage {
-                KeyValueStorageConfig::MultiSqlite(multi_sqlite) =>
-                    Arc::new(MultiSqliteIndexedStorage::new(
-                        &multi_sqlite.root_dir,
-                        multi_sqlite.max_connections,
-                        multi_sqlite.foreign_keys,
-                    )),
-                _ => panic!("Invalid configuration: multi-sqlite must be used as key-value storage when using KVStoreMultiSqlite")
+        IndexedStorageConfig::KVStoreMultiSqlite(_) => match &golem_config.key_value_storage {
+            KeyValueStorageConfig::MultiSqlite(multi_sqlite) => {
+                Arc::new(MultiSqliteIndexedStorage::new(
+                    &multi_sqlite.root_dir,
+                    multi_sqlite.max_connections,
+                    multi_sqlite.foreign_keys,
+                ))
             }
-        }
+            _ => panic!(
+                "Invalid configuration: multi-sqlite must be used as key-value storage when using KVStoreMultiSqlite"
+            ),
+        },
         IndexedStorageConfig::Sqlite(sqlite) => {
             let pool = SqlitePool::configured(sqlite)
                 .await

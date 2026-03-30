@@ -20,15 +20,14 @@ use golem_wasm::NodeIndex;
 // This is useful for simplifying the handling of return values from rpc calls,
 // as rpc result is often represented using a tuple with one element.
 pub fn unwrap_wit_tuple(wit_value: WitValue) -> WitValue {
-    if let Some(WitNode::TupleValue(nodes)) = wit_value.nodes.first() {
-        if nodes.len() == 1 {
-            if let Some(&first_index) = nodes.first() {
-                let first_index = first_index as usize;
-                let mut new_nodes = wit_value.nodes[first_index..].to_vec();
-                rebase_indices(&mut new_nodes, first_index);
-                return WitValue { nodes: new_nodes };
-            }
-        }
+    if let Some(WitNode::TupleValue(nodes)) = wit_value.nodes.first()
+        && nodes.len() == 1
+        && let Some(&first_index) = nodes.first()
+    {
+        let first_index = first_index as usize;
+        let mut new_nodes = wit_value.nodes[first_index..].to_vec();
+        rebase_indices(&mut new_nodes, first_index);
+        return WitValue { nodes: new_nodes };
     }
     wit_value
 }
@@ -124,11 +123,11 @@ mod tests {
             let unwrapped = unwrap_wit_tuple(wit_value);
             let round_trip_value = Value::from(unwrapped);
 
-            if let Tuple(inner) = &value {
-                if inner.len() == 1 {
-                    assert_eq!(round_trip_value, inner[0].clone());
-                    continue;
-                }
+            if let Tuple(inner) = &value
+                && inner.len() == 1
+            {
+                assert_eq!(round_trip_value, inner[0].clone());
+                continue;
             }
 
             assert_eq!(round_trip_value, value);

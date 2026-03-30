@@ -10,11 +10,11 @@ use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageCo
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
 };
+use golem_worker_executor::Bootstrap;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
 };
-use golem_worker_executor::Bootstrap;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
 

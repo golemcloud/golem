@@ -15,7 +15,7 @@
 use crate::metrics::events::{record_broadcast_event, record_event};
 use crate::model::event::InternalWorkerEvent;
 use applying::Apply;
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use golem_common::model::{IdempotencyKey, LogLevel};
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
@@ -23,9 +23,9 @@ use ringbuf::*;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::*;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::Stream;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 /// Per-worker event stream
 pub trait WorkerEventService: Send + Sync {

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::analysis::AnalysedType;
 use crate::ValueAndType;
+use crate::analysis::AnalysedType;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
 use poem_openapi::types::{IsObjectType, ParseFromJSON, ParseResult, ToJSON, Type};
 use serde_json::Value;

@@ -34,9 +34,11 @@ fn test_type_naming_reserved_names_are_not_used() {
         .types()
         .map(|(_, name)| name.to_string())
         .collect::<Vec<_>>();
-    assert!(without_reserved_names
-        .iter()
-        .any(|name| name == "AllPrimitives"));
+    assert!(
+        without_reserved_names
+            .iter()
+            .any(|name| name == "AllPrimitives")
+    );
 
     let with_reserved = TypeNaming::<RustTypeName>::new_with_reserved_names(
         &agent_type,
@@ -48,7 +50,9 @@ fn test_type_naming_reserved_names_are_not_used() {
         .types()
         .map(|(_, name)| name.to_string())
         .collect::<Vec<_>>();
-    assert!(with_reserved_names
-        .iter()
-        .all(|name| name != "AllPrimitives"));
+    assert!(
+        with_reserved_names
+            .iter()
+            .all(|name| name != "AllPrimitives")
+    );
 }

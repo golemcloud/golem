@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
 use golem_api_grpc::proto::grpc::health::v1::HealthCheckRequest;
-use golem_client::api::HealthCheckClient;
+use golem_api_grpc::proto::grpc::health::v1::health_check_response::ServingStatus;
 use golem_client::Security;
+use golem_client::api::HealthCheckClient;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
@@ -23,8 +23,8 @@ use std::str::FromStr;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::time::Instant;
+use tracing::{Level, error, warn};
 use tracing::{debug, info, trace};
-use tracing::{error, warn, Level};
 use url::Url;
 
 pub mod blob_storage;
@@ -232,7 +232,9 @@ fn parse_tracing_level(s: &str) -> Option<Level> {
 fn check_child_process_alive(child: &mut Child, name: &str) {
     match child.try_wait() {
         Ok(Some(status)) => {
-            panic!("{name} process exited early with {status}. Check the logs above for the root cause (e.g. DB migration failure).");
+            panic!(
+                "{name} process exited early with {status}. Check the logs above for the root cause (e.g. DB migration failure)."
+            );
         }
         Ok(None) => {} // still running
         Err(e) => {

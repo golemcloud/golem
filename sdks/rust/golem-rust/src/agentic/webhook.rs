@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{await_promise, create_promise, PromiseId};
+use crate::{PromiseId, await_promise, create_promise};
 use std::future::Future;
 use std::future::IntoFuture;
 use std::pin::Pin;

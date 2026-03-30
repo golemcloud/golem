@@ -21,11 +21,11 @@ use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::spawn_blocking;
-use tracing::{info, warn, Instrument};
-use wasmtime::component::Component;
+use tracing::{Instrument, info, warn};
 use wasmtime::Engine;
+use wasmtime::component::Component;
 
 // Single worker that compiles WASM components.
 #[derive(Clone)]
@@ -66,10 +66,10 @@ impl CompileWorker {
                 while let Some(request) = recv.recv().await {
                     crate::metrics::decrement_queue_length();
 
-                    if let Some(sender) = request.sender {
-                        if worker.client.lock().await.is_none() {
-                            worker.set_client(sender).await;
-                        }
+                    if let Some(sender) = request.sender
+                        && worker.client.lock().await.is_none()
+                    {
+                        worker.set_client(sender).await;
                     }
 
                     let result = worker

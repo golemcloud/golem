@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm::analysis::{analysed_type, AnalysedType};
+use golem_wasm::analysis::{AnalysedType, analysed_type};
 use golem_wasm::{FromValue, IntoValue, Value};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{Display, Formatter};
-use std::num::{NonZeroU128, NonZeroU64};
+use std::num::{NonZeroU64, NonZeroU128};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

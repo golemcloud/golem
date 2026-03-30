@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use super::wait_for_startup;
+use crate::components::ChildProcessLogger;
 use crate::components::redis::Redis;
 use crate::components::shard_manager::ShardManager;
-use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::info;
 use tracing::Level;
+use tracing::info;
 
 pub struct SpawnedShardManager {
     http_port: u16,

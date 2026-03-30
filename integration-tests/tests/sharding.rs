@@ -17,8 +17,8 @@ test_r::enable!();
 #[test_r::sequential]
 mod tests {
     use async_trait::async_trait;
-    use axum::routing::post;
     use axum::Router;
+    use axum::routing::post;
     use bytes::Bytes;
     use golem_api_grpc::proto::golem::worker;
     use golem_client::api::RegistryServiceClient;
@@ -29,7 +29,7 @@ mod tests {
         OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
     };
     use golem_common::model::{AgentStatus, IdempotencyKey};
-    use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+    use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
@@ -45,7 +45,7 @@ mod tests {
     use test_r::{flaky, test, test_dep, timeout};
     use tokio::sync::mpsc;
     use tokio::task::{JoinHandle, JoinSet};
-    use tracing::{error, info, Instrument};
+    use tracing::{Instrument, error, info};
     use uuid::Uuid;
 
     pub struct Tracing;

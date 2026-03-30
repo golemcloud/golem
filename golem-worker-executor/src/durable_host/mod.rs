@@ -40,6 +40,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
+use crate::services::HasOplogService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -59,12 +60,11 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::HasOplogService;
-use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
+use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
-    invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
+    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::worker::{RetryDecision, Worker};
@@ -78,9 +78,11 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 pub use durability::*;
-use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use futures::future::try_join_all;
+use golem_common::model::RetryConfig;
+use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{
@@ -97,8 +99,6 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
-use golem_common::model::RetryConfig;
-use golem_common::model::TransactionId;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScanCursor,
@@ -112,8 +112,8 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
-use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::Uri;
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -125,21 +125,21 @@ use std::vec;
 use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use tracing::{debug, info, span, warn, Instrument, Level};
+use tracing::{Instrument, Level, debug, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
-use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::p2::FsResult;
+use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
     WasiView,
 };
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
-    default_send_request_with_pool, BodyCompletionReceiver, HostFutureIncomingResponse,
-    OutgoingRequestConfig,
+    BodyCompletionReceiver, HostFutureIncomingResponse, OutgoingRequestConfig,
+    default_send_request_with_pool,
 };
 use wasmtime_wasi_http::{HttpConnectionPool, HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
@@ -623,62 +623,61 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
-        if let Some(entry) = event.as_oplog_entry() {
-            if let OplogEntry::Log {
+        if let Some(entry) = event.as_oplog_entry()
+            && let OplogEntry::Log {
                 level,
                 context,
                 message,
                 ..
             } = &entry
-            {
-                match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
-                    LogEventEmitBehaviour::LiveOnly => {
-                        // Stdout and stderr writes are persistent and overwritten by sending the data to the event
-                        // service instead of the real output stream
+        {
+            match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
+                LogEventEmitBehaviour::LiveOnly => {
+                    // Stdout and stderr writes are persistent and overwritten by sending the data to the event
+                    // service instead of the real output stream
 
-                        if self.state.is_live()
-                        // If the worker is in live mode we always emit events
+                    if self.state.is_live()
+                    // If the worker is in live mode we always emit events
+                    {
+                        if !self
+                            .state
+                            .replay_state
+                            .seen_log(*level, context, message)
+                            .await
                         {
-                            if !self
-                                .state
+                            // haven't seen this log before
+                            self.public_state
+                                .event_service
+                                .emit_event(event.clone(), true);
+                            self.public_state.worker().add_to_oplog(entry).await;
+                        } else {
+                            // we have persisted emitting this log before, so we mark it as non-live and
+                            // remove the entry from the seen log set.
+                            // note that we still call emit_event because we need replayed log events for
+                            // improved error reporting in case of invocation failures
+                            self.public_state
+                                .event_service
+                                .emit_event(event.clone(), false);
+                            self.state
                                 .replay_state
-                                .seen_log(*level, context, message)
-                                .await
-                            {
-                                // haven't seen this log before
-                                self.public_state
-                                    .event_service
-                                    .emit_event(event.clone(), true);
-                                self.public_state.worker().add_to_oplog(entry).await;
-                            } else {
-                                // we have persisted emitting this log before, so we mark it as non-live and
-                                // remove the entry from the seen log set.
-                                // note that we still call emit_event because we need replayed log events for
-                                // improved error reporting in case of invocation failures
-                                self.public_state
-                                    .event_service
-                                    .emit_event(event.clone(), false);
-                                self.state
-                                    .replay_state
-                                    .remove_seen_log(*level, context, message)
-                                    .await;
-                            }
+                                .remove_seen_log(*level, context, message)
+                                .await;
                         }
                     }
-                    LogEventEmitBehaviour::Always => {
-                        self.public_state
-                            .event_service
-                            .emit_event(event.clone(), true);
+                }
+                LogEventEmitBehaviour::Always => {
+                    self.public_state
+                        .event_service
+                        .emit_event(event.clone(), true);
 
-                        if self.state.is_live()
-                            & !self
-                                .state
-                                .replay_state
-                                .seen_log(*level, context, message)
-                                .await
-                        {
-                            self.state.oplog.add(entry).await;
-                        }
+                    if self.state.is_live()
+                        & !self
+                            .state
+                            .replay_state
+                            .seen_log(*level, context, message)
+                            .await
+                    {
+                        self.state.oplog.add(entry).await;
                     }
                 }
             }
@@ -1891,13 +1890,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .replay_state
                 .get_oplog_entry_agent_invocation_finished()
                 .await?;
-            if let Some(recorded_result) = response {
-                if !recorded_result.replay_equivalent(&output.result) {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("{full_function_name} => {recorded_result:?}"),
-                        format!("{full_function_name} => {:?}", output.result),
-                    ));
-                }
+            if let Some(recorded_result) = response
+                && !recorded_result.replay_equivalent(&output.result)
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!("{full_function_name} => {recorded_result:?}"),
+                    format!("{full_function_name} => {:?}", output.result),
+                ));
             }
         }
         debug!("Function {full_function_name} finished");

@@ -15,7 +15,7 @@
 use crate::context::Context;
 use crate::log::logln;
 use crate::model::format::Format;
-use crate::model::text::fmt::{to_colored_json, to_colored_yaml, DecoratedIndent, TextView};
+use crate::model::text::fmt::{DecoratedIndent, TextView, to_colored_json, to_colored_yaml};
 use serde::Serialize;
 use std::sync::Arc;
 

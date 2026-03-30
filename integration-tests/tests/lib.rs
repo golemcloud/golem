@@ -20,7 +20,7 @@ mod otlp_plugin;
 mod plugins;
 mod worker;
 
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };

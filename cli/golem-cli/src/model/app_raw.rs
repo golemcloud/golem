@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
+use crate::model::GuestLanguage;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::format::Format;
-use crate::model::GuestLanguage;
-use crate::{fs, APP_MANIFEST_JSON_SCHEMA};
-use anyhow::{anyhow, Context};
+use crate::{APP_MANIFEST_JSON_SCHEMA, fs};
+use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::diff;

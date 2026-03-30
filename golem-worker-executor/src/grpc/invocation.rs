@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::Principal;
 use golem_common::base_model::AgentId;
+use golem_common::base_model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::WorkerAgentConfigEntry;
