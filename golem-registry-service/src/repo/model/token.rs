@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::datetime::SqlDateTime;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{Token, TokenId, TokenSecret, TokenWithSecret};
+use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;

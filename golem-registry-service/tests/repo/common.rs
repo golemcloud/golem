@@ -40,7 +40,6 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentRepoError, ComponentRevisionRecord,
 };
-use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::deployment::{
     DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
 };
@@ -62,7 +61,8 @@ use golem_registry_service::services::registry_change_notifier::RequiresNotifica
 use golem_registry_service::services::registry_change_notifier::{
     RegistryChangeNotifier, SqliteRegistryChangeNotifier,
 };
-use golem_service_base::repo::blob::Blob;
+use golem_service_base::repo::Blob;
+use golem_service_base::repo::SqlDateTime;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;

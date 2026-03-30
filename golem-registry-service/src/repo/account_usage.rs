@@ -14,7 +14,6 @@
 
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account_usage::{AccountUsage, UsageGrouping, UsageTracking, UsageType};
-use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::plan::PlanRecord;
 use async_trait::async_trait;
 use chrono::Datelike;
@@ -24,8 +23,9 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool};
+use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoResult;
-use golem_service_base::repo::numeric::NumericU64;
+use golem_service_base::repo::SqlDateTime;
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::BTreeMap;

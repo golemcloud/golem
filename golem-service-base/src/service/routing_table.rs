@@ -40,6 +40,7 @@ use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 pub enum RoutingTableError {
     ShardManagerGrpcError(Status),
     ShardManagerError(ShardManagerError),
+    ConversionError(String),
     NoResult,
 }
 
@@ -66,6 +67,9 @@ impl Display for RoutingTableError {
 
                 write!(f, "Shard Manager error: {detail}")
             }
+            RoutingTableError::ConversionError(msg) => {
+                write!(f, "Failed converting grpc response: {msg}")
+            }
             RoutingTableError::NoResult => write!(f, "No Result"),
         }
     }
@@ -83,6 +87,7 @@ impl IsRetriableError for RoutingTableError {
                 },
                 None => true,
             },
+            RoutingTableError::ConversionError(_) => false,
             RoutingTableError::NoResult => true,
         }
     }
@@ -200,7 +205,9 @@ impl RoutingTableService for RoutingTableServiceDefault {
                                 Some(shardmanager::v1::get_routing_table_response::Result::Success(
                                     routing_table,
                                 )),
-                        } => Ok(routing_table.into()),
+                        } => routing_table
+                            .try_into()
+                            .map_err(RoutingTableError::ConversionError),
                         shardmanager::v1::GetRoutingTableResponse {
                             result:
                                 Some(shardmanager::v1::get_routing_table_response::Result::Failure(
