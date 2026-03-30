@@ -18,7 +18,7 @@ use crate::log::LogColorize;
 use crate::model::app::InitialComponentFile;
 use crate::model::component::ComponentDeployProperties;
 use crate::model::text::plugin::PluginNameAndVersion;
-use anyhow::{anyhow, Context as AnyhowContext};
+use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::AgentType;
 use golem_common::model::component::{

@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::spawn_blocking;
-use tracing::{debug, warn, Instrument};
+use tracing::{Instrument, debug, warn};
 use wasmtime::Engine;
 
 pub struct ComponentServiceLocalFileSystem {
@@ -76,28 +76,25 @@ impl ComponentServiceLocalFileSystem {
 
             let mut reader = tokio::fs::read_dir(&self.root).await?;
             while let Some(entry) = reader.next_entry().await? {
-                if let Ok(file_name) = entry.file_name().into_string() {
-                    if !current.processed_files.contains(&file_name) && file_name.ends_with(".json")
-                    {
-                        new_processed_files.push(file_name.clone());
+                if let Ok(file_name) = entry.file_name().into_string()
+                    && !current.processed_files.contains(&file_name)
+                    && file_name.ends_with(".json")
+                {
+                    new_processed_files.push(file_name.clone());
 
-                        let file_content =
-                            tokio::fs::read_to_string(self.root.join(file_name.clone()))
-                                .await
-                                .map_err(|e| WorkerExecutorError::Unknown {
-                                    details: format!(
-                                        "Failed to read content from file {file_name}: {e}"
-                                    ),
-                                })?;
+                    let file_content = tokio::fs::read_to_string(self.root.join(file_name.clone()))
+                        .await
+                        .map_err(|e| WorkerExecutorError::Unknown {
+                            details: format!("Failed to read content from file {file_name}: {e}"),
+                        })?;
 
-                        let metadata = serde_json::from_str(&file_content).map_err(|e| {
+                    let metadata = serde_json::from_str(&file_content).map_err(|e| {
                             WorkerExecutorError::Unknown {
                                 details: format!("Failed to deserialize properties of component from {file_name}: {e}")
                             }
                         })?;
 
-                        new_metadata.push(metadata);
-                    };
+                    new_metadata.push(metadata);
                 };
             }
         }

@@ -20,7 +20,7 @@ use crate::model::text::http_api_domain::{DomainRegistrationNewView, HttpApiDoma
 use crate::command::api::domain::ApiDomainSubcommand;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
-use crate::log::{log_action, log_warn_action, logln, LogColorize};
+use crate::log::{LogColorize, log_action, log_warn_action, logln};
 use crate::model::environment::EnvironmentResolveMode;
 use anyhow::bail;
 use golem_client::api::ApiDomainClient;

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::lexer::{Lexer, Token};
-use super::parse_common::{self, parse_cm_value, parse_uint, perr, Dialect, ParseError};
+use super::parse_common::{self, Dialect, ParseError, parse_cm_value, parse_uint, perr};
 use golem_common::model::agent::{
     BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, TextReference, TextSource,
     TextType, Url,
@@ -306,7 +306,7 @@ impl Dialect for TsDialect {
                 return Err(perr(
                     pos,
                     &format!("expected 'url' or 'inline', got '{tag}'"),
-                ))
+                ));
             }
         };
         if *lexer.peek()? == Token::Comma {

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_common::SafeDisplay;
-use golem_component_compilation_service::config::{make_config_loader, ServerConfig};
+use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_component_compilation_service::config::{ServerConfig, make_config_loader};
 use prometheus::Registry;
 use tokio::task::JoinSet;
 use tracing::info;

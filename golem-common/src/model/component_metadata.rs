@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::SafeDisplay;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
-use crate::SafeDisplay;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
@@ -697,15 +697,14 @@ fn collect_resource_types(
         {
             resource_types.insert(*resource_id, fun.clone());
         }
-    } else if fun.is_method() {
-        if let AnalysedType::Handle(TypeHandle {
+    } else if fun.is_method()
+        && let AnalysedType::Handle(TypeHandle {
             mode: AnalysedResourceMode::Borrowed,
             resource_id,
             ..
         }) = &fun.parameters[0].typ
-        {
-            resource_types.insert(*resource_id, fun.clone());
-        }
+    {
+        resource_types.insert(*resource_id, fun.clone());
     }
 }
 

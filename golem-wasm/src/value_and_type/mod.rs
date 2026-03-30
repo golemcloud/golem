@@ -19,8 +19,8 @@ mod into;
 #[cfg(all(any(feature = "host", feature = "client"), test))]
 mod tests;
 
-use crate::analysis::AnalysedType;
 use crate::Value;
+use crate::analysis::AnalysedType;
 use uuid::Uuid;
 
 #[cfg(any(feature = "host", feature = "client"))]

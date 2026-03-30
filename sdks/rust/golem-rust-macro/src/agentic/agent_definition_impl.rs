@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::agentic::agent_definition_attributes::{
-    parse_agent_definition_attributes, AgentDefinitionAttributes,
+    AgentDefinitionAttributes, parse_agent_definition_attributes,
 };
 use crate::agentic::agent_definition_http_endpoint::{
-    extract_http_endpoints, ParsedHttpEndpointDetails,
+    ParsedHttpEndpointDetails, extract_http_endpoints,
 };
 use crate::agentic::helpers::{
-    has_agent_config_attr, is_async_trait_attr, is_constructor_method, is_static_method,
-    AgentConfigAttrRemover,
+    AgentConfigAttrRemover, has_agent_config_attr, is_async_trait_attr, is_constructor_method,
+    is_static_method,
 };
 use crate::agentic::{
     async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
@@ -31,9 +31,9 @@ use crate::agentic::{
 };
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::ItemTrait;
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
-use syn::ItemTrait;
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
@@ -157,10 +157,10 @@ fn get_agent_type_with_remote_client(
     let mut constructor_methods = vec![];
 
     for item in &agent_definition_trait.items {
-        if let syn::TraitItem::Fn(trait_fn) = item {
-            if is_constructor_method(&trait_fn.sig, None) {
-                constructor_methods.push(trait_fn.clone());
-            }
+        if let syn::TraitItem::Fn(trait_fn) = item
+            && is_constructor_method(&trait_fn.sig, None)
+        {
+            constructor_methods.push(trait_fn.clone());
         }
     }
 
@@ -582,10 +582,10 @@ fn extract_prompt_hint(attrs: &[syn::Attribute]) -> Option<String> {
 
 fn extract_meta(attrs: &[syn::Attribute], key: &str) -> Option<String> {
     for attr in attrs {
-        if attr.path().is_ident(key) {
-            if let Ok(syn::Lit::Str(lit_str)) = attr.parse_args::<syn::Lit>() {
-                return Some(lit_str.value());
-            }
+        if attr.path().is_ident(key)
+            && let Ok(syn::Lit::Str(lit_str)) = attr.parse_args::<syn::Lit>()
+        {
+            return Some(lit_str.value());
         }
     }
     None

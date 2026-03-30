@@ -14,12 +14,12 @@
 
 use crate::model::Empty;
 use crate::shard_manager_config::HealthCheckMode::K8s;
+use golem_common::SafeDisplay;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, HasConfigExamples, RedisConfig,
 };
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
-use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;

@@ -48,8 +48,8 @@ pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
 use crate::declare_structs;
-use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -58,7 +58,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
 declare_structs! {
     pub struct VersionInfo {
@@ -745,11 +745,7 @@ impl ScanCursor {
     }
 
     pub fn into_option(self) -> Option<Self> {
-        if self.is_finished() {
-            None
-        } else {
-            Some(self)
-        }
+        if self.is_finished() { None } else { Some(self) }
     }
 }
 

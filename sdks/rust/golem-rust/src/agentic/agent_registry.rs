@@ -15,7 +15,7 @@
 use crate::agentic::extended_agent_type::ExtendedAgentType;
 use crate::agentic::{EnrichedElementSchema, ExtendedDataSchema, Principal};
 use crate::{
-    agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
+    agentic::{ResolvedAgent, agent_initiator::AgentInitiator},
     golem_agentic::exports::golem::agent::guest::AgentType,
 };
 use golem_wasm::golem_core_1_5_x::types::parse_uuid;

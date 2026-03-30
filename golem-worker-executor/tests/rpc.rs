@@ -20,7 +20,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{FromValue, UuidRecord, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
@@ -130,11 +130,13 @@ async fn rust_rpc_missing_target(
         )
         .await;
 
-    assert!(call_result
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("Agent type not registered"));
+    assert!(
+        call_result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Agent type not registered")
+    );
 
     Ok(())
 }

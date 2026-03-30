@@ -123,8 +123,8 @@ fn source_manifest_version_policy(
     match source_manifest_version.manifest_version.as_deref() {
         None => SourceManifestVersionPolicyResult::Error(format!(
             "Missing required {} field in application manifest. Recreate the application with {} in a new directory, then move existing agent code to the new layout.",
-            "manifestVersion".log_color_highlight()
-            ,"golem new".log_color_highlight()
+            "manifestVersion".log_color_highlight(),
+            "golem new".log_color_highlight()
         )),
         Some(manifest_version) => match manifest_version_status(manifest_version) {
             ManifestVersionStatus::Supported => SourceManifestVersionPolicyResult::Supported,

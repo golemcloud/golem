@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::diff::{
-    hash_from_serialized_value, Diffable, Hash, Hashable, PluginInstallation,
+    Diffable, Hash, Hashable, PluginInstallation, hash_from_serialized_value,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;

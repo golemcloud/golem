@@ -15,8 +15,8 @@
 use crate::base_model::component::{ComponentRevision, PluginPriority};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
-use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::oplog::PublicOplogEntry;
+use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
 use crate::declare_structs;
 use crate::model::agent::{DataSchema, DataValue, UntypedDataValue};

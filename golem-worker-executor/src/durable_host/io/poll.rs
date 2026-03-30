@@ -17,17 +17,17 @@ use crate::workerctx::WorkerCtx;
 use chrono::{Duration, Utc};
 use futures::future::Either;
 use futures::pin_mut;
+use golem_common::model::Timestamp;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,
 };
-use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tracing::debug;
 use wasmtime::component::Resource;
-use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 use wasmtime_wasi::IoView as _;
+use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<bool> {

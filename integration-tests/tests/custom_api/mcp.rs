@@ -18,7 +18,7 @@ use golem_common::base_model::domain_registration::{Domain, DomainRegistrationCr
 use golem_common::base_model::mcp_deployment::{McpDeploymentAgentOptions, McpDeploymentCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{EnvironmentOptions, TestDsl, TestDslExtended};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -294,8 +294,10 @@ async fn list_tools(ctx: &McpTestContext) -> anyhow::Result<()> {
 
     // WeatherAgentSingleton tools (no constructor params)
     assert!(tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city".to_string()));
-    assert!(tool_names
-        .contains(&"WeatherAgentSingleton-get_weather_report_for_city_with_images".to_string()));
+    assert!(
+        tool_names
+            .contains(&"WeatherAgentSingleton-get_weather_report_for_city_with_images".to_string())
+    );
     assert!(
         tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city_text".to_string())
     );
@@ -350,10 +352,12 @@ async fn call_tool_weather_agent_multimodal(ctx: &McpTestContext) -> anyhow::Res
 
     let unstructured_text_content = &multimodal_array[0];
 
-    assert!(unstructured_text_content["text"]
-        .as_str()
-        .unwrap()
-        .contains("snow fall in Sydney"));
+    assert!(
+        unstructured_text_content["text"]
+            .as_str()
+            .unwrap()
+            .contains("snow fall in Sydney")
+    );
 
     let image_content = &multimodal_array[1];
 
@@ -379,10 +383,12 @@ async fn call_tool_weather_agent_unstructured_text(ctx: &McpTestContext) -> anyh
 
     let unstructured_text = &result["content"].as_array().unwrap();
 
-    assert!(unstructured_text[0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("unstructured weather report for Sydney"),);
+    assert!(
+        unstructured_text[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("unstructured weather report for Sydney"),
+    );
 
     Ok(())
 }
@@ -494,15 +500,23 @@ async fn list_resources(ctx: &McpTestContext) -> anyhow::Result<()> {
         "Expected static weather report resource in {:?}",
         resource_uris
     );
-    assert!(resource_uris
-        .contains(&"golem://StaticResource/get_static_weather_report_with_images".to_string()));
-    assert!(resource_uris
-        .contains(&"golem://StaticResource/get_static_weather_report_text".to_string()));
-    assert!(resource_uris.contains(&"golem://StaticResource/get_static_now_fall_image".to_string()));
+    assert!(
+        resource_uris
+            .contains(&"golem://StaticResource/get_static_weather_report_with_images".to_string())
+    );
+    assert!(
+        resource_uris
+            .contains(&"golem://StaticResource/get_static_weather_report_text".to_string())
+    );
+    assert!(
+        resource_uris.contains(&"golem://StaticResource/get_static_now_fall_image".to_string())
+    );
 
-    assert!(!resource_uris
-        .iter()
-        .any(|u| u.starts_with("golem://DynamicResource")));
+    assert!(
+        !resource_uris
+            .iter()
+            .any(|u| u.starts_with("golem://DynamicResource"))
+    );
 
     Ok(())
 }
@@ -523,10 +537,14 @@ async fn list_resource_templates(ctx: &McpTestContext) -> anyhow::Result<()> {
         "Expected dynamic weather report template in {:?}",
         template_uris
     );
-    assert!(template_uris
-        .contains(&"golem://DynamicResource/get_weather_report_with_images/{name}".to_string()));
-    assert!(template_uris
-        .contains(&"golem://DynamicResource/get_weather_report_text/{name}".to_string()));
+    assert!(
+        template_uris
+            .contains(&"golem://DynamicResource/get_weather_report_with_images/{name}".to_string())
+    );
+    assert!(
+        template_uris
+            .contains(&"golem://DynamicResource/get_weather_report_text/{name}".to_string())
+    );
     assert!(
         template_uris.contains(&"golem://DynamicResource/get_snow_fall_image/{name}".to_string())
     );

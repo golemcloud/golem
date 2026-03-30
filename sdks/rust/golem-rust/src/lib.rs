@@ -213,10 +213,10 @@ use bindings::golem::api::host::*;
 
 pub use golem_wasm;
 
+pub use bindings::golem::api::host::{ForkResult, PersistenceLevel, PromiseId};
 pub use bindings::golem::api::host::{
     complete_promise, create_promise, fork, get_promise, oplog_commit,
 };
-pub use bindings::golem::api::host::{ForkResult, PersistenceLevel, PromiseId};
 
 pub use checkpoint::*;
 pub use transaction::*;

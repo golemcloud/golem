@@ -15,7 +15,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::quote;
-use syn::{parse_macro_input, Attribute, Data, DeriveInput, Lit};
+use syn::{Attribute, Data, DeriveInput, Lit, parse_macro_input};
 
 pub fn derive_allowed_languages(input: TokenStream, golem_rust_crate_ident: &Ident) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
@@ -79,10 +79,10 @@ pub fn derive_allowed_languages(input: TokenStream, golem_rust_crate_ident: &Ide
     expanded.into()
 }
 fn parse_lang_attr(attr: &Attribute) -> Option<String> {
-    if attr.path().is_ident("code") {
-        if let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>() {
-            return Some(lit_str.value());
-        }
+    if attr.path().is_ident("code")
+        && let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>()
+    {
+        return Some(lit_str.value());
     }
     None
 }

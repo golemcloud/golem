@@ -19,7 +19,7 @@ use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnaps
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 use crate::{
     agentic::{
-        with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
+        AgentTypeName, with_agent_initiator, with_agent_instance, with_agent_instance_async,
     },
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };

@@ -898,13 +898,13 @@ impl<'a> Parser<'a> {
                                 type_flags.names.len()
                             )));
                         }
-                        if let Some(prev) = prev_idx {
-                            if idx <= prev {
-                                return Err(self.error(&format!(
-                                    "Flag indices must be strictly increasing, got {} after {}",
-                                    idx, prev
-                                )));
-                            }
+                        if let Some(prev) = prev_idx
+                            && idx <= prev
+                        {
+                            return Err(self.error(&format!(
+                                "Flag indices must be strictly increasing, got {} after {}",
+                                idx, prev
+                            )));
                         }
                         flags[idx] = true;
                         prev_idx = Some(idx);
@@ -1099,25 +1099,25 @@ impl<'a> Parser<'a> {
             return Err(self.error("Expected digits after decimal point"));
         }
         // optional exponent
-        if let Some(ch) = self.peek() {
-            if ch == 'e' || ch == 'E' {
+        if let Some(ch) = self.peek()
+            && (ch == 'e' || ch == 'E')
+        {
+            self.advance();
+            if let Some(ch) = self.peek()
+                && (ch == '+' || ch == '-')
+            {
                 self.advance();
-                if let Some(ch) = self.peek() {
-                    if ch == '+' || ch == '-' {
-                        self.advance();
-                    }
+            }
+            let exp_start = self.pos;
+            while let Some(ch) = self.peek() {
+                if ch.is_ascii_digit() {
+                    self.advance();
+                } else {
+                    break;
                 }
-                let exp_start = self.pos;
-                while let Some(ch) = self.peek() {
-                    if ch.is_ascii_digit() {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                }
-                if self.pos == exp_start {
-                    return Err(self.error("Expected digits in exponent"));
-                }
+            }
+            if self.pos == exp_start {
+                return Err(self.error("Expected digits in exponent"));
             }
         }
         let s = &self.input[start..self.pos];

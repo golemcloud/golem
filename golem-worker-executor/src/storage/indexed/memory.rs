@@ -333,8 +333,8 @@ mod tests {
 
     use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
     use assert2::check;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
 
     fn test_agent_id() -> AgentId {
         use std::sync::OnceLock;

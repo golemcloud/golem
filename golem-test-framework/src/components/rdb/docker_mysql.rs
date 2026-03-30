@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
-use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb};
+use crate::components::docker::{ContainerHandle, get_docker_container_name, network};
+use crate::components::rdb::{DbInfo, MysqlInfo, Rdb, mysql_wait_for_startup};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
-use testcontainers::runners::AsyncRunner;
 use testcontainers::ImageExt;
+use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::mysql::Mysql;
 use tracing::info;
 

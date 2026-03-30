@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::GuestLanguage;
 use crate::model::app::CustomBridgeSdkTarget;
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::GuestLanguage;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use serde_derive::{Deserialize, Serialize};

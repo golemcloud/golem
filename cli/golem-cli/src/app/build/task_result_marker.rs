@@ -18,8 +18,8 @@ use crate::log::log_warn_action;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
-use crate::model::{app_raw, GuestLanguage};
-use anyhow::{anyhow, bail, Context};
+use crate::model::{GuestLanguage, app_raw};
+use anyhow::{Context, anyhow, bail};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;

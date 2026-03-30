@@ -14,7 +14,7 @@
 
 use crate::error::HintError;
 use crate::log::log_warn;
-use crate::log::{logln, LogColorize};
+use crate::log::{LogColorize, logln};
 use crate::model::app_raw::Environment;
 use crate::model::text::environment::format_resolved_environment_identity;
 use anyhow::bail;
@@ -237,7 +237,9 @@ impl ResolvedEnvironmentIdentity {
                     "The current environment {} has no deployment.",
                     self.text_format()
                 ));
-                logln("Use the 'golem deploy' CLI command, or the '.deploy' REPL command, or select a different environment.");
+                logln(
+                    "Use the 'golem deploy' CLI command, or the '.deploy' REPL command, or select a different environment.",
+                );
                 logln("");
                 Ok(R::default())
             }

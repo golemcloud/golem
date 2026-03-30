@@ -18,17 +18,17 @@ use crate::app::template::{
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
     SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, UnsafeTemplatePlan,
 };
-use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::Handlers;
+use crate::command_handler::app::AppCommandHandler;
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::log::{
-    log_action, log_anyhow_error, log_error, log_failed_to, log_finished_ok,
-    log_skipping_up_to_date, logln, LogColorize, LogIndent,
+    LogColorize, LogIndent, log_action, log_anyhow_error, log_error, log_failed_to,
+    log_finished_ok, log_skipping_up_to_date, logln,
 };
-use crate::model::text::diff::log_unified_diff_for_path;
 use crate::model::GuestLanguage;
+use crate::model::text::diff::log_unified_diff_for_path;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
@@ -171,7 +171,9 @@ impl TemplateHandler {
                     logln("");
                     log_error("Cannot create new application in existing application directory");
                     logln("");
-                    logln("To add new agents or component to the current application, use the 'golem new .' command!");
+                    logln(
+                        "To add new agents or component to the current application, use the 'golem new .' command!",
+                    );
                     logln("");
                     logln("To create a new application, switch to new directory without one!");
                     bail!(NonSuccessfulExit);
@@ -261,7 +263,10 @@ impl TemplateHandler {
                 Some(application_name) => application_name,
                 None => {
                     logln("");
-                    log_error(format!("In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}", err));
+                    log_error(format!(
+                        "In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}",
+                        err
+                    ));
                     bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
                 }
             },
@@ -304,17 +309,17 @@ impl TemplateHandler {
         for template_name in template_names {
             match component_name {
                 Some(component_name) => {
-                    if let Some(existing_component) = existing_components.get(component_name) {
-                        if template_name.language() != existing_component.language {
-                            validation.add_error(format!(
+                    if let Some(existing_component) = existing_components.get(component_name)
+                        && template_name.language() != existing_component.language
+                    {
+                        validation.add_error(format!(
                                 "Cannot add {} template {} to existing {} component {}, language mismatch!",
                                 template_name.language().name().log_color_highlight(),
                                 template_name.as_str().log_color_error_highlight(),
                                 existing_component.language.name().log_color_highlight(),
                                 component_name.as_str().log_color_highlight(),
                             ));
-                            continue;
-                        }
+                        continue;
                     }
 
                     template_to_component.insert(template_name.clone(), component_name.clone());
@@ -408,19 +413,16 @@ impl TemplateHandler {
 
             if let Some(common_template) =
                 app_template_repo.common_template(template_name.language())?
+                && !common_templates.contains_key(&common_template.0.name)
             {
-                if !common_templates.contains_key(&common_template.0.name) {
-                    common_templates
-                        .insert(common_template.0.name.clone(), common_template.clone());
-                }
+                common_templates.insert(common_template.0.name.clone(), common_template.clone());
             }
 
-            if !component_templates.contains_key(component_name) {
-                if let Some(component_template) =
+            if !component_templates.contains_key(component_name)
+                && let Some(component_template) =
                     app_template_repo.component_templates(template_name.language())?
-                {
-                    component_templates.insert(component_name.clone(), component_template.clone());
-                }
+            {
+                component_templates.insert(component_name.clone(), component_template.clone());
             }
 
             match app_template_repo.agent_template(template_name) {
@@ -550,12 +552,11 @@ impl TemplateHandler {
 
         // We extend the component templates again to include promoted existing components
         for component_name in all_component_directories.keys() {
-            if let Some(component) = existing_components.get(component_name) {
-                if let Some(component_template) =
+            if let Some(component) = existing_components.get(component_name)
+                && let Some(component_template) =
                     app_template_repo.component_template(component.language)?
-                {
-                    component_templates.insert(component_name.clone(), component_template.clone());
-                }
+            {
+                component_templates.insert(component_name.clone(), component_template.clone());
             }
         }
 

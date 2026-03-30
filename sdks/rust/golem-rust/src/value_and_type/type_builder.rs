@@ -273,13 +273,13 @@ impl WitTypeBuilder {
     pub(crate) fn finish_container(&mut self, container_idx: NodeIndex, item_idx: NodeIndex) {
         match &mut self.nodes[container_idx as usize] {
             NamedWitTypeNode {
-                type_: WitTypeNode::ListType(ref mut idx),
+                type_: WitTypeNode::ListType(idx),
                 ..
             } => {
                 *idx = item_idx;
             }
             NamedWitTypeNode {
-                type_: WitTypeNode::OptionType(ref mut idx),
+                type_: WitTypeNode::OptionType(idx),
                 ..
             } => {
                 *idx = item_idx;
@@ -297,7 +297,7 @@ impl WitTypeBuilder {
     ) {
         match &mut self.nodes[record_idx as usize] {
             NamedWitTypeNode {
-                type_: WitTypeNode::RecordType(ref mut field_list),
+                type_: WitTypeNode::RecordType(field_list),
                 ..
             } => {
                 *field_list = fields;
@@ -311,7 +311,7 @@ impl WitTypeBuilder {
     pub(crate) fn finish_tuple(&mut self, tuple_idx: NodeIndex, fields: Vec<NodeIndex>) {
         match &mut self.nodes[tuple_idx as usize] {
             NamedWitTypeNode {
-                type_: WitTypeNode::TupleType(ref mut field_list),
+                type_: WitTypeNode::TupleType(field_list),
                 ..
             } => {
                 *field_list = fields;
@@ -329,7 +329,7 @@ impl WitTypeBuilder {
     ) {
         match &mut self.nodes[variant_idx as usize] {
             NamedWitTypeNode {
-                type_: WitTypeNode::VariantType(ref mut case_list),
+                type_: WitTypeNode::VariantType(case_list),
                 ..
             } => {
                 *case_list = cases;
@@ -348,7 +348,7 @@ impl WitTypeBuilder {
     ) {
         match &mut self.nodes[result_idx as usize] {
             NamedWitTypeNode {
-                type_: WitTypeNode::ResultType(ref mut result),
+                type_: WitTypeNode::ResultType(result),
                 ..
             } => {
                 *result = (ok, err);

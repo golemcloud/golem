@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_common::SafeDisplay;
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_executor::bootstrap;
 use golem_worker_executor::metrics;
-use golem_worker_executor::services::golem_config::{make_config_loader, GolemConfig};
+use golem_worker_executor::services::golem_config::{GolemConfig, make_config_loader};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::info;

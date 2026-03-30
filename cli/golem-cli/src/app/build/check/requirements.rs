@@ -75,8 +75,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             args: &["--version"],
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::RUSTC_MIN)),
-        install_hint:
-            "Install stable Rust with rustup: rustup install stable && rustup default stable",
+        install_hint: "Install stable Rust with rustup: rustup install stable && rustup default stable",
     },
     ToolRequirement {
         key: "cargo",

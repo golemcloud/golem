@@ -14,9 +14,9 @@
 
 mod persistence;
 
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_test_framework::components::redis::spawned::SpawnedRedis;
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_test_framework::components::redis::Redis;
+use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use std::net::TcpListener;
 use std::sync::Arc;
 use test_r::test_dep;

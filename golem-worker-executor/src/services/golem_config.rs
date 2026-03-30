@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use anyhow::Context;
-use figment::providers::{Format, Toml};
 use figment::Figment;
+use figment::providers::{Format, Toml};
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::base64::Base64;
 use golem_common::model::RetryConfig;
+use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
-use golem_common::{grpc_uri, SafeDisplay};
+use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
@@ -454,15 +454,15 @@ impl GolemConfig {
     }
 
     pub fn add_port_to_tracing_file_name_if_enabled(&mut self) {
-        if self.tracing_file_name_with_port {
-            if let Some(file_name) = &self.tracing.file_name {
-                let elems: Vec<&str> = file_name.split('.').collect();
-                self.tracing.file_name = {
-                    if elems.len() == 2 {
-                        Some(format!("{}.{}.{}", elems[0], self.grpc.port, elems[1]))
-                    } else {
-                        Some(format!("{}.{}", file_name, self.grpc.port))
-                    }
+        if self.tracing_file_name_with_port
+            && let Some(file_name) = &self.tracing.file_name
+        {
+            let elems: Vec<&str> = file_name.split('.').collect();
+            self.tracing.file_name = {
+                if elems.len() == 2 {
+                    Some(format!("{}.{}.{}", elems[0], self.grpc.port, elems[1]))
+                } else {
+                    Some(format!("{}.{}", file_name, self.grpc.port))
                 }
             }
         }
