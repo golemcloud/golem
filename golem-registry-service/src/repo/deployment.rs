@@ -37,7 +37,7 @@ use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -94,12 +94,11 @@ pub trait DeploymentRepo: Send + Sync {
     ) -> RepoResult<Option<DeployedDeploymentIdentity>>;
 
     /// Deploy and record a change event in the same transaction.
-    /// Returns the deployment record and the outbox event_id.
     async fn deploy(
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError>;
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>;
 
     async fn list_active_compiled_routes_for_domain(
         &self,
@@ -168,13 +167,12 @@ pub trait DeploymentRepo: Send + Sync {
     ) -> RepoResult<Option<ResolvedAgentTypeRecord>>;
 
     /// Set the current deployment and record a change event in the same transaction.
-    /// Returns the deployment record and the outbox event_id.
     async fn set_current_deployment(
         &self,
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError>;
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -306,7 +304,8 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError> {
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
+    {
         let span = Self::span_user_and_env(
             deployment_creation.user_account_id,
             deployment_creation.environment_id,
@@ -495,7 +494,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError> {
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
         self.repo
             .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
             .instrument(info_span!(
@@ -704,7 +703,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
-    ) -> Result<(CurrentDeploymentExtRevisionRecord, ChangeEventId), DeployRepoError> {
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
+    {
         if version_check
             && self
                 .version_exists(
@@ -830,13 +830,13 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     let change_event = NewRegistryChangeEvent::deployment_changed(
                         environment_id,
                         deployment_revision_id,
+                        revision.revision_id,
                     );
-                    let change_event_id =
-                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
-                            tx,
-                            &change_event,
-                        )
-                        .await?;
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                        tx,
+                        &change_event,
+                    )
+                    .await?;
 
                     let ext_revision = CurrentDeploymentExtRevisionRecord {
                         revision,
@@ -844,15 +844,13 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         deployment_hash: deployment_revision.hash,
                     };
 
-                    Ok::<_, DeployRepoError>((ext_revision, change_event_id))
+                    Ok::<_, DeployRepoError>(ext_revision)
                 }
                 .boxed()
             })
             .await?;
 
-        self.db_pool.notify_change_event(result.1).await;
-
-        Ok(result)
+        Ok(result.requires_notification_signal())
     }
 
     async fn get_active_mcp_for_domain(
@@ -1175,6 +1173,17 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .to_string()
         };
 
+        let current_deployment_revision_expr = if deployment_revision.is_some() {
+            "NULL".to_string()
+        } else {
+            indoc! { r#"
+                (SELECT cd.current_revision_id
+                 FROM current_deployments cd
+                 WHERE cd.environment_id = env.environment_id)"#
+            }
+            .to_string()
+        };
+
         let query = formatdoc! { r#"
             WITH owner AS (
               SELECT account_id
@@ -1196,6 +1205,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 env.environment_id,
                 env.owner_account_id,
                 {deployment_revision_expr} AS deployment_revision_id,
+                {current_deployment_revision_expr} AS current_deployment_revision_id,
                 COALESCE((
                   SELECT esr.roles
                   FROM environment_shares es
@@ -1209,7 +1219,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
               FROM env
             )
             SELECT
-              r.environment_id, r.deployment_revision_id,
+              r.environment_id, r.deployment_revision_id, target.current_deployment_revision_id,
               r.agent_type_name, r.canonical_agent_type_name,
               r.component_id, r.component_revision_id,
               r.webhook_prefix_authority_and_path, r.agent_type,
@@ -1243,7 +1253,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> Result<(CurrentDeploymentRevisionRecord, ChangeEventId), DeployRepoError> {
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
         let result = self
             .with_tx_err("set_current_deployment", |tx| {
                 Box::pin(async move {
@@ -1258,22 +1268,20 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     let change_event = NewRegistryChangeEvent::deployment_changed(
                         environment_id,
                         deployment_revision_id,
+                        revision.revision_id,
                     );
-                    let change_event_id =
-                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(
-                            tx,
-                            &change_event,
-                        )
-                        .await?;
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                        tx,
+                        &change_event,
+                    )
+                    .await?;
 
-                    Ok::<_, DeployRepoError>((revision, change_event_id))
+                    Ok::<_, DeployRepoError>(revision)
                 })
             })
             .await?;
 
-        self.db_pool.notify_change_event(result.1).await;
-
-        Ok(result)
+        Ok(result.requires_notification_signal())
     }
 
     async fn get_latest_deployed_agent_type_by_component_revision(

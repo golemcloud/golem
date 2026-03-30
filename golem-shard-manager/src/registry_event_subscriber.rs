@@ -14,103 +14,67 @@
 
 use crate::quota::{QuotaService, ResourceDefinitionFetcher};
 use golem_common::model::agent::RegistryInvalidationEvent;
-use golem_service_base::clients::registry::RegistryService;
+use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::task::JoinSet;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
-pub fn start(
-    registry_service: Arc<dyn RegistryService>,
+pub(crate) struct ShardManagerRegistryInvalidationHandler {
     fetcher: Arc<dyn ResourceDefinitionFetcher>,
     quota_service: Arc<QuotaService>,
-    join_set: &mut JoinSet<anyhow::Result<()>>,
-) {
-    join_set.spawn(run_loop(registry_service, fetcher, quota_service));
 }
 
-async fn run_loop(
-    registry_service: Arc<dyn RegistryService>,
-    fetcher: Arc<dyn ResourceDefinitionFetcher>,
-    quota_service: Arc<QuotaService>,
-) -> anyhow::Result<()> {
-    use futures::StreamExt;
-
-    let mut last_seen_event_id: Option<u64> = None;
-    let mut backoff = Duration::from_millis(100);
-    let max_backoff = Duration::from_secs(30);
-
-    loop {
-        let connect_result = registry_service
-            .subscribe_registry_invalidations(last_seen_event_id)
-            .await;
-
-        match connect_result {
-            Ok(mut stream) => {
-                info!("Connected to registry invalidation stream");
-                backoff = Duration::from_millis(100);
-
-                loop {
-                    match stream.next().await {
-                        Some(Ok(event)) => {
-                            last_seen_event_id = Some(event.event_id());
-                            dispatch_event(&fetcher, &quota_service, &event).await;
-                        }
-                        Some(Err(e)) => {
-                            warn!("Error receiving registry event: {e}, reconnecting");
-                            break;
-                        }
-                        None => {
-                            warn!("Registry invalidation stream ended, reconnecting");
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to connect to registry invalidation stream: {e}");
-            }
-        }
-
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(max_backoff);
+impl ShardManagerRegistryInvalidationHandler {
+    pub async fn run(
+        registry_service: Arc<dyn RegistryService>,
+        fetcher: Arc<dyn ResourceDefinitionFetcher>,
+        quota_service: Arc<QuotaService>,
+    ) {
+        registry_service
+            .run_registry_invalidation_event_subscriber(
+                "shard-manager",
+                None,
+                Arc::new(Self {
+                    fetcher,
+                    quota_service,
+                }),
+            )
+            .await
     }
 }
 
-async fn dispatch_event(
-    fetcher: &Arc<dyn ResourceDefinitionFetcher>,
-    quota_service: &QuotaService,
-    event: &RegistryInvalidationEvent,
-) {
-    match event {
-        RegistryInvalidationEvent::CursorExpired { .. } => {
-            warn!("Registry invalidation cursor expired, refreshing all entries");
-            fetcher.invalidate_all().await;
-            quota_service.on_cursor_expired().await;
+#[async_trait::async_trait]
+impl RegistryInvalidationHandler for ShardManagerRegistryInvalidationHandler {
+    async fn on_event(&self, event: RegistryInvalidationEvent) {
+        match &event {
+            RegistryInvalidationEvent::CursorExpired { .. } => {
+                warn!("Registry invalidation cursor expired, refreshing all entries");
+                self.fetcher.invalidate_all().await;
+                self.quota_service.on_cursor_expired().await;
+            }
+            RegistryInvalidationEvent::ResourceDefinitionChanged {
+                environment_id,
+                resource_definition_id,
+                resource_name,
+                ..
+            } => {
+                debug!(
+                    %environment_id,
+                    %resource_definition_id,
+                    %resource_name,
+                    "resource definition changed, refreshing cached entry"
+                );
+                self.fetcher
+                    .invalidate(*environment_id, resource_name.clone())
+                    .await;
+                self.quota_service
+                    .on_resource_definition_changed(*resource_definition_id)
+                    .await;
+            }
+            RegistryInvalidationEvent::DeploymentChanged { .. }
+            | RegistryInvalidationEvent::DomainRegistrationChanged { .. }
+            | RegistryInvalidationEvent::AccountTokensInvalidated { .. }
+            | RegistryInvalidationEvent::EnvironmentPermissionsChanged { .. }
+            | RegistryInvalidationEvent::SecuritySchemeChanged { .. } => {}
         }
-        RegistryInvalidationEvent::ResourceDefinitionChanged {
-            environment_id,
-            resource_definition_id,
-            resource_name,
-            ..
-        } => {
-            debug!(
-                %environment_id,
-                %resource_definition_id,
-                %resource_name,
-                "resource definition changed, refreshing cached entry"
-            );
-            fetcher
-                .invalidate(*environment_id, resource_name.clone())
-                .await;
-            quota_service
-                .on_resource_definition_changed(*resource_definition_id)
-                .await;
-        }
-        RegistryInvalidationEvent::DeploymentChanged { .. }
-        | RegistryInvalidationEvent::DomainRegistrationChanged { .. }
-        | RegistryInvalidationEvent::AccountTokensInvalidated { .. }
-        | RegistryInvalidationEvent::EnvironmentPermissionsChanged { .. }
-        | RegistryInvalidationEvent::SecuritySchemeChanged { .. } => {}
     }
 }

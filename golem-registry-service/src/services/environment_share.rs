@@ -18,8 +18,9 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment_share::{
     EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
-use crate::repo::registry_change::{ChangeEventId, RegistryChangeEvent};
-use crate::services::registry_change_notifier::RegistryChangeNotifier;
+use crate::services::registry_change_notifier::{
+    RegistryChangeNotifier, RequiresNotificationSignalExt,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_share::{
@@ -31,7 +32,6 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
-use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentShareError {
@@ -90,20 +90,6 @@ impl EnvironmentShareService {
         }
     }
 
-    fn notify_permissions_changed(
-        &self,
-        change_event_id: ChangeEventId,
-        environment_id: Uuid,
-        grantee_account_id: Uuid,
-    ) {
-        self.registry_change_notifier
-            .notify(RegistryChangeEvent::EnvironmentPermissionsChanged {
-                event_id: change_event_id,
-                environment_id,
-                grantee_account_id,
-            });
-    }
-
     pub async fn create(
         &self,
         environment_id: EnvironmentId,
@@ -136,13 +122,10 @@ impl EnvironmentShareService {
             .await;
 
         match result {
-            Ok((record, change_event_id)) => {
-                let share: EnvironmentShare = record.try_into()?;
-                self.notify_permissions_changed(
-                    change_event_id,
-                    environment_id.0,
-                    data.grantee_account_id.0,
-                );
+            Ok(record) => {
+                let share: EnvironmentShare = record
+                    .signal_new_events_available(&self.registry_change_notifier)
+                    .try_into()?;
                 Ok(share)
             }
             Err(EnvironmentShareRepoError::ShareViolatesUniqueness) => {
@@ -177,9 +160,6 @@ impl EnvironmentShareService {
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
 
-        let env_id = environment_share.environment_id;
-        let grantee_id = environment_share.grantee_account_id;
-
         let result = self
             .environment_share_repo
             .update(EnvironmentShareRevisionRecord::from_model(
@@ -189,9 +169,10 @@ impl EnvironmentShareService {
             .await;
 
         match result {
-            Ok((record, change_event_id)) => {
-                let share: EnvironmentShare = record.try_into()?;
-                self.notify_permissions_changed(change_event_id, env_id.0, grantee_id.0);
+            Ok(record) => {
+                let share: EnvironmentShare = record
+                    .signal_new_events_available(&self.registry_change_notifier)
+                    .try_into()?;
                 Ok(share)
             }
             Err(EnvironmentShareRepoError::ConcurrentModification) => {
@@ -225,9 +206,6 @@ impl EnvironmentShareService {
 
         let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
 
-        let env_id = environment_share.environment_id;
-        let grantee_id = environment_share.grantee_account_id;
-
         let result = self
             .environment_share_repo
             .delete(EnvironmentShareRevisionRecord::from_model(
@@ -237,9 +215,10 @@ impl EnvironmentShareService {
             .await;
 
         match result {
-            Ok((record, change_event_id)) => {
-                let share: EnvironmentShare = record.try_into()?;
-                self.notify_permissions_changed(change_event_id, env_id.0, grantee_id.0);
+            Ok(record) => {
+                let share: EnvironmentShare = record
+                    .signal_new_events_available(&self.registry_change_notifier)
+                    .try_into()?;
                 Ok(share)
             }
             Err(EnvironmentShareRepoError::ConcurrentModification) => {
