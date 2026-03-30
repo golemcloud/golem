@@ -479,6 +479,8 @@ impl TypeScriptBridgeGenerator {
         self.generate_ts_class_constructor(writer);
         self.generate_ts_constructor_methods(writer, class_name, config_var)?;
         self.generate_ts_config_getter(writer, config_var);
+        self.generate_ts_agent_id_getter(writer);
+        self.generate_ts_get_configuration(writer, config_var);
         self.generate_ts_remote_methods(writer, class_name)?;
 
         writer.end_export_class();
@@ -488,10 +490,11 @@ impl TypeScriptBridgeGenerator {
 
     /// Generates fields of the agent client class.
     ///
-    /// We store the encoded parameters and phantom ID of the targeted agent.
+    /// We store the encoded parameters, phantom ID, and agent ID of the targeted agent.
     fn generate_ts_class_fields(&self, writer: &mut TsWriter) {
         writer.declare_field("parameters", "base.DataValue", None);
         writer.declare_field("phantomId", "base.PhantomId | undefined", None);
+        writer.declare_field("_agentId", "base.AgentId", None);
     }
 
     /// Generates the private constructor of the agent class. The user-facing constructors
@@ -500,8 +503,10 @@ impl TypeScriptBridgeGenerator {
         let mut constructor = writer.begin_private_constructor();
         constructor.param("parameters", "base.DataValue");
         constructor.param("phantomId", "base.PhantomId | undefined");
+        constructor.param("agentId", "base.AgentId");
         constructor.write_line("this.parameters = parameters;");
         constructor.write_line("this.phantomId = phantomId;");
+        constructor.write_line("this._agentId = agentId;");
     }
 
     /// Generates the static methods for constructing agent clients. For durable agents we
@@ -572,7 +577,9 @@ impl TypeScriptBridgeGenerator {
         self.write_encode_data_value(&mut get, &self.agent_type.constructor.input_schema)?;
         get.write_line("const phantomId = undefined;");
         self.write_create_agent_call(&mut get, config_var, "[]");
-        get.write_line(format!("return new {class_name}(parameters, phantomId);"));
+        get.write_line(format!(
+            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+        ));
 
         Ok(())
     }
@@ -596,7 +603,9 @@ impl TypeScriptBridgeGenerator {
         get_phantom.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
         self.write_create_agent_call(&mut get_phantom, config_var, "[]");
-        get_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
+        get_phantom.write_line(format!(
+            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+        ));
 
         Ok(())
     }
@@ -620,7 +629,9 @@ impl TypeScriptBridgeGenerator {
         self.write_encode_data_value(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
         new_phantom.write_line("const phantomId = uuidv4();");
         self.write_create_agent_call(&mut new_phantom, config_var, "[]");
-        new_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
+        new_phantom.write_line(format!(
+            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+        ));
 
         Ok(())
     }
@@ -637,7 +648,7 @@ impl TypeScriptBridgeGenerator {
         writer.write_line(format!(
             "if (!__config) {{ throw new Error(\"{agent_type_name} configuration is not set\"); }}"
         ));
-        writer.write_line("await base.createAgent(__config.server, {");
+        writer.write_line("const __createResponse = await base.createAgent(__config.server, {");
         writer.indent();
         writer.write_line("appName: __config.application,");
         writer.write_line("envName: __config.environment,");
@@ -671,7 +682,9 @@ impl TypeScriptBridgeGenerator {
         method.write_line("const phantomId = undefined;");
         self.write_config_encoding(&mut method, local_configs);
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
-        method.write_line(format!("return new {class_name}(parameters, phantomId);"));
+        method.write_line(format!(
+            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+        ));
 
         Ok(())
     }
@@ -698,7 +711,9 @@ impl TypeScriptBridgeGenerator {
         self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
         self.write_config_encoding(&mut method, local_configs);
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
-        method.write_line(format!("return new {class_name}(parameters, phantomId);"));
+        method.write_line(format!(
+            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+        ));
 
         Ok(())
     }
@@ -725,7 +740,9 @@ impl TypeScriptBridgeGenerator {
         method.write_line("const phantomId = uuidv4();");
         self.write_config_encoding(&mut method, local_configs);
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
-        method.write_line(format!("return new {class_name}(parameters, phantomId);"));
+        method.write_line(format!(
+            "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
+        ));
 
         Ok(())
     }
@@ -797,6 +814,30 @@ impl TypeScriptBridgeGenerator {
         get_config.unindent();
         get_config.write_line("}");
         get_config.write_line(format!("return {};", config_var));
+    }
+
+    /// Generates a public getter for the agent's identity
+    fn generate_ts_agent_id_getter(&self, writer: &mut TsWriter) {
+        writer.write_doc("Returns the agent's identity, containing the component ID and agent name.");
+        let mut get_agent_id = writer.begin_method("get agentId");
+        get_agent_id.result("base.AgentId");
+        get_agent_id.write_line("return this._agentId;");
+    }
+
+    /// Generates a public static method to access the current configuration
+    fn generate_ts_get_configuration(&self, writer: &mut TsWriter, config_var: &str) {
+        writer.write_doc("Returns the current configuration, or throws if not configured.");
+        let mut get_configuration = writer.begin_static_method("getConfiguration");
+        get_configuration.result("base.Configuration");
+        get_configuration.write_line(format!("if (!{config_var}) {{"));
+        get_configuration.indent();
+        get_configuration.write_line(format!(
+            "  throw new Error(\"{} configuration is not set\");",
+            self.agent_type.type_name.0
+        ));
+        get_configuration.unindent();
+        get_configuration.write_line("}");
+        get_configuration.write_line(format!("return {};", config_var));
     }
 
     /// Generates the remote agent methods
