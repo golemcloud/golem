@@ -27,3 +27,4 @@ if (fs.existsSync(packagesDir)) {
 }
 
 removePath(path.join(packagesDir, 'golem-ts-sdk', 'agent-template'));
+removePath(path.join(packagesDir, 'golem-ts-sdk', 'wasm', 'agent_guest.wasm'));
