@@ -24,7 +24,8 @@ use golem_common::model::agent::ResolvedAgentType;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{
-    DeploymentPlan, DeploymentRevision, DeploymentSummary, DeploymentVersion,
+    CurrentDeploymentRevision, DeploymentPlan, DeploymentRevision, DeploymentSummary,
+    DeploymentVersion,
 };
 use golem_common::model::environment::{Environment, EnvironmentName};
 use golem_common::{
@@ -432,12 +433,18 @@ impl DeploymentService {
             .deployment_revision_id
             .try_into()
             .map_err(DeployRepoError::from)?;
+        let current_deployment_revision: Option<CurrentDeploymentRevision> = record
+            .current_deployment_revision_id
+            .map(CurrentDeploymentRevision::try_from)
+            .transpose()
+            .map_err(DeploymentError::from)?;
         let deployed: DeployedRegisteredAgentType =
             record.try_into().map_err(DeploymentError::from)?;
         Ok(ResolvedAgentType {
             registered_agent_type: deployed.into(),
             environment_id,
             deployment_revision,
+            current_deployment_revision,
         })
     }
 

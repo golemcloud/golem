@@ -26,6 +26,7 @@ pub mod service;
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
 use crate::mcp::{GolemAgentMcpServer, McpBearerAuth, oauth_proxy_routes};
+use crate::service::registry_event_subscriber::WorkerServiceRegistryInvalidationHandler;
 use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -89,11 +90,12 @@ impl WorkerService {
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
         join_set.spawn(async move {
-            service::registry_event_subscriber::run_registry_event_subscriber(
+            WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                None,
             )
             .await;
             Ok(())
@@ -125,6 +127,21 @@ impl WorkerService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
         tracer: Option<SdkTracer>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
+        let registry_service = self.services.registry_service.clone();
+        let agent_resolution_cache = self.services.agent_resolution_cache.clone();
+        let route_resolver = self.services.route_resolver.clone();
+        let auth_service = self.services.auth_service.clone();
+        join_set.spawn(async move {
+            service::registry_event_subscriber::run_registry_event_subscriber(
+                registry_service,
+                agent_resolution_cache,
+                route_resolver,
+                auth_service,
+            )
+            .await;
+            Ok(())
+        });
+
         let grpc_port = self.start_grpc_server(join_set).await?;
         let custom_request_port = self
             .start_api_gateway_server(join_set, tracer.clone())
