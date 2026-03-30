@@ -138,7 +138,9 @@ impl ReplHandler {
             fs::create_dir_all(&repl_root_bridge_sdk_dir)?;
             let repl_root_bridge_sdk_dir = fs::canonicalize_path(&repl_root_bridge_sdk_dir)?;
 
-            let repl_history_file_path = app_ctx.application().repl_history_file(language.try_into()?);
+            let repl_history_file_path = app_ctx
+                .application()
+                .repl_history_file(language.try_into()?);
             if !repl_history_file_path.exists() {
                 fs::write(&repl_history_file_path, "")?;
             }

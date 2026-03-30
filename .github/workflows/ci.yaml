@@ -231,6 +231,17 @@ jobs:
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
+      - name: Setup Java
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        uses: sbt/setup-sbt@v1
+
       - name: Restore built TS SDK
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         uses: actions/cache/restore@v4
@@ -340,7 +351,7 @@ jobs:
       - name: Publish Scala SDK locally
         working-directory: sdks/scala
         run: |
-          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal'
+          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; sbtPlugin/publishLocal'
 
       - name: Copy agent_guest.wasm
         run: |

@@ -298,7 +298,11 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                         ]
                     }
                     (false, "Cargo.toml") => vec![Transform::ComponentName, Transform::RustSdk],
-                    (false, "build.sbt") => vec![Transform::ComponentName, Transform::ScalaSdk, Transform::ApplicationName],
+                    (false, "build.sbt") => vec![
+                        Transform::ComponentName,
+                        Transform::ScalaSdk,
+                        Transform::ApplicationName,
+                    ],
                     (false, _) => vec![Transform::ComponentName],
                 };
 
@@ -418,10 +422,7 @@ fn transform(
                 );
             }
             Transform::ScalaSdk => {
-                replacements.insert(
-                    "GOLEM_SCALA_SDK_VERSION",
-                    sdk_overrides.scala_sdk_dep(),
-                );
+                replacements.insert("GOLEM_SCALA_SDK_VERSION", sdk_overrides.scala_sdk_dep());
                 replacements.insert(
                     "GOLEM_SCALA_VERSION",
                     versions::scala_dep::SCALA_VERSION.to_string(),

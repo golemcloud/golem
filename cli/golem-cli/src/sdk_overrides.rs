@@ -25,13 +25,15 @@ const GOLEM_RUST_PATH: &str = "GOLEM_RUST_PATH";
 const GOLEM_RUST_VERSION: &str = "GOLEM_RUST_VERSION";
 const GOLEM_TS_PACKAGES_PATH: &str = "GOLEM_TS_PACKAGES_PATH";
 const GOLEM_TS_VERSION: &str = "GOLEM_TS_VERSION";
+const GOLEM_SCALA_SDK_VERSION: &str = "GOLEM_SCALA_SDK_VERSION";
 
-const SDK_OVERRIDE_KEYS: [&str; 5] = [
+const SDK_OVERRIDE_KEYS: [&str; 6] = [
     GOLEM_PATH,
     GOLEM_RUST_PATH,
     GOLEM_RUST_VERSION,
     GOLEM_TS_PACKAGES_PATH,
     GOLEM_TS_VERSION,
+    GOLEM_SCALA_SDK_VERSION,
 ];
 
 pub const SDK_OVERRIDES_FILE_NAME: &str = ".golem-sdk-overrides";
@@ -55,6 +57,7 @@ pub struct SdkOverrides {
     pub golem_rust_version: Option<String>,
     pub ts_packages_path: Option<String>,
     pub ts_version: Option<String>,
+    pub scala_sdk_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +84,7 @@ impl SdkOverrides {
                 "sdks/ts/packages",
             )),
             ts_version: None,
+            scala_sdk_version: None,
         }
         .to_env_vars()
     }
@@ -97,7 +101,10 @@ impl SdkOverrides {
     }
 
     pub fn scala_sdk_dep(&self) -> String {
-        versions::sdk::SCALA.to_string()
+        self.scala_sdk_version
+            .as_deref()
+            .unwrap_or(versions::sdk::SCALA)
+            .to_string()
     }
 
     pub fn golem_rust_dep(&self) -> String {
@@ -228,6 +235,7 @@ impl SdkOverrides {
                 },
             ),
             ts_version: get_normalized_value_by_key(&values, GOLEM_TS_VERSION),
+            scala_sdk_version: get_normalized_value_by_key(&values, GOLEM_SCALA_SDK_VERSION),
         }
     }
 
@@ -244,6 +252,9 @@ impl SdkOverrides {
         }
         if let Some(value) = &self.ts_version {
             values.insert(GOLEM_TS_VERSION.to_string(), value.clone());
+        }
+        if let Some(value) = &self.scala_sdk_version {
+            values.insert(GOLEM_SCALA_SDK_VERSION.to_string(), value.clone());
         }
         values
     }
@@ -465,6 +476,7 @@ mod tests {
             golem_rust_version: None,
             ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
             ts_version: None,
+            scala_sdk_version: None,
         }
         .to_env_vars();
 

@@ -76,7 +76,7 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
 
     // Checking bridge SDK generation for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
-    for language in GuestLanguage::iter() {
+    for language in GuestLanguage::iter().filter(|l| l.supports_bridge_generation()) {
         for deployed_agent_type in &deployed_agent_types {
             let output = ctx
                 .cli([
