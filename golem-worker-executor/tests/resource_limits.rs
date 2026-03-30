@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::Tracing;
+use axum::routing::get;
+use axum::Router;
 use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -20,6 +22,7 @@ use golem_worker_executor_test_utils::{
     start_with_concurrent_agent_limit, start_with_table_limit, LastUniqueId, PrecompiledComponent,
     TestContext, WorkerExecutorTestDependencies,
 };
+use std::collections::HashMap;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -28,6 +31,10 @@ inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 inherit_test_dep!(
     #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("http_tests")]
     PrecompiledComponent
 );
 
@@ -256,7 +263,11 @@ async fn concurrent_agent_limit_idle_agent_is_evicted_to_make_room(
 }
 
 /// When the limit is reached with no idle agents, a new agent waits in
-/// WaitingForPermit until a running agent finishes and its permit is returned.
+/// WaitingForPermit until the running agent finishes and its permit is returned.
+///
+/// Uses an HTTP-gated server to keep a1 provably Running (not Idle) while a2
+/// is in WaitingForPermit, eliminating any timing dependency on agent
+/// initialization speed.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -264,48 +275,98 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
 
-    let component = executor
+    // HTTP server that gates its /poll response behind a Notify.
+    // HttpClient2.start_polling polls GET /poll until the body equals "done".
+    // By holding the Notify unreleased we keep a1 in the Running state
+    // for as long as needed, preventing eviction and holding the only permit.
+    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    let gate_clone = gate.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let http_server = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/poll",
+            get(move || {
+                let gate = gate_clone.clone();
+                async move {
+                    gate.notified().await;
+                    "done".to_string()
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let http_component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    // Start a1 using the HttpClient2 agent. Pass the HTTP server port via env.
+    let a1 = agent_id!("HttpClient2", "concurrent-wait-http-1");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let a1_id = executor
+        .start_agent_with(
+            &http_component.id,
+            a1.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // Enqueue start_polling (fire-and-forget). a1 immediately starts Running,
+    // polling the gated server — it cannot complete or go Idle until we notify.
+    executor
+        .invoke_agent(&http_component, &a1, "start_polling", data_value!("done"))
+        .await?;
+
+    // Confirm a1 is provably Running (holds the only permit, is not evictable).
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let counters_component = executor
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
-    // Start a1 — takes the only permit. Keep it busy with an invocation so it
-    // is Running (not Idle) and cannot be evicted.
-    let a1 = agent_id!("Counter", "concurrent-wait-running-1");
-    let a1_id = executor.start_agent(&component.id, a1.clone()).await?;
-
-    // Spawn a2's start while a1 is holding the permit and is not idle.
-    // a2 will block in WaitingForPermit.
+    // Spawn a2's start in the background. It will block in WaitingForPermit
+    // because a1 is Running (not evictable) and holds the only permit.
     let executor_clone = executor.clone();
-    let component_clone = component.clone();
-    let a2 = agent_id!("Counter", "concurrent-wait-running-2");
+    let counters_clone = counters_component.clone();
+    let a2 = agent_id!("Counter", "concurrent-wait-http-2");
     let a2_clone = a2.clone();
     tokio::spawn(async move {
         executor_clone
-            .start_agent(&component_clone.id, a2_clone)
+            .start_agent(&counters_clone.id, a2_clone)
             .await
     });
 
-    // Wait for a1 to be Idle before triggering the next invocation; this keeps
-    // the ordering deterministic while a2 start is pending.
+    // Release the gate — a1's poll loop returns "done", its invocation
+    // completes, and its permit is returned to the semaphore via Drop.
+    // This unblocks a2 from WaitingForPermit.
+    gate.notify_waiters();
+
+    // Wait for a1 to become Idle (invocation done, permit released).
     executor
         .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
-    // Now invoke a1 to completion — this returns its permit and unblocks a2.
+    // a2 is now unblocked. invoke_and_await_agent will block until a2 has
+    // acquired its permit and processed the invocation — this is the proof
+    // that the waiting-and-unblocking path works correctly.
     executor
-        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
+        .invoke_and_await_agent(&counters_component, &a2, "increment", data_value!())
         .await?;
 
-    // a2 should now be able to run.
-    executor
-        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
-        .await?;
-
+    http_server.abort();
     Ok(())
 }
