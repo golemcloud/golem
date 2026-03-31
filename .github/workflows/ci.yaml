@@ -322,6 +322,15 @@ jobs:
       - name: Install wasm-rquickjs
         run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
+      - name: Install WASI SDK
+        run: |
+          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
+          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
+
+      - name: Build agent_guest.wasm
+        working-directory: sdks/scala
+        run: ./scripts/generate-agent-guest-wasm.sh
+
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}
@@ -352,11 +361,6 @@ jobs:
         working-directory: sdks/scala
         run: |
           sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; sbtPlugin/publishLocal'
-
-      - name: Copy agent_guest.wasm
-        run: |
-          mkdir -p sdks/scala/test-agents/.generated
-          cp sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm sdks/scala/test-agents/.generated/agent_guest.wasm
 
       - name: Run Scala SDK integration tests
         working-directory: sdks/scala
@@ -437,15 +441,6 @@ jobs:
       - name: Build agent_guest.wasm
         working-directory: sdks/scala
         run: ./scripts/generate-agent-guest-wasm.sh
-
-      - name: Verify agent_guest.wasm is committed
-        working-directory: sdks/scala
-        run: |
-          if ! git diff --exit-code sbt/src/main/resources/golem/wasm/agent_guest.wasm mill/resources/golem/wasm/agent_guest.wasm wit/dts/; then
-            echo "❌ The agent_guest.wasm or wit/dts/ files differ from the committed version."
-            echo "Please run './scripts/generate-agent-guest-wasm.sh' from sdks/scala/ and commit the updated files."
-            exit 1
-          fi
 
       - name: Run Golem tests (Scala 3.8.2)
         working-directory: sdks/scala
