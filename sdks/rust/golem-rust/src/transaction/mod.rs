@@ -17,7 +17,7 @@ mod compfn;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
 
-use crate::bindings::golem::api::host::{get_oplog_index, set_oplog_index, OplogIndex};
+use crate::bindings::golem::api::host::{OplogIndex, get_oplog_index, set_oplog_index};
 use crate::mark_atomic_operation;
 
 pub use compfn::*;
@@ -102,7 +102,10 @@ impl<Err: Display> Display for TransactionFailure<Err> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TransactionFailure::FailedAndRolledBackCompletely(err) => {
-                write!(f, "Transaction failed with {err} and rolled back completely.")
+                write!(
+                    f,
+                    "Transaction failed with {err} and rolled back completely."
+                )
             }
             TransactionFailure::FailedAndRolledBackPartially {
                 failure,

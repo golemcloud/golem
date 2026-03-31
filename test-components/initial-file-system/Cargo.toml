@@ -1,7 +1,7 @@
 [package]
 name = "it_initial_file_system"
 version = "0.0.1"
-edition = "2021"
+ edition = "2024"
 
 [profile.release]
 opt-level = "s"

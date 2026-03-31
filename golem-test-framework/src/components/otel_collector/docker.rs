@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::docker::ContainerHandle;
-use crate::components::otel_collector::{wait_for_collector_startup, OtelCollector};
+use crate::components::otel_collector::{OtelCollector, wait_for_collector_startup};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};

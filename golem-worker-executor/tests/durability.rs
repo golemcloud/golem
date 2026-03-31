@@ -18,7 +18,7 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use golem_common::model::oplog::{
     MultipartPartData, OplogIndex, PublicOplogEntry, PublicSnapshotData,
 };
@@ -27,15 +27,15 @@ use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    start, start_with_snapshot_policy, LastUniqueId, PrecompiledComponent, TestContext,
-    WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    start_with_snapshot_policy,
 };
 use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::sync::Mutex;

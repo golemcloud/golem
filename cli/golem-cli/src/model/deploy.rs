@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
-use crate::model::worker::RawAgentId;
 use crate::model::GuestLanguage;
+use crate::model::worker::RawAgentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

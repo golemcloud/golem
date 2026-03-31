@@ -15236,6 +15236,18 @@ components:
         maxDiskSpacePerWorker:
           type: integer
           format: uint64
+        perInvocationHttpCallLimit:
+          type: integer
+          format: uint64
+        perInvocationRpcCallLimit:
+          type: integer
+          format: uint64
+        monthlyHttpCallLimit:
+          type: integer
+          format: uint64
+        monthlyRpcCallLimit:
+          type: integer
+          format: uint64
         maxConcurrentAgentsPerExecutor:
           type: integer
           format: uint64
@@ -15253,6 +15265,10 @@ components:
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
+      - perInvocationHttpCallLimit
+      - perInvocationRpcCallLimit
+      - monthlyHttpCallLimit
+      - monthlyRpcCallLimit
       - maxConcurrentAgentsPerExecutor
     PluginInstallation:
       title: PluginInstallation

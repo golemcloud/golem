@@ -26,16 +26,16 @@ use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
+    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
+    HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
+    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService,
+    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
     active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
-    scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
-    HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
-    HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasLeakSentinel,
-    HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasResourceLimits, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    scheduler, shard_manager, worker, worker_activator, worker_enumeration,
 };
-use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
+use crate::services::{HasOplog, HasRdbmsService, HasWorkerForkService, rdbms};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -466,7 +466,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_worker_call("fork");
 
-        tracing::debug!("Copying source oplog of worker {fork_account_id}/{source_agent_id} to {target_agent_id} up to index {oplog_index_cut_off}");
+        tracing::debug!(
+            "Copying source oplog of worker {fork_account_id}/{source_agent_id} to {target_agent_id} up to index {oplog_index_cut_off}"
+        );
 
         let (owned_source_agent_id, owned_target_agent_id) = self
             .validate_worker_forking(

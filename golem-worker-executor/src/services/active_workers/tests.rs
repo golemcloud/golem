@@ -146,7 +146,7 @@ async fn multiple_permits_are_independent() {
 #[test]
 async fn try_acquire_rounds_up_to_kb_boundary() {
     let filesystem_storage_semaphore = filesystem_storage_semaphore(2 * 1024); // 2 KB = 2 permits
-                                                                               // 1 byte rounds up to 1 KB = 1 permit; should leave 1 KB
+    // 1 byte rounds up to 1 KB = 1 permit; should leave 1 KB
     let _p = filesystem_storage_semaphore.try_acquire(1).await.unwrap();
     assert_eq!(filesystem_storage_semaphore.available_bytes(), 1024);
 }

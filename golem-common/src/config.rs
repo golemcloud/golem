@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::RetryConfig;
 use crate::SafeDisplay;
+use crate::model::RetryConfig;
+use figment::Figment;
 use figment::providers::{Env, Format, Serialized, Toml};
 use figment::value::Value;
-use figment::Figment;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -473,11 +473,7 @@ impl SafeDisplay for DbConfig {
 
 impl Default for DbConfig {
     fn default() -> Self {
-        DbConfig::Sqlite(DbSqliteConfig {
-            database: "golem_service.db".to_string(),
-            max_connections: 10,
-            foreign_keys: false,
-        })
+        DbConfig::Sqlite(DbSqliteConfig::default())
     }
 }
 
@@ -518,6 +514,16 @@ impl SafeDisplay for DbSqliteConfig {
         let _ = writeln!(&mut result, "database: {}", self.database);
         let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
         result
+    }
+}
+
+impl Default for DbSqliteConfig {
+    fn default() -> Self {
+        Self {
+            database: "golem_service.db".to_string(),
+            max_connections: 10,
+            foreign_keys: false,
+        }
     }
 }
 

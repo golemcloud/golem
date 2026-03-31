@@ -14,7 +14,7 @@
 
 use crate::printer::*;
 use crate::rust::printer::*;
-use crate::rust::types::{escape_keywords, RustPrinter};
+use crate::rust::types::{RustPrinter, escape_keywords};
 use convert_case::{Case, Casing};
 use itertools::Itertools;
 
@@ -136,7 +136,7 @@ mod tests {
 
     use indoc::indoc;
 
-    use crate::rust::lib_gen::{lib_gen, ModuleDef, ModuleName};
+    use crate::rust::lib_gen::{ModuleDef, ModuleName, lib_gen};
 
     #[test]
     fn simple_lib() {

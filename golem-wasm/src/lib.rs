@@ -606,9 +606,9 @@ impl TryFrom<Uri> for AgentId {
             match parts.len() {
                 2 => {
                     use std::str::FromStr;
-                    let component_id = ComponentId::from_str(parts[0]).map_err(|err|
+                    let component_id = ComponentId::from_str(parts[0]).map_err(|err| {
                         format!("Invalid URN: expected UUID for component_id: {err}")
-                    )?;
+                    })?;
                     let agent_id = parts[1];
                     Ok(AgentId {
                         component_id,

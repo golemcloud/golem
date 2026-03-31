@@ -21,13 +21,13 @@ use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::fs;
-use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
+use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, log_warn_action};
 use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
 use crate::process::CommandExt;
-use anyhow::{anyhow, Context as AnyhowContext};
+use anyhow::{Context as AnyhowContext, anyhow};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
 use std::path::Path;

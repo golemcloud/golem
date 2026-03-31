@@ -250,10 +250,10 @@ impl<'a> Lexer<'a> {
             if self.bytes()[self.pos] == b'I' {
                 let ident_start = self.pos;
                 let (tok, _, end) = self.read_ident(ident_start)?;
-                if let Token::FloatLit(v) = tok {
-                    if v == f64::INFINITY {
-                        return Ok((Token::FloatLit(f64::NEG_INFINITY), start, end));
-                    }
+                if let Token::FloatLit(v) = tok
+                    && v == f64::INFINITY
+                {
+                    return Ok((Token::FloatLit(f64::NEG_INFINITY), start, end));
                 }
                 Err(LexError {
                     position: start,

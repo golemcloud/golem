@@ -2,8 +2,14 @@ syntax = "proto3";
 
 package golem.shardmanager;
 
+message IpAddress {
+  oneof kind {
+    uint32 ipv4 = 1;
+    bytes ipv6 = 2;
+  }
+}
+
 message Pod {
-  string host = 1;
+  IpAddress ip = 1;
   uint32 port = 2;
-  optional string pod_name = 3;
 }

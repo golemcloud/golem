@@ -64,7 +64,7 @@ use crate::model::oplog::{
     AgentResourceId, OplogEntry, RawSnapshotData, TimestampedUpdateDescription,
 };
 use crate::model::regions::DeletedRegions;
-use crate::{grpc_uri, SafeDisplay};
+use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -77,8 +77,10 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
+use std::net::{IpAddr, SocketAddr};
 use std::ops::Add;
 use std::time::Duration;
+use tonic::transport::Endpoint;
 use url::Url;
 use uuid::Uuid;
 
@@ -212,10 +214,8 @@ pub trait PoemTypeRequirements:
 }
 
 impl<
-        T: poem_openapi::types::Type
-            + poem_openapi::types::ParseFromJSON
-            + poem_openapi::types::ToJSON,
-    > PoemTypeRequirements for T
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> PoemTypeRequirements for T
 {
 }
 
@@ -377,30 +377,39 @@ impl Display for ScheduleId {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct NumberOfShards {
     pub value: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub struct Pod {
-    host: String,
-    port: u16,
+    pub ip: IpAddr,
+    pub port: u16,
 }
 
 impl Pod {
     pub fn uri(&self, use_tls: bool) -> Uri {
-        grpc_uri(&self.host, self.port, use_tls)
+        grpc_uri(&self.ip.to_string(), self.port, use_tls)
+    }
+
+    pub fn address(&self) -> SocketAddr {
+        SocketAddr::new(self.ip, self.port)
+    }
+
+    pub fn endpoint(&self, use_tls: bool) -> Endpoint {
+        Endpoint::from(self.uri(use_tls))
     }
 }
 
 impl Display for Pod {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.host, self.port)
+        write!(f, "{}:{}", self.ip, self.port)
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RoutingTable {
     pub number_of_shards: NumberOfShards,
     shard_assignments: HashMap<ShardId, Pod>,

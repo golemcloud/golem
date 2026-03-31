@@ -1,7 +1,8 @@
 use crate::services::{HasConfig, HasOplogService};
 use async_recursion::async_recursion;
-use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::AgentInvocationPayload;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -9,7 +10,6 @@ use golem_common::model::oplog::{
     UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::AgentInvocationPayload;
 use golem_common::model::{
     AgentInvocation, AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
     IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, RetryConfig,
@@ -249,15 +249,15 @@ fn calculate_latest_worker_status(
         // Errors are counted in skipped regions too (but not in deleted ones),
         // otherwise we would not be able to know how many times we retried failures in atomic regions.
         // This must happen before the skipped-region continue below.
-        if !deleted_regions.is_in_deleted_region(*idx) {
-            if let OplogEntry::Error { retry_from, .. } = entry {
-                let new_count = current_retry_count
-                    .get(retry_from)
-                    .copied()
-                    .unwrap_or_default()
-                    + 1;
-                current_retry_count.insert(*retry_from, new_count);
-            }
+        if !deleted_regions.is_in_deleted_region(*idx)
+            && let OplogEntry::Error { retry_from, .. } = entry
+        {
+            let new_count = current_retry_count
+                .get(retry_from)
+                .copied()
+                .unwrap_or_default()
+                + 1;
+            current_retry_count.insert(*retry_from, new_count);
         }
 
         // Skipping entries in skipped regions, as they are skipped during replay too
@@ -266,26 +266,25 @@ fn calculate_latest_worker_status(
         }
 
         // For non-skipped errors, update the worker status based on the accumulated retry count
-        if !deleted_regions.is_in_deleted_region(*idx) {
-            if let OplogEntry::Error {
+        if !deleted_regions.is_in_deleted_region(*idx)
+            && let OplogEntry::Error {
                 error, retry_from, ..
             } = entry
-            {
-                let count = current_retry_count
-                    .get(retry_from)
-                    .copied()
-                    .unwrap_or_default();
-                if is_worker_error_retriable(
-                    current_retry_policy
-                        .as_ref()
-                        .unwrap_or(default_retry_policy),
-                    error,
-                    count,
-                ) {
-                    current_status = AgentStatus::Retrying;
-                } else {
-                    current_status = AgentStatus::Failed;
-                }
+        {
+            let count = current_retry_count
+                .get(retry_from)
+                .copied()
+                .unwrap_or_default();
+            if is_worker_error_retriable(
+                current_retry_policy
+                    .as_ref()
+                    .unwrap_or(default_retry_policy),
+                error,
+                count,
+            ) {
+                current_status = AgentStatus::Retrying;
+            } else {
+                current_status = AgentStatus::Failed;
             }
         }
 
@@ -1014,6 +1013,8 @@ fn is_worker_error_retriable(
         AgentError::ExceededMemoryLimit => false,
         AgentError::ExceededTableLimit => false,
         AgentError::InternalError(_) => false,
+        AgentError::ExceededHttpCallLimit => false,
+        AgentError::ExceededRpcCallLimit => false,
         AgentError::NodeOutOfFilesystemStorage => true,
         AgentError::AgentExceededFilesystemStorageLimit => false,
     }
@@ -1030,8 +1031,8 @@ mod test {
         calculate_oplog_processor_checkpoints,
     };
     use async_trait::async_trait;
-    use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::base_model::OplogIndex;
+    use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{Principal, UntypedDataValue, UntypedElementValue};
     use golem_common::model::component::{ComponentId, ComponentRevision};

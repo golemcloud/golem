@@ -14,7 +14,7 @@
 
 use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::type_naming::TypeNaming;
-use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
+use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
@@ -28,7 +28,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use std::collections::{BTreeMap, HashMap};
 use syn::{Lit, LitStr};
-use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
 use tracing::debug;
 
 #[allow(clippy::module_inception)]

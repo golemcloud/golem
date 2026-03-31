@@ -59,7 +59,7 @@ impl From<RegistryServiceError> for FetchError {
 pub trait ResourceDefinitionFetcher: Send + Sync {
     /// Always fetches from the source. Never cached.
     async fn fetch_by_id(&self, id: ResourceDefinitionId)
-        -> Result<ResourceDefinition, FetchError>;
+    -> Result<ResourceDefinition, FetchError>;
 
     /// Resolves a name to a definition. May return a cached result.
     async fn resolve_by_name(
@@ -85,7 +85,7 @@ pub struct GrpcResourceDefinitionFetcher {
 impl GrpcResourceDefinitionFetcher {
     pub fn new(
         registry_service: Arc<dyn RegistryService>,
-        config: &crate::shard_manager_config::ResourceDefinitionFetcherConfig,
+        config: &crate::config::ResourceDefinitionFetcherConfig,
     ) -> Self {
         let cache = Cache::new(
             Some(config.cache_max_capacity),

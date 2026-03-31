@@ -10135,6 +10135,10 @@ components:
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
+      - perInvocationHttpCallLimit
+      - perInvocationRpcCallLimit
+      - monthlyHttpCallLimit
+      - monthlyRpcCallLimit
       - maxConcurrentAgentsPerExecutor
       properties:
         planId:
@@ -10173,6 +10177,18 @@ components:
           type: integer
           format: uint64
         maxDiskSpacePerWorker:
+          type: integer
+          format: uint64
+        perInvocationHttpCallLimit:
+          type: integer
+          format: uint64
+        perInvocationRpcCallLimit:
+          type: integer
+          format: uint64
+        monthlyHttpCallLimit:
+          type: integer
+          format: uint64
+        monthlyRpcCallLimit:
           type: integer
           format: uint64
         maxConcurrentAgentsPerExecutor:

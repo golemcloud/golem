@@ -43,7 +43,7 @@ use crate::model::{
     AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, f64, field, handle, list, option, r#enum, record, result_err, result_ok, s16, s32, str,
+    bool, r#enum, f64, field, handle, list, option, record, result_err, result_ok, s16, s32, str,
     tuple, u64, variant,
 };
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
@@ -872,8 +872,8 @@ fn snapshot_multipart_serialization_poem_serde_equivalence() {
 #[test]
 fn oplog_entry_type_matches_wit() {
     use crate::model::oplog::OplogEntry;
-    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
     use golem_wasm::IntoValue;
+    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
     use std::path::PathBuf;
 
     let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");

@@ -18,7 +18,6 @@ pub mod agent_secrets;
 pub mod application;
 pub mod audit;
 pub mod component;
-pub mod datetime;
 pub mod deployment;
 pub mod domain_registration;
 pub mod environment;
@@ -38,8 +37,8 @@ pub mod token;
 
 use self::audit::ImmutableAuditFields;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
-use crate::repo::model::datetime::SqlDateTime;
 use chrono::NaiveDateTime;
+use golem_service_base::repo::SqlDateTime;
 use sqlx::Database;
 use sqlx::query::{Query, QueryAs};
 use uuid::Uuid;

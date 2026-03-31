@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Pod;
+use chrono::{DateTime, Utc};
+use golem_common::model::Pod;
 use golem_common::model::resource_definition::{
     EnforcementAction, ResourceDefinitionId, ResourceLimit,
 };
 use golem_service_base::model::quota_lease::{LeaseEpoch, QuotaAllocation};
-use std::time::Duration;
+use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub enum QuotaLease {
@@ -26,13 +27,13 @@ pub enum QuotaLease {
         pod: Pod,
         epoch: LeaseEpoch,
         allocation: QuotaAllocation,
-        expires_after: Duration,
+        expires_at: DateTime<Utc>,
         resource_limit: ResourceLimit,
         enforcement_action: EnforcementAction,
     },
     Unlimited {
         pod: Pod,
-        expires_after: Duration,
+        expires_at: DateTime<Utc>,
     },
 }
 
@@ -46,7 +47,7 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::common::QuotaLease {
                 pod,
                 epoch,
                 allocation,
-                expires_after,
+                expires_at,
                 resource_limit,
                 enforcement_action,
             } => {
@@ -74,7 +75,9 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::common::QuotaLease {
                         pod: Some(pod.into()),
                         epoch: epoch.0,
                         allocation: Some(grpc_allocation),
-                        expires_after_nanos: expires_after.as_nanos() as u64,
+                        expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                            expires_at,
+                        ))),
                         resource_limit: Some(resource_limit.into()),
                         enforcement_action:
                             golem_api_grpc::proto::golem::common::EnforcementAction::from(
@@ -84,10 +87,10 @@ impl From<QuotaLease> for golem_api_grpc::proto::golem::common::QuotaLease {
                     })),
                 }
             }
-            QuotaLease::Unlimited { pod, expires_after } => Self {
+            QuotaLease::Unlimited { pod, expires_at } => Self {
                 kind: Some(quota_lease::Kind::Unlimited(quota_lease::Unlimited {
                     pod: Some(pod.into()),
-                    expires_after_nanos: expires_after.as_nanos() as u64,
+                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(expires_at))),
                 })),
             },
         }

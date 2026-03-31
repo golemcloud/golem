@@ -4,21 +4,21 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    fork_worker_response, revert_worker_response, ForkWorkerRequest, RevertWorkerRequest,
+    ForkWorkerRequest, RevertWorkerRequest, fork_worker_response, revert_worker_response,
 };
 use golem_common::base_model::OplogIndex;
+use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
-use golem_common::model::AgentInvocationOutput;
 use golem_common::model::{AgentId, IdempotencyKey, InvocationStatus, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
-use golem_worker_executor_test_utils::component_writer::FileSystemComponentWriter;
 use golem_worker_executor_test_utils::TestContext;
+use golem_worker_executor_test_utils::component_writer::FileSystemComponentWriter;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::transport::Channel;
@@ -50,11 +50,12 @@ impl TestWorkerProxy {
     }
 
     fn should_retry<R>(retry_count: &mut usize, result: &Result<R, tonic::Status>) -> bool {
-        if let Err(status) = result {
-            if *retry_count > 0 && status.code() == tonic::Code::Unavailable {
-                *retry_count -= 1;
-                return true;
-            }
+        if let Err(status) = result
+            && *retry_count > 0
+            && status.code() == tonic::Code::Unavailable
+        {
+            *retry_count -= 1;
+            return true;
         }
         false
     }
@@ -78,7 +79,7 @@ impl WorkerProxy for TestWorkerProxy {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
                 "Not implemented in tests as debug service is not expected to call start through proxy",
-            )
+            ),
         ))
     }
 
@@ -101,7 +102,7 @@ impl WorkerProxy for TestWorkerProxy {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
                 "Not implemented in tests as debug service is not expected to call invoke_agent through proxy",
-            )
+            ),
         ))
     }
 
@@ -116,7 +117,7 @@ impl WorkerProxy for TestWorkerProxy {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
                 "Not implemented in tests as debug service is not expected to call invoke and await through proxy",
-            )
+            ),
         ))
     }
 

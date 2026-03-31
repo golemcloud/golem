@@ -15,11 +15,11 @@
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
 use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
+use crate::error::service::AnyhowMapServiceError;
 use crate::log::{
-    log_action, log_error, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
+    LogColorize, LogIndent, log_action, log_error, log_skipping_up_to_date, log_warn_action, logln,
 };
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -416,11 +416,13 @@ impl EnvironmentCommandHandler {
         match mode {
             EnvironmentResolveMode::ManifestOnly => {
                 log_error(
-                "The requested command requires an environment defined in an application manifest.",
-            );
+                    "The requested command requires an environment defined in an application manifest.",
+                );
             }
             EnvironmentResolveMode::Any => {
-                log_error("The requested command requires an environment from an application manifest or via flags or environment variables.");
+                log_error(
+                    "The requested command requires an environment from an application manifest or via flags or environment variables.",
+                );
             }
         }
         logln("");

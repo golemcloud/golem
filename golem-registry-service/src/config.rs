@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
-use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
+use golem_common::config::{ConfigLoader, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -173,6 +173,10 @@ impl Default for RegistryServiceConfig {
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
                 max_table_elements_per_worker: 16_384,
                 max_disk_space_per_worker: 1024 * 1024 * 1024, // 1 GB
+                per_invocation_http_call_limit: 1_000_000_000_000_000_000,
+                per_invocation_rpc_call_limit: 1_000_000_000_000_000_000,
+                monthly_http_call_limit: 1_000_000_000_000_000_000,
+                monthly_rpc_call_limit: 1_000_000_000_000_000_000,
                 max_concurrent_agents_per_executor: 1_000_000_000_000_000_000, // unlimited sentinel
             },
         );
@@ -183,7 +187,10 @@ impl Default for RegistryServiceConfig {
             workspace: "release".to_string(),
             http_port: 8081,
             grpc: GrpcApiConfig::default(),
-            db: DbConfig::default(),
+            db: DbConfig::Sqlite(DbSqliteConfig {
+                database: "golem_registry_service.db".to_string(),
+                ..Default::default()
+            }),
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             component_compilation: ComponentCompilationConfig::default(),
@@ -460,7 +467,15 @@ pub struct PrecreatedPlan {
     pub max_table_elements_per_worker: u64,
     #[serde(default = "default_max_disk_space_per_worker")]
     pub max_disk_space_per_worker: u64,
-    #[serde(default = "default_max_concurrent_agents_per_executor")]
+    #[serde(default = "default_unlimited")]
+    pub per_invocation_http_call_limit: u64,
+    #[serde(default = "default_unlimited")]
+    pub per_invocation_rpc_call_limit: u64,
+    #[serde(default = "default_unlimited")]
+    pub monthly_http_call_limit: u64,
+    #[serde(default = "default_unlimited")]
+    pub monthly_rpc_call_limit: u64,
+    #[serde(default = "default_unlimited")]
     pub max_concurrent_agents_per_executor: u64,
 }
 
@@ -472,8 +487,8 @@ fn default_max_disk_space_per_worker() -> u64 {
     1024 * 1024 * 1024 // 1 GB
 }
 
-fn default_max_concurrent_agents_per_executor() -> u64 {
-    1_000_000_000_000_000_000 // unlimited sentinel, consistent with monthly_gas_limit
+fn default_unlimited() -> u64 {
+    1_000_000_000_000_000_000 // 10^18, fits in i64 (TOML max), safe for SQLite REAL
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

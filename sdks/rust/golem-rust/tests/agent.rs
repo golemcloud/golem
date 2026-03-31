@@ -18,19 +18,19 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 #[test_r::sequential]
 mod tests {
-    use golem_rust::agentic::{create_webhook, Principal};
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
+    use golem_rust::agentic::{Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, ElementValue,
         Snapshotting, SnapshottingConfig,
     };
     use golem_rust::value_and_type::IntoValue;
-    use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, ConfigSchema, MultimodalSchema};
-    use golem_rust_macro::{description, endpoint, prompt, FromValueAndType, IntoValue};
+    use golem_rust::{Schema, agent_definition, agent_implementation, agentic::BaseAgent};
+    use golem_rust_macro::{FromValueAndType, IntoValue, description, endpoint, prompt};
     use std::fmt::Debug;
     use test_r::test;
     use wasip2::clocks::wall_clock::Datetime;

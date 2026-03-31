@@ -1,5 +1,5 @@
-use crate::app::{check_component_metadata, cmd, flag, pattern, TestContext};
 use crate::Tracing;
+use crate::app::{TestContext, check_component_metadata, cmd, flag, pattern};
 
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
-use toml_edit::{value, DocumentMut};
+use toml_edit::{DocumentMut, value};
 
 inherit_test_dep!(Tracing);
 
@@ -198,7 +198,9 @@ async fn build_check(_tracing: &Tracing) {
     // Phase 2: intentionally break versions/settings and verify build check can auto-fix them.
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Planned required changes for dependencies and configurations"));
+    assert!(
+        outputs.stdout_contains("Planned required changes for dependencies and configurations")
+    );
     assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
 
     fs::write_str(
@@ -239,7 +241,9 @@ async fn build_check(_tracing: &Tracing) {
     // Phase 3: wipe dependencies completely and verify check restores everything needed.
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains("Planned required changes for dependencies and configurations"));
+    assert!(
+        outputs.stdout_contains("Planned required changes for dependencies and configurations")
+    );
     assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
 
     // Phase 4: full build should succeed after all auto-applied fixes.

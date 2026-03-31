@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use golem_common::model::agent::structural_format::{
     format_structural, normalize_structural, parse_structural,
 };
@@ -23,10 +23,10 @@ use golem_common::model::agent::{
     TextReference, TextSource, TextType, UnstructuredBinaryElementValue,
     UnstructuredTextElementValue,
 };
-use golem_wasm::analysis::analysed_type::{
-    case, f64, field, flags, list, option, record, result, str, tuple, u32, u8, variant,
-};
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{
+    case, f64, field, flags, list, option, record, result, str, tuple, u8, u32, variant,
+};
 use golem_wasm::{Value, ValueAndType};
 
 // ── Schema/data helpers ─────────────────────────────────────────────────────

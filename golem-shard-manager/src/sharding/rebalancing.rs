@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{Assignments, Pod, RoutingTable, Unassignments};
-use golem_common::model::ShardId;
-use serde::{Deserialize, Serialize};
+use super::model::{Assignments, RoutingTable, Unassignments};
+use golem_common::model::{Pod, ShardId};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use tracing::trace;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Rebalance {
     assignments: Assignments,
     unassignments: Unassignments,
@@ -81,10 +80,9 @@ impl Rebalance {
 
                 trace!(
                     "Assigning shard to originally empty pod: {} to {}",
-                    shard,
-                    target_idx
+                    shard, target_idx
                 );
-                assignments.assign(routing_table_entry.pod.clone(), shard);
+                assignments.assign(routing_table_entry.pod, shard);
                 routing_table_entry.shard_ids.insert(shard);
 
                 // If the last pod is at optimal count, then all pods are at optimal count
@@ -102,7 +100,7 @@ impl Rebalance {
             for shard in unassigned_shards_iter {
                 trace!("Assigning shard: {} to {}", shard, idx);
                 let routing_table_entry = &mut routing_table_entries[idx];
-                assignments.assign(routing_table_entry.pod.clone(), shard);
+                assignments.assign(routing_table_entry.pod, shard);
                 routing_table_entry.shard_ids.insert(shard);
                 idx = (idx + 1) % pod_count;
             }
@@ -153,21 +151,16 @@ impl Rebalance {
                             // this is guaranteed by check (**)
                             trace!(
                                 "Moving first shard from {} to {}: {}",
-                                source_idx,
-                                target_idx,
-                                shard_id
+                                source_idx, target_idx, shard_id
                             );
                             routing_table_entries[source_idx]
                                 .shard_ids
                                 .remove(&shard_id);
 
                             routing_table_entries[target_idx].shard_ids.insert(shard_id);
-                            assignments
-                                .assign(routing_table_entries[target_idx].pod.clone(), shard_id);
-                            unassignments
-                                .unassign(routing_table_entries[source_idx].pod.clone(), shard_id);
-                            assignments
-                                .unassign(routing_table_entries[source_idx].pod.clone(), shard_id);
+                            assignments.assign(routing_table_entries[target_idx].pod, shard_id);
+                            unassignments.unassign(routing_table_entries[source_idx].pod, shard_id);
+                            assignments.unassign(routing_table_entries[source_idx].pod, shard_id);
                         } else {
                             trace!("Target reached a balanced state");
                             // target reached a balanced state
@@ -198,10 +191,10 @@ impl Rebalance {
     pub fn get_pods(&self) -> HashSet<Pod> {
         let mut pods = HashSet::new();
         for pod in self.assignments.assignments.keys() {
-            pods.insert(pod.clone());
+            pods.insert(*pod);
         }
         for pod in self.unassignments.unassignments.keys() {
-            pods.insert(pod.clone());
+            pods.insert(*pod);
         }
         pods
     }
@@ -241,7 +234,7 @@ impl Rebalance {
         shard_ids.retain(|shard_id| !unassignments.contains(shard_id));
         self.assignments
             .assignments
-            .entry(pod.clone())
+            .entry(*pod)
             .or_default()
             .append(&mut shard_ids);
     }
@@ -263,10 +256,11 @@ mod tests {
 
     use tracing_test::traced_test;
 
-    use golem_common::model::ShardId;
+    use golem_common::model::{Pod, ShardId};
 
-    use crate::model::{Pod, RoutingTable};
-    use crate::rebalancing::Rebalance;
+    use super::Rebalance;
+    use crate::sharding::model::RoutingTable;
+    use std::net::{IpAddr, Ipv4Addr};
 
     struct TestConfig {
         number_of_shards: usize,
@@ -275,7 +269,10 @@ mod tests {
     }
 
     fn pod(idx: usize) -> Pod {
-        Pod::new(format!("pod{idx}"), (9000 + idx) as u16)
+        Pod {
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 0, idx as u8)),
+            port: (9000 + idx) as u16,
+        }
     }
 
     fn shard_ids(ids: Vec<i64>) -> Vec<ShardId> {
@@ -285,15 +282,15 @@ mod tests {
     fn new_routing_table(config: TestConfig) -> RoutingTable {
         let mut routing_table = RoutingTable::new(config.number_of_shards);
         for i in 0..config.number_of_pods {
-            routing_table.add_pod(&pod(i));
+            routing_table.add_pod(pod(i), None);
         }
         for (pod_idx, shards) in config.initial_assignments {
-            assign_shards(&mut routing_table, &pod(pod_idx), shards);
+            assign_shards(&mut routing_table, pod(pod_idx), shards);
         }
         routing_table
     }
 
-    fn assert_assignments_for_pod(rebalance: &Rebalance, pod: &Pod, shards: Vec<i64>) {
+    fn assert_assignments_for_pod(rebalance: &Rebalance, pod: Pod, shards: Vec<i64>) {
         assert_eq!(
             get_assigned_ids(rebalance, pod),
             shard_ids(shards),
@@ -303,11 +300,11 @@ mod tests {
 
     fn assert_assignments(rebalance: &Rebalance, assignments: Vec<(usize, Vec<i64>)>) {
         for (pod_idx, shards) in assignments {
-            assert_assignments_for_pod(rebalance, &pod(pod_idx), shards)
+            assert_assignments_for_pod(rebalance, pod(pod_idx), shards)
         }
     }
 
-    fn assert_unassignments_for_pod(rebalance: &Rebalance, pod: &Pod, shards: Vec<i64>) {
+    fn assert_unassignments_for_pod(rebalance: &Rebalance, pod: Pod, shards: Vec<i64>) {
         assert_eq!(
             get_unassigned_ids(rebalance, pod),
             shard_ids(shards),
@@ -317,29 +314,27 @@ mod tests {
 
     fn assert_unassignments(rebalance: &Rebalance, unassignments: Vec<(usize, Vec<i64>)>) {
         for (pod_idx, shards) in unassignments {
-            assert_unassignments_for_pod(rebalance, &pod(pod_idx), shards)
+            assert_unassignments_for_pod(rebalance, pod(pod_idx), shards)
         }
     }
 
-    fn assign_shard(routing_table: &mut RoutingTable, pod: &Pod, shard_id: i64) {
-        routing_table
-            .shard_assignments
-            .entry(pod.clone())
-            .or_default()
-            .insert(ShardId::new(shard_id));
+    fn assign_shard(routing_table: &mut RoutingTable, pod: Pod, shard_id: i64) {
+        if let Some(pod_state) = routing_table.pod_states.get_mut(&pod) {
+            pod_state.assigned_shards.insert(ShardId::new(shard_id));
+        }
     }
 
-    fn assign_shards(routing_table: &mut RoutingTable, pod: &Pod, shard_ids: Vec<i64>) {
+    fn assign_shards(routing_table: &mut RoutingTable, pod: Pod, shard_ids: Vec<i64>) {
         for shar_id in shard_ids {
             assign_shard(routing_table, pod, shar_id)
         }
     }
 
-    fn get_assigned_ids(rebalance: &Rebalance, pod: &Pod) -> Vec<ShardId> {
+    fn get_assigned_ids(rebalance: &Rebalance, pod: Pod) -> Vec<ShardId> {
         let mut assigned_ids = rebalance
             .get_assignments()
             .assignments
-            .get(pod)
+            .get(&pod)
             .cloned()
             .unwrap_or_default()
             .iter()
@@ -349,11 +344,11 @@ mod tests {
         assigned_ids
     }
 
-    fn get_unassigned_ids(rebalance: &Rebalance, pod: &Pod) -> Vec<ShardId> {
+    fn get_unassigned_ids(rebalance: &Rebalance, pod: Pod) -> Vec<ShardId> {
         let mut assigned_ids = rebalance
             .get_unassignments()
             .unassignments
-            .get(pod)
+            .get(&pod)
             .cloned()
             .unwrap_or_default()
             .iter()

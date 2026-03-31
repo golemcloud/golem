@@ -226,10 +226,10 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
         if is_incoming_http_body_stream(self, &rep) {
             let handle = rep.rep();
-            if let Some(state) = self.state.open_http_requests.get(&handle) {
-                if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                    end_http_request(self, handle).await?;
-                }
+            if let Some(state) = self.state.open_http_requests.get(&handle)
+                && state.close_owner == HttpRequestCloseOwner::InputStreamClosed
+            {
+                end_http_request(self, handle).await?;
             }
         }
 
@@ -620,10 +620,10 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, rep: Resource<OutputStream>) -> wasmtime::Result<()> {
         let handle = rep.rep();
         self.observe_function_call("io::streams::output_stream", "drop");
-        if let Some(request_handle) = self.state.find_request_handle_by_output_stream(handle) {
-            if let Some(state) = self.state.open_http_requests.get_mut(&request_handle) {
-                state.output_stream_rep = None;
-            }
+        if let Some(request_handle) = self.state.find_request_handle_by_output_stream(handle)
+            && let Some(state) = self.state.open_http_requests.get_mut(&request_handle)
+        {
+            state.output_stream_rep = None;
         }
         let result = HostOutputStream::drop(self.table(), rep).await;
         reconcile_pending_filesystem_stream_reservation(self, handle).await;
@@ -695,25 +695,24 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
     handle: u32,
     result: &Result<T, SerializableStreamError>,
 ) -> Result<(), WorkerExecutorError> {
-    if matches!(result, Err(SerializableStreamError::Closed)) {
-        if let Some(state) = ctx.state.open_http_requests.get(&handle) {
-            if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                // If the stream has a recorded body handle, transfer tracking back
-                // to the body instead of ending the request. This allows
-                // IncomingBody::finish() to later transfer tracking to FutureTrailers,
-                // making FutureTrailers::get() durable.
-                let body_handle = state.body_handle;
-                if let Some(body_handle) = body_handle {
-                    continue_http_request(
-                        ctx,
-                        handle,
-                        body_handle,
-                        HttpRequestCloseOwner::IncomingBodyDropOrFinish,
-                    );
-                } else {
-                    end_http_request(ctx, handle).await?;
-                }
-            }
+    if matches!(result, Err(SerializableStreamError::Closed))
+        && let Some(state) = ctx.state.open_http_requests.get(&handle)
+        && state.close_owner == HttpRequestCloseOwner::InputStreamClosed
+    {
+        // If the stream has a recorded body handle, transfer tracking back
+        // to the body instead of ending the request. This allows
+        // IncomingBody::finish() to later transfer tracking to FutureTrailers,
+        // making FutureTrailers::get() durable.
+        let body_handle = state.body_handle;
+        if let Some(body_handle) = body_handle {
+            continue_http_request(
+                ctx,
+                handle,
+                body_handle,
+                HttpRequestCloseOwner::IncomingBodyDropOrFinish,
+            );
+        } else {
+            end_http_request(ctx, handle).await?;
         }
     }
     Ok(())
@@ -825,10 +824,9 @@ fn mark_filesystem_stream_write_enqueued<Ctx: WorkerCtx>(
         .state
         .open_filesystem_output_streams
         .get_mut(&stream_rep)
+        && let Some(position) = &mut state.position
     {
-        if let Some(position) = &mut state.position {
-            *position = position.saturating_add(write_len);
-        }
+        *position = position.saturating_add(write_len);
     }
 }
 

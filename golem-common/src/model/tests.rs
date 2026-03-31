@@ -234,29 +234,33 @@ fn worker_filter_matches() {
             .matches(&worker_metadata)
     );
 
-    assert!(AgentFilter::new_env(
-        "env1".to_string(),
-        StringFilterComparator::Equal,
-        "value1".to_string(),
-    )
-    .and(AgentFilter::new_status(
-        FilterComparator::Equal,
-        AgentStatus::Idle,
-    ))
-    .matches(&worker_metadata));
-
-    assert!(AgentFilter::new_env(
-        "env1".to_string(),
-        StringFilterComparator::Equal,
-        "value2".to_string(),
-    )
-    .not()
-    .and(
-        AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running).or(
-            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Idle)
+    assert!(
+        AgentFilter::new_env(
+            "env1".to_string(),
+            StringFilterComparator::Equal,
+            "value1".to_string(),
         )
-    )
-    .matches(&worker_metadata));
+        .and(AgentFilter::new_status(
+            FilterComparator::Equal,
+            AgentStatus::Idle,
+        ))
+        .matches(&worker_metadata)
+    );
+
+    assert!(
+        AgentFilter::new_env(
+            "env1".to_string(),
+            StringFilterComparator::Equal,
+            "value2".to_string(),
+        )
+        .not()
+        .and(
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running).or(
+                AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Idle)
+            )
+        )
+        .matches(&worker_metadata)
+    );
 
     assert!(
         AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
@@ -276,33 +280,39 @@ fn worker_filter_matches() {
             .matches(&worker_metadata)
     );
 
-    assert!(AgentFilter::new_revision(
-        FilterComparator::GreaterEqual,
-        ComponentRevision::new(1).unwrap()
-    )
-    .and(AgentFilter::new_revision(
-        FilterComparator::Less,
-        ComponentRevision::new(2).unwrap()
-    ))
-    .or(AgentFilter::new_name(
-        StringFilterComparator::Equal,
-        "worker-2".to_string(),
-    ))
-    .matches(&worker_metadata));
+    assert!(
+        AgentFilter::new_revision(
+            FilterComparator::GreaterEqual,
+            ComponentRevision::new(1).unwrap()
+        )
+        .and(AgentFilter::new_revision(
+            FilterComparator::Less,
+            ComponentRevision::new(2).unwrap()
+        ))
+        .or(AgentFilter::new_name(
+            StringFilterComparator::Equal,
+            "worker-2".to_string(),
+        ))
+        .matches(&worker_metadata)
+    );
 
-    assert!(AgentFilter::new_config_vars(
-        "var1".to_string(),
-        StringFilterComparator::Equal,
-        "value1".to_string(),
-    )
-    .matches(&worker_metadata));
+    assert!(
+        AgentFilter::new_config_vars(
+            "var1".to_string(),
+            StringFilterComparator::Equal,
+            "value1".to_string(),
+        )
+        .matches(&worker_metadata)
+    );
 
-    assert!(!AgentFilter::new_config_vars(
-        "var1".to_string(),
-        StringFilterComparator::Equal,
-        "value2".to_string(),
-    )
-    .matches(&worker_metadata));
+    assert!(
+        !AgentFilter::new_config_vars(
+            "var1".to_string(),
+            StringFilterComparator::Equal,
+            "value2".to_string(),
+        )
+        .matches(&worker_metadata)
+    );
 }
 
 #[test]

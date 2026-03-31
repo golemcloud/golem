@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use futures::FutureExt;
 use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
@@ -36,7 +37,14 @@ use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::plan::PlanRepo;
 use golem_registry_service::repo::plugin::PluginRepo;
-use golem_registry_service::repo::registry_change::RegistryChangeRepo;
+use golem_registry_service::repo::registry_change::{
+    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
+};
+use golem_registry_service::services::account_usage::AccountUsageService;
+use golem_registry_service::services::registry_change_notifier::RegistryChangeNotifier;
+use golem_service_base::db::Pool;
+use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::sqlite::SqlitePool;
 use std::str::FromStr;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
@@ -52,7 +60,7 @@ sequential_suite!(sqlite);
 
 pub struct Deps {
     pub account_repo: Box<dyn AccountRepo>,
-    pub account_usage_repo: Box<dyn AccountUsageRepo>,
+    pub account_usage_repo: std::sync::Arc<dyn AccountUsageRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Box<dyn EnvironmentRepo>,
     pub plan_repo: Box<dyn PlanRepo>,
@@ -64,9 +72,79 @@ pub struct Deps {
     pub environment_share_repo: Box<dyn EnvironmentShareRepo>,
     pub plugin_repo: Box<dyn PluginRepo>,
     pub registry_change_repo: Box<dyn RegistryChangeRepo>,
+    pub test_db: TestDb,
+}
+
+pub enum TestDb {
+    Postgres(PostgresPool),
+    Sqlite(SqlitePool),
+}
+
+struct NoopRegistryChangeNotifier {
+    sender: tokio::sync::broadcast::Sender<
+        golem_registry_service::repo::registry_change::RegistryChangeEvent,
+    >,
+}
+
+impl NoopRegistryChangeNotifier {
+    fn new() -> Self {
+        let (sender, _) = tokio::sync::broadcast::channel(1);
+        Self { sender }
+    }
+}
+
+impl RegistryChangeNotifier for NoopRegistryChangeNotifier {
+    fn signal_new_events_available(&self) {}
+
+    fn subscribe(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<
+        golem_registry_service::repo::registry_change::RegistryChangeEvent,
+    > {
+        self.sender.subscribe()
+    }
 }
 
 impl Deps {
+    pub fn registry_change_repo_for_notifier(&self) -> std::sync::Arc<dyn RegistryChangeRepo> {
+        match &self.test_db {
+            TestDb::Postgres(pool) => std::sync::Arc::new(DbRegistryChangeRepo::new(pool.clone())),
+            TestDb::Sqlite(pool) => std::sync::Arc::new(DbRegistryChangeRepo::new(pool.clone())),
+        }
+    }
+
+    pub fn test_registry_change_notifier(&self) -> std::sync::Arc<dyn RegistryChangeNotifier> {
+        std::sync::Arc::new(NoopRegistryChangeNotifier::new())
+    }
+
+    pub async fn record_registry_change_event(
+        &self,
+        event: NewRegistryChangeEvent,
+    ) -> ChangeEventId {
+        match &self.test_db {
+            TestDb::Postgres(pool) => pool
+                .with_tx_err("registry_change", "record_change_event_test", |tx| {
+                    async move {
+                        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &event)
+                            .await
+                    }
+                    .boxed()
+                })
+                .await
+                .expect("failed to insert registry change event"),
+            TestDb::Sqlite(pool) => pool
+                .with_tx_err("registry_change", "record_change_event_test", |tx| {
+                    async move {
+                        DbRegistryChangeRepo::<SqlitePool>::create_change_event_in_tx(tx, &event)
+                            .await
+                    }
+                    .boxed()
+                })
+                .await
+                .expect("failed to insert registry change event"),
+        }
+    }
+
     pub async fn setup(&self) {
         self.plan_repo
             .create_or_update(PlanRecord {
@@ -83,6 +161,10 @@ impl Deps {
                 max_memory_per_worker: 4000.into(),
                 max_table_elements_per_worker: 16384.into(),
                 max_disk_space_per_worker: 1073741824.into(),
+                per_invocation_http_call_limit: u64::MAX.into(),
+                per_invocation_rpc_call_limit: u64::MAX.into(),
+                monthly_http_call_limit: 5000.into(),
+                monthly_rpc_call_limit: 5000.into(),
                 max_concurrent_agents_per_executor: 1_000_000_000_000_000_000u64.into(),
             })
             .await
@@ -91,6 +173,10 @@ impl Deps {
 
     pub fn test_plan_id(&self) -> Uuid {
         Uuid::from_str("e449dca1-cf07-4270-a8a2-6bcfc6528038").unwrap()
+    }
+
+    pub fn account_usage_service(&self) -> AccountUsageService {
+        AccountUsageService::new(self.account_usage_repo.clone())
     }
 
     pub async fn create_account(&self) -> AccountExtRevisionRecord {

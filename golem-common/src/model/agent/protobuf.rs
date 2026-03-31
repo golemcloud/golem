@@ -1031,8 +1031,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
     fn try_from(
         value: golem_api_grpc::proto::golem::component::HttpMethod,
     ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::http_method::Value;
         use golem_api_grpc::proto::golem::component::StandardHttpMethod;
+        use golem_api_grpc::proto::golem::component::http_method::Value;
 
         match value
             .value
@@ -1064,8 +1064,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
 
 impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
     fn from(value: HttpMethod) -> Self {
-        use golem_api_grpc::proto::golem::component::http_method::Value;
         use golem_api_grpc::proto::golem::component::StandardHttpMethod;
+        use golem_api_grpc::proto::golem::component::http_method::Value;
 
         Self {
             value: Some(match value {

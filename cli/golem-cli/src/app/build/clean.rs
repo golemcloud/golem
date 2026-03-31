@@ -1,6 +1,6 @@
 use crate::app::context::BuildContext;
 use crate::fs;
-use crate::log::{log_action, LogIndent};
+use crate::log::{LogIndent, log_action};
 use crate::model::app::CleanMode;
 use golem_common::model::component::ComponentName;
 use std::collections::BTreeSet;

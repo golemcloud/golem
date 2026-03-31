@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::audit::ImmutableAuditFields;
-use super::datetime::SqlDateTime;
 use super::hash::SqlBlake3Hash;
 use super::plugin::PluginRecord;
 use golem_common::error_forwarding;
@@ -25,6 +24,7 @@ use golem_common::model::environment_plugin_grant::{
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::model::plugin_registration::PluginRegistration;
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use sqlx::types::Json;
 use uuid::Uuid;

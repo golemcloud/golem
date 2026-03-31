@@ -17,9 +17,10 @@ use crate::bridge_gen::fixtures::{
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_cli::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptTypeName};
 use golem_cli::bridge_gen::BridgeGenerator;
+use golem_cli::bridge_gen::typescript::{TypeScriptBridgeGenerator, TypeScriptTypeName};
 use golem_cli::model::GuestLanguage;
+use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,
@@ -27,11 +28,10 @@ use golem_common::model::agent::{
     TextReference, TextReferenceValue, TextSource, UntypedJsonDataValue, UntypedJsonElementValue,
     UntypedJsonElementValues, UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
 };
-use golem_common::model::Empty;
-use golem_wasm::analysis::analysed_type::{bool, f64, field, record, s32, str};
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{bool, f64, field, record, s32, str};
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValueAndType, Value};
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -1612,8 +1612,8 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         agent_type.type_name, agent_type.description, target_dir
     );
 
-    let mut gen = TypeScriptBridgeGenerator::new(agent_type, target_dir, true).unwrap();
-    gen.generate().unwrap();
+    let mut generator = TypeScriptBridgeGenerator::new(agent_type, target_dir, true).unwrap();
+    generator.generate().unwrap();
 
     let status = std::process::Command::new("npm")
         .arg("install")
@@ -1649,12 +1649,11 @@ fn collect_js_and_d_ts(dir: &std::path::Path) -> Vec<Utf8PathBuf> {
                         stack.push(e.path());
                     }
                 }
-            } else if md.is_file() {
-                if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
-                    if name.ends_with(".js") || name.ends_with(".d.ts") {
-                        result.push(Utf8PathBuf::from_path_buf(p.to_path_buf()).unwrap());
-                    }
-                }
+            } else if md.is_file()
+                && let Some(name) = p.file_name().and_then(|s| s.to_str())
+                && (name.ends_with(".js") || name.ends_with(".d.ts"))
+            {
+                result.push(Utf8PathBuf::from_path_buf(p.to_path_buf()).unwrap());
             }
         }
     }

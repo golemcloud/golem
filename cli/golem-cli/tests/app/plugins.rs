@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::{cmd, flag, replace_string_in_file, TestContext};
 use crate::Tracing;
+use crate::app::{TestContext, cmd, flag, replace_string_in_file};
 
+use axum::Router;
 use axum::extract::{DefaultBodyLimit, Multipart};
 use axum::routing::post;
-use axum::Router;
 use base64::Engine;
 use bytes::Bytes;
 use golem_cli::fs;

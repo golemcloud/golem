@@ -111,10 +111,14 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
             .await
             .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
 
+        tracing::debug!("Routing agent call for {self} using routing table: {routing_table:?}");
+
         match routing_table.lookup(self) {
             None => Ok((None, None)),
             Some(pod) => {
                 let clients = context.worker_executor_clients();
+
+                tracing::debug!("Calling agent {self} on pod: {pod:?}");
 
                 Ok((
                     Some(
@@ -123,12 +127,11 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
                             .await
                             .map_err(|err| {
                                 CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                    err,
-                                    pod.clone(),
+                                    err, *pod,
                                 )
                             })?,
                     ),
-                    Some(pod.clone()),
+                    Some(*pod),
                 ))
             }
         }
@@ -179,12 +182,11 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
                             .await
                             .map_err(|status| {
                                 CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                    status,
-                                    pod.clone(),
+                                    status, *pod,
                                 )
                             })?,
                     ),
-                    Some(pod.clone()),
+                    Some(*pod),
                 ))
             }
         }
@@ -233,7 +235,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
                 let worker_executor_clients = context.worker_executor_clients().clone();
                 let _ = fibers.spawn(
                     {
-                        let pod = pod.clone();
+                        let pod = *pod;
                         let f = f.clone();
                         let description = description.clone();
                         async move {

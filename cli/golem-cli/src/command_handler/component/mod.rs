@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{validated_to_anyhow, BuildContext};
+use crate::app::context::{BuildContext, validated_to_anyhow};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
+use crate::command_handler::Handlers;
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
-use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_action, log_error, log_warn_action, logln, LogColorize, LogIndent};
+use crate::error::service::AnyhowMapServiceError;
+use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
+use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::{
@@ -39,9 +40,8 @@ use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::worker::AgentUpdateMode;
-use crate::model::GuestLanguage;
 use crate::validation::ValidationBuilder;
-use anyhow::{anyhow, bail, Context as AnyhowContext};
+use anyhow::{Context as AnyhowContext, anyhow, bail};
 use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
@@ -55,7 +55,7 @@ use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, VecDiffable};
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -164,7 +164,9 @@ impl ComponentCommandHandler {
                     .join(", ")
             ));
             logln("");
-            logln("Specify the requested component name or switch to an application directory with exactly one component!");
+            logln(
+                "Specify the requested component name or switch to an application directory with exactly one component!",
+            );
             logln("");
             bail!(NonSuccessfulExit);
         }
@@ -576,7 +578,9 @@ impl ComponentCommandHandler {
         };
 
         if selected_component_names.is_empty() && component_name.is_none() && !allow_no_matches {
-            log_error("No components were selected based on the current directory an no component was requested.");
+            log_error(
+                "No components were selected based on the current directory an no component was requested.",
+            );
             logln("");
             logln(
                 "Please specify a requested component name or switch to an application directory!",
@@ -859,7 +863,9 @@ impl ComponentCommandHandler {
                             component_name.0.log_color_highlight()
                         ));
                         logln("");
-                        logln("Check if the plugin is registered and granted for the application environment!");
+                        logln(
+                            "Check if the plugin is registered and granted for the application environment!",
+                        );
                         bail!(NonSuccessfulExit);
                     };
                     plugins_by_grant_id.insert(
@@ -1122,14 +1128,7 @@ fn resolve_env_vars(
     component_name: &ComponentName,
     env: &BTreeMap<String, String>,
 ) -> anyhow::Result<BTreeMap<String, String>> {
-    let proc_env_map: HashMap<String, String> = std::env::vars().collect();
-    let proc_env_vars = minijinja::value::Value::from(proc_env_map.clone());
-
-    let minijinja_env = {
-        let mut env = minijinja::Environment::new();
-        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
-        env
-    };
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
 
     let mut resolved_env = BTreeMap::new();
     let mut validation = ValidationBuilder::new();
@@ -1138,13 +1137,12 @@ fn resolve_env_vars(
         |validation| {
             for key in env.keys().sorted() {
                 let value = env.get(key).unwrap();
-                match minijinja_env.render_str(value, &proc_env_vars) {
+                match renderer.render_str(value) {
                     Ok(resolved_value) => {
                         resolved_env.insert(key.clone(), resolved_value);
                     }
                     Err(err) => {
-                        let missing_env_vars =
-                            missing_env_vars(&minijinja_env, value, &proc_env_map, &err);
+                        let missing_env_vars = renderer.missing_env_vars(value, &err);
                         let error_message = if missing_env_vars.is_empty() {
                             format!(
                                 "Failed to substitute environment variable(s) for {}",
@@ -1152,18 +1150,11 @@ fn resolve_env_vars(
                             )
                         } else {
                             format!(
-                                "Failed to substitute environment variable(s){}for {}",
-                                if missing_env_vars.is_empty() {
-                                    "".to_string()
-                                } else {
-                                    format!(
-                                        " ({}) ",
-                                        missing_env_vars
-                                            .iter()
-                                            .map(|key| key.log_color_highlight())
-                                            .join(", ")
-                                    )
-                                },
+                                "Failed to substitute environment variable(s) ({}) for {}",
+                                missing_env_vars
+                                    .iter()
+                                    .map(|key| key.log_color_highlight())
+                                    .join(", "),
                                 key.log_color_highlight()
                             )
                         };
@@ -1195,49 +1186,4 @@ fn resolve_env_vars(
         validation.build(resolved_env),
         None,
     )
-}
-
-fn missing_env_vars(
-    minijinja_env: &minijinja::Environment,
-    template: &str,
-    env_vars: &HashMap<String, String>,
-    err: &minijinja::Error,
-) -> Vec<String> {
-    fn is_known_var(
-        var: &str,
-        env_vars: &HashMap<String, String>,
-        global_vars: &HashSet<String>,
-    ) -> bool {
-        if env_vars.contains_key(var) || global_vars.contains(var) {
-            return true;
-        }
-
-        if let Some((root, _)) = var.split_once('.') {
-            return env_vars.contains_key(root) || global_vars.contains(root);
-        }
-
-        false
-    }
-
-    if err.kind() != minijinja::ErrorKind::UndefinedError {
-        return Vec::new();
-    }
-
-    let Ok(template) = minijinja_env.template_from_str(template) else {
-        return Vec::new();
-    };
-
-    let global_vars: HashSet<String> = minijinja_env
-        .globals()
-        .map(|(name, _)| name.to_string())
-        .collect();
-
-    let mut missing: Vec<String> = template
-        .undeclared_variables(true)
-        .into_iter()
-        .filter(|var| !is_known_var(var, env_vars, &global_vars))
-        .collect();
-
-    missing.sort();
-    missing
 }

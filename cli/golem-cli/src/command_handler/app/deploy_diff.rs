@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{show_exported_agents, ComponentDeployProperties};
+use crate::model::component::{ComponentDeployProperties, show_exported_agents};
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use crate::model::text::component::is_sensitive_env_var_name;
@@ -387,7 +387,9 @@ impl DeployDiff {
                 {
                     Some(diff) => self.diff = diff,
                     None => {
-                        bail!("Illegal state: empty diff between current and local deployment after adding details")
+                        bail!(
+                            "Illegal state: empty diff between current and local deployment after adding details"
+                        )
                     }
                 }
             }
@@ -622,7 +624,9 @@ impl RollbackDiff {
                 self.diff = diff;
             }
             None => {
-                bail!("Illegal state: empty diff between taget and current deployment after adding details");
+                bail!(
+                    "Illegal state: empty diff between taget and current deployment after adding details"
+                );
             }
         }
 

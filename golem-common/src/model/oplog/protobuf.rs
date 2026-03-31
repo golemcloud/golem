@@ -25,9 +25,11 @@ use super::{
     StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
+use crate::model::Empty;
 use crate::model::agent::DataValue;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::oplog::PersistenceLevel;
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -41,14 +43,12 @@ use crate::model::oplog::public_oplog_entry::{
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
-use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
 use crate::model::worker::ParsedWorkerAgentConfigEntry;
-use crate::model::Empty;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
-    invocation_span, oplog_entry, wrapped_function_type, AttributeValue, ExternalParentSpan,
-    InvocationSpan, LocalInvocationSpan,
+    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
+    oplog_entry, wrapped_function_type,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
@@ -100,6 +100,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
             Error::ExceededMemoryLimit(_) => Ok(Self::ExceededMemoryLimit),
             Error::ExceededTableLimit(_) => Ok(Self::ExceededTableLimit),
+            Error::ExceededHttpCallLimit(_) => Ok(Self::ExceededHttpCallLimit),
+            Error::ExceededRpcCallLimit(_) => Ok(Self::ExceededRpcCallLimit),
             Error::NodeOutOfFilesystemStorage(_) => Ok(Self::NodeOutOfFilesystemStorage),
             Error::AgentExceededFilesystemStorageLimit(_) => {
                 Ok(Self::AgentExceededFilesystemStorageLimit)
@@ -129,6 +131,12 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
             }
             AgentError::ExceededTableLimit => {
                 Error::ExceededTableLimit(grpc_worker::ExceededTableLimit {})
+            }
+            AgentError::ExceededHttpCallLimit => {
+                Error::ExceededHttpCallLimit(grpc_worker::ExceededHttpCallLimit {})
+            }
+            AgentError::ExceededRpcCallLimit => {
+                Error::ExceededRpcCallLimit(grpc_worker::ExceededRpcCallLimit {})
             }
             AgentError::NodeOutOfFilesystemStorage => {
                 Error::NodeOutOfFilesystemStorage(grpc_worker::NodeOutOfFilesystemStorage {})
@@ -1874,10 +1882,10 @@ fn encode_public_span_data(spans: Vec<InvocationSpan>) -> Result<Vec<Vec<PublicS
 
     for stack in &mut result {
         for span in stack {
-            if let PublicSpanData::LocalSpan(ref mut local_span) = span {
-                if let Some(linked_id) = &mut local_span.linked_context {
-                    *linked_id += 1;
-                }
+            if let PublicSpanData::LocalSpan(local_span) = span
+                && let Some(linked_id) = &mut local_span.linked_context
+            {
+                *linked_id += 1;
             }
         }
     }

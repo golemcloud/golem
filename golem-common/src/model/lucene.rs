@@ -14,8 +14,8 @@
 
 use combine::parser::char::{char, space, spaces, string};
 use combine::{
-    any, attempt, between, choice, eof, many, none_of, one_of, optional, parser, sep_by,
-    skip_many1, token, EasyParser, ParseError, Parser, Stream,
+    EasyParser, ParseError, Parser, Stream, any, attempt, between, choice, eof, many, none_of,
+    one_of, optional, parser, sep_by, skip_many1, token,
 };
 use regex::Regex;
 use std::error::Error;
@@ -323,8 +323,8 @@ mod tests {
     mod sub_parsers {
         use test_r::test;
 
-        use crate::model::lucene::{clause, disjunct_query, term, Query};
-        use combine::{attempt, optional, EasyParser};
+        use crate::model::lucene::{Query, clause, disjunct_query, term};
+        use combine::{EasyParser, attempt, optional};
 
         #[test]
         fn term1() {

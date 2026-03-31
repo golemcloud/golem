@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::app::build::check::{
-    evaluate_dependency_spec_compliance, DependencyFixStep, DependencyMatcherSemantics,
-    DependencySpecCompliance, ExpectedDependencyKind,
+    DependencyFixStep, DependencyMatcherSemantics, DependencySpecCompliance,
+    ExpectedDependencyKind, evaluate_dependency_spec_compliance,
 };
 use crate::app::context::BuildContext;
 use crate::app::edit;
@@ -380,10 +380,10 @@ fn evaluate_cargo_dependency_compliance(
             },
             DependencySpec::Path { path, .. },
         ) => {
-            if let ExpectedDependencyKind::ExactPath(expected_path) = expected {
-                if path_matches_expected(path, expected_path, base_dir) {
-                    return DependencySpecCompliance::Compatible;
-                }
+            if let ExpectedDependencyKind::ExactPath(expected_path) = expected
+                && path_matches_expected(path, expected_path, base_dir)
+            {
+                return DependencySpecCompliance::Compatible;
             }
 
             evaluate_dependency_spec_compliance(path, expected, *semantics)
@@ -429,8 +429,8 @@ fn has_required_features(found: &DependencySpec, expected: &DependencySpec) -> b
 #[cfg(test)]
 mod test {
     use super::{
-        build_cargo_update_spec, evaluate_cargo_dependency_compliance,
-        rust_dependency_requirements, CargoDependencyMatcher, CargoDependencyRequirement,
+        CargoDependencyMatcher, CargoDependencyRequirement, build_cargo_update_spec,
+        evaluate_cargo_dependency_compliance, rust_dependency_requirements,
     };
     use crate::app::edit::cargo_toml::DependencySpec;
     use crate::sdk_overrides::sdk_overrides;
