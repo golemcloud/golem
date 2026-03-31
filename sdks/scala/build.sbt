@@ -10,7 +10,6 @@ import scalajscrossproject.ScalaJSCrossPlugin.autoImport.*
 
 val Scala3Golem = "3.8.2"
 val Scala213    = "2.13.18"
-val Scala3JS    = "3.3.7"   // Scala.js doesn't support 3.7+
 val Scala212    = "2.12.21"
 
 // ---------------------------------------------------------------------------
@@ -50,27 +49,16 @@ val scalafmtDynamicVersion    = "3.10.4"
 
 // ---------------------------------------------------------------------------
 // zio-blocks dependency helper
-//
-// For Scala 3.7+: zio-blocks-next-* 0.017
-// For Scala 2.13 / 3.3: zio-blocks-* 0.0.31
 // ---------------------------------------------------------------------------
 
+val zioBlocksVersion = "0.0.32"
+
 def zioBlocksDep(name: String) = Def.setting {
-  CrossVersion.partialVersion(scalaVersion.value) match {
-    case Some((3, minor)) if minor >= 7 =>
-      "dev.zio" %%% s"zio-blocks-next-$name" % "0.017"
-    case _ =>
-      "dev.zio" %%% s"zio-blocks-$name" % "0.0.31"
-  }
+  "dev.zio" %%% s"zio-blocks-$name" % zioBlocksVersion
 }
 
 def zioBlocksDepJvm(name: String) = Def.setting {
-  CrossVersion.partialVersion(scalaVersion.value) match {
-    case Some((3, minor)) if minor >= 7 =>
-      "dev.zio" %% s"zio-blocks-next-$name" % "0.017"
-    case _ =>
-      "dev.zio" %% s"zio-blocks-$name" % "0.0.31"
-  }
+  "dev.zio" %% s"zio-blocks-$name" % zioBlocksVersion
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +66,13 @@ def zioBlocksDepJvm(name: String) = Def.setting {
 // ---------------------------------------------------------------------------
 
 lazy val commonSettings = Seq(
-  testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
+  testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
+  scalacOptions ++= {
+    CrossVersion.partialVersion(scalaVersion.value) match {
+      case Some((3, minor)) if minor >= 5 => Seq("-experimental")
+      case _                              => Nil
+    }
+  }
 )
 
 def versionSpecificSourceDirs(conf: Configuration) = Seq(
@@ -92,17 +86,8 @@ def versionSpecificSourceDirs(conf: Configuration) = Seq(
   }
 )
 
-// JS projects: override Scala 3 version to 3.3.x, skip for 3.7+
 lazy val jsSettings = Seq(
-  scalaVersion := {
-    CrossVersion.partialVersion((ThisBuild / scalaVersion).value) match {
-      case Some((3, minor)) if minor >= 7 => Scala3JS
-      case _                              => (ThisBuild / scalaVersion).value
-    }
-  },
-  Test / parallelExecution := false,
-  Compile / compile / skip := scalaVersion.value.startsWith("3.7"),
-  Test / test / skip := scalaVersion.value.startsWith("3.7")
+  Test / parallelExecution := false
 )
 
 // ---------------------------------------------------------------------------
@@ -188,6 +173,7 @@ lazy val macros = project
   .settings(
     name               := "golem-scala-macros",
     crossScalaVersions := Seq(Scala3Golem, Scala213),
+    scalacOptions += "-language:experimental.macros",
     libraryDependencies ++= {
       CrossVersion.partialVersion(scalaVersion.value) match {
         case Some((2, _)) =>
@@ -205,15 +191,15 @@ lazy val macros = project
   .settings(versionSpecificSourceDirs(Compile))
   .settings(versionSpecificSourceDirs(Test))
 
-// --- codegen (JVM only, cross 2.12 + 3.3) ----------------------------------
+// --- codegen (JVM only, cross 2.12 + 3.8) ----------------------------------
 
 lazy val codegen = project
   .in(file("codegen"))
   .settings(commonSettings)
   .settings(
     name               := "golem-scala-codegen",
-    scalaVersion       := Scala3JS,
-    crossScalaVersions := Seq(Scala212, Scala3JS),
+    scalaVersion       := Scala3Golem,
+    crossScalaVersions := Seq(Scala212, Scala3Golem),
     libraryDependencies ++= Seq(
       "org.scalameta" %% "scalameta" % scalametaVersion,
       "com.lihaoyi"   %% "ujson"     % ujsonVersion,

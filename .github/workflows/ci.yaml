@@ -444,15 +444,11 @@ jobs:
 
       - name: Run Golem tests (Scala 3.8.2)
         working-directory: sdks/scala
-        run: sbt "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; testAgents/fastLinkJS"
+        run: sbt -mem 4096 "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; codegen/test"
 
       - name: Run Golem tests (Scala 2.13.18)
         working-directory: sdks/scala
-        run: sbt "++2.13.18; modelJVM/test; modelJS/test; core/test; macros/test; testAgents/fastLinkJS"
-
-      - name: Test codegen (Scala 3.3.7)
-        working-directory: sdks/scala
-        run: sbt "++3.3.7; codegen/test"
+        run: sbt -mem 4096 "++2.13.18; modelJVM/test; modelJS/test; core/test; macros/test"
 
       - name: Compile sbt plugin (Scala 2.12)
         working-directory: sdks/scala
