@@ -101,6 +101,8 @@ echo "[agent-guest] Built: $out_wasm" >&2
 sha256sum "$out_wasm" 2>/dev/null || shasum -a 256 "$out_wasm" >&2
 
 echo "[agent-guest] Installing into plugin embedded resources..." >&2
+mkdir -p "$sdk_root/sbt/src/main/resources/golem/wasm"
+mkdir -p "$sdk_root/mill/resources/golem/wasm"
 install -m 0644 "$out_wasm" "$sdk_root/sbt/src/main/resources/golem/wasm/agent_guest.wasm"
 install -m 0644 "$out_wasm" "$sdk_root/mill/resources/golem/wasm/agent_guest.wasm"
 
