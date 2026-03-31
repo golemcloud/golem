@@ -171,8 +171,8 @@ async fn websocket_echo_rust_oplog_replay(
         )
         .await?;
 
-    // First invocation: full WebSocket session (durable host calls) plus one
-    // entry in agent-local `echo_history`.
+    // First invocation: full WebSocket session (connect/send/receive/drop) and
+    // one entry persisted in agent-local `echo_history`.
     let first_result = executor
         .invoke_and_await_agent(
             &component,
@@ -188,16 +188,16 @@ async fn websocket_echo_rust_oplog_replay(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    // Drop the executor but keep the WebSocket server running on the same port.
-    // The next executor instance will fully replay the first invocation before
-    // running any new work on this worker.
+    // Drop the executor to force replay on next activation. Keep server running
+    // so the second invocation can still do live websocket I/O.
     drop(executor);
 
-    // Restart the executor to force oplog replay for this worker.
+    // Restarting does not directly invoke guest functions; replay is performed
+    // when this worker is activated by the next invocation.
     let executor = start(deps, &context).await?;
 
-    // Second invocation: after replay, agent state must still contain the first
-    // echoed message; this call appends the second and returns `m1|m2`.
+    // Second invocation: replay reconstructs agent state from the first invoke.
+    // We append another message and assert we now observe "m1|m2".
     let second_result = executor
         .invoke_and_await_agent(
             &component,
@@ -216,6 +216,105 @@ async fn websocket_echo_rust_oplog_replay(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_reconnect_after_replay_continues_stream(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+
+    // Stateless server: every new websocket connection emits msg-0, msg-1, ...
+    // If reconnect+fast-forward works, post-restart reads should continue from
+    // the last observed message index instead of repeating msg-0.
+    let ws_server = spawn(
+        async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let ws_stream = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("WS handshake failed");
+                let (mut write, _read) = StreamExt::split(ws_stream);
+                for i in 0..5u32 {
+                    let msg = tokio_tungstenite::tungstenite::Message::text(format!("msg-{i}"));
+                    if SinkExt::send(&mut write, msg).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "ws-phase2-reconnect");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // First invocation creates a websocket in agent state and reads first frame.
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "connect_and_receive_first",
+            data_value!(format!("ws://localhost:{ws_port}")),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(first, Value::String("msg-0".to_string()));
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    // Simulate executor crash/restart.
+    drop(executor);
+
+    // Next invocation activates the worker again:
+    // 1) replay restores persisted websocket metadata
+    // 2) host reconnects and fast-forwards before serving read
+    let executor = start(deps, &context).await?;
+    let next = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "receive_next_from_persisted",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    // Must be msg-1 (not msg-0): proves replay+reconnect resumed stream position.
+    assert_eq!(next, Value::String("msg-1".to_string()));
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
     ws_server.abort();
 

@@ -9,6 +9,10 @@ pub trait WebsocketTest {
     /// Like `echo`, but appends each echoed payload to agent-local history and returns `history.join("|")`.
     /// Used in tests to assert state survives replay across executor restarts.
     fn echo_and_record(&self, url: String, msg: String) -> String;
+    /// Connects once, stores the connection in agent state and receives one message.
+    fn connect_and_receive_first(&self, url: String) -> String;
+    /// Receives the next message from the connection stored in agent state.
+    fn receive_next_from_persisted(&self) -> String;
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
 
     // New polling methods
@@ -18,6 +22,7 @@ pub trait WebsocketTest {
 pub struct WebsocketTestImpl {
     _name: String,
     echo_history: RefCell<Vec<String>>,
+    persisted_ws: RefCell<Option<WebsocketConnection>>,
 }
 
 #[agent_implementation]
@@ -26,6 +31,7 @@ impl WebsocketTest for WebsocketTestImpl {
         Self {
             _name: name,
             echo_history: RefCell::new(Vec::new()),
+            persisted_ws: RefCell::new(None),
         }
     }
 
@@ -44,6 +50,27 @@ impl WebsocketTest for WebsocketTestImpl {
         let echoed = self.echo(url, msg);
         self.echo_history.borrow_mut().push(echoed);
         self.echo_history.borrow().join("|")
+    }
+
+    fn connect_and_receive_first(&self, url: String) -> String {
+        let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
+        let first = match ws.receive().expect("receive failed") {
+            WebSocketMessage::Text(t) => t,
+            WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
+        };
+        *self.persisted_ws.borrow_mut() = Some(ws);
+        first
+    }
+
+    fn receive_next_from_persisted(&self) -> String {
+        let mut ws_ref = self.persisted_ws.borrow_mut();
+        let ws = ws_ref
+            .as_mut()
+            .expect("persisted websocket was not initialized");
+        match ws.receive().expect("receive failed") {
+            WebSocketMessage::Text(t) => t,
+            WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
+        }
     }
 
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {

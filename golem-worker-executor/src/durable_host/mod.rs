@@ -1493,7 +1493,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn websocket_connection_info(
         &self,
         rep: u32,
-    ) -> Option<(String, Option<Vec<(String, String)>>, u64, WebSocketConnectionMode)> {
+    ) -> Option<(
+        String,
+        Option<Vec<(String, String)>>,
+        u64,
+        WebSocketConnectionMode,
+    )> {
         self.state
             .open_websocket_connections
             .get(&rep)
