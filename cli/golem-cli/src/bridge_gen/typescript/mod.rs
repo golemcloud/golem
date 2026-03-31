@@ -19,6 +19,7 @@ mod type_name;
 
 pub use type_name::TypeScriptTypeName;
 
+use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::type_naming::TypeNaming;
 use crate::bridge_gen::typescript::javascript::escape_js_ident;
 use crate::bridge_gen::typescript::ts_writer::{
@@ -39,6 +40,7 @@ use indoc::formatdoc;
 use serde_json::json;
 
 const TS_BRIDGE_PACKAGE_NAME: &str = "@golemcloud/golem-ts-bridge";
+const MULTIMODAL_INPUT_NAME: &str = "multimodalInput";
 
 pub struct TypeScriptBridgeGenerator {
     target_path: Utf8PathBuf,
@@ -250,7 +252,11 @@ impl TypeScriptBridgeGenerator {
             encode_input.write_line("] = __json;");
         }
         encode_input.write_line("const __result: base.DataValue = ");
-        self.write_encode_data_value(&mut encode_input, &method_def.input_schema)?;
+        self.write_encode_data_value(
+            &mut encode_input,
+            &method_def.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
         encode_input.write_line("console.log(JSON.stringify(__result));");
         Ok(())
     }
@@ -300,7 +306,11 @@ impl TypeScriptBridgeGenerator {
                 encode_output.write_line("] = __json;");
             }
             encode_output.write_line("const __result: base.DataValue =");
-            self.write_encode_data_value(&mut encode_output, &method_def.output_schema)?;
+            self.write_encode_data_value(
+                &mut encode_output,
+                &method_def.output_schema,
+                MULTIMODAL_INPUT_NAME,
+            )?;
             encode_output.write_line("console.log(JSON.stringify(__result));");
         }
         Ok(())
@@ -574,7 +584,11 @@ impl TypeScriptBridgeGenerator {
         get.result(&format!("Promise<{class_name}>"));
 
         get.write_line("const parameters: base.DataValue = ");
-        self.write_encode_data_value(&mut get, &self.agent_type.constructor.input_schema)?;
+        self.write_encode_data_value(
+            &mut get,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
         get.write_line("const phantomId = undefined;");
         self.write_create_agent_call(&mut get, config_var, "[]");
         get.write_line(format!(
@@ -601,7 +615,11 @@ impl TypeScriptBridgeGenerator {
         get_phantom.result(&format!("Promise<{class_name}>"));
 
         get_phantom.write_line("const parameters: base.DataValue = ");
-        self.write_encode_data_value(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
+        self.write_encode_data_value(
+            &mut get_phantom,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
         self.write_create_agent_call(&mut get_phantom, config_var, "[]");
         get_phantom.write_line(format!(
             "return new {class_name}(parameters, phantomId, __createResponse.agentId);"
@@ -626,7 +644,11 @@ impl TypeScriptBridgeGenerator {
         new_phantom.result(&format!("Promise<{class_name}>"));
 
         new_phantom.write_line("const parameters: base.DataValue = ");
-        self.write_encode_data_value(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
+        self.write_encode_data_value(
+            &mut new_phantom,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
         new_phantom.write_line("const phantomId = uuidv4();");
         self.write_create_agent_call(&mut new_phantom, config_var, "[]");
         new_phantom.write_line(format!(
@@ -933,18 +955,44 @@ impl TypeScriptBridgeGenerator {
     /// Builds the function that takes the method's parameters and encodes them into a DataValue,
     /// to be injected into the invocation request
     fn build_encode_args_fn(&self, method_def: &AgentMethod) -> anyhow::Result<String> {
+        let mut parameter_naming = ParameterNaming::new();
+        match &method_def.input_schema {
+            DataSchema::Tuple(params) => {
+                parameter_naming.reserve_many(
+                    params
+                        .elements
+                        .iter()
+                        .map(|param| self.to_js_ident(&param.name)),
+                );
+            }
+            DataSchema::Multimodal(_) => parameter_naming.reserve(MULTIMODAL_INPUT_NAME),
+        }
+
+        let args_tuple_name = parameter_naming.fresh("__args");
+        let multimodal_input_name = parameter_naming.fresh("__multimodalInput");
+        let method_parameters_name = parameter_naming.fresh("__methodParameters");
+
         let mut encode_args = TsAnonymousFunctionWriter::new();
         encode_args.param(
-            "args",
+            &args_tuple_name,
             &format!(
                 "[{}]",
                 self.data_schema_as_type_list(&method_def.input_schema)?
             ),
         );
-        self.destructure_args_tuple(&mut encode_args, "args", &method_def.input_schema)?;
-        encode_args.write_line("const methodParameters: base.DataValue = ");
-        self.write_encode_data_value(&mut encode_args, &method_def.input_schema)?;
-        encode_args.write_line("return methodParameters;");
+        self.destructure_args_tuple(
+            &mut encode_args,
+            &args_tuple_name,
+            &method_def.input_schema,
+            &multimodal_input_name,
+        )?;
+        encode_args.write_line(format!("const {method_parameters_name}: base.DataValue = "));
+        self.write_encode_data_value(
+            &mut encode_args,
+            &method_def.input_schema,
+            &multimodal_input_name,
+        )?;
+        encode_args.write_line(format!("return {method_parameters_name};"));
         Ok(encode_args.build())
     }
 
@@ -1591,6 +1639,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut Target,
         tuple: &str,
         schema: &DataSchema,
+        multimodal_input_name: &str,
     ) -> anyhow::Result<()> {
         match schema {
             DataSchema::Tuple(params) => {
@@ -1604,7 +1653,7 @@ impl TypeScriptBridgeGenerator {
             }
             DataSchema::Multimodal(_) => {
                 // For multimodal input, extract the array from the args tuple
-                writer.write_line(format!("const multimodalInput = {}[0];", tuple));
+                writer.write_line(format!("const {multimodal_input_name} = {tuple}[0];"));
                 Ok(())
             }
         }
@@ -1615,6 +1664,7 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut Target,
         schema: &DataSchema,
+        multimodal_input_name: &str,
     ) -> anyhow::Result<()> {
         match schema {
             DataSchema::Tuple(params) => {
@@ -1651,7 +1701,9 @@ impl TypeScriptBridgeGenerator {
             DataSchema::Multimodal(multimodal) => {
                 writer.indent();
                 writer.write_line(
-                    "{ type: \"Multimodal\", elements: multimodalInput.map((item: any) => {",
+                    format!(
+                        "{{ type: \"Multimodal\", elements: {multimodal_input_name}.map((item: any) => {{"
+                    ),
                 );
                 writer.indent();
 
@@ -2114,7 +2166,7 @@ impl TypeScriptBridgeGenerator {
                 writer.write(param_names.join(", "));
             }
             DataSchema::Multimodal(_) => {
-                writer.write("multimodalInput");
+                writer.write(MULTIMODAL_INPUT_NAME);
             }
         }
     }
@@ -2145,7 +2197,7 @@ impl TypeScriptBridgeGenerator {
             }
             DataSchema::Multimodal(multimodal) => {
                 writer.param(
-                    "multimodalInput",
+                    MULTIMODAL_INPUT_NAME,
                     &format!("({})[]", self.named_element_schemas_as_type(multimodal)?),
                 );
                 Ok(())
