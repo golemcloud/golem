@@ -100,7 +100,6 @@ lazy val jsSettings = Seq(
       case _                              => (ThisBuild / scalaVersion).value
     }
   },
-  coverageEnabled := false,
   Test / parallelExecution := false,
   Compile / compile / skip := scalaVersion.value.startsWith("3.7"),
   Test / test / skip := scalaVersion.value.startsWith("3.7")
@@ -189,7 +188,6 @@ lazy val macros = project
   .settings(
     name               := "golem-scala-macros",
     crossScalaVersions := Seq(Scala3Golem, Scala213),
-    coverageEnabled    := false,
     libraryDependencies ++= {
       CrossVersion.partialVersion(scalaVersion.value) match {
         case Some((2, _)) =>
