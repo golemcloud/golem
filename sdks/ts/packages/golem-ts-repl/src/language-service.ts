@@ -94,10 +94,10 @@ export class LanguageService {
   }
 
   addSnippetToHistory(snippet: string) {
-    if (!this.snippetHistory.endsWith('\n')) {
-      snippet = snippet + '\n';
-    }
-    this.snippetHistory = this.snippetHistory + snippet;
+    const normalizedSnippet = snippet.trimEnd();
+    if (!normalizedSnippet) return;
+
+    this.snippetHistory = this.snippetHistory + normalizedSnippet + ';\n';
     this.updateProjectSnippet();
   }
 
