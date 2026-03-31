@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::repo::Deps;
+use crate::repo::{Deps, TestDb};
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
@@ -96,6 +96,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(db.pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(db.pool.clone())),
+        test_db: TestDb::Sqlite(db.pool.clone()),
     };
     deps.setup().await;
     deps
