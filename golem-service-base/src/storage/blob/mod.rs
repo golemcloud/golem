@@ -417,3 +417,26 @@ pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
 
     Ok(())
 }
+
+pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
+    path.to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
+}
+
+pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
+    match path.parent() {
+        Some(parent) => blob_path_to_string(parent),
+        None => Ok(String::new()),
+    }
+}
+
+pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
+    path.file_name()
+        .ok_or_else(|| anyhow!("Path must have a file name: {path:?}"))
+        .and_then(|name| {
+            name.to_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
+        })
+}
