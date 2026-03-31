@@ -61,6 +61,26 @@ impl RedisIndexedStorage {
         }
     }
 
+    fn to_scan_pattern(prefix: Option<&str>) -> String {
+        match prefix {
+            None => "*".to_string(),
+            Some(prefix) => {
+                let mut result = String::with_capacity(prefix.len() + 1);
+                for ch in prefix.chars() {
+                    match ch {
+                        '*' | '?' | '[' | ']' | '\\' => {
+                            result.push('\\');
+                            result.push(ch);
+                        }
+                        _ => result.push(ch),
+                    }
+                }
+                result.push('*');
+                result
+            }
+        }
+    }
+
     const KEY: &'static str = "key";
 
     fn parse_entry_id(id: &str) -> Result<u64, String> {
@@ -143,15 +163,16 @@ impl IndexedStorage for RedisIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
-        pattern: &str,
+        prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
+        let pattern = Self::to_scan_pattern(prefix);
         let (cursor, keys) = self
             .redis
             .with(svc_name, api_name)
             .scan(
-                Self::composite_meta_key(namespace.clone(), pattern),
+                Self::composite_meta_key(namespace.clone(), &pattern),
                 cursor,
                 count,
             )
