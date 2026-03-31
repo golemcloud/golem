@@ -524,6 +524,7 @@ mod tests {
             golem_rust_version: None,
             ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
             ts_version: None,
+            scala_sdk_version: None,
         };
 
         assert_eq!(
