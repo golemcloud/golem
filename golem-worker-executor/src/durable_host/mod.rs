@@ -156,7 +156,6 @@ impl Drop for WorkerDir {
     }
 }
 
-
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, info, span, warn};
 use try_match::try_match;
@@ -237,22 +236,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 })?;
                 WorkerDir::Deterministic(dir)
             } else {
-                WorkerDir::Temp(
-                    tempfile::Builder::new()
-                        .prefix("golem")
-                        .tempdir()
-                        .map_err(|e| {
-                            WorkerExecutorError::runtime(format!(
-                                "Failed to create temporary directory: {e}",
-                            ))
-                        })?,
-                )
+                WorkerDir::Temp(tempfile::Builder::new().prefix("golem").tempdir().map_err(
+                    |e| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed to create temporary directory: {e}",
+                        ))
+                    },
+                )?)
             },
         );
-        debug!(
-            "Created file system root at {:?}",
-            worker_dir.path()
-        );
+        debug!("Created file system root at {:?}", worker_dir.path());
 
         debug!(
             "Worker {} initialized with deleted regions {}",
