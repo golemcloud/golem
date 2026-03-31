@@ -129,7 +129,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                         _permit: permit,
                     }));
                     let resource = self.as_wasi_view().table().push(entry)?;
-                    self.register_open_websocket(resource.rep());
+                    self.register_open_websocket(resource.rep(), url.clone(), headers.clone());
                     let resp = HostResponseWebsocketConnectResponse { result: Ok(()) };
                     durability
                         .persist_raw(self, req.into(), resp.into())
@@ -154,7 +154,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                         .as_wasi_view()
                         .table()
                         .push(WebSocketConnectionEntry::Replay)?;
-                    self.register_open_websocket(resource.rep());
+                    self.register_open_websocket(resource.rep(), url.clone(), headers.clone());
                     Ok(Ok(resource))
                 }
                 Err(e) => Ok(Err(serializable_error_to_error(e))),
@@ -180,6 +180,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         };
 
         if durability.is_live() {
+            ensure_websocket_connection_live(self, &self_).await?;
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let tungstenite_msg = to_tungstenite_message(message);
@@ -229,6 +230,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let req = HostRequestWebsocketReceive {};
 
         if durability.is_live() {
+            ensure_websocket_connection_live(self, &self_).await?;
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let live_result = match entry {
@@ -255,12 +257,18 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             durability
                 .persist_raw(self, req.into(), resp.into())
                 .await?;
+            if live_result.is_ok() {
+                self.mark_websocket_message_observed(self_.rep());
+            }
             Ok(live_result)
         } else {
             let _ = self.as_wasi_view().table().get(&self_)?;
             let resp: HostResponseWebsocketReceiveResponse = durability.replay(self).await?;
             match resp.result {
-                Ok(m) => Ok(Ok(serializable_message_to_message(m))),
+                Ok(m) => {
+                    self.mark_websocket_message_observed(self_.rep());
+                    Ok(Ok(serializable_message_to_message(m)))
+                }
                 Err(e) => Ok(Err(serializable_error_to_error(e))),
             }
         }
@@ -282,6 +290,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let req = HostRequestWebsocketReceiveWithTimeout { timeout_ms };
 
         if durability.is_live() {
+            ensure_websocket_connection_live(self, &self_).await?;
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let live_result: Result<Option<Message>, Error> = match entry {
@@ -332,13 +341,19 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             durability
                 .persist_raw(self, req.into(), resp.into())
                 .await?;
+            if let Ok(Some(_)) = &live_result {
+                self.mark_websocket_message_observed(self_.rep());
+            }
             Ok(live_result)
         } else {
             let _ = self.as_wasi_view().table().get(&self_)?;
             let resp: HostResponseWebsocketReceiveWithTimeoutResponse =
                 durability.replay(self).await?;
             match resp.result {
-                Ok(Some(m)) => Ok(Ok(Some(serializable_message_to_message(m)))),
+                Ok(Some(m)) => {
+                    self.mark_websocket_message_observed(self_.rep());
+                    Ok(Ok(Some(serializable_message_to_message(m))))
+                }
                 Ok(None) => Ok(Ok(None)),
                 Err(e) => Ok(Err(serializable_error_to_error(e))),
             }
@@ -367,6 +382,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let rep_id = self_.rep();
 
         if durability.is_live() {
+            ensure_websocket_connection_live(self, &self_).await?;
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let live_result = match entry {
@@ -420,6 +436,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         self_: Resource<WebSocketConnectionEntry>,
     ) -> anyhow::Result<Resource<wasmtime_wasi::p2::bindings::io::poll::Pollable>> {
         self.observe_function_call("golem:websocket/client", "subscribe");
+        ensure_websocket_connection_live(self, &self_).await?;
         Ok(wasmtime_wasi::subscribe(self.table(), self_, None)?)
     }
 
@@ -429,6 +446,57 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         self.as_wasi_view().table().delete(rep)?;
         Ok(())
     }
+}
+
+async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    resource: &Resource<WebSocketConnectionEntry>,
+) -> anyhow::Result<()> {
+    let rep = resource.rep();
+    let is_replay_entry = {
+        let mut view = ctx.as_wasi_view();
+        let entry = view.table().get(resource)?;
+        matches!(entry, WebSocketConnectionEntry::Replay)
+    };
+    let info = ctx.websocket_connection_info(rep);
+    let Some((url, headers, last_seen_message_index, mode)) = info else {
+        return Ok(());
+    };
+    if !is_replay_entry && mode != crate::durable_host::WebSocketConnectionMode::NeedsReconnect {
+        return Ok(());
+    }
+
+    let request = build_request(&url, headers.as_deref())
+        .map_err(|e| anyhow::anyhow!("Failed to rebuild websocket request for reconnect: {e}"))?;
+    let permit = ctx.websocket_connection_pool.acquire().await?;
+    let (ws_stream, _) = connect_async(request)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to reconnect websocket: {e}"))?;
+    let (writer, mut reader) = ws_stream.split();
+
+    let mut skipped = 0u64;
+    while skipped < last_seen_message_index {
+        read_next_user_or_close(&mut reader)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fast-forward websocket stream: {e:?}"))?;
+        skipped += 1;
+    }
+
+    let new_entry = WebSocketConnectionEntry::Live(Box::new(LiveWebSocketConnection {
+        writer: Mutex::new(writer),
+        reader: Mutex::new(ReaderState {
+            stream: reader,
+            pending: None,
+        }),
+        _permit: permit,
+    }));
+    {
+        let mut view = ctx.as_wasi_view();
+        let entry = view.table().get_mut(resource)?;
+        *entry = new_entry;
+    }
+    ctx.mark_websocket_reconnected(rep);
+    Ok(())
 }
 
 fn build_request(

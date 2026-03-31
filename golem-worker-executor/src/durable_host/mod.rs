@@ -1463,23 +1463,59 @@ enum SnapshotRecoveryResult {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(crate) fn register_open_websocket(&mut self, rep: u32) {
-        self.state.open_websocket_connections.insert(rep);
+    pub(crate) fn register_open_websocket(
+        &mut self,
+        rep: u32,
+        url: String,
+        headers: Option<Vec<(String, String)>>,
+    ) {
+        self.state.open_websocket_connections.insert(
+            rep,
+            WebSocketConnectionState {
+                url,
+                headers,
+                last_seen_message_index: 0,
+                mode: WebSocketConnectionMode::Live,
+            },
+        );
     }
 
     pub(crate) fn unregister_open_websocket(&mut self, rep: u32) {
         self.state.open_websocket_connections.remove(&rep);
     }
 
-    pub(crate) fn validate_no_open_websocket_after_replay(
+    pub(crate) fn mark_websocket_message_observed(&mut self, rep: u32) {
+        if let Some(state) = self.state.open_websocket_connections.get_mut(&rep) {
+            state.last_seen_message_index += 1;
+        }
+    }
+
+    pub(crate) fn websocket_connection_info(
         &self,
-    ) -> Result<(), WorkerExecutorError> {
-        if !self.state.open_websocket_connections.is_empty() {
-            Err(WorkerExecutorError::runtime(
-                "WebSocket connection was still open when replay ended; close or drop the connection before the replay boundary.",
-            ))
-        } else {
-            Ok(())
+        rep: u32,
+    ) -> Option<(String, Option<Vec<(String, String)>>, u64, WebSocketConnectionMode)> {
+        self.state
+            .open_websocket_connections
+            .get(&rep)
+            .map(|state| {
+                (
+                    state.url.clone(),
+                    state.headers.clone(),
+                    state.last_seen_message_index,
+                    state.mode.clone(),
+                )
+            })
+    }
+
+    pub(crate) fn mark_websocket_reconnected(&mut self, rep: u32) {
+        if let Some(state) = self.state.open_websocket_connections.get_mut(&rep) {
+            state.mode = WebSocketConnectionMode::Live;
+        }
+    }
+
+    pub(crate) fn mark_open_websockets_for_reconnect(&mut self) {
+        for state in self.state.open_websocket_connections.values_mut() {
+            state.mode = WebSocketConnectionMode::NeedsReconnect;
         }
     }
 
@@ -1501,13 +1537,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
-
-                    // Phase 1 WebSocket durability rule:
-                    // If replay reached the boundary with any WebSocket connections that were
-                    // opened (according to the oplog) but not closed/dropped, we don't yet
-                    // support resuming from that state. Fail fast instead of continuing with
-                    // a half-open logical connection.
-                    self.validate_no_open_websocket_after_replay()?;
+                    self.mark_open_websockets_for_reconnect();
 
                     let pending_update = self.state.pending_update.lock().await.take();
 
@@ -3049,6 +3079,21 @@ pub(crate) struct PendingFilesystemReservation {
     pub reserved_growth: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WebSocketConnectionMode {
+    Live,
+    NeedsReconnect,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketConnectionState {
+    pub url: String,
+    pub headers: Option<Vec<(String, String)>>,
+    /// Number of user-visible websocket messages already observed by the guest.
+    pub last_seen_message_index: u64,
+    pub mode: WebSocketConnectionMode,
+}
+
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -3081,8 +3126,8 @@ struct PrivateDurableWorkerState {
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
 
-    /// WebSocket connection resource reps that are still open (not yet closed/dropped).
-    open_websocket_connections: HashSet<u32>,
+    /// WebSocket connection state indexed by websocket resource rep.
+    open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
 
     /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
     /// before outgoing_handler::handle() is called and the HttpRequestState is created.
@@ -3233,7 +3278,7 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
-            open_websocket_connections: HashSet::new(),
+            open_websocket_connections: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
