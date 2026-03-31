@@ -48,7 +48,7 @@ pub(super) fn plan_package_json_fix_step(
 ) -> anyhow::Result<Option<DependencyFixStep>> {
     let package_json_path = ctx.application().app_root_dir().join("package.json");
     let package_json_str_contents = fs::read_to_string(&package_json_path)?;
-    let requirements = typescript_sdk_requirements(overrides);
+    let requirements = typescript_sdk_requirements(overrides)?;
     let names = requirements.iter().map(|r| r.name).collect::<Vec<_>>();
 
     let dependencies = collect_object_entries(&package_json_str_contents, "dependencies", &names)?;
@@ -74,7 +74,7 @@ pub(super) fn plan_package_json_fix_step(
                     found_text.as_str(),
                     &requirement.expected,
                     requirement.semantics,
-                ),
+                )?,
                 None => DependencySpecCompliance::SkipWarn(format!(
                     "Skipped dependency check for complex package spec '{}'",
                     raw
@@ -166,29 +166,33 @@ fn parse_json_string_literal(raw: &str) -> Option<String> {
     serde_json::from_str::<String>(raw).ok()
 }
 
-fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDependencyRequirement> {
-    let make_expected = |package_name: &str| {
+fn typescript_sdk_requirements(
+    overrides: &SdkOverrides,
+) -> anyhow::Result<Vec<PackageJsonDependencyRequirement>> {
+    let make_expected = |package_name: &str| -> anyhow::Result<ExpectedDependencyKind> {
         if overrides.ts_packages_path.is_some() {
-            ExpectedDependencyKind::ExactPath(overrides.ts_package_dep(package_name))
+            Ok(ExpectedDependencyKind::ExactPath(
+                overrides.ts_package_dep(package_name)?,
+            ))
         } else {
-            ExpectedDependencyKind::SemanticCompatibleVersion {
-                base_version: overrides.ts_package_dep(package_name),
+            Ok(ExpectedDependencyKind::SemanticCompatibleVersion {
+                base_version: overrides.ts_package_dep(package_name)?,
                 use_version_hint: false,
-            }
+            })
         }
     };
 
-    vec![
+    Ok(vec![
         PackageJsonDependencyRequirement {
             name: "@golemcloud/golem-ts-sdk",
             section: PackageJsonSection::Dependencies,
-            expected: make_expected("golem-ts-sdk"),
+            expected: make_expected("golem-ts-sdk")?,
             semantics: DependencyMatcherSemantics::TypeScript,
         },
         PackageJsonDependencyRequirement {
             name: "@golemcloud/golem-ts-typegen",
             section: PackageJsonSection::DevDependencies,
-            expected: make_expected("golem-ts-typegen"),
+            expected: make_expected("golem-ts-typegen")?,
             semantics: DependencyMatcherSemantics::TypeScript,
         },
         PackageJsonDependencyRequirement {
@@ -272,7 +276,7 @@ fn typescript_sdk_requirements(overrides: &SdkOverrides) -> Vec<PackageJsonDepen
             },
             semantics: DependencyMatcherSemantics::TypeScript,
         },
-    ]
+    ])
 }
 
 fn dep_base_version(spec: &str) -> String {
@@ -312,7 +316,7 @@ mod test {
         let mut check_deps = BTreeSet::new();
         let mut check_dev_deps = BTreeSet::new();
 
-        for requirement in typescript_sdk_requirements(overrides) {
+        for requirement in typescript_sdk_requirements(overrides).unwrap() {
             match requirement.section {
                 PackageJsonSection::Dependencies => {
                     check_deps.insert(requirement.name.to_string());

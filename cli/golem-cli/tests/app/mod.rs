@@ -347,14 +347,20 @@ impl TestContext {
         let ctx = Self {
             quiet,
             golem_path: {
-                let path = workspace_path().join("target/debug/golem");
+                let path = workspace_path().join(format!(
+                    "target/debug/golem{}",
+                    std::env::consts::EXE_SUFFIX
+                ));
                 if !path.exists() {
                     panic!("golem binary not found at {}", path.display());
                 }
                 path
             },
             golem_cli_path: {
-                let path = workspace_path().join("target/debug/golem-cli");
+                let path = workspace_path().join(format!(
+                    "target/debug/golem-cli{}",
+                    std::env::consts::EXE_SUFFIX
+                ));
                 if !path.exists() {
                     panic!("golem-cli binary not found at {}", path.display());
                 }
@@ -437,7 +443,7 @@ impl TestContext {
             );
             all_args
         };
-        let working_dir = &self.working_dir.canonicalize().unwrap();
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
 
         println!(
             "{} {}",
@@ -449,7 +455,7 @@ impl TestContext {
         let mut child = Command::new(&self.golem_cli_path)
             .args(args)
             .envs(&self.env)
-            .current_dir(working_dir)
+            .current_dir(&working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -479,7 +485,7 @@ impl TestContext {
             );
             all_args
         };
-        let working_dir = self.working_dir.canonicalize().unwrap();
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
 
         println!(
             "{} {}",
