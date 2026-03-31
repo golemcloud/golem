@@ -168,24 +168,17 @@ type HttpSpec = {
   headers?: Record<string, string>;
 };
 
-type OneOf<T extends object, Keys extends keyof T = keyof T> = {
-  [K in Keys]: T[K] extends undefined
-    ? never
-    : StepCommon & Pick<Required<T>, K> & Partial<Record<Exclude<Keys, K>, undefined>>;
-}[Keys];
-
-type StepVariants = {
-  prompt: string;
-  invoke: InvokeSpec;
-  shell: ShellSpec;
-  trigger: TriggerSpec;
-  create_agent: CreateAgentSpec;
-  delete_agent: DeleteAgentSpec;
-  sleep: number;
-  http: HttpSpec;
-};
-
-export type StepSpec = OneOf<StepVariants>;
+export type StepSpec = StepCommon &
+  (
+    | { tag: "prompt"; prompt: string; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
+    | { tag: "invoke"; invoke: InvokeSpec; prompt?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
+    | { tag: "shell"; shell: ShellSpec; prompt?: undefined; invoke?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
+    | { tag: "trigger"; trigger: TriggerSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
+    | { tag: "create_agent"; create_agent: CreateAgentSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
+    | { tag: "delete_agent"; delete_agent: DeleteAgentSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; sleep?: undefined; http?: undefined }
+    | { tag: "sleep"; sleep: number; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; http?: undefined }
+    | { tag: "http"; http: HttpSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined }
+  );
 
 export interface ScenarioSpec {
   name: string;
@@ -215,8 +208,13 @@ export class ScenarioLoader {
         .join("\n");
       throw new Error(`Invalid scenario file "${filePath}":\n${issues}`);
     }
-    // The refine() guarantees exactly one action field, making the cast safe
-    return result.data as unknown as ScenarioSpec;
+    // Add the tag field based on which action field is present
+    const data = result.data;
+    const steps = data.steps.map((step) => {
+      const tag = ACTION_FIELDS.find((f) => step[f] !== undefined)!;
+      return { ...step, tag } as StepSpec;
+    });
+    return { ...data, steps } as ScenarioSpec;
   }
 }
 
@@ -349,51 +347,51 @@ export class ScenarioExecutor {
       prompt: sub(step.prompt),
       shell: step.shell
         ? {
-            command: substituteVariables(step.shell.command, variables),
-            args: subArr(step.shell.args),
-            cwd: sub(step.shell.cwd),
-          }
+          command: substituteVariables(step.shell.command, variables),
+          args: subArr(step.shell.args),
+          cwd: sub(step.shell.cwd),
+        }
         : step.shell,
       invoke: step.invoke
         ? {
-            agent: substituteVariables(step.invoke.agent, variables),
-            function: substituteVariables(step.invoke.function, variables),
-            args: sub(step.invoke.args),
-          }
+          agent: substituteVariables(step.invoke.agent, variables),
+          function: substituteVariables(step.invoke.function, variables),
+          args: sub(step.invoke.args),
+        }
         : step.invoke,
       trigger: step.trigger
         ? {
-            agent: substituteVariables(step.trigger.agent, variables),
-            function: substituteVariables(step.trigger.function, variables),
-            args: sub(step.trigger.args),
-          }
+          agent: substituteVariables(step.trigger.agent, variables),
+          function: substituteVariables(step.trigger.function, variables),
+          args: sub(step.trigger.args),
+        }
         : step.trigger,
       create_agent: step.create_agent
         ? {
-            ...step.create_agent,
-            name: substituteVariables(step.create_agent.name, variables),
-          }
+          ...step.create_agent,
+          name: substituteVariables(step.create_agent.name, variables),
+        }
         : step.create_agent,
       delete_agent: step.delete_agent
         ? {
-            ...step.delete_agent,
-            name: substituteVariables(step.delete_agent.name, variables),
-          }
+          ...step.delete_agent,
+          name: substituteVariables(step.delete_agent.name, variables),
+        }
         : step.delete_agent,
       http: step.http
         ? {
-            ...step.http,
-            url: substituteVariables(step.http.url, variables),
-            body: sub(step.http.body),
-            headers: step.http.headers
-              ? Object.fromEntries(
-                  Object.entries(step.http.headers).map(([k, v]) => [
-                    k,
-                    substituteVariables(v, variables),
-                  ]),
-                )
-              : step.http.headers,
-          }
+          ...step.http,
+          url: substituteVariables(step.http.url, variables),
+          body: sub(step.http.body),
+          headers: step.http.headers
+            ? Object.fromEntries(
+              Object.entries(step.http.headers).map(([k, v]) => [
+                k,
+                substituteVariables(v, variables),
+              ]),
+            )
+            : step.http.headers,
+        }
         : step.http,
     } as StepSpec;
   }
@@ -521,11 +519,11 @@ export class ScenarioExecutor {
         const attempts: StepAttemptResult[] = [];
         let finalResult:
           | {
-              success: boolean;
-              errors: string[];
-              activatedSkills: string[];
-              isFirstPrompt: boolean;
-            }
+            success: boolean;
+            errors: string[];
+            activatedSkills: string[];
+            isFirstPrompt: boolean;
+          }
           | undefined;
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {

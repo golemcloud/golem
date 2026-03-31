@@ -88,6 +88,7 @@ describe("Variable substitution integration", () => {
       steps: [
         {
           id: "vars-step",
+          tag: "prompt" as const,
           prompt:
             "Agent={{agent}} Lang={{language}} WS={{workspace}} Scenario={{scenario}}",
         },
@@ -134,6 +135,7 @@ describe("Variable substitution integration", () => {
       steps: [
         {
           id: "echo-vars",
+          tag: "shell" as const,
           shell: {
             command: "sh",
             args: ["-c", 'echo "agent={{agent}} lang={{language}}"'],
@@ -174,6 +176,7 @@ describe("Variable substitution integration", () => {
       steps: [
         {
           id: "unknown",
+          tag: "prompt" as const,
           prompt: "{{agent}} and {{mystery_var}}",
         },
       ],
@@ -213,6 +216,7 @@ describe("Variable substitution integration", () => {
       steps: [
         {
           id: "invoke-step",
+          tag: "invoke" as const,
           invoke: {
             agent: "{{agent}}",
             function: "test-func",
@@ -254,6 +258,7 @@ describe("Variable substitution integration", () => {
       steps: [
         {
           id: "create",
+          tag: "create_agent" as const,
           create_agent: { name: "{{agent}}-worker" },
         },
       ],
@@ -290,11 +295,13 @@ describe("Variable substitution integration", () => {
       steps: [
         {
           id: "skipped",
+          tag: "prompt" as const,
           prompt: "{{agent}} should not run",
           skip_if: { agent: "claude-code" },
         },
         {
           id: "runs",
+          tag: "prompt" as const,
           prompt: "{{agent}} should run",
           only_if: { language: "ts" },
         },
@@ -335,9 +342,9 @@ describe("Variable substitution integration", () => {
       name: "abort-test",
       settings: { cleanup: false },
       steps: [
-        { id: "step-1", prompt: "first" },
-        { id: "step-2", prompt: "second" },
-        { id: "step-3", prompt: "third" },
+        { id: "step-1", tag: "prompt" as const, prompt: "first" },
+        { id: "step-2", tag: "prompt" as const, prompt: "second" },
+        { id: "step-3", tag: "prompt" as const, prompt: "third" },
       ],
     };
 
