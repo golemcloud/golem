@@ -24,6 +24,7 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
+use golem_service_base::repo::SqlDateTime;
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::Database;
@@ -338,7 +339,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
 
-                let mcp_deployment: (Uuid, crate::repo::model::datetime::SqlDateTime, String) = tx
+                let mcp_deployment: (Uuid, SqlDateTime, String) = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             UPDATE mcp_deployments

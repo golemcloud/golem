@@ -12,26 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Empty;
-use crate::shard_manager_config::HealthCheckMode::K8s;
+use crate::config::HealthCheckMode::K8s;
 use golem_common::SafeDisplay;
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbPostgresConfig, HasConfigExamples, RedisConfig,
+    ConfigExample, ConfigLoader, DbConfig, DbSqliteConfig, HasConfigExamples,
 };
-use golem_common::model::RetryConfig;
+use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerConfig {
     pub tracing: TracingConfig,
-    pub persistence: PersistenceConfig,
+    pub db: DbConfig,
     pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
     pub http_port: u16,
@@ -48,12 +47,8 @@ impl SafeDisplay for ShardManagerConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
-        let _ = writeln!(&mut result, "persistence:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.persistence.to_safe_string_indented()
-        );
+        let _ = writeln!(&mut result, "db:");
+        let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
         let _ = writeln!(&mut result, "worker executors:");
         let _ = writeln!(
             &mut result,
@@ -99,7 +94,10 @@ impl Default for ShardManagerConfig {
     fn default() -> Self {
         Self {
             tracing: TracingConfig::local_dev("shard-manager"),
-            persistence: PersistenceConfig::default(),
+            db: DbConfig::Sqlite(DbSqliteConfig {
+                database: "golem_shard_manager.db".to_string(),
+                ..Default::default()
+            }),
             worker_executors: WorkerExecutorServiceConfig::default(),
             health_check: HealthCheckConfig::default(),
             http_port: 8081,
@@ -366,46 +364,6 @@ impl SafeDisplay for HealthCheckK8sConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum PersistenceConfig {
-    Redis(RedisConfig),
-    Postgres(DbPostgresConfig),
-    FileSystem(FileSystemPersistenceConfig),
-}
-
-impl SafeDisplay for PersistenceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        match self {
-            PersistenceConfig::Redis(inner) => {
-                let _ = writeln!(&mut result, "redis:");
-                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
-            }
-            PersistenceConfig::Postgres(inner) => {
-                let _ = writeln!(&mut result, "postgres:");
-                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
-            }
-            PersistenceConfig::FileSystem(inner) => {
-                let _ = writeln!(&mut result, "filesystem:");
-                let _ = writeln!(&mut result, "path: {:?}", inner.path);
-            }
-        }
-        result
-    }
-}
-
-impl Default for PersistenceConfig {
-    fn default() -> Self {
-        Self::Redis(RedisConfig::default())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FileSystemPersistenceConfig {
-    pub path: PathBuf,
-}
-
 pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {
     ConfigLoader::new_with_examples(Path::new("config/shard-manager.toml"))
 }
@@ -414,7 +372,7 @@ pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {
 mod tests {
     use test_r::test;
 
-    use crate::shard_manager_config::make_config_loader;
+    use crate::config::make_config_loader;
 
     #[test]
     pub fn config_is_loadable() {

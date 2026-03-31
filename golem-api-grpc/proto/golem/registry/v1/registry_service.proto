@@ -19,7 +19,7 @@ import "golem/mcp/core.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/environment_state.proto";
 import "golem/common/quota.proto";
-import "golem/registry/fuel_usage_update.proto";
+import "golem/registry/resource_usage_update.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
 
@@ -32,7 +32,7 @@ service RegistryService {
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
   rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
   rpc UpdateWorkerConnectionLimit (UpdateWorkerConnectionLimitRequest) returns (UpdateWorkerConnectionLimitResponse);
-  rpc BatchUpdateFuelUsage (BatchUpdateFuelUsageRequest) returns (BatchUpdateFuelUsageResponse);
+  rpc BatchUpdateResourceUsage (BatchUpdateResourceUsageRequest) returns (BatchUpdateResourceUsageResponse);
 
   // components api
   rpc DownloadComponent (DownloadComponentRequest) returns (stream DownloadComponentResponse);
@@ -134,18 +134,18 @@ message UpdateWorkerConnectionLimitResponse {
   }
 }
 
-message BatchUpdateFuelUsageRequest {
-  repeated golem.registry.FuelUsageUpdate updates = 1;
+message BatchUpdateResourceUsageRequest {
+  repeated golem.registry.ResourceUsageUpdate updates = 1;
 }
 
-message BatchUpdateFuelUsageResponse {
+message BatchUpdateResourceUsageResponse {
   oneof result {
-    BatchUpdateFuelUsageSuccessResponse success = 1;
+    BatchUpdateResourceUsageSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
 }
 
-message BatchUpdateFuelUsageSuccessResponse {
+message BatchUpdateResourceUsageSuccessResponse {
   golem.common.AccountResourceLimits account_resource_limits = 1;
 }
 

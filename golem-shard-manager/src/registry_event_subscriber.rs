@@ -63,11 +63,11 @@ impl RegistryInvalidationHandler for ShardManagerRegistryInvalidationHandler {
                     %resource_name,
                     "resource definition changed, refreshing cached entry"
                 );
-                self.fetcher
-                    .invalidate(*environment_id, resource_name.clone())
-                    .await;
                 self.quota_service
                     .on_resource_definition_changed(*resource_definition_id)
+                    .await;
+                self.fetcher
+                    .invalidate(*environment_id, resource_name.clone())
                     .await;
             }
             RegistryInvalidationEvent::DeploymentChanged { .. }
