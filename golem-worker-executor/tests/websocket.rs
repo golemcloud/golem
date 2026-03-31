@@ -119,8 +119,6 @@ async fn websocket_echo_rust_oplog_replay(
     _tracing: &Tracing,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::data_value;
-
     let context = TestContext::new(last_unique_id);
 
     // First executor instance + WebSocket echo server
@@ -173,23 +171,20 @@ async fn websocket_echo_rust_oplog_replay(
         )
         .await?;
 
-    // First invocation: build up an oplog entry sequence for a full
-    // connect → send → receive → close WebSocket session.
+    // First invocation: full WebSocket session (durable host calls) plus one
+    // entry in agent-local `echo_history`.
     let first_result = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "echo",
+            "echo_and_record",
             data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
         )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(
-        first_result,
-        Value::String("hello websocket".to_string())
-    );
+    assert_eq!(first_result, Value::String("hello websocket".to_string()));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -201,13 +196,13 @@ async fn websocket_echo_rust_oplog_replay(
     // Restart the executor to force oplog replay for this worker.
     let executor = start(deps, &context).await?;
 
-    // Second invocation on the same worker id; this triggers full replay of the
-    // previous WebSocket session and then runs a fresh echo call.
+    // Second invocation: after replay, agent state must still contain the first
+    // echoed message; this call appends the second and returns `m1|m2`.
     let second_result = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "echo",
+            "echo_and_record",
             data_value!(format!("ws://localhost:{ws_port}"), "hello websocket 2"),
         )
         .await?
@@ -216,7 +211,7 @@ async fn websocket_echo_rust_oplog_replay(
 
     assert_eq!(
         second_result,
-        Value::String("hello websocket 2".to_string())
+        Value::String("hello websocket|hello websocket 2".to_string())
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;

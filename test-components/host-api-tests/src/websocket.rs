@@ -1,10 +1,14 @@
 use golem_rust::{agent_definition, agent_implementation, WebSocketMessage, WebsocketConnection};
+use std::cell::RefCell;
 use wasi::io::poll;
 
 #[agent_definition]
 pub trait WebsocketTest {
     fn new(name: String) -> Self;
     fn echo(&self, url: String, msg: String) -> String;
+    /// Like `echo`, but appends each echoed payload to agent-local history and returns `history.join("|")`.
+    /// Used in tests to assert state survives replay across executor restarts.
+    fn echo_and_record(&self, url: String, msg: String) -> String;
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
 
     // New polling methods
@@ -13,12 +17,16 @@ pub trait WebsocketTest {
 
 pub struct WebsocketTestImpl {
     _name: String,
+    echo_history: RefCell<Vec<String>>,
 }
 
 #[agent_implementation]
 impl WebsocketTest for WebsocketTestImpl {
     fn new(name: String) -> Self {
-        Self { _name: name }
+        Self {
+            _name: name,
+            echo_history: RefCell::new(Vec::new()),
+        }
     }
 
     fn echo(&self, url: String, msg: String) -> String {
@@ -30,6 +38,12 @@ impl WebsocketTest for WebsocketTestImpl {
             WebSocketMessage::Text(t) => t,
             WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
         }
+    }
+
+    fn echo_and_record(&self, url: String, msg: String) -> String {
+        let echoed = self.echo(url, msg);
+        self.echo_history.borrow_mut().push(echoed);
+        self.echo_history.borrow().join("|")
     }
 
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {
