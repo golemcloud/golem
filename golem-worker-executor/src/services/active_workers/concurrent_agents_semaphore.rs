@@ -306,8 +306,8 @@ impl ConcurrentAgentsSemaphore {
             .await
             .flatten();
 
-        if let Some(to_remove) = excess {
-            if let Ok(permits) = semaphore.clone().try_acquire_many_owned(to_remove as u32) {
+        if let Some(to_remove) = excess
+            && let Ok(permits) = semaphore.clone().try_acquire_many_owned(to_remove as u32) {
                 permits.forget();
                 // total_issued decreases to reflect the permanently consumed permits.
                 self.accounts
@@ -319,7 +319,6 @@ impl ConcurrentAgentsSemaphore {
                     "ConcurrentAgentsSemaphore: trimmed {to_remove} excess permits for {account_id}"
                 );
             }
-        }
     }
 
     /// Available permit count for an account (for tests / observability).
