@@ -179,13 +179,13 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
-        pattern: &str,
+        prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
         use std::fs;
 
-        let prefix = match namespace {
+        let db_prefix = match namespace {
             IndexedStorageMetaNamespace::Oplog => "oplog-".to_string(),
             IndexedStorageMetaNamespace::CompressedOplog { level } => {
                 format!("compressed-oplog-l{}-", level)
@@ -199,7 +199,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
                 entry.ok().and_then(|e| {
                     let path = e.path();
                     let file_name = path.file_name()?.to_string_lossy().to_string();
-                    if file_name.starts_with(&prefix) && file_name.ends_with(".db") {
+                    if file_name.starts_with(&db_prefix) && file_name.ends_with(".db") {
                         Some(file_name)
                     } else {
                         None
@@ -224,7 +224,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
                     svc_name,
                     api_name,
                     namespace.clone(),
-                    pattern,
+                    prefix,
                     current_file_cursor,
                     count - results.len() as u64,
                 )
