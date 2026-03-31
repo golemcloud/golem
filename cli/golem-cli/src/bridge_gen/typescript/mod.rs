@@ -700,7 +700,11 @@ impl TypeScriptBridgeGenerator {
         method.result(&format!("Promise<{class_name}>"));
 
         method.write_line("const parameters: base.DataValue = ");
-        self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
+        self.write_encode_data_value(
+            &mut method,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
         method.write_line("const phantomId = undefined;");
         self.write_config_encoding(&mut method, local_configs);
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
@@ -730,7 +734,11 @@ impl TypeScriptBridgeGenerator {
         method.result(&format!("Promise<{class_name}>"));
 
         method.write_line("const parameters: base.DataValue = ");
-        self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
+        self.write_encode_data_value(
+            &mut method,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
         self.write_config_encoding(&mut method, local_configs);
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
         method.write_line(format!(
@@ -758,7 +766,11 @@ impl TypeScriptBridgeGenerator {
         method.result(&format!("Promise<{class_name}>"));
 
         method.write_line("const parameters: base.DataValue = ");
-        self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
+        self.write_encode_data_value(
+            &mut method,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
         method.write_line("const phantomId = uuidv4();");
         self.write_config_encoding(&mut method, local_configs);
         self.write_create_agent_call(&mut method, config_var, "agentConfig");
