@@ -14,7 +14,9 @@
 
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
-use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use crate::storage::blob::{
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, validate_relative_blob_path,
+};
 use anyhow::Error;
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
@@ -155,6 +157,19 @@ impl S3BlobStorage {
                 }
             }
         }
+    }
+
+    fn encode_copy_source_key(key: &str) -> String {
+        let mut encoded = String::with_capacity(key.len());
+        for b in key.bytes() {
+            let ch = b as char;
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~' | '/') {
+                encoded.push(ch);
+            } else {
+                encoded.push_str(&format!("%{:02X}", b));
+            }
+        }
+        encoded
     }
 
     async fn list_objects(
@@ -318,6 +333,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -366,6 +382,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -415,6 +432,7 @@ impl BlobStorage for S3BlobStorage {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -464,6 +482,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let op_id = format!("{bucket} - {key:?}");
@@ -560,6 +579,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -597,6 +617,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -664,6 +685,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -699,6 +721,9 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
     ) -> Result<(), Error> {
+        for path in paths {
+            validate_relative_blob_path(path)?;
+        }
         let bucket = self.bucket_of(&namespace);
         let prefix = self.prefix_of(&namespace);
 
@@ -750,6 +775,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let marker = key.join("__dir_marker");
@@ -787,6 +813,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
         let key = namespace_root.join(path);
@@ -827,6 +854,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -881,6 +909,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let op_id = format!("{bucket} - {key:?}");
@@ -957,22 +986,25 @@ impl BlobStorage for S3BlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(from)?;
+        validate_relative_blob_path(to)?;
         let bucket = self.bucket_of(&namespace);
         let from_key = self.prefix_of(&namespace).join(from);
         let to_key = self.prefix_of(&namespace).join(to);
+        let encoded_from_key = Self::encode_copy_source_key(&from_key.to_string_lossy());
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, from_key, to_key),
-            |(client, bucket, from_key, to_key)| {
+            &(self.client.clone(), bucket, encoded_from_key, to_key),
+            |(client, bucket, encoded_from_key, to_key)| {
                 Box::pin(async move {
                     client
                         .copy_object()
                         .bucket(*bucket)
-                        .copy_source(format!("/{}/{}", *bucket, from_key.to_string_lossy()))
+                        .copy_source(format!("/{}/{}", *bucket, encoded_from_key))
                         .key(to_key.to_string_lossy())
                         .send()
                         .await

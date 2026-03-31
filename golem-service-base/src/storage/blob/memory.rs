@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::ErasedReplayableStream;
-use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use crate::storage::blob::{
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, validate_relative_blob_path,
+};
 use anyhow::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -72,6 +74,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
+        validate_relative_blob_path(path)?;
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -105,6 +108,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        validate_relative_blob_path(path)?;
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -143,6 +147,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
+        validate_relative_blob_path(path)?;
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -177,6 +182,7 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -234,6 +240,7 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -292,6 +299,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -332,6 +340,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let dir = path.to_string_lossy().to_string();
 
         let key = Key {
@@ -384,6 +393,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
+        validate_relative_blob_path(path)?;
         let dir = path.to_string_lossy().to_string();
 
         let key = Key {
@@ -411,6 +421,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
+        validate_relative_blob_path(path)?;
         let dir = path.to_string_lossy().to_string();
 
         let key = Key {
@@ -449,6 +460,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
+        validate_relative_blob_path(path)?;
         let path_str = path.to_string_lossy().to_string();
         let dir_key = Key {
             namespace: namespace.clone(),

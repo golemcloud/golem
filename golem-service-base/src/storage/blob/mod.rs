@@ -23,6 +23,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
+use std::path::Component;
 use std::path::{Path, PathBuf};
 
 pub mod fs;
@@ -393,4 +394,26 @@ pub enum ExistsResult {
 pub struct BlobMetadata {
     pub last_modified_at: Timestamp,
     pub size: u64,
+}
+
+pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
+    if path.is_absolute() {
+        return Err(anyhow!("Blob path must be relative: {path:?}"));
+    }
+
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(anyhow!(
+                    "Blob path cannot contain parent traversal: {path:?}"
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(anyhow!("Blob path must be relative: {path:?}"));
+            }
+        }
+    }
+
+    Ok(())
 }
