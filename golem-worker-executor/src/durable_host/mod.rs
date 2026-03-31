@@ -147,10 +147,10 @@ impl WorkerDir {
 
 impl Drop for WorkerDir {
     fn drop(&mut self) {
-        if let WorkerDir::Deterministic(p) = self {
-            if p.exists() {
-                let _ = std::fs::remove_dir_all(p);
-            }
+        if let WorkerDir::Deterministic(p) = self
+            && p.exists()
+        {
+            let _ = std::fs::remove_dir_all(p);
         }
         // WorkerDir::Temp is dropped automatically by TempDir's own Drop impl
     }
