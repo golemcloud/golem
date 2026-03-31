@@ -4,6 +4,7 @@ componentTemplates:
   scala:
     build:
     - command: sbt -batch -no-colors -Dsbt.supershell=false "golemBuildComponent {{ component_name }} .golem/scala.js"
+      dir: "{{ appRootDir }}"
       sources:
       - "{{ componentDir }}/src"
       targets:
@@ -18,3 +19,4 @@ componentTemplates:
 customCommands:
   scala-prepare:
   - command: sbt -batch -no-colors -Dsbt.supershell=false golemPrepare
+    dir: "{{ appRootDir }}"
