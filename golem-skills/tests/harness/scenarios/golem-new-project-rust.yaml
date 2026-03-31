@@ -1,11 +1,11 @@
-name: "golem-new-project-ts"
+name: "golem-new-project-rust"
 settings:
   timeout_per_subprompt: 300
 skip_if:
-  language: "rust"
+  language: "ts"
 steps:
   - id: "create-project"
-    prompt: "Create a new Golem application called test-app with TypeScript."
+    prompt: "Create a new Golem application called test-app with Rust."
     expectedSkills:
       - "golem-new-project"
     allowedExtraSkills:

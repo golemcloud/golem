@@ -1,6 +1,6 @@
 ---
-name: golem-db-app
-description: "Building a Golem application with PostgreSQL database integration. Use when creating agents that store and query data using golem:rdbms/postgres, defining HTTP endpoints, and configuring environment variables."
+name: golem-db-app-ts
+description: "Building a TypeScript Golem application with PostgreSQL database integration. Use when creating TypeScript agents that store and query data using golem:rdbms/postgres, defining HTTP endpoints, and configuring environment variables."
 ---
 
 # Building a Database-Backed Golem Application
