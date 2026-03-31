@@ -218,11 +218,11 @@ pub use bindings::golem::api::host::{
     complete_promise, create_promise, fork, get_promise, oplog_commit,
 };
 
-pub use checkpoint::*;
 pub use bindings::golem::websocket::client::{
     CloseInfo as WebSocketCloseInfo, Error as WebSocketError, Message as WebSocketMessage,
     WebsocketConnection,
 };
+pub use checkpoint::*;
 
 pub use transaction::*;
 
