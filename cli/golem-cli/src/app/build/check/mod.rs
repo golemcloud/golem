@@ -505,11 +505,11 @@ fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
 
 #[cfg(test)]
 mod test {
-    use crate::fs;
     use super::{
         DependencyMatcherSemantics, DependencySpecCompliance, ExpectedDependencyKind,
         evaluate_dependency_spec_compliance, verify_semantic_version_compatibility,
     };
+    use crate::fs;
     use pretty_assertions::assert_eq;
     use test_r::test;
 
@@ -586,8 +586,7 @@ mod test {
     fn ts_path_comparison_accepts_relative_file_path_equivalent_to_absolute_override() {
         let cwd = std::env::current_dir().unwrap();
         let sdk_path_buf = cwd.join("sdks/ts/packages/golem-ts-sdk");
-        let sdk_path = fs::path_to_str(&sdk_path_buf)
-            .expect("sdk path must be valid UTF-8");
+        let sdk_path = fs::path_to_str(&sdk_path_buf).expect("sdk path must be valid UTF-8");
         let found = format!(
             "file:{}",
             sdk_path.replace(

@@ -61,11 +61,8 @@ pub(super) fn plan_rust_cargo_fix_steps(
                 continue;
             }
 
-            let compliance = evaluate_cargo_dependency_compliance(
-                found,
-                requirement,
-                cargo_toml_path.parent(),
-            )?;
+            let compliance =
+                evaluate_cargo_dependency_compliance(found, requirement, cargo_toml_path.parent())?;
 
             match compliance {
                 DependencySpecCompliance::Compatible => {}
@@ -288,8 +285,8 @@ fn build_cargo_update_spec(
             Some(DependencySpec::Path { path, features }),
         ) if matches!(expected, ExpectedDependencyKind::ExactPath(expected_path)
             if path_matches_expected(path, expected_path, base_dir))
-            || evaluate_dependency_spec_compliance(path, expected, *semantics)
-                ? == DependencySpecCompliance::Compatible =>
+            || evaluate_dependency_spec_compliance(path, expected, *semantics)?
+                == DependencySpecCompliance::Compatible =>
         {
             DependencySpec::Path {
                 path: path.clone(),
@@ -299,7 +296,11 @@ fn build_cargo_update_spec(
         _ => requirement.expected_spec.clone(),
     };
 
-    Ok(merge_dependency_features(&base_spec, found, Some(&requirement.expected_spec)))
+    Ok(merge_dependency_features(
+        &base_spec,
+        found,
+        Some(&requirement.expected_spec),
+    ))
 }
 
 fn merge_dependency_features(
