@@ -490,7 +490,7 @@ mod tests {
             per_invocation_rpc_call_limit: 0,
             available_http_calls: 0,
             available_rpc_calls: 0,
-            max_concurrent_agents_per_executor: 7,
+            max_concurrent_agents_per_executor: 0,
         };
 
         let converted: super::ResourceLimits = proto.into();

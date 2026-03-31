@@ -142,7 +142,9 @@ impl ConcurrentAgentsSemaphore {
             None => {
                 // Account not registered — this should not happen in production
                 // surface the bug loudly rather than silently bypassing the limit.
-                debug!("ConcurrentAgentsSemaphore: acquire called for unregistered account {account_id}");
+                debug!(
+                    "ConcurrentAgentsSemaphore: acquire called for unregistered account {account_id}"
+                );
                 Arc::new(Semaphore::new(0))
             }
         };
@@ -307,18 +309,19 @@ impl ConcurrentAgentsSemaphore {
             .flatten();
 
         if let Some(to_remove) = excess
-            && let Ok(permits) = semaphore.clone().try_acquire_many_owned(to_remove as u32) {
-                permits.forget();
-                // total_issued decreases to reflect the permanently consumed permits.
-                self.accounts
-                    .update_async(account_id, |_, e| {
-                        e.total_issued = e.total_issued.saturating_sub(to_remove);
-                    })
-                    .await;
-                debug!(
-                    "ConcurrentAgentsSemaphore: trimmed {to_remove} excess permits for {account_id}"
-                );
-            }
+            && let Ok(permits) = semaphore.clone().try_acquire_many_owned(to_remove as u32)
+        {
+            permits.forget();
+            // total_issued decreases to reflect the permanently consumed permits.
+            self.accounts
+                .update_async(account_id, |_, e| {
+                    e.total_issued = e.total_issued.saturating_sub(to_remove);
+                })
+                .await;
+            debug!(
+                "ConcurrentAgentsSemaphore: trimmed {to_remove} excess permits for {account_id}"
+            );
+        }
     }
 
     /// Available permit count for an account (for tests / observability).

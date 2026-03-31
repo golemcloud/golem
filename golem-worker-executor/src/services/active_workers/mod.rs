@@ -30,9 +30,9 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
 use tracing::{Instrument, debug};
 
-use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::HasAll;
 use crate::services::golem_config::{FilesystemStorageConfig, MemoryConfig};
+use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};

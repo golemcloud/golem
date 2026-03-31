@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::Tracing;
-use axum::routing::get;
 use axum::Router;
+use axum::routing::get;
 use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start_with_concurrent_agent_limit, start_with_invocation_limits, start_with_table_limit,
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    start_with_concurrent_agent_limit, start_with_invocation_limits, start_with_table_limit,
 };
 use std::collections::HashMap;
 use std::time::Duration;
