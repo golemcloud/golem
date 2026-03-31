@@ -587,7 +587,7 @@ impl DeploymentRevisionCreationRecord {
 pub struct CompiledMcpData {
     pub implementers: golem_service_base::mcp::AgentTypeImplementers,
     #[desert(default)]
-    pub security_scheme_id: Option<SecuritySchemeId>,
+    pub security_scheme_name: Option<SecuritySchemeName>,
 }
 
 #[derive(FromRow)]
@@ -608,7 +608,7 @@ impl DeploymentCompiledMcpRecord {
             domain: compiled_mcp.domain.0.clone(),
             mcp_data: Blob::new(CompiledMcpData {
                 implementers: compiled_mcp.agent_type_implementers,
-                security_scheme_id: compiled_mcp.security_scheme.as_ref().map(|s| s.id),
+                security_scheme_name: compiled_mcp.security_scheme_name.clone(),
             }),
         }
     }
@@ -626,7 +626,8 @@ impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
             deployment_revision: value.deployment_revision_id.try_into()?,
             domain: Domain(value.domain),
             agent_type_implementers: mcp_data.implementers,
-            security_scheme: None,
+            security_scheme_name: mcp_data.security_scheme_name,
+            security_scheme: None, // Will be resolved at runtime
             registered_agent_types: Vec::new(),
         })
     }
