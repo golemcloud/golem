@@ -113,6 +113,123 @@ async fn websocket_echo_rust(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn websocket_echo_rust_oplog_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+
+    // First executor instance + WebSocket echo server
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+
+    // Accept many connections: the second invocation after executor restart
+    // performs a new live connect; a single accept() would leave nothing listening.
+    let ws_server = spawn(
+        async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let ws_stream = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("WS handshake failed");
+                let (mut write, mut read) = StreamExt::split(ws_stream);
+                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
+                    if msg.is_close() {
+                        break;
+                    }
+                    if msg.is_text() || msg.is_binary() {
+                        SinkExt::send(&mut write, msg).await.ok();
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "ws-echo-oplog-replay");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // First invocation: build up an oplog entry sequence for a full
+    // connect → send → receive → close WebSocket session.
+    let first_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "echo",
+            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        first_result,
+        Value::String("hello websocket".to_string())
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Drop the executor but keep the WebSocket server running on the same port.
+    // The next executor instance will fully replay the first invocation before
+    // running any new work on this worker.
+    drop(executor);
+
+    // Restart the executor to force oplog replay for this worker.
+    let executor = start(deps, &context).await?;
+
+    // Second invocation on the same worker id; this triggers full replay of the
+    // previous WebSocket session and then runs a fresh echo call.
+    let second_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "echo",
+            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket 2"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        second_result,
+        Value::String("hello websocket 2".to_string())
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn websocket_receive_with_timeout(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
