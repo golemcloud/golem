@@ -1502,6 +1502,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
 
+                    // Phase 1 WebSocket durability rule:
+                    // If replay reached the boundary with any WebSocket connections that were
+                    // opened (according to the oplog) but not closed/dropped, we don't yet
+                    // support resuming from that state. Fail fast instead of continuing with
+                    // a half-open logical connection.
+                    self.validate_no_open_websocket_after_replay()?;
+
                     let pending_update = self.state.pending_update.lock().await.take();
 
                     let pending_update = if let Some(pending_update) = pending_update {

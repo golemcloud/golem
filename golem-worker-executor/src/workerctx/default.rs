@@ -262,10 +262,6 @@ impl InvocationManagement for Context {
     fn is_replay(&self) -> bool {
         self.durable_ctx.is_replay()
     }
-
-    fn validate_state_after_replay_caught_up(&self) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.validate_no_open_websocket_after_replay()
-    }
 }
 
 #[async_trait]
