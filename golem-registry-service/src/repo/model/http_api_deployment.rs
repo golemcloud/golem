@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use desert_rust::BinaryCodec;
@@ -28,8 +27,9 @@ use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentId,
     HttpApiDeploymentRevision,
 };
+use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
-use golem_service_base::repo::blob::Blob;
+use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use uuid::Uuid;

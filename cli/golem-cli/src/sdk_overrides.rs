@@ -218,25 +218,19 @@ impl SdkOverrides {
 
         Ok(Self {
             golem_path: golem_path.clone(),
-            golem_rust_path: match get_normalized_value_by_key(&values, GOLEM_RUST_PATH) {
-                Some(path) => Some(path),
-                None => match golem_path.as_deref() {
-                    Some(path) => Some(
-                        fs::path_to_str(&Path::new(path).join("sdks/rust/golem-rust"))?.to_string(),
-                    ),
-                    None => None,
-                },
-            },
+            golem_rust_path: resolved_path_override(
+                &values,
+                GOLEM_RUST_PATH,
+                golem_path.as_deref(),
+                "sdks/rust/golem-rust",
+            )?,
             golem_rust_version: get_normalized_value_by_key(&values, GOLEM_RUST_VERSION),
-            ts_packages_path: match get_normalized_value_by_key(&values, GOLEM_TS_PACKAGES_PATH) {
-                Some(path) => Some(path),
-                None => match golem_path.as_deref() {
-                    Some(path) => Some(
-                        fs::path_to_str(&Path::new(path).join("sdks/ts/packages"))?.to_string(),
-                    ),
-                    None => None,
-                },
-            },
+            ts_packages_path: resolved_path_override(
+                &values,
+                GOLEM_TS_PACKAGES_PATH,
+                golem_path.as_deref(),
+                "sdks/ts/packages",
+            )?,
             ts_version: get_normalized_value_by_key(&values, GOLEM_TS_VERSION),
         })
     }
@@ -422,6 +416,24 @@ fn get_normalized_value_by_key(values: &HashMap<String, String>, key: &str) -> O
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed.to_string())
     })
+}
+
+fn resolved_path_override(
+    values: &HashMap<String, String>,
+    key: &str,
+    golem_path: Option<&str>,
+    suffix: &str,
+) -> anyhow::Result<Option<String>> {
+    if let Some(path) = get_normalized_value_by_key(values, key) {
+        return Ok(Some(path));
+    }
+
+    match golem_path {
+        Some(path) => Ok(Some(
+            fs::path_to_str(&Path::new(path).join(suffix))?.to_string(),
+        )),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,1 @@
+ALTER TABLE plans ADD COLUMN max_concurrent_agents_per_executor NUMERIC NOT NULL DEFAULT 1000000000000000000;

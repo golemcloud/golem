@@ -23,6 +23,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use std::collections::HashMap;
 
 use crate::custom_api::SecuritySchemeDetails;
+use golem_common::model::security_scheme::SecuritySchemeName;
 
 pub type AgentTypeImplementers = HashMap<AgentTypeName, (ComponentId, ComponentRevision)>;
 
@@ -33,7 +34,8 @@ pub struct CompiledMcp {
     pub deployment_revision: DeploymentRevision,
     pub domain: Domain,
     pub agent_type_implementers: AgentTypeImplementers,
-    pub security_scheme: Option<SecuritySchemeDetails>,
+    pub security_scheme_name: Option<SecuritySchemeName>,
+    pub security_scheme: Option<SecuritySchemeDetails>, // Resolved at runtime
     pub registered_agent_types: Vec<RegisteredAgentType>,
 }
 

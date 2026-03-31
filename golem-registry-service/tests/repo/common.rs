@@ -40,7 +40,6 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentRepoError, ComponentRevisionRecord,
 };
-use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::deployment::{
     DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
 };
@@ -58,10 +57,12 @@ use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
 };
+use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
 use golem_registry_service::services::registry_change_notifier::{
-    LocalRegistryChangeNotifier, RegistryChangeNotifier,
+    RegistryChangeNotifier, SqliteRegistryChangeNotifier,
 };
-use golem_service_base::repo::blob::Blob;
+use golem_service_base::repo::Blob;
+use golem_service_base::repo::SqlDateTime;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
@@ -996,6 +997,8 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalComponentStorageBytes => 1000,
             UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
+            UsageType::MonthlyHttpCalls => 5000,
+            UsageType::MonthlyRpcCalls => 5000,
         };
         let plan_limit = usage.plan.limit(usage_type);
         assert!(plan_limit == limit);
@@ -1287,7 +1290,8 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
     deps.full_deployment_repo
         .deploy(deployment_creation, false)
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
 
     ResolveTestEnv {
         owner_account_id,
@@ -1348,7 +1352,8 @@ pub async fn test_resolve_agent_type_shared_with_email(deps: &Deps) {
             grantee_account_id,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
 
     // Grantee resolves using owner's email
     let result = deps
@@ -1693,26 +1698,20 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
 
     // Record first event
     let id1 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id1, 1))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id1, 1, 1))
+        .await;
     assert!(id1 > baseline);
 
     // Record second event
     let id2 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id2, 2))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id2, 2, 2))
+        .await;
     assert!(id2 > id1);
 
     // Record third event for same environment
     let id3 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id1, 3))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id1, 3, 3))
+        .await;
     assert!(id3 > id2);
 
     // get_latest_event_id returns latest
@@ -1767,19 +1766,17 @@ pub async fn test_registry_change_record_and_query(deps: &Deps) {
 
 pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
     let env_id = new_repo_uuid();
-    let notifier = LocalRegistryChangeNotifier::new(64);
+    let notifier = SqliteRegistryChangeNotifier::new(64, deps.registry_change_repo_for_notifier());
+    let mut join_set = tokio::task::JoinSet::new();
+    notifier.start_background_tasks(&mut join_set);
 
     // Insert some events in the DB (simulating past deployments)
     let id1 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 10))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 10, 10))
+        .await;
     let id2 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 20))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 20, 20))
+        .await;
 
     // Simulate replay from cursor: get_events_since(id1 - 1) should include id1 and id2
     let replayed = deps
@@ -1812,19 +1809,26 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
 
     // Simulate a new deployment: record in DB and notify
     let id3 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 30))
-        .await
-        .unwrap();
-    notifier.notify(RegistryChangeEvent::DeploymentChanged {
-        event_id: id3,
-        environment_id: env_id,
-        deployment_revision_id: 30,
-    });
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 30, 30))
+        .await;
+    notifier.signal_new_events_available();
 
-    // Verify we receive the live event
-    let received = rx.recv().await.unwrap();
-    assert!(received.event_id() == id3);
+    // Verify we eventually receive the new live event.
+    // Depending on local notifier cursor state, older events can still be emitted first.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let received = loop {
+        let now = tokio::time::Instant::now();
+        assert!(now < deadline, "timed out waiting for event id {}", id3.0);
+
+        let next = tokio::time::timeout(deadline - now, rx.recv())
+            .await
+            .expect("timeout while waiting for broadcast event")
+            .expect("broadcast channel closed");
+
+        if next.event_id() == id3 {
+            break next;
+        }
+    };
     assert!(matches!(
         received,
         RegistryChangeEvent::DeploymentChanged { environment_id, deployment_revision_id: 30, .. }
@@ -1843,6 +1847,7 @@ pub async fn test_registry_change_replay_and_broadcast(deps: &Deps) {
         .collect();
     assert!(our_events.len() == 1);
     assert!(our_events[0].event_id() == id3);
+    join_set.abort_all();
 }
 
 pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
@@ -1850,15 +1855,11 @@ pub async fn test_registry_change_cursor_expired_detection(deps: &Deps) {
 
     // Insert events
     let id1 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 10))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 10, 10))
+        .await;
     let id2 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 20))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 20, 20))
+        .await;
 
     // Normal case: events exist after cursor, so no cursor_expired
     let events = deps
@@ -1915,10 +1916,8 @@ pub async fn test_registry_change_cleanup(deps: &Deps) {
 
     // Record an event
     let id = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 1))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 1, 1))
+        .await;
 
     // Cleanup with large retention should not delete the freshly created event
     let deleted = deps
@@ -1954,28 +1953,22 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
 
     // Record deployment changed event
     let id1 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 1))
-        .await
-        .unwrap();
+        .record_registry_change_event(NewRegistryChangeEvent::deployment_changed(env_id, 1, 1))
+        .await;
 
     // Record account tokens invalidated event
     let _id2 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::account_tokens_invalidated(
+        .record_registry_change_event(NewRegistryChangeEvent::account_tokens_invalidated(
             account_id,
         ))
-        .await
-        .unwrap();
+        .await;
 
     // Record environment permissions changed event
     let _id3 = deps
-        .registry_change_repo
-        .record_change_event(&NewRegistryChangeEvent::environment_permissions_changed(
+        .record_registry_change_event(NewRegistryChangeEvent::environment_permissions_changed(
             env_id, grantee_id,
         ))
-        .await
-        .unwrap();
+        .await;
 
     // Fetch all events since baseline
     let events = deps
@@ -2006,4 +1999,288 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
         RegistryChangeEvent::EnvironmentPermissionsChanged { environment_id, grantee_account_id, .. }
         if *environment_id == env_id && *grantee_account_id == grantee_id
     ));
+}
+
+pub async fn test_update_http_call_counts(deps: &Deps) {
+    use golem_common::model::account::AccountId;
+    use golem_registry_service::services::account_usage::ResourceUsageUpdate;
+    use golem_service_base::model::auth::AuthCtx;
+    use std::collections::HashMap;
+
+    let user = deps.create_account().await;
+    let account_id = AccountId(user.revision.account_id);
+    let svc = deps.account_usage_service();
+
+    // Empty updates → no accounts in the response.
+    let initial = svc
+        .update_resource_usage(
+            HashMap::<AccountId, ResourceUsageUpdate>::new(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert!(initial.0.is_empty());
+
+    // Recording 10 HTTP calls reduces available by 10.
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 10,
+            rpc_call_count_delta: 0,
+        },
+    );
+    let result = svc
+        .update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result
+        .0
+        .get(&account_id)
+        .expect("account must be in response");
+    check!(
+        limits.available_http_calls == 4990,
+        "expected 4990, got {}",
+        limits.available_http_calls
+    );
+    // RPC should be untouched.
+    check!(
+        limits.available_rpc_calls == 5000,
+        "expected RPC untouched at 5000, got {}",
+        limits.available_rpc_calls
+    );
+
+    // Exactly reaching the limit returns 0.
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 4990,
+            rpc_call_count_delta: 0,
+        },
+    );
+    let result = svc
+        .update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).unwrap();
+    check!(
+        limits.available_http_calls == 0,
+        "expected 0 at limit, got {}",
+        limits.available_http_calls
+    );
+
+    // Slightly exceeding the limit is allowed (optimistic) — saturates at 0, not an error.
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 1,
+            rpc_call_count_delta: 0,
+        },
+    );
+    let result = svc
+        .update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).unwrap();
+    check!(
+        limits.available_http_calls == 0,
+        "available_http_calls should saturate at 0, got {}",
+        limits.available_http_calls
+    );
+}
+
+pub async fn test_update_rpc_call_counts(deps: &Deps) {
+    use golem_common::model::account::AccountId;
+    use golem_registry_service::services::account_usage::ResourceUsageUpdate;
+    use golem_service_base::model::auth::AuthCtx;
+    use std::collections::HashMap;
+
+    let user = deps.create_account().await;
+    let account_id = AccountId(user.revision.account_id);
+    let svc = deps.account_usage_service();
+
+    // Empty updates → no accounts in the response.
+    let initial = svc
+        .update_resource_usage(
+            HashMap::<AccountId, ResourceUsageUpdate>::new(),
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert!(initial.0.is_empty());
+
+    // Recording 100 RPC calls reduces available by 100.
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 100,
+        },
+    );
+    let result = svc
+        .update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result
+        .0
+        .get(&account_id)
+        .expect("account must be in response");
+    check!(
+        limits.available_rpc_calls == 4900,
+        "expected 4900, got {}",
+        limits.available_rpc_calls
+    );
+    // HTTP should be untouched.
+    check!(
+        limits.available_http_calls == 5000,
+        "expected HTTP untouched at 5000, got {}",
+        limits.available_http_calls
+    );
+
+    // Exactly reaching the limit returns 0.
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 4900,
+        },
+    );
+    let result = svc
+        .update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).unwrap();
+    check!(
+        limits.available_rpc_calls == 0,
+        "expected 0 at limit, got {}",
+        limits.available_rpc_calls
+    );
+
+    // Slightly exceeding the limit is allowed (optimistic) — saturates at 0, not an error.
+    let mut updates = HashMap::new();
+    updates.insert(
+        account_id,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 1,
+        },
+    );
+    let result = svc
+        .update_resource_usage(updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let limits = result.0.get(&account_id).unwrap();
+    check!(
+        limits.available_rpc_calls == 0,
+        "available_rpc_calls should saturate at 0, got {}",
+        limits.available_rpc_calls
+    );
+}
+
+pub async fn test_update_call_counts_batch(deps: &Deps) {
+    use golem_common::model::account::AccountId;
+    use golem_registry_service::services::account_usage::ResourceUsageUpdate;
+    use golem_service_base::model::auth::AuthCtx;
+    use std::collections::HashMap;
+
+    let svc = deps.account_usage_service();
+    let a1 = AccountId(deps.create_account().await.revision.account_id);
+    let a2 = AccountId(deps.create_account().await.revision.account_id);
+    let a3 = AccountId(deps.create_account().await.revision.account_id);
+    let a4 = AccountId(deps.create_account().await.revision.account_id);
+
+    // HTTP batch — multiple accounts in one call.
+    let mut http_updates = HashMap::new();
+    http_updates.insert(
+        a1,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 50,
+            rpc_call_count_delta: 0,
+        },
+    );
+    http_updates.insert(
+        a2,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 200,
+            rpc_call_count_delta: 0,
+        },
+    );
+    let result = svc
+        .update_resource_usage(http_updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(
+        result.0.get(&a1).unwrap().available_http_calls == 4950,
+        "a1: expected 4950"
+    );
+    check!(
+        result.0.get(&a2).unwrap().available_http_calls == 4800,
+        "a2: expected 4800"
+    );
+    // Accounts not in the batch are absent from the response.
+    assert!(
+        !result.0.contains_key(&a3),
+        "a3 should not appear in HTTP response"
+    );
+
+    // RPC batch — different accounts, same call.
+    let mut rpc_updates = HashMap::new();
+    rpc_updates.insert(
+        a3,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 300,
+        },
+    );
+    rpc_updates.insert(
+        a4,
+        ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 1000,
+        },
+    );
+    let result = svc
+        .update_resource_usage(rpc_updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(
+        result.0.get(&a3).unwrap().available_rpc_calls == 4700,
+        "a3: expected 4700"
+    );
+    check!(
+        result.0.get(&a4).unwrap().available_rpc_calls == 4000,
+        "a4: expected 4000"
+    );
+    // HTTP budgets are untouched for accounts that only had RPC calls recorded.
+    check!(
+        result.0.get(&a3).unwrap().available_http_calls == 5000,
+        "a3: HTTP should be untouched"
+    );
+    check!(
+        result.0.get(&a4).unwrap().available_http_calls == 5000,
+        "a4: HTTP should be untouched"
+    );
+    // a1/a2 (HTTP-only) are absent from the RPC response.
+    assert!(
+        !result.0.contains_key(&a1),
+        "a1 should not appear in RPC response"
+    );
+    assert!(
+        !result.0.contains_key(&a2),
+        "a2 should not appear in RPC response"
+    );
 }

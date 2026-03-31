@@ -1013,6 +1013,8 @@ fn is_worker_error_retriable(
         AgentError::ExceededMemoryLimit => false,
         AgentError::ExceededTableLimit => false,
         AgentError::InternalError(_) => false,
+        AgentError::ExceededHttpCallLimit => false,
+        AgentError::ExceededRpcCallLimit => false,
         AgentError::NodeOutOfFilesystemStorage => true,
         AgentError::AgentExceededFilesystemStorageLimit => false,
     }

@@ -17,13 +17,20 @@ pub mod error;
 use self::error::LimitExceededError;
 use crate::repo::account_usage::AccountUsageRepo;
 use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageType};
-use crate::repo::model::datetime::SqlDateTime;
 use crate::services::account_usage::error::AccountUsageError;
 use golem_common::model::account::AccountId;
 use golem_service_base::model::auth::{AccountAction, AuthCtx};
 use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
+use golem_service_base::repo::SqlDateTime;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResourceUsageUpdate {
+    pub fuel_delta: i64,
+    pub http_call_count_delta: u64,
+    pub rpc_call_count_delta: u64,
+}
 
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
@@ -166,25 +173,33 @@ impl AccountUsageService {
         Ok(())
     }
 
-    pub async fn record_fuel_consumption(
+    pub async fn update_resource_usage(
         &self,
-        updates: HashMap<AccountId, i64>,
+        updates: HashMap<AccountId, ResourceUsageUpdate>,
         auth: &AuthCtx,
     ) -> Result<AccountResourceLimits, AccountUsageError> {
         let mut limits_of_updates_accounts = HashMap::new();
         for (account_id, update) in updates {
             auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-            match self
-                .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
-                .await
-            {
+            match self.get_account_usage(account_id, None).await {
                 Ok(mut account_usage) => {
-                    // fuel usage is allowed to exceeded the montly limit slightly.
-                    // The worker executor will stop the worker at the next opportunity.
-                    account_usage.add_change(UsageType::MonthlyGasLimit, update);
+                    // Usage can slightly exceed the monthly limit. The worker executor
+                    // will suspend the worker at the next opportunity.
+                    account_usage.add_change(UsageType::MonthlyGasLimit, update.fuel_delta);
+                    account_usage.add_change(
+                        UsageType::MonthlyHttpCalls,
+                        i64::try_from(update.http_call_count_delta).unwrap_or(i64::MAX),
+                    );
+                    account_usage.add_change(
+                        UsageType::MonthlyRpcCalls,
+                        i64::try_from(update.rpc_call_count_delta).unwrap_or(i64::MAX),
+                    );
 
                     tracing::debug!(
-                        "Updating monthly fuel consumption for account {account_id}: {update}"
+                        "Updating usage for account {account_id}: fuel_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                        update.fuel_delta,
+                        update.http_call_count_delta,
+                        update.rpc_call_count_delta,
                     );
 
                     self.account_usage_repo.add(&account_usage).await?;
@@ -200,6 +215,11 @@ impl AccountUsageService {
                             max_memory_per_worker: 0,
                             max_table_elements_per_worker: 0,
                             max_disk_space_per_worker: 0,
+                            per_invocation_http_call_limit: 0,
+                            per_invocation_rpc_call_limit: 0,
+                            available_http_calls: 0,
+                            available_rpc_calls: 0,
+                            max_concurrent_agents_per_executor: 0,
                         },
                     );
                 }

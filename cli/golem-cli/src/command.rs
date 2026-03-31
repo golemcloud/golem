@@ -1599,6 +1599,12 @@ pub mod server {
         /// Clean the data directory before starting
         #[clap(long)]
         pub clean: bool,
+
+        /// Use deterministic agent filesystem directories rooted at the given
+        /// path instead of random temp directories. The directory layout is:
+        ///   <root>/<environment_id>/<component_id>/<agent_name>/
+        #[clap(long)]
+        pub agent_filesystem_root: Option<PathBuf>,
     }
 
     impl RunArgs {

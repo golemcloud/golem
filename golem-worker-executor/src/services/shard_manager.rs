@@ -29,11 +29,7 @@ use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 /// Service providing access to the shard manager service
 #[async_trait]
 pub trait ShardManagerService: Send + Sync {
-    async fn register(
-        &self,
-        host: String,
-        port: u16,
-    ) -> Result<ShardAssignment, WorkerExecutorError>;
+    async fn register(&self, port: u16) -> Result<ShardAssignment, WorkerExecutorError>;
 }
 
 pub fn configured(config: &ShardManagerServiceConfig) -> Arc<dyn ShardManagerService> {
@@ -75,26 +71,21 @@ impl ShardManagerServiceGrpc {
 
 #[async_trait]
 impl ShardManagerService for ShardManagerServiceGrpc {
-    async fn register(
-        &self,
-        host: String,
-        port: u16,
-    ) -> Result<ShardAssignment, WorkerExecutorError> {
+    async fn register(&self, port: u16) -> Result<ShardAssignment, WorkerExecutorError> {
         let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         with_retries(
             "shard_manager",
             "register",
             Some(format!("{pod_name:?}")),
             &self.retries,
-            &(host, port),
-            |(host, port)| {
+            &port,
+            |port| {
                 let client = self.client.clone();
                 let pod_name = pod_name.clone();
                 Box::pin(async move {
                     let response = client
                         .call("register", move |client| {
                             Box::pin(client.register(shardmanager::v1::RegisterRequest {
-                                host: host.clone(),
                                 port: *port as i32,
                                 pod_name: pod_name.clone(),
                             }))
@@ -149,11 +140,7 @@ impl ShardManagerServiceSingleShard {
 
 #[async_trait]
 impl ShardManagerService for ShardManagerServiceSingleShard {
-    async fn register(
-        &self,
-        _host: String,
-        _port: u16,
-    ) -> Result<ShardAssignment, WorkerExecutorError> {
+    async fn register(&self, _port: u16) -> Result<ShardAssignment, WorkerExecutorError> {
         Ok(ShardAssignment::new(
             1,
             HashSet::from_iter(vec![ShardId::new(0)]),

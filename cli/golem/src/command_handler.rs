@@ -55,6 +55,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     mcp_port: args.mcp_port(),
                     ports_file: args.ports_file.clone(),
                     data_dir,
+                    agent_filesystem_root: args.agent_filesystem_root.clone(),
                 })
                 .await?;
 
@@ -78,6 +79,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
             mcp_port: args.mcp_port(),
             ports_file: args.ports_file.clone(),
             data_dir: default_data_dir()?,
+            agent_filesystem_root: args.agent_filesystem_root.clone(),
         })
         .await?;
 
