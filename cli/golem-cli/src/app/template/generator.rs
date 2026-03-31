@@ -394,7 +394,10 @@ fn transform(
                 }
             }
             Transform::RustSdk => {
-                replacements.insert("GOLEM_RUST_VERSION_OR_PATH", sdk_overrides.golem_rust_dep());
+                replacements.insert(
+                    "GOLEM_RUST_VERSION_OR_PATH",
+                    sdk_overrides.golem_rust_dep()?,
+                );
                 replacements.insert(
                     "GOLEM_RUST_LOG_VERSION",
                     versions::rust_dep::LOG.to_string(),

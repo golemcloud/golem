@@ -15,6 +15,7 @@
 use crate::StartedComponents;
 use crate::router::start_router;
 use anyhow::Context;
+use golem_cli::fs;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::Empty;
@@ -162,7 +163,7 @@ async fn start_components(
             .await?;
 
     let registry_service = run_registry_service(
-        registry_service_config(args, &component_compilation_service),
+        registry_service_config(args, &component_compilation_service)?,
         join_set,
     )
     .await?;
@@ -171,7 +172,7 @@ async fn start_components(
         run_shard_manager(shard_manager_config(args, &registry_service), join_set).await?;
 
     let worker_service = run_worker_service(
-        worker_service_config(args, &shard_manager, &registry_service),
+        worker_service_config(args, &shard_manager, &registry_service)?,
         join_set,
     )
     .await?;
@@ -200,22 +201,18 @@ fn blob_storage_config(args: &LaunchArgs) -> BlobStorageConfig {
 fn registry_service_config(
     args: &LaunchArgs,
     component_compilation_service: &golem_component_compilation_service::RunDetails,
-) -> RegistryServiceConfig {
+) -> anyhow::Result<RegistryServiceConfig> {
     let plan_id = PlanId(uuid!("e808bd76-a6ab-4090-ade4-8447b8e8550f"));
     let plan_name = PlanName("default".to_string());
 
-    RegistryServiceConfig {
+    Ok(RegistryServiceConfig {
         http_port: 0,
         grpc: golem_registry_service::config::GrpcApiConfig {
             port: 0,
             ..Default::default()
         },
         db: DbConfig::Sqlite(DbSqliteConfig {
-            database: args
-                .data_dir
-                .join("registry.db")
-                .to_string_lossy()
-                .to_string(),
+            database: fs::path_to_str(&args.data_dir.join("registry.db"))?.to_string(),
             max_connections: 4,
             foreign_keys: true,
         }),
@@ -279,7 +276,7 @@ fn registry_service_config(
         },
         builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
         ..Default::default()
-    }
+    })
 }
 
 fn shard_manager_config(
@@ -400,8 +397,8 @@ fn worker_service_config(
     args: &LaunchArgs,
     shard_manager_run_details: &golem_shard_manager::RunDetails,
     registry_service_run_details: &golem_registry_service::SingleExecutableRunDetails,
-) -> WorkerServiceConfig {
-    WorkerServiceConfig {
+) -> anyhow::Result<WorkerServiceConfig> {
+    Ok(WorkerServiceConfig {
         port: 0,
         custom_request_port: args.custom_request_port,
         mcp_port: args.mcp_port,
@@ -414,10 +411,7 @@ fn worker_service_config(
                 pending_login_expiration: Duration::from_hours(1),
                 cleanup_interval: Duration::from_mins(5),
                 sqlite_config: DbSqliteConfig {
-                    database: args
-                        .data_dir
-                        .join("gateway-sessions.db")
-                        .to_string_lossy()
+                    database: fs::path_to_str(&args.data_dir.join("gateway-sessions.db"))?
                         .to_string(),
                     max_connections: 4,
                     foreign_keys: false,
@@ -440,7 +434,7 @@ fn worker_service_config(
             router_cache_eviction_period: Default::default(),
         },
         ..Default::default()
-    }
+    })
 }
 
 async fn run_shard_manager(

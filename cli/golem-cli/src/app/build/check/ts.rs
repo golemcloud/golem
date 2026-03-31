@@ -74,7 +74,7 @@ pub(super) fn plan_package_json_fix_step(
                     found_text.as_str(),
                     &requirement.expected,
                     requirement.semantics,
-                ),
+                )?,
                 None => DependencySpecCompliance::SkipWarn(format!(
                     "Skipped dependency check for complex package spec '{}'",
                     raw

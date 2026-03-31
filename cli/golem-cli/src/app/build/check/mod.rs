@@ -333,15 +333,15 @@ fn evaluate_dependency_spec_compliance(
     found_text: &str,
     expected: &ExpectedDependencyKind,
     semantics: DependencyMatcherSemantics,
-) -> DependencySpecCompliance {
+) -> anyhow::Result<DependencySpecCompliance> {
     match expected {
         ExpectedDependencyKind::ExactPath(expected_path) => {
-            if resolve_local_dependency_path(found_text)
-                == resolve_local_dependency_path(expected_path)
+            if resolve_local_ts_dependency_path(found_text)?
+                == resolve_local_ts_dependency_path(expected_path)?
             {
-                DependencySpecCompliance::Compatible
+                Ok(DependencySpecCompliance::Compatible)
             } else {
-                DependencySpecCompliance::NeedsUpdate
+                Ok(DependencySpecCompliance::NeedsUpdate)
             }
         }
         ExpectedDependencyKind::SemanticCompatibleVersion {
@@ -350,32 +350,32 @@ fn evaluate_dependency_spec_compliance(
         } => {
             if *use_version_hint {
                 let Some(actual_version) = extract_version(found_text) else {
-                    return DependencySpecCompliance::SkipWarn(format!(
+                    return Ok(DependencySpecCompliance::SkipWarn(format!(
                         "Skipped dependency check for complex version spec '{}'",
                         found_text
-                    ));
+                    )));
                 };
 
                 if verify_semantic_version_compatible_with_base(base_version, &actual_version)
                     .is_ok()
                 {
-                    return DependencySpecCompliance::Compatible;
+                    return Ok(DependencySpecCompliance::Compatible);
                 }
 
-                return DependencySpecCompliance::NeedsUpdate;
+                return Ok(DependencySpecCompliance::NeedsUpdate);
             }
 
             if !looks_semver_compatible_spec(found_text) {
-                return DependencySpecCompliance::SkipWarn(format!(
+                return Ok(DependencySpecCompliance::SkipWarn(format!(
                     "Skipped dependency check for complex version spec '{}'",
                     found_text
-                ));
+                )));
             }
 
             if verify_semantic_version_compatibility(base_version, found_text, semantics).is_ok() {
-                DependencySpecCompliance::Compatible
+                Ok(DependencySpecCompliance::Compatible)
             } else {
-                DependencySpecCompliance::NeedsUpdate
+                Ok(DependencySpecCompliance::NeedsUpdate)
             }
         }
     }
@@ -473,24 +473,24 @@ fn looks_semver_compatible_spec(spec: &str) -> bool {
     SemVerVersion::parse(spec).is_ok() || VersionReq::parse(spec).is_ok()
 }
 
-fn normalize_path_str(path: &str) -> String {
+fn normalize_ts_dependency_path(path: &str) -> anyhow::Result<String> {
     let path = path
         .strip_prefix("file://")
         .or_else(|| path.strip_prefix("file:"))
         .unwrap_or(path);
     let normalized: PathBuf = fs::normalize_path_lexically(Path::new(path));
-    normalized.to_string_lossy().to_string()
+    Ok(fs::path_to_str(&normalized)?.to_string())
 }
 
-fn resolve_local_dependency_path(path: &str) -> String {
-    let normalized = normalize_path_str(path);
+fn resolve_local_ts_dependency_path(path: &str) -> anyhow::Result<String> {
+    let normalized = normalize_ts_dependency_path(path)?;
     let path = PathBuf::from(&normalized);
     if path.is_absolute() {
-        return normalized;
+        return Ok(normalized);
     }
 
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    normalize_path_str(cwd.join(path).to_string_lossy().as_ref())
+    normalize_ts_dependency_path(fs::path_to_str(&cwd.join(path))?)
 }
 
 fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
@@ -505,6 +505,7 @@ fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
 
 #[cfg(test)]
 mod test {
+    use crate::fs;
     use super::{
         DependencyMatcherSemantics, DependencySpecCompliance, ExpectedDependencyKind,
         evaluate_dependency_spec_compliance, verify_semantic_version_compatibility,
@@ -575,7 +576,8 @@ mod test {
                 use_version_hint: true,
             },
             DependencyMatcherSemantics::TypeScript,
-        );
+        )
+        .unwrap();
 
         assert_eq!(compliance, DependencySpecCompliance::Compatible);
     }
@@ -583,25 +585,24 @@ mod test {
     #[test]
     fn ts_path_comparison_accepts_relative_file_path_equivalent_to_absolute_override() {
         let cwd = std::env::current_dir().unwrap();
+        let sdk_path_buf = cwd.join("sdks/ts/packages/golem-ts-sdk");
+        let sdk_path = fs::path_to_str(&sdk_path_buf)
+            .expect("sdk path must be valid UTF-8");
         let found = format!(
             "file:{}",
-            cwd.join("sdks/ts/packages/golem-ts-sdk")
-                .to_string_lossy()
-                .replace(
-                    "/workspace/golem-alt-00/",
-                    "/workspace/golem-alt-00/../golem-alt-00/"
-                )
+            sdk_path.replace(
+                "/workspace/golem-alt-00/",
+                "/workspace/golem-alt-00/../golem-alt-00/"
+            )
         );
-        let expected = format!(
-            "file:{}",
-            cwd.join("sdks/ts/packages/golem-ts-sdk").to_string_lossy()
-        );
+        let expected = format!("file:{sdk_path}");
 
         let compliance = evaluate_dependency_spec_compliance(
             &found,
             &ExpectedDependencyKind::ExactPath(expected),
             DependencyMatcherSemantics::TypeScript,
-        );
+        )
+        .unwrap();
 
         assert_eq!(compliance, DependencySpecCompliance::Compatible);
     }
