@@ -36,7 +36,7 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
-    GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
+    FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
     ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
@@ -66,6 +66,7 @@ pub struct LaunchArgs {
     pub mcp_port: u16,
     pub ports_file: Option<PathBuf>,
     pub data_dir: PathBuf,
+    pub agent_filesystem_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -386,6 +387,10 @@ fn worker_executor_config(
         },
         agent_webhooks_service: AgentWebhooksServiceConfig {
             use_https_for_webhook_url: false,
+            ..Default::default()
+        },
+        filesystem_storage: FilesystemStorageConfig {
+            deterministic_root_dir: args.agent_filesystem_root.clone(),
             ..Default::default()
         },
         ..Default::default()

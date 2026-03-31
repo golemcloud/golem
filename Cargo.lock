@@ -4134,6 +4134,7 @@ dependencies = [
  "tracing-test",
  "typed-path",
  "url",
+ "urlencoding",
  "uuid",
  "wasm-wave",
  "wasmparser 0.244.0",
