@@ -409,11 +409,11 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
             repl.send_line_and_expect_regex("CounterAgent.", "get .* getPhantom ")?;
             repl.send_line_and_expect_str(
                 "CounterAgent.get",
-                "(method) CounterAgent.get(name: string): CounterAgent",
+                "(method) CounterAgent.get(name: string): Promise<CounterAgent>",
             )?;
             repl.send_line_and_expect_str("CounterAgent.get(", "\"?\"")?;
-            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\")", "> CounterAgent")?;
-            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\").", "increment")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\")", "awaiting CounterAgent")?;
+            repl.send_line_and_expect_str("(await CounterAgent.get(\"xyz\")).", "increment")?;
         }
 
         // Hints on "tab"
@@ -433,14 +433,14 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
             repl.send_tab_complete_expect_str("CounterAgent.get(", "\"?\"")?;
             repl.send_line("")?;
 
-            repl.send_tab_list_expect_regex("CounterAgent.get(\"xyz\").", "increment")?;
+            repl.send_tab_list_expect_regex("(await CounterAgent.get(\"xyz\")).", "increment")?;
             repl.send_line("")?;
 
             repl.send_tab_complete_expect_str("Sample", "Agent")?;
             repl.send_line("")?;
 
             repl.send_tab_list_expect_regex(
-                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).",
+                "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
                 "sampleMethod",
             )?;
             repl.send_line("")?;
