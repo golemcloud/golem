@@ -85,7 +85,7 @@ pub struct GrpcResourceDefinitionFetcher {
 impl GrpcResourceDefinitionFetcher {
     pub fn new(
         registry_service: Arc<dyn RegistryService>,
-        config: &crate::shard_manager_config::ResourceDefinitionFetcherConfig,
+        config: &crate::config::ResourceDefinitionFetcherConfig,
     ) -> Self {
         let cache = Cache::new(
             Some(config.cache_max_capacity),

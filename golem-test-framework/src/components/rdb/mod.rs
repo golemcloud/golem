@@ -101,7 +101,7 @@ impl DbInfo {
                 (
                     "GOLEM__DB__CONFIG__DATABASE".to_string(),
                     db_path
-                        .join(service_namespace)
+                        .join(format!("{service_namespace}.db"))
                         .to_str()
                         .expect("Invalid Sqlite database path")
                         .to_string(),

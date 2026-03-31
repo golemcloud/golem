@@ -301,6 +301,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_failure: None,
         }));
 
+        // Fetch the account's resource entry and register it with the
+        // concurrent-agents semaphore. This must happen before WaitingWorker
+        // can acquire a concurrent-agent permit so that the real plan limit
+        // is enforced from the very first agent startup for this account.
+        // Registration is idempotent — subsequent calls for the same account
+        // on the same executor are instant (OnceCell cache hit in ResourceLimitsGrpc).
+        let resource_entry = deps
+            .resource_limits()
+            .initialize_account(*account_id)
+            .await?;
+        deps.active_workers()
+            .register_account_concurrency(*account_id, resource_entry)
+            .await;
+
         let worker = Worker {
             owned_agent_id,
             parsed_agent_id: agent_id.clone(),
@@ -2061,6 +2075,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
         filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+        concurrent_agent_permit: OwnedSemaphorePermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
     ) {
@@ -2074,6 +2089,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     this.queue.clone(),
                     this.clone(),
                     permit,
+                    concurrent_agent_permit,
                     oom_retry_count,
                 )
                 .await;
@@ -2177,6 +2193,11 @@ impl WaitingWorker {
         let handle = tokio::task::spawn(
             async move {
                 let permit = parent.active_workers().acquire(memory_requirement).await;
+                let account_id = parent.initial_worker_metadata.created_by;
+                let concurrent_agent_permit = parent
+                    .active_workers()
+                    .acquire_concurrent_agent(account_id)
+                    .await;
                 // Pre-acquire storage permits for this restart.
                 //
                 // We need to acquire `filesystem_storage_requirement + desired_extra` total:
@@ -2229,6 +2250,7 @@ impl WaitingWorker {
                     parent,
                     permit,
                     filesystem_storage_permit,
+                    concurrent_agent_permit,
                     oom_retry_count,
                     start_attempt,
                 )
@@ -2264,6 +2286,10 @@ struct RunningWorker {
     /// automatically when `RunningWorker` is dropped, returning storage
     /// permits to the pool.
     filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+    /// Concurrent-agent semaphore permit for this account. Held for the
+    /// lifetime of the `RunningWorker` and returned automatically via `Drop`,
+    /// freeing a slot for the next waiting agent from the same account.
+    _concurrent_agent_permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
 }
@@ -2274,6 +2300,7 @@ impl RunningWorker {
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
+        concurrent_agent_permit: OwnedSemaphorePermit,
         oom_retry_count: u32,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -2320,6 +2347,7 @@ impl RunningWorker {
             queue,
             permit,
             filesystem_storage_permit: None,
+            _concurrent_agent_permit: concurrent_agent_permit,
             waiting_for_command,
             interrupt_signal,
         }

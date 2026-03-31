@@ -414,6 +414,8 @@ async fn call_exported_function<Ctx: WorkerCtx>(
 ) -> Result<(wasmtime::Result<Vec<Val>>, u64), WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
+    store.data_mut().reset_invocation_call_counts();
+
     let idempotency_key = store.data().get_current_idempotency_key().await;
     if let Some(idempotency_key) = &idempotency_key {
         store

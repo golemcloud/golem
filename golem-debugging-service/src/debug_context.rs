@@ -67,9 +67,9 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{HasAll, worker_enumeration};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::future::Future;
@@ -102,6 +102,20 @@ impl FuelManagement for DebugContext {
 
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
+    }
+}
+
+impl CallCountManagement for DebugContext {
+    fn reset_invocation_call_counts(&mut self) {
+        self.durable_ctx.reset_invocation_call_counts();
+    }
+
+    fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        Ok(()) // debug context: monthly limits are always unlimited
+    }
+
+    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        Ok(()) // debug context: monthly limits are always unlimited
     }
 }
 
@@ -556,6 +570,7 @@ impl WorkerCtx for DebugContext {
             usize::MAX,
             usize::MAX,
             u64::MAX,
+            u64::MAX,
         ));
 
         let golem_ctx = DurableWorkerCtx::create(
@@ -588,6 +603,8 @@ impl WorkerCtx for DebugContext {
             http_connection_pool,
             pending_update,
             original_phantom_id,
+            u64::MAX,
+            u64::MAX,
         )
         .await?;
         Ok(Self {

@@ -33,7 +33,7 @@ use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
 };
 use golem_service_base::service::routing_table::RoutingTableConfig;
-use golem_shard_manager::shard_manager_config::ShardManagerConfig;
+use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
     GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
@@ -237,6 +237,11 @@ fn registry_service_config(
                     max_memory_per_worker: u64::MAX,
                     max_table_elements_per_worker: u64::MAX,
                     max_disk_space_per_worker: u64::MAX,
+                    per_invocation_http_call_limit: u64::MAX,
+                    per_invocation_rpc_call_limit: u64::MAX,
+                    monthly_http_call_limit: u64::MAX,
+                    monthly_rpc_call_limit: u64::MAX,
+                    max_concurrent_agents_per_executor: 1_000_000_000_000_000_000, // unlimited sentinel
                 },
             );
             plans
@@ -276,18 +281,22 @@ fn shard_manager_config(
     args: &LaunchArgs,
     registry_service_run_details: &golem_registry_service::SingleExecutableRunDetails,
 ) -> ShardManagerConfig {
-    use golem_shard_manager::shard_manager_config::{
-        FileSystemPersistenceConfig, HealthCheckConfig, PersistenceConfig,
-    };
+    use golem_shard_manager::config::HealthCheckConfig;
 
     ShardManagerConfig {
         http_port: 0,
-        grpc: golem_shard_manager::shard_manager_config::GrpcApiConfig {
+        grpc: golem_shard_manager::config::GrpcApiConfig {
             port: 0,
             ..Default::default()
         },
-        persistence: PersistenceConfig::FileSystem(FileSystemPersistenceConfig {
-            path: args.data_dir.join("sharding.bin"),
+        db: DbConfig::Sqlite(DbSqliteConfig {
+            database: args
+                .data_dir
+                .join("shard_manager.db")
+                .to_string_lossy()
+                .to_string(),
+            max_connections: 4,
+            foreign_keys: true,
         }),
         health_check: HealthCheckConfig {
             silent: true,

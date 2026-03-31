@@ -569,15 +569,12 @@ async fn test_playback_with_overrides(
 }
 
 fn nth_invocation_boundary(oplogs: &[PublicOplogEntryWithIndex], n: usize) -> OplogIndex {
-    let index = oplogs
+    oplogs
         .iter()
-        .enumerate()
-        .filter(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
         .nth(n - 1)
-        .map(|(i, _)| i)
-        .unwrap_or_else(|| panic!("No {n}th invocation boundary found"));
-
-    OplogIndex::from_u64((index + 1) as u64)
+        .map(|entry| entry.oplog_index)
+        .unwrap_or_else(|| panic!("No {n}th invocation boundary found"))
 }
 
 fn previous_index(index: OplogIndex) -> OplogIndex {

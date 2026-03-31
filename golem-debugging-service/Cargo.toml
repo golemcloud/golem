@@ -28,7 +28,6 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum-jrpc = { workspace = true }
 futures = { workspace = true }
-gethostname = { workspace = true }
 humansize = { workspace = true }
 log = { workspace = true }
 poem = { workspace = true }

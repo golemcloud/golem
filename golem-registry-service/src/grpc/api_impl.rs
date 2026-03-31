@@ -14,7 +14,7 @@
 
 use super::error::GrpcApiError;
 use crate::repo::registry_change::RegistryChangeRepo;
-use crate::services::account_usage::AccountUsageService;
+use crate::services::account_usage::{AccountUsageService, ResourceUsageUpdate};
 use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
@@ -30,17 +30,17 @@ use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
-    BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, BatchUpdateFuelUsageSuccessResponse,
-    DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
-    GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
-    GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
-    GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest, GetAgentTypeResponse,
-    GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
-    GetAllAgentTypesSuccessResponse, GetAllDeployedComponentRevisionsRequest,
-    GetAllDeployedComponentRevisionsResponse, GetAllDeployedComponentRevisionsSuccessResponse,
-    GetAuthDetailsForEnvironmentRequest, GetAuthDetailsForEnvironmentResponse,
-    GetAuthDetailsForEnvironmentSuccessResponse, GetComponentMetadataRequest,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    BatchUpdateResourceUsageRequest, BatchUpdateResourceUsageResponse,
+    BatchUpdateResourceUsageSuccessResponse, DownloadComponentRequest, DownloadComponentResponse,
+    GetActiveMcpForDomainRequest, GetActiveMcpForDomainResponse,
+    GetActiveMcpForDomainSuccessResponse, GetActiveRoutesForDomainRequest,
+    GetActiveRoutesForDomainResponse, GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest,
+    GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
+    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
+    GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
+    GetAllDeployedComponentRevisionsSuccessResponse, GetAuthDetailsForEnvironmentRequest,
+    GetAuthDetailsForEnvironmentResponse, GetAuthDetailsForEnvironmentSuccessResponse,
+    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedComponentMetadataRequest,
     GetDeployedComponentMetadataResponse, GetDeployedComponentMetadataSuccessResponse,
@@ -53,7 +53,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    authenticate_token_response, batch_update_resource_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
@@ -224,25 +224,32 @@ impl RegistryServiceGrpcApi {
         Ok(EmptySuccessResponse {})
     }
 
-    async fn batch_update_fuel_usage_internal(
+    async fn batch_update_resource_usage_internal(
         &self,
-        request: BatchUpdateFuelUsageRequest,
-    ) -> Result<BatchUpdateFuelUsageSuccessResponse, GrpcApiError> {
-        let updates: HashMap<AccountId, i64> = request
+        request: BatchUpdateResourceUsageRequest,
+    ) -> Result<BatchUpdateResourceUsageSuccessResponse, GrpcApiError> {
+        let updates: HashMap<AccountId, ResourceUsageUpdate> = request
             .updates
             .into_iter()
             .map(|u| {
                 let account_id = u.account_id.ok_or("missing account_id field")?.try_into()?;
-                Ok::<_, GrpcApiError>((account_id, u.value))
+                Ok::<_, GrpcApiError>((
+                    account_id,
+                    ResourceUsageUpdate {
+                        fuel_delta: u.fuel_delta,
+                        http_call_count_delta: u.http_call_count_delta,
+                        rpc_call_count_delta: u.rpc_call_count_delta,
+                    },
+                ))
             })
             .collect::<Result<_, _>>()?;
 
         let account_resource_limits = self
             .account_usage_service
-            .record_fuel_consumption(updates, &AuthCtx::System)
+            .update_resource_usage(updates, &AuthCtx::System)
             .await?;
 
-        Ok(BatchUpdateFuelUsageSuccessResponse {
+        Ok(BatchUpdateResourceUsageSuccessResponse {
             account_resource_limits: Some(account_resource_limits.into()),
         })
     }
@@ -656,24 +663,24 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         }))
     }
 
-    async fn batch_update_fuel_usage(
+    async fn batch_update_resource_usage(
         &self,
-        request: Request<BatchUpdateFuelUsageRequest>,
-    ) -> Result<Response<BatchUpdateFuelUsageResponse>, tonic::Status> {
+        request: Request<BatchUpdateResourceUsageRequest>,
+    ) -> Result<Response<BatchUpdateResourceUsageResponse>, tonic::Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_api_request!("batch_update_fuel_usage",);
+        let record = recorded_grpc_api_request!("batch_update_resource_usage",);
 
         let response = match self
-            .batch_update_fuel_usage_internal(request)
+            .batch_update_resource_usage_internal(request)
             .instrument(record.span.clone())
             .await
             .apply(|r| record.result(r))
         {
-            Ok(result) => batch_update_fuel_usage_response::Result::Success(result),
-            Err(error) => batch_update_fuel_usage_response::Result::Error(error.into()),
+            Ok(result) => batch_update_resource_usage_response::Result::Success(result),
+            Err(error) => batch_update_resource_usage_response::Result::Error(error.into()),
         };
 
-        Ok(Response::new(BatchUpdateFuelUsageResponse {
+        Ok(Response::new(BatchUpdateResourceUsageResponse {
             result: Some(response),
         }))
     }
