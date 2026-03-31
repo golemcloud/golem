@@ -22,10 +22,10 @@ use std::sync::Arc;
 
 #[cfg(feature = "server-commands")]
 mod hooks {
+    use golem_cli::mcp_server;
     use golem_cli::command::server::ServerSubcommand;
     use golem_cli::command_handler::CommandHandlerHooks;
     use golem_cli::context::Context;
-
     use clap_verbosity_flag::Verbosity;
     use std::sync::Arc;
 
@@ -35,15 +35,25 @@ mod hooks {
         #[cfg(feature = "server-commands")]
         async fn handler_server_commands(
             &self,
-            _ctx: Arc<Context>,
-            _subcommand: ServerSubcommand,
+            ctx: Arc<Context>,
+            subcommand: ServerSubcommand,
         ) -> anyhow::Result<()> {
-            unimplemented!()
+            match subcommand {
+                ServerSubcommand::Serve { port } => {
+                    println!("Starting Golem CLI MCP Server on http://0.0.0.0:{}...", port);
+                    mcp_server::run_mcp_server(ctx, port).await
+                }
+                other => {
+                    println!("Server subcommand not available: {:?}", other);
+                    Ok(())
+                }
+            }
         }
 
         #[cfg(feature = "server-commands")]
         async fn run_server() -> anyhow::Result<()> {
-            unimplemented!()
+            println!("run_server not implemented");
+            Ok(())
         }
 
         #[cfg(feature = "server-commands")]

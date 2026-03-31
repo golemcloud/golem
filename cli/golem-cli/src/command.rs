@@ -1633,6 +1633,15 @@ pub mod server {
         },
         /// Clean the local server data directory
         Clean,
+        /// Start the CLI as an MCP server (Model Context Protocol)
+        ///
+        /// This runs the Golem CLI as an MCP server, exposing Golem commands as
+        /// MCP tools for AI agents (Claude Code, etc.) to interact with Golem.
+        Serve {
+            /// Port to serve MCP server on (informational - uses stdio transport)
+            #[clap(long, default_value = "8080")]
+            port: u16,
+        },
     }
 }
 

@@ -12,7 +12,7 @@ build = "build.rs"
 
 [features]
 default = []
-server-commands = []
+server-commands = ["rmcp"]
 
 [lib]
 harness = false
@@ -32,6 +32,9 @@ harness = false
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-wasm = { workspace = true, default-features = true }
+
+# MCP server support (behind server-commands feature)
+rmcp = { workspace = true, optional = true }
 
 # External deps
 anyhow = { workspace = true }

@@ -49,6 +49,9 @@ pub mod versions;
 #[cfg(test)]
 test_r::enable!();
 
+#[cfg(feature = "server-commands")]
+pub mod mcp_server;
+
 shadow!(build);
 
 static APP_MANIFEST_JSON_SCHEMA: &str = include_str!(concat!(

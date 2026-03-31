@@ -3997,6 +3997,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.2",
  "reqwest-middleware",
+ "rmcp",
  "rustyline",
  "semver",
  "serde",
