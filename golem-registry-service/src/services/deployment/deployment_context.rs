@@ -23,6 +23,7 @@ use super::route_compilation::{
 };
 use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
 use crate::model::api_definition::UnboundCompiledRoute;
+use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
@@ -31,9 +32,6 @@ use golem_common::model::agent::{
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
-use golem_common::model::retry_policy::RetryPolicyId;
-use golem_service_base::model::retry_policy::StoredRetryPolicy;
-use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
@@ -41,10 +39,12 @@ use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::resource_definition::{
     ResourceDefinition, ResourceDefinitionCreation, ResourceName,
 };
+use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
+use golem_service_base::model::retry_policy::StoredRetryPolicy;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use heck::ToKebabCase;
@@ -513,10 +513,10 @@ impl DeploymentContext {
             // Convert API types back to core types for DB storage
             let predicate: golem_common::model::retry_policy::Predicate = rpd.predicate.into();
             let policy: golem_common::model::retry_policy::RetryPolicy = rpd.policy.into();
-            let predicate_json = serde_json::to_string(&predicate)
-                .expect("Predicate serialization cannot fail");
-            let policy_json = serde_json::to_string(&policy)
-                .expect("RetryPolicy serialization cannot fail");
+            let predicate_json =
+                serde_json::to_string(&predicate).expect("Predicate serialization cannot fail");
+            let policy_json =
+                serde_json::to_string(&policy).expect("RetryPolicy serialization cannot fail");
 
             creations.push(RetryPolicyCreationRecord::new(
                 RetryPolicyId::new(),

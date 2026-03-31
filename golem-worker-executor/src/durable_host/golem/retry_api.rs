@@ -40,7 +40,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?;
 
         if durability.is_live() {
-            let policies: Vec<NamedRetryPolicy> = self.state.named_retry_policies().to_vec();
+            let policies: Vec<NamedRetryPolicy> = self.state.named_retry_policies().await;
 
             let persisted = durability
                 .persist(
@@ -72,7 +72,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         if durability.is_live() {
-            let policies = self.state.named_retry_policies();
+            let policies = self.state.named_retry_policies().await;
             let found = policies.iter().find(|p| p.name == name).cloned();
 
             let persisted = durability
@@ -117,8 +117,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 })
                 .collect();
 
-            let policies = self.state.named_retry_policies();
-            let resolved = match NamedRetryPolicy::resolve(policies, &props) {
+            let policies = self.state.named_retry_policies().await;
+            let resolved = match NamedRetryPolicy::resolve(&policies, &props) {
                 Ok(Some(matched)) => Some(matched.policy.clone()),
                 Ok(None) => None,
                 Err(err) => return Err(anyhow::anyhow!("Retry policy resolution error: {err}")),
@@ -156,8 +156,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::set_retry_policy(named_policy.clone()))
                 .await;
         } else {
-            let (_, _) =
-                get_oplog_entry!(self.state.replay_state, OplogEntry::SetRetryPolicy)?;
+            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::SetRetryPolicy)?;
         }
 
         self.state.apply_set_retry_policy(named_policy);
@@ -173,8 +172,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::remove_retry_policy(name.clone()))
                 .await;
         } else {
-            let (_, _) =
-                get_oplog_entry!(self.state.replay_state, OplogEntry::RemoveRetryPolicy)?;
+            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::RemoveRetryPolicy)?;
         }
 
         self.state.apply_remove_retry_policy(&name);

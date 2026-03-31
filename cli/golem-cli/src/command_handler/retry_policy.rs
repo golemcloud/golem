@@ -131,9 +131,7 @@ impl RetryPolicyCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx
-            .log_handler()
-            .log_view(&RetryPolicyGetView(result));
+        self.ctx.log_handler().log_view(&RetryPolicyGetView(result));
 
         Ok(())
     }

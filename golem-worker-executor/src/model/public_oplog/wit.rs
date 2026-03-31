@@ -17,19 +17,19 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostCallParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
+    CancelPendingInvocationParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams,
+    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams,
-    RemoveRetryPolicyParams, SetRetryPolicyParams, SnapshotParams, StartSpanParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartSpanParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, MultipartPartData,
@@ -124,8 +124,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 error: error.to_string(),
                 retry_from: retry_from.into(),
                 inside_atomic_region,
-                retry_policy_state: retry_policy_state
-                    .and_then(|s| serde_json::to_vec(&s).ok()),
+                retry_policy_state: retry_policy_state.and_then(|s| serde_json::to_vec(&s).ok()),
             }),
             PublicOplogEntry::NoOp(NoOpParams { timestamp }) => Self::NoOp(timestamp.into()),
             PublicOplogEntry::Jump(JumpParams { timestamp, jump }) => {
@@ -388,23 +387,21 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 sending_up_to: sending_up_to.into(),
                 last_batch_start: last_batch_start.into(),
             }),
-            PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
-                timestamp,
-                policy,
-            }) => Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
-                timestamp: timestamp.into(),
-                name: policy.name,
-                priority: policy.priority,
-                predicate_json: policy.predicate_json,
-                policy_json: policy.policy_json,
-            }),
-            PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams {
-                timestamp,
-                name,
-            }) => Self::RemoveRetryPolicy(oplog::RemoveRetryPolicyParameters {
-                timestamp: timestamp.into(),
-                name,
-            }),
+            PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams { timestamp, policy }) => {
+                Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
+                    timestamp: timestamp.into(),
+                    name: policy.name,
+                    priority: policy.priority,
+                    predicate_json: policy.predicate_json,
+                    policy_json: policy.policy_json,
+                })
+            }
+            PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams { timestamp, name }) => {
+                Self::RemoveRetryPolicy(oplog::RemoveRetryPolicyParameters {
+                    timestamp: timestamp.into(),
+                    name,
+                })
+            }
         }
     }
 }

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
+use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::retry_policy::{
     RetryPolicyCreationRecord, RetryPolicyRepoError, RetryPolicyRevisionRecord,
 };
-use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::retry_policy::RetryPolicyRepo;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::retry_policy::{
@@ -103,15 +103,11 @@ impl RetryPolicyService {
             EnvironmentAction::CreateRetryPolicy,
         )?;
 
-        serde_json::from_str::<golem_common::model::retry_policy::Predicate>(
-            &data.predicate_json,
-        )
-        .map_err(|e| RetryPolicyError::InvalidPredicateJson(e.to_string()))?;
+        serde_json::from_str::<golem_common::model::retry_policy::Predicate>(&data.predicate_json)
+            .map_err(|e| RetryPolicyError::InvalidPredicateJson(e.to_string()))?;
 
-        serde_json::from_str::<golem_common::model::retry_policy::RetryPolicy>(
-            &data.policy_json,
-        )
-        .map_err(|e| RetryPolicyError::InvalidPolicyJson(e.to_string()))?;
+        serde_json::from_str::<golem_common::model::retry_policy::RetryPolicy>(&data.policy_json)
+            .map_err(|e| RetryPolicyError::InvalidPolicyJson(e.to_string()))?;
 
         let id = RetryPolicyId::new();
         let name = data.name.clone();
@@ -172,10 +168,8 @@ impl RetryPolicyService {
         }
 
         if let Some(ref new_policy_json) = update.policy_json {
-            serde_json::from_str::<golem_common::model::retry_policy::RetryPolicy>(
-                new_policy_json,
-            )
-            .map_err(|e| RetryPolicyError::InvalidPolicyJson(e.to_string()))?;
+            serde_json::from_str::<golem_common::model::retry_policy::RetryPolicy>(new_policy_json)
+                .map_err(|e| RetryPolicyError::InvalidPolicyJson(e.to_string()))?;
             retry_policy.policy_json = new_policy_json.clone();
         }
 

@@ -45,7 +45,7 @@ fn is_method_idempotent(method: &SerializableHttpMethod) -> bool {
     )
 }
 
-pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
+pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: u32,
 ) -> HttpResult<()> {
@@ -59,17 +59,14 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
     }
 
     let durable_state = ctx.durable_execution_state();
-    let named_retry_policies = ctx.state.named_retry_policies().to_vec();
     let method_eligible =
         durable_state.assume_idempotence || is_method_idempotent(&state.request.method);
     let body_ready_for_retry = state.retry.body_finished || state.output_stream_rep.is_none();
-    let has_policies = !named_retry_policies.is_empty();
 
     let enable_background_retry = durable_state.is_live
         && durable_state.snapshotting_mode.is_none()
         && durable_state.persistence_level != PersistenceLevel::PersistNothing
         && !ctx.in_atomic_region()
-        && has_policies
         && method_eligible
         && body_ready_for_retry
         && !state.retry.has_unreconstructable_body
@@ -79,6 +76,11 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
     if !enable_background_retry {
         return Ok(());
     }
+
+    let environment_state_service = ctx.state.environment_state_service.clone();
+    let environment_id = ctx.state.owned_agent_id.environment_id;
+    let agent_config_retry_policies = ctx.state.agent_config_retry_policies();
+    let runtime_retry_policy_mutations = ctx.state.runtime_retry_policy_mutations.clone();
 
     let future_res = ctx
         .table()
@@ -94,7 +96,10 @@ pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
             state.outgoing_request_config(),
             ctx.wasi_http.connection_pool.clone(),
             ctx.public_state.worker(),
-            named_retry_policies,
+            environment_state_service,
+            environment_id,
+            agent_config_retry_policies,
+            runtime_retry_policy_mutations,
             retry_properties,
             durable_state.max_in_function_retry_delay,
             state.begin_index,
@@ -295,7 +300,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     },
                 );
 
-                maybe_enable_http_background_retry(self, handle)?;
+                maybe_enable_http_background_retry(self, handle).await?;
             }
             Err(err) => {
                 tracing::error!("!!! ERROR FROM handle(): {err:?}");

@@ -636,11 +636,12 @@ impl From<RetryPolicyError> for ApiError {
     fn from(value: RetryPolicyError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            RetryPolicyError::InvalidPredicateJson(_)
-            | RetryPolicyError::InvalidPolicyJson(_) => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                cause: None,
-            })),
+            RetryPolicyError::InvalidPredicateJson(_) | RetryPolicyError::InvalidPolicyJson(_) => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: None,
+                }))
+            }
             RetryPolicyError::ConcurrentModification
             | RetryPolicyError::RetryPolicyForNameAlreadyExists { .. } => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))

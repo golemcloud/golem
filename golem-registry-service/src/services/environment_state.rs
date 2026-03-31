@@ -35,7 +35,12 @@ impl SafeDisplay for EnvironmentStateError {
     }
 }
 
-error_forwarding!(EnvironmentStateError, DeploymentError, AgentSecretError, RetryPolicyError);
+error_forwarding!(
+    EnvironmentStateError,
+    DeploymentError,
+    AgentSecretError,
+    RetryPolicyError
+);
 
 pub struct EnvironmentStateService {
     pub deployment_service: Arc<DeploymentService>,
@@ -83,21 +88,23 @@ impl EnvironmentStateService {
             .map(|sec| (sec.path.clone(), sec))
             .collect();
 
-        let retry_policies = self
-            .retry_policy_service
-            .list_in_environment_unchecked(environment_id)
-            .await?
-            .into_iter()
-            .filter_map(|stored| {
-                match golem_common::model::retry_policy::NamedRetryPolicy::try_from(stored) {
-                    Ok(p) => Some(p),
-                    Err(e) => {
-                        tracing::warn!("Skipping invalid retry policy in environment {environment_id}: {e}");
-                        None
+        let retry_policies =
+            self.retry_policy_service
+                .list_in_environment_unchecked(environment_id)
+                .await?
+                .into_iter()
+                .filter_map(|stored| {
+                    match golem_common::model::retry_policy::NamedRetryPolicy::try_from(stored) {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Skipping invalid retry policy in environment {environment_id}: {e}"
+                            );
+                            None
+                        }
                     }
-                }
-            })
-            .collect();
+                })
+                .collect();
 
         Ok(EnvironmentState {
             agent_deployment_details,

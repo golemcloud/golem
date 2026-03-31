@@ -29,9 +29,7 @@ use golem_common::model::oplog::{
     AgentError, DurableFunctionType, OplogEntry, OplogIndex, OplogPayload,
 };
 use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry, PublicSnapshotData};
-use golem_common::model::{
-    AgentId, AgentInvocationResult, AgentMetadata, OwnedAgentId,
-};
+use golem_common::model::{AgentId, AgentInvocationResult, AgentMetadata, OwnedAgentId};
 use golem_wasm::wasmtime::ResourceTypeId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};

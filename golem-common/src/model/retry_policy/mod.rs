@@ -111,20 +111,11 @@ pub enum Predicate {
         values: Vec<PredicateValue>,
     },
     /// True when the property's text representation matches the glob pattern.
-    PropMatches {
-        property: String,
-        pattern: String,
-    },
+    PropMatches { property: String, pattern: String },
     /// True when the property's text representation starts with the given prefix.
-    PropStartsWith {
-        property: String,
-        prefix: String,
-    },
+    PropStartsWith { property: String, prefix: String },
     /// True when the property's text representation contains the given substring.
-    PropContains {
-        property: String,
-        substring: String,
-    },
+    PropContains { property: String, substring: String },
     /// Logical conjunction of two predicates.
     And(Box<Predicate>, Box<Predicate>),
     /// Logical disjunction of two predicates.
@@ -146,15 +137,9 @@ pub enum RetryPolicy {
     /// Retries with a fixed delay between each attempt.
     Periodic(Duration),
     /// Retries with exponentially growing delays: `base_delay * factor^attempt`.
-    Exponential {
-        base_delay: Duration,
-        factor: f64,
-    },
+    Exponential { base_delay: Duration, factor: f64 },
     /// Retries following the Fibonacci sequence of delays starting from `first` and `second`.
-    Fibonacci {
-        first: Duration,
-        second: Duration,
-    },
+    Fibonacci { first: Duration, second: Duration },
     /// Retries immediately with zero delay.
     Immediate,
     /// Never retries; gives up on the first failure.
@@ -897,29 +882,6 @@ impl RetryPolicy {
                 }),
             ),
         }
-    }
-
-    /// Rebuilds a [`RetryPolicyState`] by replaying `count` steps from the initial state.
-    ///
-    /// Used when migrating from a legacy retry counter to the semantic retry model.
-    pub fn reconstruct_state_from_count(
-        &self,
-        count: u32,
-        elapsed: Duration,
-        properties: &RetryProperties,
-        rng: &mut dyn RngSource,
-    ) -> Result<RetryPolicyState, RetryEvaluationError> {
-        let mut state = self.initial_state();
-        for _ in 0..count {
-            let (next_state, verdict) = self.step(&state, elapsed, properties, rng);
-            state = next_state;
-            match verdict {
-                RetryVerdict::Retry(_) => {}
-                RetryVerdict::GiveUp => break,
-                RetryVerdict::Error(error) => return Err(error),
-            }
-        }
-        Ok(state)
     }
 }
 
@@ -2244,8 +2206,6 @@ declare_structs! {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2602,25 +2562,6 @@ mod tests {
     }
 
     #[test]
-    fn reconstruct_state_from_count_replays_steps() {
-        let policy = RetryPolicy::CountBox {
-            max_retries: 10,
-            inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(5))),
-        };
-        let props = RetryProperties::new();
-        let mut rng = FixedRng(0.0);
-
-        let reconstructed = policy
-            .reconstruct_state_from_count(3, Duration::ZERO, &props, &mut rng)
-            .expect("state reconstruction should succeed");
-
-        match reconstructed {
-            RetryPolicyState::CountBox { attempts, .. } => assert_eq!(attempts, 3),
-            other => panic!("unexpected reconstructed state: {other:?}"),
-        }
-    }
-
-    #[test]
     fn named_policy_resolution_respects_priority_order() {
         let high = NamedRetryPolicy {
             name: "high".to_string(),
@@ -2790,25 +2731,45 @@ mod tests {
     #[test]
     fn predicate_value_type_matches_wit() {
         let mut resolver = retry_wit_resolver();
-        assert_type_matches_wit(PredicateValue::get_type(), "retry", "predicate-value", &mut resolver);
+        assert_type_matches_wit(
+            PredicateValue::get_type(),
+            "retry",
+            "predicate-value",
+            &mut resolver,
+        );
     }
 
     #[test]
     fn predicate_type_matches_wit() {
         let mut resolver = retry_wit_resolver();
-        assert_type_matches_wit(Predicate::get_type(), "retry", "retry-predicate", &mut resolver);
+        assert_type_matches_wit(
+            Predicate::get_type(),
+            "retry",
+            "retry-predicate",
+            &mut resolver,
+        );
     }
 
     #[test]
     fn retry_policy_type_matches_wit() {
         let mut resolver = retry_wit_resolver();
-        assert_type_matches_wit(RetryPolicy::get_type(), "retry", "retry-policy", &mut resolver);
+        assert_type_matches_wit(
+            RetryPolicy::get_type(),
+            "retry",
+            "retry-policy",
+            &mut resolver,
+        );
     }
 
     #[test]
     fn named_retry_policy_type_matches_wit() {
         let mut resolver = retry_wit_resolver();
-        assert_type_matches_wit(NamedRetryPolicy::get_type(), "retry", "named-retry-policy", &mut resolver);
+        assert_type_matches_wit(
+            NamedRetryPolicy::get_type(),
+            "retry",
+            "named-retry-policy",
+            &mut resolver,
+        );
     }
 
     #[test]

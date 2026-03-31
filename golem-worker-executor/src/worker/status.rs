@@ -131,16 +131,15 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 
     let active_plugins = last_known.active_plugins.clone();
 
-    let (status, current_retry_state, overridden_retry_config) =
-        calculate_latest_worker_status(
-            last_known.status,
-            last_known.current_retry_state,
-            last_known.overridden_retry_config,
-            default_retry_policy,
-            &skipped_regions,
-            &deleted_regions,
-            &new_entries,
-        );
+    let (status, current_retry_state, overridden_retry_config) = calculate_latest_worker_status(
+        last_known.status,
+        last_known.current_retry_state,
+        last_known.overridden_retry_config,
+        default_retry_policy,
+        &skipped_regions,
+        &deleted_regions,
+        &new_entries,
+    );
 
     let pending_invocations = calculate_pending_invocations(
         this,
@@ -240,7 +239,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 fn calculate_latest_worker_status(
     mut current_status: AgentStatus,
     mut current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
-    mut current_retry_policy: Option<RetryConfig>,
+    current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
     deleted_regions: &DeletedRegions,
@@ -257,13 +256,11 @@ fn calculate_latest_worker_status(
         if !deleted_regions.is_in_deleted_region(*idx) {
             if let OplogEntry::Error {
                 retry_from,
-                retry_policy_state,
+                retry_policy_state: Some(state),
                 ..
             } = entry
             {
-                if let Some(state) = retry_policy_state {
-                    current_retry_state.insert(*retry_from, state.clone());
-                }
+                current_retry_state.insert(*retry_from, state.clone());
             }
         }
 
@@ -403,11 +400,7 @@ fn calculate_latest_worker_status(
             }
         }
     }
-    (
-        current_status,
-        current_retry_state,
-        current_retry_policy,
-    )
+    (current_status, current_retry_state, current_retry_policy)
 }
 
 fn calculate_deleted_regions(

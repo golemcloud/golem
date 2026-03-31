@@ -1453,6 +1453,44 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     ) -> NoAdditionalDeps {
         NoAdditionalDeps {}
     }
+
+    fn create_wasmtime_linker(
+        &self,
+        engine: &Engine,
+    ) -> anyhow::Result<Linker<golem_worker_executor::workerctx::default::Context>> {
+        use golem_worker_executor::workerctx::default::Context;
+        let mut linker =
+            golem_worker_executor::wasi_host::create_linker(engine, get_durable_ctx_from_context)?;
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_api_1_x::retry::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(&mut linker, get_durable_ctx_from_context)?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx_from_context,
+        )?;
+        Ok(linker)
+    }
 }
 
 /// A `ResourceLimits` implementation that provides a fixed table element limit

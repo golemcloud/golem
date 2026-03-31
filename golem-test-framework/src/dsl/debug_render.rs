@@ -440,7 +440,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "SET RETRY POLICY");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}name:              {}", &params.policy.name);
-            let _ = writeln!(result, "{pad}priority:          {}", &params.policy.priority);
+            let _ = writeln!(
+                result,
+                "{pad}priority:          {}",
+                &params.policy.priority
+            );
         }
         PublicOplogEntry::RemoveRetryPolicy(params) => {
             let _ = writeln!(result, "REMOVE RETRY POLICY");

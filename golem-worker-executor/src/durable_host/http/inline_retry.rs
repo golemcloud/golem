@@ -28,16 +28,17 @@
 //!   was partially consumed. Requires re-sending the request and verifying the
 //!   response prefix matches.
 
-use crate::durable_host::HttpRequestState;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind,
     InFunctionRetryHost, InFunctionRetryState,
 };
 use crate::durable_host::http::types::classify_http_error_code;
+use crate::durable_host::HttpRequestState;
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::{HasOplog, HasWorker};
 use bytes::Bytes;
-use golem_common::model::RetryConfig;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::HostPayloadPair;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{
@@ -52,15 +53,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
 use wasmtime_wasi::OutputStream;
-use wasmtime_wasi_http::HttpConnectionPool;
 use wasmtime_wasi_http::bindings::http::types as wasi_http_types;
 use wasmtime_wasi_http::body::{
     HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
 };
 use wasmtime_wasi_http::types::{
-    FutureIncomingResponseHandle, HostFutureIncomingResponse, IncomingResponse,
-    OutgoingRequestConfig, default_send_request_with_pool,
+    default_send_request_with_pool, FutureIncomingResponseHandle, HostFutureIncomingResponse,
+    IncomingResponse, OutgoingRequestConfig,
 };
+use wasmtime_wasi_http::HttpConnectionPool;
 
 /// Reasons why an HTTP request is not eligible for transparent inline retry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -517,7 +518,10 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                         None,
                         "transient",
                     );
-                    match retry_state.decide_retry_with_properties(ctx, function_name, &retry_properties).await {
+                    match retry_state
+                        .decide_retry_with_properties(ctx, function_name, &retry_properties)
+                        .await
+                    {
                         AsyncRetryDecision::RetryAfterDelay(delay) => {
                             // Interrupt-aware sleep
                             let interrupt = ctx.create_interrupt_signal();
@@ -684,7 +688,10 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     config: OutgoingRequestConfig,
     _connection_pool: Option<HttpConnectionPool>,
     worker: Arc<crate::worker::Worker<Ctx>>,
-    named_retry_policies: Vec<NamedRetryPolicy>,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
+    environment_id: EnvironmentId,
+    agent_config_retry_policies: Vec<NamedRetryPolicy>,
+    runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
     retry_properties: RetryProperties,
     max_delay: Duration,
     begin_index: OplogIndex,
@@ -726,7 +733,10 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         .cloned();
                     let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: begin_index,
-                        named_retry_policies,
+                        environment_state_service,
+                        environment_id,
+                        agent_config_retry_policies,
+                        runtime_retry_policy_mutations,
                         max_in_function_retry_delay: max_delay,
                         current_retry_policy_state,
                         retry_properties,
@@ -885,7 +895,9 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         None,
         "transient",
     );
-    let decision = retry_state.decide_retry_with_properties(ctx, "output-stream-write", &retry_properties).await;
+    let decision = retry_state
+        .decide_retry_with_properties(ctx, "output-stream-write", &retry_properties)
+        .await;
 
     match decision {
         AsyncRetryDecision::RetryAfterDelay(delay) => {
@@ -920,7 +932,10 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     // original request had it, so that transient errors at get() are still handled.
     let new_future = if request_state.retry.has_background_retry {
         if let HostFutureIncomingResponse::Pending(handle) = rebuilt.future {
-            let named_retry_policies = ctx.state.named_retry_policies().to_vec();
+            let environment_state_service = ctx.state.environment_state_service.clone();
+            let environment_id = ctx.state.owned_agent_id.environment_id;
+            let agent_config_retry_policies = ctx.state.agent_config_retry_policies();
+            let runtime_retry_policy_mutations = ctx.state.runtime_retry_policy_mutations.clone();
             let mut retry_properties = golem_common::model::RetryContext::http(
                 &request_state.request.method.to_string(),
                 &request_state.request.uri,
@@ -932,7 +947,10 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 request_state.outgoing_request_config(),
                 ctx.wasi_http.connection_pool.clone(),
                 ctx.public_state.worker(),
-                named_retry_policies,
+                environment_state_service,
+                environment_id,
+                agent_config_retry_policies,
+                runtime_retry_policy_mutations,
                 retry_properties,
                 exec_state.max_in_function_retry_delay,
                 request_state.begin_index,

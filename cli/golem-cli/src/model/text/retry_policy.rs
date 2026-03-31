@@ -38,10 +38,7 @@ pub struct RetryPolicyGetView(pub RetryPolicyDto);
 
 impl MessageWithFields for RetryPolicyGetView {
     fn message(&self) -> String {
-        format!(
-            "Retry policy {}",
-            format_message_highlight(&self.0.name),
-        )
+        format!("Retry policy {}", format_message_highlight(&self.0.name),)
     }
 
     fn fields(&self) -> Vec<(String, String)> {

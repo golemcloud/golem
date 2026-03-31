@@ -476,12 +476,10 @@ impl From<RetryPolicy> for ApiRetryPolicy {
                 max_delay_ms: max_delay.as_millis() as u64,
                 inner: Box::new((*inner).into()),
             }),
-            RetryPolicy::AddDelay { delay, inner } => {
-                ApiRetryPolicy::AddDelay(ApiAddDelayPolicy {
-                    delay_ms: delay.as_millis() as u64,
-                    inner: Box::new((*inner).into()),
-                })
-            }
+            RetryPolicy::AddDelay { delay, inner } => ApiRetryPolicy::AddDelay(ApiAddDelayPolicy {
+                delay_ms: delay.as_millis() as u64,
+                inner: Box::new((*inner).into()),
+            }),
             RetryPolicy::Jitter { factor, inner } => ApiRetryPolicy::Jitter(ApiJitterPolicy {
                 factor,
                 inner: Box::new((*inner).into()),
@@ -549,18 +547,15 @@ impl From<ApiRetryPolicy> for RetryPolicy {
                 predicate: v.predicate.into(),
                 inner: Box::new((*v.inner).into()),
             },
-            ApiRetryPolicy::AndThen(v) => RetryPolicy::AndThen(
-                Box::new((*v.first).into()),
-                Box::new((*v.second).into()),
-            ),
-            ApiRetryPolicy::Union(v) => RetryPolicy::Union(
-                Box::new((*v.first).into()),
-                Box::new((*v.second).into()),
-            ),
-            ApiRetryPolicy::Intersect(v) => RetryPolicy::Intersect(
-                Box::new((*v.first).into()),
-                Box::new((*v.second).into()),
-            ),
+            ApiRetryPolicy::AndThen(v) => {
+                RetryPolicy::AndThen(Box::new((*v.first).into()), Box::new((*v.second).into()))
+            }
+            ApiRetryPolicy::Union(v) => {
+                RetryPolicy::Union(Box::new((*v.first).into()), Box::new((*v.second).into()))
+            }
+            ApiRetryPolicy::Intersect(v) => {
+                RetryPolicy::Intersect(Box::new((*v.first).into()), Box::new((*v.second).into()))
+            }
         }
     }
 }

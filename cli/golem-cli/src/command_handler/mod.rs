@@ -55,7 +55,6 @@ use tracing::{Level, debug};
 
 mod agent_secret;
 mod api;
-mod retry_policy;
 mod app;
 mod bridge;
 mod cloud;
@@ -68,6 +67,7 @@ mod plugin;
 mod profile;
 mod repl;
 pub(crate) mod template;
+mod retry_policy;
 mod worker;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound

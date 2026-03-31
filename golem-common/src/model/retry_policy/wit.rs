@@ -107,7 +107,12 @@ fn predicate_node_from_wit(nodes: &[PredicateNode], idx: i32) -> Predicate {
         PredicateNode::PropExists(name) => Predicate::PropExists(name.clone()),
         PredicateNode::PropIn(check) => Predicate::PropIn {
             property: check.property_name.clone(),
-            values: check.values.iter().cloned().map(PredicateValue::from).collect(),
+            values: check
+                .values
+                .iter()
+                .cloned()
+                .map(PredicateValue::from)
+                .collect(),
         },
         PredicateNode::PropMatches(p) => Predicate::PropMatches {
             property: p.property_name.clone(),
@@ -129,9 +134,7 @@ fn predicate_node_from_wit(nodes: &[PredicateNode], idx: i32) -> Predicate {
             Box::new(predicate_node_from_wit(nodes, *l)),
             Box::new(predicate_node_from_wit(nodes, *r)),
         ),
-        PredicateNode::PredNot(i) => {
-            Predicate::Not(Box::new(predicate_node_from_wit(nodes, *i)))
-        }
+        PredicateNode::PredNot(i) => Predicate::Not(Box::new(predicate_node_from_wit(nodes, *i))),
         PredicateNode::PredTrue => Predicate::True,
         PredicateNode::PredFalse => Predicate::False,
     }

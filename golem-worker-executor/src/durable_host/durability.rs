@@ -16,24 +16,26 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::{record_host_function_call, record_in_function_retry};
 use crate::model::TrapType;
 use crate::preview2::golem::durability::durability;
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasOplog, HasWorker};
 use crate::worker::RetryDecision;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
 use golem_common::model::{
-    NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicy,
-    RetryPolicyState, RetryProperties, RetryVerdict, ThreadRng, Timestamp,
+    NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState, RetryProperties,
+    RetryVerdict, ThreadRng, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::{FromValue, IntoValueAndType};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::pin::Pin;
@@ -122,7 +124,7 @@ pub trait InFunctionRetryHost {
     fn current_retry_point(&self) -> OplogIndex;
 
     /// Returns available semantic retry policies for the current worker context.
-    fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy>;
+    async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy>;
 
     /// Returns the current semantic retry policy state for the given retry point, if available.
     async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState>;
@@ -159,20 +161,13 @@ pub(crate) fn collect_named_retry_policies(
 
 pub(crate) fn evaluate_named_policy_step(
     named_policy: &NamedRetryPolicy,
-    total_attempts: u32,
     properties: &RetryProperties,
     current_state: Option<&RetryPolicyState>,
 ) -> Result<(RetryPolicyState, RetryVerdict), RetryEvaluationError> {
     let mut rng = ThreadRng;
-    let state = match current_state {
-        Some(state) => state.clone(),
-        None => named_policy.policy.reconstruct_state_from_count(
-            total_attempts,
-            Duration::ZERO,
-            properties,
-            &mut rng,
-        )?,
-    };
+    let state = current_state
+        .cloned()
+        .unwrap_or_else(|| named_policy.policy.initial_state());
 
     let (new_state, verdict) =
         named_policy
@@ -180,29 +175,6 @@ pub(crate) fn evaluate_named_policy_step(
             .step(&state, Duration::ZERO, properties, &mut rng);
 
     Ok((new_state, verdict))
-}
-
-
-
-pub(crate) fn policy_uses_elapsed_time(policy: &RetryPolicy) -> bool {
-    match policy {
-        RetryPolicy::TimeBox { .. } => true,
-        RetryPolicy::CountBox { inner, .. }
-        | RetryPolicy::Clamp { inner, .. }
-        | RetryPolicy::AddDelay { inner, .. }
-        | RetryPolicy::Jitter { inner, .. }
-        | RetryPolicy::FilteredOn { inner, .. } => policy_uses_elapsed_time(inner),
-        RetryPolicy::AndThen(left, right)
-        | RetryPolicy::Union(left, right)
-        | RetryPolicy::Intersect(left, right) => {
-            policy_uses_elapsed_time(left) || policy_uses_elapsed_time(right)
-        }
-        RetryPolicy::Periodic(_)
-        | RetryPolicy::Exponential { .. }
-        | RetryPolicy::Fibonacci { .. }
-        | RetryPolicy::Immediate
-        | RetryPolicy::Never => false,
-    }
 }
 
 /// Encapsulates in-function retry state for a single durable function invocation.
@@ -252,7 +224,7 @@ impl InFunctionRetryState {
         let total_attempts = self.retry_count + oplog_retry_count;
         let mut retry_policy_state: Option<RetryPolicyState> = None;
 
-        let policies = ctx.named_retry_policies();
+        let policies = ctx.named_retry_policies().await;
         let named_policy = match NamedRetryPolicy::resolve(&policies, properties) {
             Ok(Some(policy)) => policy,
             Ok(None) => return AsyncRetryDecision::Exhausted,
@@ -267,48 +239,34 @@ impl InFunctionRetryState {
             }
         };
 
-        if policy_uses_elapsed_time(&named_policy.policy) {
-            warn!(
-                function = function_label,
-                retry_policy = %named_policy.name,
-                total_attempts,
-                "Semantic retry policy uses elapsed-time operators that are not supported in inline retry reconstruction"
-            );
-            return AsyncRetryDecision::Exhausted;
-        }
-
-        let delay = match evaluate_named_policy_step(
-            named_policy,
-            total_attempts,
-            properties,
-            current_state.as_ref(),
-        ) {
-            Ok((new_state, RetryVerdict::Retry(delay))) => {
-                retry_policy_state = Some(new_state);
-                delay
-            }
-            Ok((_new_state, RetryVerdict::GiveUp)) => return AsyncRetryDecision::Exhausted,
-            Ok((_new_state, RetryVerdict::Error(error))) => {
-                warn!(
-                    function = function_label,
-                    retry_policy = %named_policy.name,
-                    total_attempts,
-                    ?error,
-                    "Semantic retry policy evaluation returned error verdict"
-                );
-                return AsyncRetryDecision::Exhausted;
-            }
-            Err(error) => {
-                warn!(
-                    function = function_label,
-                    retry_policy = %named_policy.name,
-                    total_attempts,
-                    ?error,
-                    "Failed evaluating semantic retry policy"
-                );
-                return AsyncRetryDecision::Exhausted;
-            }
-        };
+        let delay =
+            match evaluate_named_policy_step(named_policy, properties, current_state.as_ref()) {
+                Ok((new_state, RetryVerdict::Retry(delay))) => {
+                    retry_policy_state = Some(new_state);
+                    delay
+                }
+                Ok((_new_state, RetryVerdict::GiveUp)) => return AsyncRetryDecision::Exhausted,
+                Ok((_new_state, RetryVerdict::Error(error))) => {
+                    warn!(
+                        function = function_label,
+                        retry_policy = %named_policy.name,
+                        total_attempts,
+                        ?error,
+                        "Semantic retry policy evaluation returned error verdict"
+                    );
+                    return AsyncRetryDecision::Exhausted;
+                }
+                Err(error) => {
+                    warn!(
+                        function = function_label,
+                        retry_policy = %named_policy.name,
+                        total_attempts,
+                        ?error,
+                        "Failed evaluating semantic retry policy"
+                    );
+                    return AsyncRetryDecision::Exhausted;
+                }
+            };
 
         let state = ctx.durable_execution_state();
         if delay > state.max_in_function_retry_delay {
@@ -599,8 +557,8 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         self.state.current_retry_point
     }
 
-    fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
-        self.state.named_retry_policies().to_vec()
+    async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        self.state.named_retry_policies().await
     }
 
     async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState> {
@@ -609,10 +567,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             .worker()
             .get_non_detached_last_known_status()
             .await;
-        latest_status
-            .current_retry_state
-            .get(&retry_from)
-            .cloned()
+        latest_status.current_retry_state.get(&retry_from).cloned()
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
@@ -763,74 +718,56 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         let trap_type = TrapType::from_error::<Ctx>(&failure, current_retry_point);
 
         // Try semantic policy resolution first
-        let policies = self.state.named_retry_policies().to_vec();
+        let policies = self.state.named_retry_policies().await;
         if !policies.is_empty() {
-            if let Ok(Some(named_policy)) =
-                NamedRetryPolicy::resolve(&policies, &properties)
-            {
-                if !policy_uses_elapsed_time(&named_policy.policy) {
-                    let current_state = latest_status
-                        .current_retry_state
-                        .get(&current_retry_point)
-                        .cloned();
-                    let total_attempts = current_state
-                        .as_ref()
-                        .map(|s| s.retry_count())
-                        .unwrap_or(0);
-                    match evaluate_named_policy_step(
-                        named_policy,
-                        total_attempts,
-                        &properties,
-                        current_state.as_ref(),
-                    ) {
-                        Ok((_new_state, RetryVerdict::Retry(_))) => {
-                            debug!(
-                                retry_policy = %named_policy.name,
-                                retry_path = "host-trap",
-                                retry_policy_source = "worker-local",
-                                retry_decision = "retry",
-                                attempt = total_attempts + 1,
-                                "Semantic host-trap retry: triggering retry"
-                            );
-                            return Err(failure);
-                        }
-                        Ok((_new_state, RetryVerdict::GiveUp)) => {
-                            debug!(
-                                retry_policy = %named_policy.name,
-                                retry_path = "host-trap",
-                                retry_policy_source = "worker-local",
-                                retry_decision = "give-up",
-                                attempt = total_attempts + 1,
-                                "Semantic host-trap retry: exhausted"
-                            );
-                            return Ok(());
-                        }
-                        Ok((_new_state, RetryVerdict::Error(error))) => {
-                            warn!(
-                                retry_policy = %named_policy.name,
-                                ?error,
-                                retry_path = "host-trap",
-                                fallback_reason = "eval-error",
-                                "Semantic host-trap retry evaluation error, falling back to legacy"
-                            );
-                        }
-                        Err(error) => {
-                            warn!(
-                                retry_policy = %named_policy.name,
-                                ?error,
-                                retry_path = "host-trap",
-                                fallback_reason = "eval-error",
-                                "Failed evaluating semantic host-trap retry policy, falling back to legacy"
-                            );
-                        }
+            if let Ok(Some(named_policy)) = NamedRetryPolicy::resolve(&policies, &properties) {
+                let current_state = latest_status
+                    .current_retry_state
+                    .get(&current_retry_point)
+                    .cloned();
+                let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
+                match evaluate_named_policy_step(named_policy, &properties, current_state.as_ref())
+                {
+                    Ok((_new_state, RetryVerdict::Retry(_))) => {
+                        debug!(
+                            retry_policy = %named_policy.name,
+                            retry_path = "host-trap",
+                            retry_policy_source = "worker-local",
+                            retry_decision = "retry",
+                            attempt = total_attempts + 1,
+                            "Semantic host-trap retry: triggering retry"
+                        );
+                        return Err(failure);
                     }
-                } else {
-                    warn!(
-                        retry_policy = %named_policy.name,
-                        retry_path = "host-trap",
-                        fallback_reason = "elapsed-unsupported",
-                        "Semantic host-trap retry policy uses elapsed-time operators, falling back to legacy"
-                    );
+                    Ok((_new_state, RetryVerdict::GiveUp)) => {
+                        debug!(
+                            retry_policy = %named_policy.name,
+                            retry_path = "host-trap",
+                            retry_policy_source = "worker-local",
+                            retry_decision = "give-up",
+                            attempt = total_attempts + 1,
+                            "Semantic host-trap retry: exhausted"
+                        );
+                        return Ok(());
+                    }
+                    Ok((_new_state, RetryVerdict::Error(error))) => {
+                        warn!(
+                            retry_policy = %named_policy.name,
+                            ?error,
+                            retry_path = "host-trap",
+                            fallback_reason = "eval-error",
+                            "Semantic host-trap retry evaluation error, falling back to legacy"
+                        );
+                    }
+                    Err(error) => {
+                        warn!(
+                            retry_policy = %named_policy.name,
+                            ?error,
+                            retry_path = "host-trap",
+                            fallback_reason = "eval-error",
+                            "Failed evaluating semantic host-trap retry policy, falling back to legacy"
+                        );
+                    }
                 }
             }
         }
@@ -941,10 +878,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
                         message: message.clone(),
                     });
                     let mut properties = properties;
-                    properties.set(
-                        "error-type",
-                        PredicateValue::Text("transient".to_string()),
-                    );
+                    properties.set("error-type", PredicateValue::Text("transient".to_string()));
                     ctx.try_trigger_retry(failure, properties).await
                 }
             }
@@ -1144,10 +1078,10 @@ pub async fn count_oplog_errors_for(
     let entries = oplog.read_many(OplogIndex::INITIAL, len).await;
     let mut count: u32 = 0;
     for entry in entries.values() {
-        if let OplogEntry::Error { retry_from, .. } = entry
-            && *retry_from == retry_point
-        {
-            count += 1;
+        if let OplogEntry::Error { retry_from, .. } = entry {
+            if *retry_from == retry_point {
+                count += 1;
+            }
         }
     }
     count
@@ -1164,8 +1098,14 @@ pub async fn count_oplog_errors_for(
 pub struct TaskRetryContext<Ctx: WorkerCtx> {
     /// The oplog index that error entries reference as their `retry_from` point.
     pub retry_point: OplogIndex,
-    /// List of semantic retry policies to evaluate.
-    pub named_retry_policies: Vec<NamedRetryPolicy>,
+    /// Environment state service for lazy policy fetching
+    pub environment_state_service: Arc<dyn EnvironmentStateService>,
+    /// Environment ID for policy lookup
+    pub environment_id: EnvironmentId,
+    /// Cached agent-config-derived retry policies (cheap, already computed)
+    pub agent_config_retry_policies: Vec<NamedRetryPolicy>,
+    /// Runtime overlay mutations (set/remove via guest API)
+    pub runtime_retry_policy_mutations: BTreeMap<String, Option<NamedRetryPolicy>>,
     /// Maximum delay for in-function retries; delays exceeding this fall back to trap+replay.
     pub max_in_function_retry_delay: Duration,
     /// The current semantic retry policy state, if a named policy was previously selected.
@@ -1187,8 +1127,41 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         self.retry_point
     }
 
-    fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
-        self.named_retry_policies.clone()
+    async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        // Fetch environment policies lazily (only called on error path)
+        let environment_policies = self
+            .environment_state_service
+            .get_retry_policies(self.environment_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to fetch environment retry policies in task context: {e}");
+                vec![]
+            });
+
+        let mut deduped = BTreeMap::new();
+        for policy in &self.agent_config_retry_policies {
+            deduped.insert(policy.name.clone(), policy.clone());
+        }
+        for policy in environment_policies {
+            deduped.insert(policy.name.clone(), policy);
+        }
+        for (name, mutation) in &self.runtime_retry_policy_mutations {
+            match mutation {
+                Some(policy) => {
+                    deduped.insert(name.clone(), policy.clone());
+                }
+                None => {
+                    deduped.remove(name);
+                }
+            }
+        }
+        let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
+        policies.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        policies
     }
 
     async fn current_retry_state_for(&self, _retry_from: OplogIndex) -> Option<RetryPolicyState> {
@@ -1391,11 +1364,14 @@ mod tests {
             OplogIndex::INITIAL
         }
 
-        fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
             self.named_retry_policies.clone()
         }
 
-        async fn current_retry_state_for(&self, _retry_from: OplogIndex) -> Option<RetryPolicyState> {
+        async fn current_retry_state_for(
+            &self,
+            _retry_from: OplogIndex,
+        ) -> Option<RetryPolicyState> {
             if let Some(state) = &self.current_retry_policy_state {
                 Some(state.clone())
             } else if self.oplog_retry_count > 0 {

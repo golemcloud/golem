@@ -73,11 +73,11 @@ pub mod service {
     use crate::model::text::fmt::{format_stack, format_stderr};
     use golem_client::api::{
         AccountError, AgentError, AgentSecretsError, ApiDeploymentError, ApiDomainError,
-        ApiSecurityError, ApplicationError, ComponentError, EnvironmentError, RetryPoliciesError,
+        ApiSecurityError, ApplicationError, ComponentError, EnvironmentError,
         LoginCompleteOauth2DeviceFlowError, LoginCurrentLoginTokenError, LoginLoginOauth2Error,
         LoginPollOauth2WebflowError, LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
-        LoginSubmitOauth2WebflowCallbackError, McpDeploymentError, PluginError, TokenError,
-        WorkerError,
+        LoginSubmitOauth2WebflowCallbackError, McpDeploymentError, PluginError, RetryPoliciesError,
+        TokenError, WorkerError,
     };
     use golem_common::model::{AgentId, PromiseId};
     use itertools::Itertools;

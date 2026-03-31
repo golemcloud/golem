@@ -338,8 +338,7 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
     agent_secrets_defaults:
         BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
-    retry_policy_defaults:
-        BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+    retry_policy_defaults: BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -1513,7 +1512,9 @@ mod app_builder {
     use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
-    use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
+    use golem_common::model::deployment::{
+        DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault,
+    };
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{

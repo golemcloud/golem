@@ -34,6 +34,7 @@ pub mod wasm_rpc;
 pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
+use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
@@ -63,7 +64,6 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
 use crate::wasi_host;
-use crate::durable_host::durability::collect_named_retry_policies;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
@@ -100,15 +100,15 @@ use golem_common::model::oplog::{
     OplogIndex, PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
 use golem_common::model::retry_policy::NamedRetryPolicy;
-use golem_common::model::{PredicateValue, RetryConfig, RetryPolicyState, RetryProperties};
+use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
 use golem_common::model::TransactionId;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, RetryContext,
     RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
 };
+use golem_common::model::{PredicateValue, RetryConfig, RetryPolicyState, RetryProperties};
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -321,14 +321,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             HashMap::new()
         };
 
-        let environment_retry_policies = environment_state_service
-            .get_retry_policies(owned_agent_id.environment_id)
-            .await
-            .unwrap_or_else(|e| {
-                warn!("Failed to load environment retry policies: {e}");
-                vec![]
-            });
-
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
@@ -390,7 +382,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 config_vars,
                 worker_config.initial_agent_config,
                 agent_config,
-                environment_retry_policies,
                 shard_service,
                 pending_update,
                 original_phantom_id,
@@ -726,7 +717,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 retry_from,
             } if in_atomic_region => {
                 // +1 because the current attempt hasn't been persisted to the state yet
-                let attempts = retry_state.get(retry_from).map(|s| s.retry_count()).unwrap_or_default() + 1;
+                let attempts = retry_state
+                    .get(retry_from)
+                    .map(|s| s.retry_count())
+                    .unwrap_or_default()
+                    + 1;
                 let retryable = attempts < retry_config.max_attempts;
                 if retryable {
                     match get_delay(retry_config, attempts) {
@@ -750,7 +745,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 retry_from,
             } => {
                 // +1 because the current attempt hasn't been persisted to the state yet
-                let attempts = retry_state.get(retry_from).map(|s| s.retry_count()).unwrap_or_default() + 1;
+                let attempts = retry_state
+                    .get(retry_from)
+                    .map(|s| s.retry_count())
+                    .unwrap_or_default()
+                    + 1;
                 let retryable = attempts < retry_config.max_attempts;
                 if retryable {
                     match get_delay(retry_config, attempts) {
@@ -811,7 +810,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return (fallback_decision, None);
         }
 
-        let named_retry_policies = self.named_retry_policies();
+        let named_retry_policies = self.named_retry_policies().await;
         if named_retry_policies.is_empty() {
             return (fallback_decision, None);
         }
@@ -838,27 +837,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
-        if policy_uses_elapsed_time(&named_policy.policy) {
-            warn!(
-                retry_policy = %named_policy.name,
-                trap = ?trap_type,
-                "Semantic trap retry policy uses elapsed-time operators that are not supported in invocation-level retry reconstruction; falling back to legacy retry config"
-            );
-            return (fallback_decision, None);
-        }
-
-        let current_state = retry_state_with_current_attempt
-            .get(retry_from)
-            .cloned();
-        let total_attempts_with_current = current_state.as_ref().map(|s| s.retry_count()).unwrap_or_default();
+        let current_state = retry_state_with_current_attempt.get(retry_from).cloned();
+        let total_attempts_with_current = current_state
+            .as_ref()
+            .map(|s| s.retry_count())
+            .unwrap_or_default();
         let total_attempts_before_current = total_attempts_with_current.saturating_sub(1);
 
-        match evaluate_named_policy_step(
-            named_policy,
-            total_attempts_before_current,
-            &properties,
-            current_state.as_ref(),
-        ) {
+        match evaluate_named_policy_step(named_policy, &properties, current_state.as_ref()) {
             Ok((new_state, RetryVerdict::Retry(delay))) => {
                 debug!(
                     retry_policy = %named_policy.name,
@@ -1918,7 +1904,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             validate_agent_config(&updated_agent_config, &agent_type)?;
 
             self.state.agent_config = updated_agent_config;
-            self.state.cached_named_retry_policies = None;
+            self.state.cached_agent_config_retry_policies = None;
         };
 
         self.state.component_metadata = new_metadata;
@@ -3514,13 +3500,9 @@ struct PrivateDurableWorkerState {
     /// The current local agent config of the worker, taking the component revision into account
     agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
 
-    /// Cached named retry policies derived from `agent_config`. Lazily populated and
+    /// Cached named retry policies derived from `agent_config` only. Lazily populated and
     /// invalidated whenever `agent_config` is reassigned.
-    cached_named_retry_policies: Option<Vec<NamedRetryPolicy>>,
-
-    /// Environment-level retry policies loaded at bootstrap. These are merged with agent_config
-    /// policies and runtime overlay in `named_retry_policies()`.
-    environment_retry_policies: Vec<NamedRetryPolicy>,
+    cached_agent_config_retry_policies: Option<Vec<NamedRetryPolicy>>,
 
     /// Runtime overlay of named retry policy mutations applied via oplog entries.
     /// `Some(policy)` = set/overwrite, `None` = tombstone (removed).
@@ -3603,7 +3585,6 @@ impl PrivateDurableWorkerState {
         config_vars: BTreeMap<String, String>,
         initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
-        environment_retry_policies: Vec<NamedRetryPolicy>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -3681,8 +3662,7 @@ impl PrivateDurableWorkerState {
             config_vars,
             initial_agent_config,
             agent_config,
-            cached_named_retry_policies: None,
-            environment_retry_policies,
+            cached_agent_config_retry_policies: None,
             runtime_retry_policy_mutations: std::collections::BTreeMap::new(),
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
@@ -3696,49 +3676,77 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    /// Returns the named retry policies derived from agent config plus runtime overlay,
-    /// caching the result. Cache is invalidated when overlay or agent_config changes.
-    pub fn named_retry_policies(&mut self) -> &[NamedRetryPolicy] {
-        if self.cached_named_retry_policies.is_none() {
-            let mut deduped = std::collections::BTreeMap::new();
-            // Lowest precedence: agent config policies
-            for policy in collect_named_retry_policies(&self.agent_config) {
-                deduped.insert(policy.name.clone(), policy);
-            }
-            // Middle precedence: environment-level policies
-            for policy in &self.environment_retry_policies {
-                deduped.insert(policy.name.clone(), policy.clone());
-            }
-            // Highest precedence: runtime overlay (set/overwrite or tombstone)
-            for (name, mutation) in &self.runtime_retry_policy_mutations {
-                match mutation {
-                    Some(policy) => {
-                        deduped.insert(name.clone(), policy.clone());
-                    }
-                    None => {
-                        deduped.remove(name);
-                    }
+    /// Returns the agent-config-derived retry policies (cached, cheap).
+    pub fn agent_config_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        if let Some(ref cached) = self.cached_agent_config_retry_policies {
+            cached.clone()
+        } else {
+            let policies = collect_named_retry_policies(&self.agent_config);
+            self.cached_agent_config_retry_policies = Some(policies.clone());
+            policies
+        }
+    }
+
+    /// Returns the named retry policies derived from agent config, environment-level policies
+    /// (fetched dynamically via EnvironmentStateService), and runtime overlay.
+    pub async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        // Tier 1: agent_config policies (cached; invalidated on component update)
+        let agent_config_policies =
+            if let Some(ref cached) = self.cached_agent_config_retry_policies {
+                cached.clone()
+            } else {
+                let policies = collect_named_retry_policies(&self.agent_config);
+                self.cached_agent_config_retry_policies = Some(policies.clone());
+                policies
+            };
+
+        // Tier 2: environment-level policies (fetched dynamically)
+        let environment_policies = self
+            .environment_state_service
+            .get_retry_policies(self.owned_agent_id.environment_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to fetch environment retry policies: {e}");
+                vec![]
+            });
+
+        // Tier 3: runtime overlay (highest precedence)
+        let mut deduped = std::collections::BTreeMap::new();
+        for policy in agent_config_policies {
+            deduped.insert(policy.name.clone(), policy);
+        }
+        for policy in environment_policies {
+            deduped.insert(policy.name.clone(), policy);
+        }
+        for (name, mutation) in &self.runtime_retry_policy_mutations {
+            match mutation {
+                Some(policy) => {
+                    deduped.insert(name.clone(), policy.clone());
+                }
+                None => {
+                    deduped.remove(name);
                 }
             }
-            let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
-            policies.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.name.cmp(&b.name)));
-            self.cached_named_retry_policies = Some(policies);
         }
-        self.cached_named_retry_policies.as_deref().unwrap()
+        let mut policies: Vec<NamedRetryPolicy> = deduped.into_values().collect();
+        policies.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        policies
     }
 
     /// Apply a set-retry-policy mutation (from oplog replay or live execution).
     pub fn apply_set_retry_policy(&mut self, policy: NamedRetryPolicy) {
         self.runtime_retry_policy_mutations
             .insert(policy.name.clone(), Some(policy));
-        self.cached_named_retry_policies = None; // invalidate cache
     }
 
     /// Apply a remove-retry-policy mutation (from oplog replay or live execution).
     pub fn apply_remove_retry_policy(&mut self, name: &str) {
         self.runtime_retry_policy_mutations
             .insert(name.to_string(), None);
-        self.cached_named_retry_policies = None; // invalidate cache
     }
 
     /// Returns whether the outermost active atomic region has side effects

@@ -1065,6 +1065,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if let wasmtime_wasi_http::types::HostFutureIncomingResponse::Pending(pending_handle) =
                 new_future
             {
+                let environment_state_service = self.state.environment_state_service.clone();
+                let environment_id = self.state.owned_agent_id.environment_id;
+                let agent_config_retry_policies = self.state.agent_config_retry_policies();
+                let runtime_retry_policy_mutations =
+                    self.state.runtime_retry_policy_mutations.clone();
                 let mut retry_properties = golem_common::model::RetryContext::http(
                     &request_state.request.method.to_string(),
                     &request_state.request.uri,
@@ -1076,7 +1081,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     request_state.outgoing_request_config(),
                     None,
                     self.public_state.worker(),
-                    self.state.named_retry_policies().to_vec(),
+                    environment_state_service,
+                    environment_id,
+                    agent_config_retry_policies,
+                    runtime_retry_policy_mutations,
                     retry_properties,
                     exec_state.max_in_function_retry_delay,
                     request_state.begin_index,

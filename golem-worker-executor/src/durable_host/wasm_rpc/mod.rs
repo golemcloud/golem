@@ -19,6 +19,7 @@ use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, RpcError,
 };
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
 use crate::services::HasWorker;
@@ -28,7 +29,9 @@ use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::UntypedDataValue;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
@@ -46,7 +49,6 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::{
     AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex, OwnedAgentId,
     PredicateValue, RetryContext, RetryProperties, ScheduledAction,
@@ -468,11 +470,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
             let in_atomic_region = self.in_atomic_region();
             let allow_retry = !in_atomic_region;
-            let named_retry_policies = if in_atomic_region {
-                Vec::new()
-            } else {
-                self.state.named_retry_policies().to_vec()
-            };
+            let environment_state_service = self.state.environment_state_service.clone();
+            let environment_id = self.state.owned_agent_id.environment_id;
+            let agent_config_retry_policies = self.state.agent_config_retry_policies();
+            let runtime_retry_policy_mutations = self.state.runtime_retry_policy_mutations.clone();
             let mut retry_properties =
                 RetryContext::rpc("invoke-and-await", &remote_agent_id, &method_name);
             self.state.enrich_retry_properties(&mut retry_properties);
@@ -491,7 +492,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 config_vars,
                 stack,
                 allow_retry,
-                named_retry_policies,
+                environment_state_service,
+                environment_id,
+                agent_config_retry_policies,
+                runtime_retry_policy_mutations,
                 retry_properties,
                 max_delay,
                 worker,
@@ -698,11 +702,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
             let in_atomic_region = self.in_atomic_region();
             let allow_retry = !in_atomic_region;
-            let named_retry_policies = if in_atomic_region {
-                Vec::new()
-            } else {
-                self.state.named_retry_policies().to_vec()
-            };
+            let environment_state_service = self.state.environment_state_service.clone();
+            let environment_id = self.state.owned_agent_id.environment_id;
+            let agent_config_retry_policies = self.state.agent_config_retry_policies();
+            let runtime_retry_policy_mutations = self.state.runtime_retry_policy_mutations.clone();
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
             let worker = self.public_state.worker();
             let execution_status = self.execution_status.clone();
@@ -791,7 +794,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         rpc,
                         stack,
                         allow_retry,
-                        named_retry_policies,
+                        environment_state_service,
+                        environment_id,
+                        agent_config_retry_policies,
+                        runtime_retry_policy_mutations,
                         enrichment,
                         max_delay,
                         worker,
@@ -823,10 +829,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 self.state.current_retry_point = begin_index;
                 let failure = anyhow::Error::new(ClassifiedHostError { kind, message });
                 let mut properties = RetryProperties::new();
-                properties.set(
-                    "error-type",
-                    PredicateValue::Text("transient".to_string()),
-                );
+                properties.set("error-type", PredicateValue::Text("transient".to_string()));
                 self.try_trigger_retry(failure, properties).await?;
             }
 
@@ -1185,7 +1188,10 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     config_vars: BTreeMap<String, String>,
     stack: InvocationContextStack,
     allow_retry: bool,
-    named_retry_policies: Vec<NamedRetryPolicy>,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
+    environment_id: EnvironmentId,
+    agent_config_retry_policies: Vec<NamedRetryPolicy>,
+    runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
     retry_properties: RetryProperties,
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
@@ -1230,7 +1236,10 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     .cloned();
                 let task_ctx = crate::durable_host::durability::TaskRetryContext {
                     retry_point,
-                    named_retry_policies,
+                    environment_state_service,
+                    environment_id,
+                    agent_config_retry_policies,
+                    runtime_retry_policy_mutations,
                     max_in_function_retry_delay,
                     current_retry_policy_state,
                     retry_properties,
@@ -1319,7 +1328,10 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     rpc: Arc<dyn Rpc>,
     stack: InvocationContextStack,
     allow_retry: bool,
-    named_retry_policies: Vec<NamedRetryPolicy>,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
+    environment_id: EnvironmentId,
+    agent_config_retry_policies: Vec<NamedRetryPolicy>,
+    runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
     enrichment: Option<(&ParsedAgentId, bool)>,
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
@@ -1356,17 +1368,13 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         remote_agent_type: None,
         remote_agent_parameters: None,
     };
-    let mut retry_properties =
-        RetryContext::rpc("invoke-and-await", remote_agent_id, method_name);
+    let mut retry_properties = RetryContext::rpc("invoke-and-await", remote_agent_id, method_name);
     if let Some((agent_id, assume_idempotence)) = enrichment {
         retry_properties.set(
             "agent-type",
             PredicateValue::Text(agent_id.agent_type.to_string()),
         );
-        retry_properties.set(
-            "is-idempotent",
-            PredicateValue::Boolean(assume_idempotence),
-        );
+        retry_properties.set("is-idempotent", PredicateValue::Boolean(assume_idempotence));
     }
 
     let handle = spawn_rpc_task_with_retry(
@@ -1381,7 +1389,10 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         config_vars.clone(),
         stack,
         allow_retry,
-        named_retry_policies,
+        environment_state_service,
+        environment_id,
+        agent_config_retry_policies,
+        runtime_retry_policy_mutations,
         retry_properties,
         max_in_function_retry_delay,
         worker,

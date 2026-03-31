@@ -784,7 +784,10 @@ impl golem_wasm::FromValue for PublicSnapshotData {
 
 /// API-facing counter state for a retry policy.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateCounter {
     /// Number of retry attempts recorded so far.
@@ -793,7 +796,10 @@ pub struct PublicRetryPolicyStateCounter {
 
 /// API-facing wrapper state that delegates to an inner retry policy state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateWrapper {
     /// The wrapped inner retry policy state.
@@ -802,7 +808,10 @@ pub struct PublicRetryPolicyStateWrapper {
 
 /// API-facing count-box state that tracks both an attempt count and an inner state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateCountBox {
     /// Number of attempts consumed so far.
@@ -813,7 +822,10 @@ pub struct PublicRetryPolicyStateCountBox {
 
 /// API-facing and-then state tracking left/right sub-states and which side is active.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateAndThen {
     /// State of the first (left) policy.
@@ -826,7 +838,10 @@ pub struct PublicRetryPolicyStateAndThen {
 
 /// API-facing pair state tracking two independent sub-states (for union/intersect).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm_derive::IntoValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStatePair {
     /// State of the first sub-policy.
@@ -838,7 +853,10 @@ pub struct PublicRetryPolicyStatePair {
 /// API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
 /// exposed through the public REST/OpenAPI interface.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union, golem_wasm_derive::IntoValue))]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Union, golem_wasm_derive::IntoValue)
+)]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicRetryPolicyState {
@@ -914,10 +932,9 @@ impl From<PublicRetryPolicyState> for crate::model::retry_policy::RetryPolicySta
                 right: Box::new((*at.right).into()),
                 on_right: at.on_right,
             },
-            PublicRetryPolicyState::Pair(p) => RetryPolicyState::Pair(
-                Box::new((*p.first).into()),
-                Box::new((*p.second).into()),
-            ),
+            PublicRetryPolicyState::Pair(p) => {
+                RetryPolicyState::Pair(Box::new((*p.first).into()), Box::new((*p.second).into()))
+            }
         }
     }
 }
