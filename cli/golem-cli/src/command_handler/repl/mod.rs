@@ -62,7 +62,7 @@ impl ReplHandler {
             if let Some(script) = script {
                 Some(ReplScriptSource::Inline(script))
             } else if let Some(script_path) = script_file {
-                Some(ReplScriptSource::FromFile(fs::canonicalize_path(
+                Some(ReplScriptSource::FromFile(fs::absolute_lexical_path(
                     &script_path,
                 )?))
             } else {
@@ -121,14 +121,14 @@ impl ReplHandler {
             .await?;
 
         let args = {
-            let app_main_dir = fs::canonicalize_path(&std::env::current_dir()?)?;
+            let app_main_dir = fs::current_dir_lexical()?;
 
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
 
             let repl_root_dir = app_ctx.application().repl_root_dir(language);
             fs::create_dir_all(&repl_root_dir)?;
-            let repl_root_dir = fs::canonicalize_path(&repl_root_dir)?;
+            let repl_root_dir = fs::absolute_lexical_path(&repl_root_dir)?;
 
             let repl_bridge_sdk_target = app_ctx.new_repl_bridge_sdk_target(language);
             let repl_root_bridge_sdk_dir = repl_bridge_sdk_target
@@ -136,7 +136,7 @@ impl ReplHandler {
                 .clone()
                 .expect("Missing target dir");
             fs::create_dir_all(&repl_root_bridge_sdk_dir)?;
-            let repl_root_bridge_sdk_dir = fs::canonicalize_path(&repl_root_bridge_sdk_dir)?;
+            let repl_root_bridge_sdk_dir = fs::absolute_lexical_path(&repl_root_bridge_sdk_dir)?;
 
             let repl_history_file_path = app_ctx
                 .application()
@@ -144,24 +144,16 @@ impl ReplHandler {
             if !repl_history_file_path.exists() {
                 fs::write(&repl_history_file_path, "")?;
             }
-            let repl_history_file_path = fs::canonicalize_path(&repl_history_file_path)?;
+            let repl_history_file_path = fs::absolute_lexical_path(&repl_history_file_path)?;
 
             let repl_cli_commands_metadata_json_path = app_ctx
                 .application()
                 .repl_cli_commands_metadata_json(language);
-            // TODO: cleanup
-            if !repl_cli_commands_metadata_json_path.exists() {
-                fs::write(&repl_cli_commands_metadata_json_path, "")?;
-            }
             let repl_cli_commands_metadata_json_path =
-                fs::canonicalize_path(&repl_cli_commands_metadata_json_path)?;
+                fs::absolute_lexical_path(&repl_cli_commands_metadata_json_path)?;
 
             let repl_metadata_json_path = app_ctx.application().repl_metadata_json(language);
-            // TODO: cleanup
-            if !repl_metadata_json_path.exists() {
-                fs::write(&repl_metadata_json_path, "")?;
-            }
-            let repl_metadata_json_path = fs::canonicalize_path(&repl_metadata_json_path)?;
+            let repl_metadata_json_path = fs::absolute_lexical_path(&repl_metadata_json_path)?;
 
             let component_names = app_ctx.application().component_names().cloned().collect();
 

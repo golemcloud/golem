@@ -18,7 +18,8 @@ use anyhow::{Context, anyhow, bail};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
-use toml_edit::{Array, Item, Table, value};
+use toml_edit::{Array, Item, Table, Value, value};
+use tracing::debug;
 
 const GOLEM_PATH: &str = "GOLEM_PATH";
 const GOLEM_RUST_PATH: &str = "GOLEM_RUST_PATH";
@@ -71,32 +72,36 @@ pub fn sdk_overrides() -> anyhow::Result<&'static SdkOverrides> {
 }
 
 impl SdkOverrides {
-    fn local_workspace_test_values(workspace_dir: &Path) -> HashMap<String, String> {
-        Self {
+    fn local_workspace_test_values(
+        workspace_dir: &Path,
+    ) -> anyhow::Result<HashMap<String, String>> {
+        Ok(Self {
             golem_path: None,
-            golem_rust_path: Some(join_path(
-                &workspace_dir.to_string_lossy(),
-                "sdks/rust/golem-rust",
-            )),
+            golem_rust_path: Some(
+                fs::path_to_str(&workspace_dir.join("sdks/rust/golem-rust"))?.to_string(),
+            ),
             golem_rust_version: None,
-            ts_packages_path: Some(join_path(
-                &workspace_dir.to_string_lossy(),
-                "sdks/ts/packages",
-            )),
+            ts_packages_path: Some(
+                fs::path_to_str(&workspace_dir.join("sdks/ts/packages"))?.to_string(),
+            ),
             ts_version: None,
             scala_sdk_version: None,
         }
-        .to_env_vars()
+        .to_env_vars())
     }
 
-    pub fn ts_package_dep(&self, package_name: &str) -> String {
+    pub fn ts_package_dep(&self, package_name: &str) -> anyhow::Result<String> {
         match &self.ts_packages_path {
-            Some(ts_packages_path) => format!("file:{}/{}", ts_packages_path, package_name),
-            None => self
+            Some(ts_packages_path) => {
+                let package_path =
+                    fs::path_to_unix_str(&Path::new(ts_packages_path).join(package_name))?;
+                Ok(format!("file:{package_path}"))
+            }
+            None => Ok(self
                 .ts_version
                 .as_deref()
                 .unwrap_or(versions::sdk::TS)
-                .to_string(),
+                .to_string()),
         }
     }
 
@@ -107,7 +112,7 @@ impl SdkOverrides {
             .to_string()
     }
 
-    pub fn golem_rust_dep(&self) -> String {
+    pub fn golem_rust_dep(&self) -> anyhow::Result<String> {
         self.golem_rust_dependency().as_dep_string()
     }
 
@@ -176,17 +181,20 @@ impl SdkOverrides {
 
     fn load() -> anyhow::Result<Self> {
         let current_dir = std::env::current_dir().context("Failed to resolve current directory")?;
+        debug!(current_dir = %current_dir.display(), "Loading SDK overrides");
         let file_values = Self::load_file_values(&current_dir)?;
+        debug!(?file_values, "Loaded SDK override file values");
 
         let test_values = Self::load_test_values()?;
+        debug!(?test_values, "Loaded SDK override test values");
 
         let env_values = Self::load_env_values();
+        debug!(?env_values, "Loaded SDK override environment values");
 
-        Ok(Self::from_values_with_test(
-            file_values,
-            test_values,
-            env_values,
-        ))
+        let overrides = Self::from_values_with_test(file_values, test_values, env_values)?;
+        debug!(?overrides, "Resolved SDK overrides");
+
+        Ok(overrides)
     }
 
     fn load_test_values() -> anyhow::Result<HashMap<String, String>> {
@@ -196,7 +204,7 @@ impl SdkOverrides {
         {
             Ok(HashMap::new())
         } else {
-            Ok(Self::local_workspace_test_values(&workspace_root()?))
+            Self::local_workspace_test_values(&workspace_root()?)
         }
     }
 
@@ -204,7 +212,7 @@ impl SdkOverrides {
     fn from_values(
         file_values: HashMap<String, String>,
         env_values: HashMap<String, String>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         Self::from_values_with_test(file_values, HashMap::new(), env_values)
     }
 
@@ -212,31 +220,31 @@ impl SdkOverrides {
         file_values: HashMap<String, String>,
         test_values: HashMap<String, String>,
         env_values: HashMap<String, String>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let mut values = file_values;
         values.extend(test_values);
         values.extend(env_values);
 
         let golem_path = get_normalized_value_by_key(&values, GOLEM_PATH);
 
-        Self {
+        Ok(Self {
             golem_path: golem_path.clone(),
-            golem_rust_path: get_normalized_value_by_key(&values, GOLEM_RUST_PATH).or_else(|| {
-                golem_path
-                    .as_deref()
-                    .map(|path| join_path(path, "sdks/rust/golem-rust"))
-            }),
+            golem_rust_path: resolved_path_override(
+                &values,
+                GOLEM_RUST_PATH,
+                golem_path.as_deref(),
+                "sdks/rust/golem-rust",
+            )?,
             golem_rust_version: get_normalized_value_by_key(&values, GOLEM_RUST_VERSION),
-            ts_packages_path: get_normalized_value_by_key(&values, GOLEM_TS_PACKAGES_PATH).or_else(
-                || {
-                    golem_path
-                        .as_deref()
-                        .map(|path| join_path(path, "sdks/ts/packages"))
-                },
-            ),
+            ts_packages_path: resolved_path_override(
+                &values,
+                GOLEM_TS_PACKAGES_PATH,
+                golem_path.as_deref(),
+                "sdks/ts/packages",
+            )?,
             ts_version: get_normalized_value_by_key(&values, GOLEM_TS_VERSION),
             scala_sdk_version: get_normalized_value_by_key(&values, GOLEM_SCALA_SDK_VERSION),
-        }
+        })
     }
 
     pub fn to_env_vars(&self) -> HashMap<String, String> {
@@ -272,13 +280,21 @@ impl SdkOverrides {
 
     fn load_file_values(current_dir: &Path) -> anyhow::Result<HashMap<String, String>> {
         let Some(overrides_file) = find_sdk_overrides_file(current_dir) else {
+            debug!(current_dir = %current_dir.display(), "No SDK overrides file found");
             return Ok(HashMap::new());
         };
+
+        debug!(overrides_file = %overrides_file.display(), "Loading SDK overrides file");
 
         let mut values = parse_dotenv_with_relative_paths(&overrides_file)?;
         if values.is_empty() {
             let parent = fs::parent_or_err(&overrides_file)?;
             values.insert(GOLEM_PATH.to_string(), fs::path_to_str(parent)?.to_string());
+            debug!(
+                overrides_file = %overrides_file.display(),
+                inferred_golem_path = %parent.display(),
+                "SDK overrides file is empty, inferring GOLEM_PATH from parent directory"
+            );
         }
 
         Ok(values)
@@ -286,18 +302,20 @@ impl SdkOverrides {
 }
 
 impl RustDependency {
-    pub fn as_dep_string(&self) -> String {
+    pub fn as_dep_string(&self) -> anyhow::Result<String> {
         match self {
-            RustDependency::Path(path) => format!(r#"path = "{}""#, path.to_string_lossy()),
-            RustDependency::Version(version) => format!(r#"version = "{}""#, version),
+            RustDependency::Path(path) => {
+                Ok(format!("path = {}", toml_string(fs::path_to_str(path)?)))
+            }
+            RustDependency::Version(version) => Ok(format!("version = {}", toml_string(version))),
         }
     }
 
-    pub fn as_toml_item(&self, features: &[&str]) -> Item {
+    pub fn as_toml_item(&self, features: &[&str]) -> anyhow::Result<Item> {
         let mut entry = Item::Table(Table::default());
         match self {
             RustDependency::Path(path) => {
-                entry["path"] = value(path.to_string_lossy().to_string());
+                entry["path"] = value(fs::path_to_str(path)?);
             }
             RustDependency::Version(version) => {
                 entry["version"] = value(version.clone());
@@ -313,13 +331,17 @@ impl RustDependency {
             entry["features"] = value(feature_items);
         }
 
-        entry
+        Ok(entry)
     }
+}
+
+fn toml_string(value: impl Into<String>) -> String {
+    Value::from(value.into()).to_string()
 }
 
 pub fn workspace_root() -> anyhow::Result<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    fs::canonicalize_path(&manifest_dir.join("../.."))
+    Ok(fs::normalize_path_lexically(&manifest_dir.join("../..")))
 }
 
 fn running_from_golem_workspace_checkout() -> bool {
@@ -336,10 +358,10 @@ fn running_from_golem_workspace_checkout() -> bool {
 
     current_dir
         .as_deref()
-        .is_some_and(|path| path.starts_with(&workspace_root))
+        .is_some_and(|path| fs::path_starts_with_normalized(path, &workspace_root))
         || current_exe
             .as_deref()
-            .is_some_and(|path| path.starts_with(&workspace_root))
+            .is_some_and(|path| fs::path_starts_with_normalized(path, &workspace_root))
 }
 
 fn should_apply_test_layer() -> bool {
@@ -367,7 +389,7 @@ fn parse_dotenv_with_relative_paths(path: &Path) -> anyhow::Result<HashMap<Strin
     {
         let (key, value) = entry.with_context(|| format!("Failed to parse {}", path.display()))?;
         let value = if is_path_override_key(&key) {
-            resolve_relative_path(file_dir, &value)
+            resolve_relative_path(file_dir, &value)?
         } else {
             value
         };
@@ -381,14 +403,12 @@ fn is_path_override_key(key: &str) -> bool {
     matches!(key, GOLEM_PATH | GOLEM_RUST_PATH | GOLEM_TS_PACKAGES_PATH)
 }
 
-fn resolve_relative_path(base_dir: &Path, value: &str) -> String {
+fn resolve_relative_path(base_dir: &Path, value: &str) -> anyhow::Result<String> {
     let path = Path::new(value);
     if path.is_absolute() {
-        normalize_path(path).to_string_lossy().to_string()
+        Ok(fs::path_to_str(&normalize_path(path))?.to_string())
     } else {
-        normalize_path(&base_dir.join(path))
-            .to_string_lossy()
-            .to_string()
+        Ok(fs::path_to_str(&normalize_path(&base_dir.join(path)))?.to_string())
     }
 }
 
@@ -413,13 +433,28 @@ fn get_normalized_value_by_key(values: &HashMap<String, String>, key: &str) -> O
     })
 }
 
-fn join_path(base: &str, suffix: &str) -> String {
-    Path::new(base).join(suffix).to_string_lossy().to_string()
+fn resolved_path_override(
+    values: &HashMap<String, String>,
+    key: &str,
+    golem_path: Option<&str>,
+    suffix: &str,
+) -> anyhow::Result<Option<String>> {
+    if let Some(path) = get_normalized_value_by_key(values, key) {
+        return Ok(Some(path));
+    }
+
+    match golem_path {
+        Some(path) => Ok(Some(
+            fs::path_to_str(&Path::new(path).join(suffix))?.to_string(),
+        )),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::tempdir;
     use test_r::test;
 
@@ -435,21 +470,33 @@ mod tests {
         let file_values = map(&[(GOLEM_RUST_VERSION, "1.2.3")]);
         let env_values = map(&[(GOLEM_RUST_VERSION, "9.9.9")]);
 
-        let overrides = SdkOverrides::from_values(file_values, env_values);
+        let overrides = SdkOverrides::from_values(file_values, env_values).unwrap();
         assert_eq!(overrides.golem_rust_version.as_deref(), Some("9.9.9"));
     }
 
     #[test]
     fn golem_path_sets_default_sdk_paths() {
-        let overrides = SdkOverrides::from_values(map(&[(GOLEM_PATH, "/repo")]), HashMap::new());
-
+        let overrides =
+            SdkOverrides::from_values(map(&[(GOLEM_PATH, "/repo")]), HashMap::new()).unwrap();
         assert_eq!(
-            overrides.golem_rust_path.as_deref(),
-            Some("/repo/sdks/rust/golem-rust")
+            overrides.golem_rust_path,
+            Some(
+                Path::new("/repo")
+                    .join("sdks/rust/golem-rust")
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            )
         );
         assert_eq!(
-            overrides.ts_packages_path.as_deref(),
-            Some("/repo/sdks/ts/packages")
+            overrides.ts_packages_path,
+            Some(
+                Path::new("/repo")
+                    .join("sdks/ts/packages")
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            )
         );
     }
 
@@ -462,10 +509,27 @@ mod tests {
                 (GOLEM_TS_PACKAGES_PATH, "/custom/ts"),
             ]),
             HashMap::new(),
-        );
+        )
+        .unwrap();
 
         assert_eq!(overrides.golem_rust_path.as_deref(), Some("/custom/rust"));
         assert_eq!(overrides.ts_packages_path.as_deref(), Some("/custom/ts"));
+    }
+
+    #[test]
+    fn ts_package_dep_uses_file_url_for_local_path() {
+        let overrides = SdkOverrides {
+            golem_path: None,
+            golem_rust_path: None,
+            golem_rust_version: None,
+            ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
+            ts_version: None,
+        };
+
+        assert_eq!(
+            overrides.ts_package_dep("golem-ts-sdk").unwrap(),
+            "file:/repo/sdks/ts/packages/golem-ts-sdk".to_string()
+        );
     }
 
     #[test]
@@ -483,7 +547,7 @@ mod tests {
         let env_values = map(&[(GOLEM_RUST_PATH, "/custom/rust")]);
 
         let overrides =
-            SdkOverrides::from_values_with_test(HashMap::new(), test_values, env_values);
+            SdkOverrides::from_values_with_test(HashMap::new(), test_values, env_values).unwrap();
 
         assert_eq!(overrides.golem_rust_path.as_deref(), Some("/custom/rust"));
     }
@@ -506,15 +570,15 @@ mod tests {
             parse_dotenv_with_relative_paths(&file).expect("failed to parse overrides file");
         assert_eq!(
             values.get(GOLEM_PATH),
-            Some(&root.to_string_lossy().to_string())
+            Some(&root.to_str().unwrap().to_string())
         );
         assert_eq!(
             values.get(GOLEM_RUST_PATH),
-            Some(&child.join("rust-override").to_string_lossy().to_string())
+            Some(&child.join("rust-override").to_str().unwrap().to_string())
         );
         assert_eq!(
             values.get(GOLEM_TS_PACKAGES_PATH),
-            Some(&root.join("ts-override").to_string_lossy().to_string())
+            Some(&root.join("ts-override").to_str().unwrap().to_string())
         );
     }
 
@@ -558,7 +622,7 @@ mod tests {
     #[test]
     fn rust_dependency_can_be_rendered_for_toml_edit() {
         let dep = RustDependency::Path(PathBuf::from("/tmp/repo/sdks/rust/golem-rust"));
-        let item = dep.as_toml_item(&["client"]);
+        let item = dep.as_toml_item(&["client"]).unwrap();
 
         assert_eq!(
             item["path"].as_str(),
@@ -576,7 +640,7 @@ mod tests {
         };
 
         assert_eq!(
-            overrides.ts_package_dep("golem-ts-sdk"),
+            overrides.ts_package_dep("golem-ts-sdk").unwrap(),
             "file:/tmp/repo/sdks/ts/packages/golem-ts-sdk"
         );
     }
@@ -599,13 +663,14 @@ mod tests {
 
         assert_eq!(
             file_values.get(GOLEM_PATH),
-            Some(&root.to_string_lossy().to_string())
+            Some(&root.to_str().unwrap().to_string())
         );
 
-        let overrides = SdkOverrides::from_values(file_values, HashMap::new());
+        let overrides = SdkOverrides::from_values(file_values, HashMap::new()).unwrap();
         let expected_rust_path = root
             .join("sdks/rust/golem-rust")
-            .to_string_lossy()
+            .to_str()
+            .unwrap()
             .to_string();
         assert_eq!(
             overrides.golem_rust_path.as_deref(),

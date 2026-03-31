@@ -403,7 +403,10 @@ fn transform(
                 }
             }
             Transform::RustSdk => {
-                replacements.insert("GOLEM_RUST_VERSION_OR_PATH", sdk_overrides.golem_rust_dep());
+                replacements.insert(
+                    "GOLEM_RUST_VERSION_OR_PATH",
+                    sdk_overrides.golem_rust_dep()?,
+                );
                 replacements.insert(
                     "GOLEM_RUST_LOG_VERSION",
                     versions::rust_dep::LOG.to_string(),
@@ -439,11 +442,11 @@ fn transform(
             Transform::TsSdk => {
                 replacements.insert(
                     "GOLEM_TS_SDK_VERSION_OR_PATH",
-                    sdk_overrides.ts_package_dep("golem-ts-sdk"),
+                    sdk_overrides.ts_package_dep("golem-ts-sdk")?,
                 );
                 replacements.insert(
                     "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-                    sdk_overrides.ts_package_dep("golem-ts-typegen"),
+                    sdk_overrides.ts_package_dep("golem-ts-typegen")?,
                 );
                 replacements.insert(
                     "GOLEM_TS_ROLLUP_PLUGIN_ALIAS_VERSION",
