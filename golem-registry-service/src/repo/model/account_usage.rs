@@ -157,6 +157,7 @@ impl AccountUsage {
             per_invocation_rpc_call_limit: self.plan.per_invocation_rpc_call_limit.get(),
             available_http_calls,
             available_rpc_calls,
+            max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
         }
     }
 }

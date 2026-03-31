@@ -39,5 +39,6 @@ declare_structs! {
         pub per_invocation_rpc_call_limit: u64,
         pub monthly_http_call_limit: u64,
         pub monthly_rpc_call_limit: u64,
+        pub max_concurrent_agents_per_executor: u64,
     }
 }

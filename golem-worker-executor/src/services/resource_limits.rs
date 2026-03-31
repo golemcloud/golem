@@ -65,14 +65,27 @@ pub struct AtomicResourceEntry {
     available_rpc_calls_from_server: AtomicU64,
     unsynced_rpc_calls: AtomicU64,
     syncing_rpc_calls: AtomicU64,
+
+    // Maximum number of concurrently running agents on a single executor for this
+    // account. Uses the unlimited sentinel (10^18) when unlimited.
+    // Refreshed via update_last_known_limits when batch sync responses arrive.
+    max_concurrent_agents_per_executor: AtomicU64,
 }
 
 impl AtomicResourceEntry {
+    /// Sentinel value used in the database and service config to represent
+    /// "unlimited" for the concurrent agents per executor limit.
+    /// `1_000_000_000_000_000_000` (10^18) — fits in i64 (TOML max) and
+    /// is safe for SQLite REAL, consistent with `monthly_gas_limit` and the
+    /// `default_unlimited()` convention from PR #3068.
+    pub const UNLIMITED_CONCURRENT_AGENTS: u64 = 1_000_000_000_000_000_000;
+
     pub fn new(
         fuel: u64,
         max_memory: usize,
         max_table_elements: usize,
         max_disk_space: u64,
+        max_concurrent_agents_per_executor: u64,
     ) -> Self {
         Self {
             fuel: AtomicU64::new(fuel),
@@ -90,6 +103,7 @@ impl AtomicResourceEntry {
             available_rpc_calls_from_server: AtomicU64::new(u64::MAX),
             unsynced_rpc_calls: AtomicU64::new(0),
             syncing_rpc_calls: AtomicU64::new(0),
+            max_concurrent_agents_per_executor: AtomicU64::new(max_concurrent_agents_per_executor),
         }
     }
 
@@ -117,6 +131,9 @@ impl AtomicResourceEntry {
             available_rpc_calls_from_server: AtomicU64::new(u64::MAX),
             unsynced_rpc_calls: AtomicU64::new(0),
             syncing_rpc_calls: AtomicU64::new(0),
+            max_concurrent_agents_per_executor: AtomicU64::new(
+                AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            ),
         }
     }
 
@@ -131,6 +148,7 @@ impl AtomicResourceEntry {
         per_invocation_rpc_call_limit: u64,
         available_http_calls: u64,
         available_rpc_calls: u64,
+        max_concurrent_agents_per_executor: u64,
     ) -> Self {
         Self {
             fuel: AtomicU64::new(fuel),
@@ -148,6 +166,7 @@ impl AtomicResourceEntry {
             available_rpc_calls_from_server: AtomicU64::new(available_rpc_calls),
             unsynced_rpc_calls: AtomicU64::new(0),
             syncing_rpc_calls: AtomicU64::new(0),
+            max_concurrent_agents_per_executor: AtomicU64::new(max_concurrent_agents_per_executor),
         }
     }
 
@@ -269,6 +288,19 @@ impl AtomicResourceEntry {
             })
             .ok();
         true
+    }
+
+    pub fn max_concurrent_agents_per_executor(&self) -> u64 {
+        self.max_concurrent_agents_per_executor
+            .load(Ordering::Acquire)
+    }
+
+    /// Overwrite the concurrent agent limit. Used in tests to simulate a plan
+    /// upgrade without going through the full registry/batch sync path.
+    #[cfg(test)]
+    pub(crate) fn set_max_concurrent_agents_per_executor(&self, limit: u64) {
+        self.max_concurrent_agents_per_executor
+            .store(limit, Ordering::Release);
     }
 }
 
@@ -536,6 +568,10 @@ impl ResourceLimitsGrpc {
             entry
                 .available_rpc_calls_from_server
                 .store(updated_limits.available_rpc_calls, Ordering::Release);
+            entry.max_concurrent_agents_per_executor.store(
+                updated_limits.max_concurrent_agents_per_executor,
+                Ordering::Release,
+            );
             entry
                 .last_refresh_secs
                 .store(Utc::now().timestamp(), Ordering::Release);
@@ -578,6 +614,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.per_invocation_rpc_call_limit,
                         fetched.available_http_calls,
                         fetched.available_rpc_calls,
+                        fetched.max_concurrent_agents_per_executor,
                     ),
                 ))
             })
@@ -600,6 +637,7 @@ impl ResourceLimits for ResourceLimitsDisabled {
             usize::MAX,
             usize::MAX,
             u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         )))
     }
 }
@@ -639,14 +677,14 @@ mod tests {
 
     #[test]
     fn effective_fuel_with_zero_delta() {
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
         assert_eq!(entry.effective_fuel(), 1000);
     }
 
     #[test]
     fn effective_fuel_sums_fuel_delta_and_in_flight() {
         // delta = +200 (fuel lent), in_flight = +50 (earlier batch in transit)
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
         entry.delta.store(200, Ordering::Release);
         entry.in_flight_delta.store(50, Ordering::Release);
         assert_eq!(entry.effective_fuel(), 1250);
@@ -655,7 +693,7 @@ mod tests {
     #[test]
     fn effective_fuel_clamps_to_zero_when_sum_is_negative() {
         // delta negative (more returned than borrowed): 100 + (-200) = -100 → 0
-        let entry = AtomicResourceEntry::new(100, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(100, 0, usize::MAX, u64::MAX, u64::MAX);
         entry.delta.store(-200, Ordering::Release);
         assert_eq!(entry.effective_fuel(), 0);
     }
@@ -663,14 +701,14 @@ mod tests {
     #[test]
     fn effective_fuel_clamps_to_u64_max_when_sum_overflows() {
         // u64::MAX + i64::MAX overflows u64 in i128 arithmetic → clamped
-        let entry = AtomicResourceEntry::new(u64::MAX, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(u64::MAX, 0, usize::MAX, u64::MAX, u64::MAX);
         entry.delta.store(i64::MAX, Ordering::Release);
         assert_eq!(entry.effective_fuel(), u64::MAX);
     }
 
     #[test]
     fn borrow_fuel_succeeds_and_increases_delta() {
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
         assert!(entry.borrow_fuel(300));
         // borrow_fuel records the loan by adding positively to delta
         assert_eq!(entry.delta.load(Ordering::Acquire), 300);
@@ -681,7 +719,7 @@ mod tests {
     #[test]
     fn borrow_fuel_fails_when_effective_fuel_is_zero() {
         // fuel=0, delta=0 → effective=0; any non-zero borrow fails
-        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX, u64::MAX);
         assert!(!entry.borrow_fuel(1));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
@@ -689,14 +727,14 @@ mod tests {
     #[test]
     fn borrow_fuel_fails_when_amount_exceeds_effective_fuel() {
         // fuel=100, effective=100; borrowing 101 must fail
-        let entry = AtomicResourceEntry::new(100, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(100, 0, usize::MAX, u64::MAX, u64::MAX);
         assert!(!entry.borrow_fuel(101));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
 
     #[test]
     fn borrow_fuel_zero_amount_always_succeeds_without_touching_delta() {
-        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX, u64::MAX);
         assert!(entry.borrow_fuel(0));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
@@ -704,7 +742,7 @@ mod tests {
     #[test]
     fn borrow_fuel_exactly_at_effective_fuel_succeeds() {
         // Borrowing exactly effective_fuel must succeed
-        let entry = AtomicResourceEntry::new(500, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(500, 0, usize::MAX, u64::MAX, u64::MAX);
         assert!(entry.borrow_fuel(500));
         assert_eq!(entry.delta.load(Ordering::Acquire), 500);
     }
@@ -712,7 +750,7 @@ mod tests {
     #[test]
     fn borrow_fuel_one_over_effective_fuel_fails() {
         // Borrowing effective_fuel + 1 must fail
-        let entry = AtomicResourceEntry::new(500, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(500, 0, usize::MAX, u64::MAX, u64::MAX);
         assert!(!entry.borrow_fuel(501));
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
     }
@@ -720,7 +758,7 @@ mod tests {
     #[test]
     fn return_fuel_decreases_delta() {
         // borrow 400 → delta = +400; return 100 unused → delta = 300
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
         entry.borrow_fuel(400);
         entry.return_fuel(100);
         assert_eq!(entry.delta.load(Ordering::Acquire), 300);
@@ -729,7 +767,7 @@ mod tests {
     #[test]
     fn borrow_then_full_return_nets_delta_to_zero() {
         // borrow 500, return 500 (nothing consumed) → delta = 0
-        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(1000, 0, usize::MAX, u64::MAX, u64::MAX);
         entry.borrow_fuel(500);
         entry.return_fuel(500);
         assert_eq!(entry.delta.load(Ordering::Acquire), 0);
@@ -738,7 +776,7 @@ mod tests {
     #[test]
     fn return_fuel_does_not_panic_on_large_amount() {
         // delta at i64::MIN, return u64::MAX → saturates at i64::MIN, no panic
-        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX, u64::MAX);
         entry.delta.store(i64::MIN, Ordering::Release);
         entry.return_fuel(u64::MAX);
         let _ = entry.delta.load(Ordering::Acquire);
@@ -746,14 +784,14 @@ mod tests {
 
     #[test]
     fn max_memory_limit_returns_stored_value() {
-        let entry = AtomicResourceEntry::new(0, 65536, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(0, 65536, usize::MAX, u64::MAX, u64::MAX);
         assert_eq!(entry.max_memory_limit(), 65536);
     }
 
     #[test]
     fn last_refresh_secs_is_set_on_initialize() {
         let before = Utc::now().timestamp();
-        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX, u64::MAX);
         let after = Utc::now().timestamp();
         let stored = entry.last_refresh_secs.load(Ordering::Acquire);
         assert!(stored >= before, "last_refresh_secs should be >= before");
@@ -766,26 +804,26 @@ mod tests {
 
     #[test]
     fn atomic_resource_entry_returns_table_elements_limit() {
-        let entry = AtomicResourceEntry::new(1000, 65536, 500, u64::MAX);
+        let entry = AtomicResourceEntry::new(1000, 65536, 500, u64::MAX, u64::MAX);
         assert_eq!(entry.max_table_elements_limit(), 500);
     }
 
     #[test]
     fn atomic_resource_entry_table_elements_independent_of_memory() {
-        let entry = AtomicResourceEntry::new(0, 1024, 256, u64::MAX);
+        let entry = AtomicResourceEntry::new(0, 1024, 256, u64::MAX, u64::MAX);
         assert_eq!(entry.max_memory_limit(), 1024);
         assert_eq!(entry.max_table_elements_limit(), 256);
     }
 
     #[test]
     fn atomic_resource_entry_table_elements_usize_max_for_disabled() {
-        let entry = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX, u64::MAX, u64::MAX);
         assert_eq!(entry.max_table_elements_limit(), usize::MAX);
     }
 
     #[test]
     fn atomic_resource_entry_table_elements_zero() {
-        let entry = AtomicResourceEntry::new(100, 4096, 0, u64::MAX);
+        let entry = AtomicResourceEntry::new(100, 4096, 0, u64::MAX, u64::MAX);
         assert_eq!(entry.max_table_elements_limit(), 0);
     }
 
@@ -823,7 +861,7 @@ mod tests {
     fn new_defaults_invocation_limits_to_max() {
         // AtomicResourceEntry::new (without invocation limits) must default to u64::MAX
         // so that workers using the old constructor are unaffected.
-        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX);
+        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX, u64::MAX);
         assert_eq!(entry.per_invocation_http_call_limit(), u64::MAX);
         assert_eq!(entry.per_invocation_rpc_call_limit(), u64::MAX);
     }
@@ -859,6 +897,7 @@ mod tests {
             u64::MAX,
             5,
             5,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
         // Simulate what send_batch does: move unsynced → syncing
         entry.syncing_http_calls.store(3, Ordering::Release);
@@ -890,6 +929,7 @@ mod tests {
             u64::MAX,
             0,
             u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
         assert!(
             !entry.record_http_call(),
@@ -909,6 +949,7 @@ mod tests {
             u64::MAX,
             2,
             u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
         assert!(entry.record_http_call(), "first call should succeed");
         assert!(entry.record_http_call(), "second call should succeed");
@@ -929,6 +970,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             3,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
         assert!(entry.record_rpc_call());
         assert_eq!(entry.remaining_rpc_calls(), 2);
@@ -945,6 +987,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             0,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
         assert!(!entry.record_rpc_call());
     }
@@ -961,6 +1004,7 @@ mod tests {
             u64::MAX,
             0,
             5,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
         assert!(!entry.record_http_call(), "HTTP should be exhausted");
         assert!(entry.record_rpc_call(), "RPC should still be available");
@@ -978,6 +1022,7 @@ mod tests {
             u64::MAX,
             10,
             u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
         entry.record_http_call();
         entry.record_http_call();
@@ -1000,6 +1045,7 @@ mod tests {
             u64::MAX,
             10,
             u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
         entry.unsynced_http_calls.store(3, Ordering::Release);
         assert_eq!(entry.remaining_http_calls(), 7);
@@ -1028,6 +1074,7 @@ mod tests {
             u64::MAX,
             10,
             u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         );
 
         // One call is included in the in-flight batch.
@@ -1071,6 +1118,7 @@ mod tests {
             per_invocation_rpc_call_limit: u64::MAX,
             available_http_calls: 5,
             available_rpc_calls: 3,
+            max_concurrent_agents_per_executor: u64::MAX,
         });
 
         let svc = make_grpc(mock.clone());
@@ -1094,6 +1142,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: 50,
                 available_rpc_calls: 40,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1125,6 +1174,7 @@ mod tests {
             per_invocation_rpc_call_limit: u64::MAX,
             available_http_calls: 10,
             available_rpc_calls: 10,
+            max_concurrent_agents_per_executor: u64::MAX,
         });
         let mut updated = HashMap::new();
         updated.insert(
@@ -1138,6 +1188,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: 10,
                 available_rpc_calls: 10,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1174,6 +1225,45 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // AtomicResourceEntry — concurrent agent limit
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn concurrent_agent_limit_defaults_to_max_when_passing_u64_max() {
+        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX, u64::MAX);
+        assert_eq!(entry.max_concurrent_agents_per_executor(), u64::MAX);
+    }
+
+    #[test]
+    fn concurrent_agent_limit_is_stored_from_new() {
+        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX, 5);
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 5);
+    }
+
+    #[test]
+    fn concurrent_agent_limit_zero_is_stored_correctly() {
+        let entry = AtomicResourceEntry::new(0, 0, usize::MAX, u64::MAX, 0);
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 0);
+    }
+
+    #[test]
+    fn concurrent_agent_limit_can_be_updated_atomically() {
+        let entry = AtomicResourceEntry::new(1000, 512, usize::MAX, u64::MAX, 5);
+        entry.set_max_concurrent_agents_per_executor(10);
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 10);
+    }
+
+    #[test]
+    fn concurrent_agent_limit_is_independent_of_other_fields() {
+        let entry = AtomicResourceEntry::new(500, 1024, 256, 4096, 7);
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 7);
+        assert_eq!(entry.effective_fuel(), 500);
+        assert_eq!(entry.max_memory_limit(), 1024);
+        assert_eq!(entry.max_table_elements_limit(), 256);
+        assert_eq!(entry.max_disk_space_limit(), 4096);
+    }
+
+    // -------------------------------------------------------------------------
     // ResourceLimitsGrpc
     // -------------------------------------------------------------------------
 
@@ -1194,6 +1284,7 @@ mod tests {
                     per_invocation_rpc_call_limit: u64::MAX,
                     available_http_calls: u64::MAX,
                     available_rpc_calls: u64::MAX,
+                    max_concurrent_agents_per_executor: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
             }
@@ -1523,6 +1614,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1554,6 +1646,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1586,6 +1679,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1669,6 +1763,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1699,6 +1794,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1756,6 +1852,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1793,6 +1890,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1864,6 +1962,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: u64::MAX,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1877,6 +1976,130 @@ mod tests {
 
         // Fuel should now reflect the server-returned value
         assert_eq!(entry.fuel.load(Ordering::Acquire), 5000);
+    }
+
+    // -------------------------------------------------------------------------
+    // ResourceLimitsGrpc — concurrent agent limit propagation
+    // -------------------------------------------------------------------------
+
+    fn mock_with_concurrent_agent_limit(limit: u64) -> Arc<MockRegistryService> {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        *mock.get_limits_result.lock().unwrap() = Ok(ServiceResourceLimits {
+            available_fuel: 1000,
+            max_memory_per_worker: 512,
+            max_table_elements_per_worker: u64::MAX,
+            max_disk_space_per_worker: u64::MAX,
+            per_invocation_http_call_limit: u64::MAX,
+            per_invocation_rpc_call_limit: u64::MAX,
+            available_http_calls: u64::MAX,
+            available_rpc_calls: u64::MAX,
+            max_concurrent_agents_per_executor: limit,
+        });
+        mock
+    }
+
+    #[test]
+    async fn initialize_account_propagates_concurrent_agent_limit() {
+        let mock = mock_with_concurrent_agent_limit(5);
+        let svc = make_grpc(mock);
+
+        let entry = svc.initialize_account(account_id()).await.unwrap();
+
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 5);
+    }
+
+    #[test]
+    async fn initialize_account_propagates_unlimited_sentinel() {
+        // The DB/registry stores 10^18 as "unlimited". The executor stores it
+        // as-is in AtomicResourceEntry. The semaphore detects it via >= threshold.
+        let mock =
+            mock_with_concurrent_agent_limit(AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS);
+        let svc = make_grpc(mock);
+
+        let entry = svc.initialize_account(account_id()).await.unwrap();
+
+        assert_eq!(
+            entry.max_concurrent_agents_per_executor(),
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS
+        );
+    }
+
+    #[test]
+    async fn update_last_known_limits_refreshes_concurrent_agent_limit() {
+        let mock = mock_with_concurrent_agent_limit(5);
+        let id = account_id();
+
+        // Batch response returns a raised limit of 10.
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 900,
+                max_memory_per_worker: 512,
+                max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: 10,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+
+        let svc = make_grpc(mock);
+        let entry = svc.initialize_account(id).await.unwrap();
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 5);
+
+        entry.borrow_fuel(100); // trigger active batch
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        // After the batch sync the limit should be updated to 10.
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 10);
+    }
+
+    #[test]
+    async fn update_last_known_limits_reflects_lowered_concurrent_agent_limit() {
+        let mock = mock_with_concurrent_agent_limit(10);
+        let id = account_id();
+
+        let mut updated = HashMap::new();
+        updated.insert(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 900,
+                max_memory_per_worker: 512,
+                max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
+                max_concurrent_agents_per_executor: 3,
+            },
+        );
+        mock.set_batch_update_response(AccountResourceLimits(updated));
+
+        let svc = make_grpc(mock);
+        let entry = svc.initialize_account(id).await.unwrap();
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 10);
+
+        entry.borrow_fuel(100);
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        assert_eq!(entry.max_concurrent_agents_per_executor(), 3);
+    }
+
+    #[test]
+    async fn disabled_returns_unlimited_concurrent_agent_sentinel() {
+        // ResourceLimitsDisabled returns the sentinel value (not u64::MAX directly)
+        // matching the convention used throughout the registry service.
+        let svc = ResourceLimitsDisabled;
+        let entry = svc.initialize_account(account_id()).await.unwrap();
+        assert_eq!(
+            entry.max_concurrent_agents_per_executor(),
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS
+        );
     }
 
     // -------------------------------------------------------------------------

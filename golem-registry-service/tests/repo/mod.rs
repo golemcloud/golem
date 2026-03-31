@@ -165,6 +165,7 @@ impl Deps {
                 per_invocation_rpc_call_limit: u64::MAX.into(),
                 monthly_http_call_limit: 5000.into(),
                 monthly_rpc_call_limit: 5000.into(),
+                max_concurrent_agents_per_executor: 1_000_000_000_000_000_000u64.into(),
             })
             .await
             .unwrap();

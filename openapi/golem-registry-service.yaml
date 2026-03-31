@@ -10139,6 +10139,7 @@ components:
       - perInvocationRpcCallLimit
       - monthlyHttpCallLimit
       - monthlyRpcCallLimit
+      - maxConcurrentAgentsPerExecutor
       properties:
         planId:
           type: string
@@ -10188,6 +10189,9 @@ components:
           type: integer
           format: uint64
         monthlyRpcCallLimit:
+          type: integer
+          format: uint64
+        maxConcurrentAgentsPerExecutor:
           type: integer
           format: uint64
     PluginInstallation:

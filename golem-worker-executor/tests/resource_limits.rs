@@ -13,13 +13,17 @@
 // limitations under the License.
 
 use crate::Tracing;
+use axum::Router;
+use axum::routing::get;
+use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
-    start_with_invocation_limits, start_with_table_limit,
+    start_with_concurrent_agent_limit, start_with_invocation_limits, start_with_table_limit,
 };
 use std::collections::HashMap;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -123,6 +127,215 @@ async fn table_exceeding_limit_not_retried(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Concurrent agent limit tests
+// ---------------------------------------------------------------------------
+
+/// When the concurrent agent limit is not yet reached, agents start immediately
+/// without waiting for a permit.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_not_reached_starts_immediately(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_concurrent_agent_limit(deps, &context, 2).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let a1 = agent_id!("Counter", "concurrent-limit-ok-1");
+    executor.start_agent(&component.id, a1.clone()).await?;
+
+    let a2 = agent_id!("Counter", "concurrent-limit-ok-2");
+    executor.start_agent(&component.id, a2.clone()).await?;
+
+    // Both agents should be invocable.
+    executor
+        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
+        .await?;
+
+    Ok(())
+}
+
+/// When the concurrent agent limit is reached and the running agent becomes
+/// idle, starting a new agent automatically evicts the idle one to free a
+/// slot — no manual deletion required.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_idle_agent_is_evicted_to_make_room(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // Limit of 1: only one agent may hold a permit at a time.
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    // Start a1 — takes the only permit.
+    let a1 = agent_id!("Counter", "concurrent-evict-1");
+    let a1_id = executor.start_agent(&component.id, a1.clone()).await?;
+
+    // Invoke a1 so it runs and then returns to Idle.
+    executor
+        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
+        .await?;
+
+    // Wait until a1 is Idle — it can now be evicted.
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // Spawn a2's start in the background. The permit acquisition will detect
+    // a1 is idle and evict it automatically, without any manual intervention.
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let a2 = agent_id!("Counter", "concurrent-evict-2");
+    let a2_clone = a2.clone();
+    tokio::spawn(async move {
+        executor_clone
+            .start_agent(&component_clone.id, a2_clone)
+            .await
+    });
+
+    // a2's invocation will complete once the eviction unblocks it.
+    // No sleep, no manual delete — eviction is the feature under test.
+    executor
+        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
+        .await?;
+
+    Ok(())
+}
+
+/// When the limit is reached with no idle agents, a new agent waits in
+/// WaitingForPermit until the running agent finishes and its permit is returned.
+///
+/// Uses an HTTP-gated server to keep a1 provably Running (not Idle) while a2
+/// is in WaitingForPermit, eliminating any timing dependency on agent
+/// initialization speed.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+
+    // HTTP server that gates its /poll response behind a Notify.
+    // HttpClient2.start_polling polls GET /poll until the body equals "done".
+    // By holding the Notify unreleased we keep a1 in the Running state
+    // for as long as needed, preventing eviction and holding the only permit.
+    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    let gate_clone = gate.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let http_server = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/poll",
+            get(move || {
+                let gate = gate_clone.clone();
+                async move {
+                    gate.notified().await;
+                    "done".to_string()
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let http_component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    // Start a1 using the HttpClient2 agent. Pass the HTTP server port via env.
+    let a1 = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let a1_id = executor
+        .start_agent_with(
+            &http_component.id,
+            a1.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // Enqueue start_polling (fire-and-forget). a1 immediately starts Running,
+    // polling the gated server — it cannot complete or go Idle until we notify.
+    executor
+        .invoke_agent(&http_component, &a1, "start_polling", data_value!("done"))
+        .await?;
+
+    // Confirm a1 is provably Running (holds the only permit, is not evictable).
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let counters_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    // Spawn a2's start in the background. It will block in WaitingForPermit
+    // because a1 is Running (not evictable) and holds the only permit.
+    let executor_clone = executor.clone();
+    let counters_clone = counters_component.clone();
+    let a2 = agent_id!("Counter", "concurrent-wait-http-2");
+    let a2_clone = a2.clone();
+    tokio::spawn(async move {
+        executor_clone
+            .start_agent(&counters_clone.id, a2_clone)
+            .await
+    });
+
+    // Release the gate — a1's poll loop returns "done", its invocation
+    // completes, and its permit is returned to the semaphore via Drop.
+    // This unblocks a2 from WaitingForPermit.
+    gate.notify_waiters();
+
+    // Wait for a1 to become Idle (invocation done, permit released).
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // a2 is now unblocked. invoke_and_await_agent will block until a2 has
+    // acquired its permit and processed the invocation — this is the proof
+    // that the waiting-and-unblocking path works correctly.
+    executor
+        .invoke_and_await_agent(&counters_component, &a2, "increment", data_value!())
+        .await?;
+
+    http_server.abort();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Per-invocation call limit tests
+// ---------------------------------------------------------------------------
+
 /// Sets the per-invocation HTTP call limit to 0 so that any outgoing HTTP
 /// request from the component immediately traps with
 /// `WorkerExceededHttpCallLimit`. The `http_tests` component's `run` function
@@ -137,7 +350,6 @@ async fn http_call_limit_exceeded_traps_invocation(
     _tracing: &Tracing,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use axum::Router;
     use axum::routing::post;
     use tokio::spawn;
     use tracing::Instrument;

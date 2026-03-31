@@ -504,6 +504,12 @@ pub async fn start_customized(
         engine: EngineConfig {
             enable_fs_cache: true,
         },
+        // Use Disabled resource limits so Worker::new() can call
+        // initialize_account without attempting a gRPC connection to a registry
+        // service that does not exist in this test setup. Tests that need custom
+        // resource limits inject their own ResourceLimits implementation via
+        // ProductionContextTestServerBootstrap (which overrides this config).
+        resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
         ..Default::default()
     };
     if let Some(retry) = retry_override {
@@ -862,6 +868,7 @@ impl WorkerCtx for TestWorkerCtx {
             u64::MAX,
             usize::MAX,
             usize::MAX,
+            u64::MAX,
             u64::MAX,
         ));
 
@@ -1652,6 +1659,7 @@ impl ResourceLimits for FixedTableLimitResourceLimits {
             usize::MAX,
             self.max_table_elements,
             u64::MAX,
+            u64::MAX,
         )))
     }
 }
@@ -1783,6 +1791,53 @@ pub async fn start_with_table_limit(
     .await
 }
 
+/// A `ResourceLimits` implementation that provides a fixed per-executor
+/// concurrent agent limit while keeping all other limits unlimited.
+/// Used by concurrent agent limit tests.
+struct FixedConcurrentAgentLimitResourceLimits {
+    max_concurrent_agents_per_executor: u64,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedConcurrentAgentLimitResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            self.max_concurrent_agents_per_executor,
+        )))
+    }
+}
+
+/// Starts a worker executor with a per-executor concurrent agent limit.
+///
+/// All agents running on this executor count against the per-account limit.
+/// When the limit is reached, new agents wait until a running agent stops
+/// or an idle agent is evicted.
+pub async fn start_with_concurrent_agent_limit(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_concurrent_agents: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedConcurrentAgentLimitResourceLimits {
+            max_concurrent_agents_per_executor: max_concurrent_agents,
+        }),
+        "Timeout waiting for concurrent-agent-limit server to start",
+    )
+    .await
+}
+
 /// A `ResourceLimits` implementation that provides a fixed per-worker disk
 /// space limit while keeping fuel, memory, and table elements unlimited.
 /// Used by storage quota tests.
@@ -1804,6 +1859,7 @@ impl ResourceLimits for FixedFilesystemStorageQuotaResourceLimits {
             usize::MAX,
             usize::MAX,
             self.max_disk_space_bytes,
+            u64::MAX,
         )))
     }
 }
@@ -1905,6 +1961,7 @@ impl ResourceLimits for FixedMonthlyCallLimitResourceLimits {
             u64::MAX,
             self.monthly_http_calls,
             self.monthly_rpc_calls,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         )))
     }
 }
