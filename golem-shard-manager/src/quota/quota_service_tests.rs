@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use super::quota_lease::QuotaLease;
+use super::quota_repo::{QuotaLeaseRecord, QuotaRepo, QuotaRepoError, QuotaResourceRecord};
 use super::quota_service::{QuotaError, QuotaService};
 use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
-use crate::model::Pod;
-use crate::shard_manager_config::QuotaServiceConfig;
+use crate::config::QuotaServiceConfig;
 use async_trait::async_trait;
+use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::resource_definition::{
     EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceDefinition,
@@ -25,11 +26,66 @@ use golem_common::model::resource_definition::{
     ResourceRateLimit, TimePeriod,
 };
 use golem_service_base::model::quota_lease::{LeaseEpoch, QuotaAllocation};
+use sqlx::types::Json;
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::test;
 use tokio::sync::RwLock;
+
+struct InMemoryQuotaRepo;
+
+#[async_trait]
+impl QuotaRepo for InMemoryQuotaRepo {
+    async fn save_lease_change(
+        &self,
+        _resource: &QuotaResourceRecord,
+        _previous_resource_revision: i64,
+        _lease: &QuotaLeaseRecord,
+        _expired_pods: &[(Json<IpAddr>, i32)],
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+    async fn save_lease_release(
+        &self,
+        _resource: &QuotaResourceRecord,
+        _previous_resource_revision: i64,
+        _pod_ip: Json<IpAddr>,
+        _pod_port: i32,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+    async fn save_resource(
+        &self,
+        _record: &QuotaResourceRecord,
+        _previous_revision: i64,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+    async fn delete_resource_and_leases(
+        &self,
+        _id: ResourceDefinitionId,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+    async fn get_all_resources(&self) -> Result<Vec<QuotaResourceRecord>, QuotaRepoError> {
+        Ok(Vec::new())
+    }
+    async fn get_all_leases(&self) -> Result<Vec<QuotaLeaseRecord>, QuotaRepoError> {
+        Ok(Vec::new())
+    }
+    async fn delete_leases_for_resource(
+        &self,
+        _id: ResourceDefinitionId,
+    ) -> Result<(), QuotaRepoError> {
+        Ok(())
+    }
+}
+
+fn test_repo() -> Arc<dyn QuotaRepo> {
+    Arc::new(InMemoryQuotaRepo)
+}
 
 fn test_config() -> QuotaServiceConfig {
     QuotaServiceConfig {
@@ -166,11 +222,17 @@ fn env_id() -> EnvironmentId {
 }
 
 fn test_pod() -> Pod {
-    Pod::new("localhost".to_string(), 9000)
+    Pod {
+        ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        port: 9000,
+    }
 }
 
 fn test_pod_2() -> Pod {
-    Pod::new("localhost".to_string(), 9001)
+    Pod {
+        ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        port: 9001,
+    }
 }
 
 #[test]
@@ -180,7 +242,7 @@ async fn acquire_lease_returns_lease_for_existing_resource() {
     let def = make_definition(env, "tokens");
     fetcher.put(def.clone()).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let lease = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
@@ -193,7 +255,7 @@ async fn acquire_lease_returns_lease_for_existing_resource() {
 #[test]
 async fn release_lease_fails_for_unknown_resource() {
     let fetcher = Arc::new(InMemoryFetcher::new());
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let result = svc
         .release_lease(
@@ -213,15 +275,15 @@ async fn acquire_lease_increments_epoch_on_repeated_calls() {
     let def = make_definition(env, "tokens");
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
     let l2 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
 
@@ -236,7 +298,7 @@ async fn acquire_lease_tracks_separate_epochs_per_pod() {
     let def = make_definition(env, "tokens");
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
@@ -260,18 +322,15 @@ async fn renew_lease_succeeds_with_correct_epoch() {
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
 
-    let l2 = svc
-        .renew_lease(id, pod.clone(), l1.epoch(), 0)
-        .await
-        .unwrap();
+    let l2 = svc.renew_lease(id, pod, l1.epoch(), 0).await.unwrap();
 
     assert_eq!(l2.id(), id);
     assert_eq!(l2.epoch(), l1.epoch().next());
@@ -285,25 +344,19 @@ async fn renew_lease_rejects_stale_epoch() {
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
-    let l2 = svc
-        .renew_lease(id, pod.clone(), l1.epoch(), 0)
-        .await
-        .unwrap();
+    let l2 = svc.renew_lease(id, pod, l1.epoch(), 0).await.unwrap();
 
-    let result = svc.renew_lease(id, pod.clone(), l1.epoch(), 0).await;
+    let result = svc.renew_lease(id, pod, l1.epoch(), 0).await;
     assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
 
-    let l3 = svc
-        .renew_lease(id, pod.clone(), l2.epoch(), 0)
-        .await
-        .unwrap();
+    let l3 = svc.renew_lease(id, pod, l2.epoch(), 0).await.unwrap();
     assert_eq!(l3.epoch(), l2.epoch().next());
 }
 
@@ -315,7 +368,7 @@ async fn renew_lease_fails_for_unknown_pod() {
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let _ = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
@@ -330,7 +383,7 @@ async fn renew_lease_fails_for_unknown_pod() {
 #[test]
 async fn acquire_lease_returns_unlimited_for_missing_resource() {
     let fetcher = Arc::new(InMemoryFetcher::new());
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let lease = svc
         .acquire_lease(env_id(), ResourceName("missing".into()), test_pod())
@@ -342,7 +395,7 @@ async fn acquire_lease_returns_unlimited_for_missing_resource() {
 #[test]
 async fn renew_lease_fails_for_unknown_resource() {
     let fetcher = Arc::new(InMemoryFetcher::new());
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let result = svc
         .renew_lease(
@@ -356,22 +409,22 @@ async fn renew_lease_fails_for_unknown_resource() {
 }
 
 #[test]
-async fn renew_lease_fails_for_tombstoned_resource() {
+async fn renew_lease_fails_for_deleted_resource() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
     let def = make_definition(env, "tokens");
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let svc = QuotaService::new(test_config(), fetcher.clone(), test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
 
-    // Tombstone via CDC.
+    // Delete via CDC.
     fetcher.remove(env, "tokens").await;
     svc.on_resource_definition_changed(id).await;
 
@@ -380,14 +433,14 @@ async fn renew_lease_fails_for_tombstoned_resource() {
 }
 
 #[test]
-async fn cdc_tombstones_deleted_resource() {
+async fn cdc_removes_deleted_resource() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
     let def = make_definition(env, "tokens");
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let svc = QuotaService::new(test_config(), fetcher.clone(), test_repo());
     let _ = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
@@ -405,14 +458,14 @@ async fn cdc_tombstones_deleted_resource() {
 }
 
 #[test]
-async fn cdc_for_tombstoned_id_is_noop() {
+async fn cdc_for_deleted_id_is_noop() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
     let def = make_definition(env, "tokens");
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let svc = QuotaService::new(test_config(), fetcher.clone(), test_repo());
     let _ = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
@@ -421,7 +474,7 @@ async fn cdc_for_tombstoned_id_is_noop() {
     fetcher.remove(env, "tokens").await;
     svc.on_resource_definition_changed(id).await;
 
-    // Repeated CDC for same tombstoned id is a no-op.
+    // Repeated CDC for same deleted id is a no-op.
     svc.on_resource_definition_changed(id).await;
 }
 
@@ -433,11 +486,11 @@ async fn release_lease_succeeds_with_correct_epoch() {
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
 
@@ -452,17 +505,15 @@ async fn release_lease_removes_pod_from_leases() {
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
 
-    svc.release_lease(id, pod.clone(), l1.epoch(), 0)
-        .await
-        .unwrap();
+    svc.release_lease(id, pod, l1.epoch(), 0).await.unwrap();
 
     let result = svc.renew_lease(id, pod, l1.epoch(), 0).await;
     assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
@@ -476,19 +527,16 @@ async fn release_lease_rejects_stale_epoch() {
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
-    let l2 = svc
-        .renew_lease(id, pod.clone(), l1.epoch(), 0)
-        .await
-        .unwrap();
+    let l2 = svc.renew_lease(id, pod, l1.epoch(), 0).await.unwrap();
 
-    let result = svc.release_lease(id, pod.clone(), l1.epoch(), 0).await;
+    let result = svc.release_lease(id, pod, l1.epoch(), 0).await;
     assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
 
     svc.release_lease(id, pod, l2.epoch(), 0).await.unwrap();
@@ -502,17 +550,15 @@ async fn release_lease_allows_re_acquire() {
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
 
-    svc.release_lease(id, pod.clone(), l1.epoch(), 0)
-        .await
-        .unwrap();
+    svc.release_lease(id, pod, l1.epoch(), 0).await.unwrap();
 
     let l2 = svc
         .acquire_lease(env, ResourceName("tokens".into()), pod)
@@ -531,7 +577,7 @@ async fn cdc_refreshes_definition_in_live_entry() {
     let v1 = make_definition_with_id(id, env, "tokens", rev0);
     fetcher.put(v1).await;
 
-    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let svc = QuotaService::new(test_config(), fetcher.clone(), test_repo());
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
@@ -561,7 +607,7 @@ async fn cursor_expired_refreshes_live_entries() {
     let v1 = make_definition_with_id(id, env, "tokens", rev0);
     fetcher.put(v1).await;
 
-    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let svc = QuotaService::new(test_config(), fetcher.clone(), test_repo());
     let _ = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
@@ -584,7 +630,7 @@ async fn cursor_expired_refreshes_live_entries() {
 async fn cursor_expired_clears_definition_cache() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
-    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let svc = QuotaService::new(test_config(), fetcher.clone(), test_repo());
 
     // First acquire: resource doesn't exist — gets unlimited.
     let r1 = svc
@@ -615,7 +661,7 @@ async fn cdc_handles_name_replaced_with_new_id() {
     let v1 = make_definition_with_id(id1, env, "tokens", rev0);
     fetcher.put(v1).await;
 
-    let svc = QuotaService::new(test_config(), fetcher.clone());
+    let svc = QuotaService::new(test_config(), fetcher.clone(), test_repo());
     let _ = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
@@ -626,7 +672,7 @@ async fn cdc_handles_name_replaced_with_new_id() {
     let v2 = make_definition_with_id(id2, env, "tokens", rev0);
     fetcher.put(v2).await;
 
-    // CDC for old id: tombstones id1.
+    // CDC for old id: removes id1.
     // In production, the registry_event_subscriber also invalidates the fetcher cache.
     fetcher.invalidate(env, ResourceName("tokens".into())).await;
     svc.on_resource_definition_changed(id1).await;
@@ -648,7 +694,7 @@ async fn single_pod_gets_fair_share_not_full_budget() {
     fetcher.put(def).await;
 
     // min_executors=2, so single pod gets 100/2 = 50.
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
     let lease = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
@@ -665,7 +711,7 @@ async fn two_pods_each_get_fair_share() {
     fetcher.put(def).await;
 
     // min_executors=2.
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
@@ -689,7 +735,7 @@ async fn renew_returns_unused_and_reallocates() {
     let def = make_definition(env, "tokens");
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
@@ -716,7 +762,7 @@ async fn release_returns_unused_to_pool() {
     let id = def.id;
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
@@ -744,7 +790,7 @@ async fn unused_capped_at_allocated() {
     let def = make_definition(env, "tokens");
     fetcher.put(def).await;
 
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
@@ -773,7 +819,7 @@ async fn exhausted_when_no_remaining_budget() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
@@ -817,11 +863,11 @@ async fn concurrency_expired_lease_returns_slots() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("workers".into()), pod.clone())
+        .acquire_lease(env, ResourceName("workers".into()), pod)
         .await
         .unwrap();
     assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 10 });
@@ -848,7 +894,7 @@ async fn concurrency_release_returns_all_slots() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("workers".into()), test_pod())
@@ -880,7 +926,7 @@ async fn capacity_expired_lease_loses_budget() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
@@ -910,7 +956,7 @@ async fn capacity_release_returns_only_reported_unused() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
@@ -961,7 +1007,7 @@ async fn rate_limit_allocates_from_pool() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
 
     // Pool starts at max=100. Single executor gets 100.
     let lease = svc
@@ -979,7 +1025,7 @@ async fn rate_limit_divides_pool_across_executors() {
     fetcher.put(def).await;
 
     // min_executors=2, so single pod gets half the pool (100/2 = 50).
-    let svc = QuotaService::new(test_config(), fetcher);
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
@@ -1006,7 +1052,7 @@ async fn rate_limit_renew_returns_unused_to_pool() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
 
     // Pod 1 acquires — gets full pool (90).
     let l1 = svc
@@ -1046,7 +1092,7 @@ async fn rate_limit_refills_after_full_period() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
@@ -1085,7 +1131,7 @@ async fn rate_limit_no_partial_refill() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
 
     let l1 = svc
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
@@ -1126,18 +1172,15 @@ async fn rate_limit_exhausted_retry_after_uses_config_fallback_not_period() {
         exhausted_retry_after: Duration::from_secs(42),
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
 
-    let l2 = svc
-        .renew_lease(l1.id(), pod.clone(), l1.epoch(), 0)
-        .await
-        .unwrap();
+    let l2 = svc.renew_lease(l1.id(), pod, l1.epoch(), 0).await.unwrap();
     match l2.allocation() {
         QuotaAllocation::Exhausted { retry_after } => {
             assert_eq!(*retry_after, Duration::from_secs(42));
@@ -1157,11 +1200,11 @@ async fn capacity_limit_does_not_refill() {
         min_executors: 1,
         ..test_config()
     };
-    let svc = QuotaService::new(config, fetcher);
+    let svc = QuotaService::new(config, fetcher, test_repo());
     let pod = test_pod();
 
     let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod.clone())
+        .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
     assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
@@ -1169,9 +1212,6 @@ async fn capacity_limit_does_not_refill() {
     // Wait and renew with 0 unused — capacity does not refill.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let l2 = svc
-        .renew_lease(l1.id(), pod.clone(), l1.epoch(), 0)
-        .await
-        .unwrap();
+    let l2 = svc.renew_lease(l1.id(), pod, l1.epoch(), 0).await.unwrap();
     assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
 }
