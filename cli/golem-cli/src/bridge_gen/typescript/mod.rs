@@ -566,7 +566,7 @@ impl TypeScriptBridgeGenerator {
         ));
         let mut get = writer.begin_static_async_method("get");
         self.write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
-        get.result(&format!("Promise<{class_name}>"));
+        get.result(class_name);
 
         get.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut get, &self.agent_type.constructor.input_schema)?;
@@ -591,7 +591,7 @@ impl TypeScriptBridgeGenerator {
         let mut get_phantom = writer.begin_static_async_method("getPhantom");
         get_phantom.param("phantomId", "base.PhantomId");
         self.write_parameter_list(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
-        get_phantom.result(&format!("Promise<{class_name}>"));
+        get_phantom.result(class_name);
 
         get_phantom.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
@@ -614,7 +614,7 @@ impl TypeScriptBridgeGenerator {
         ));
         let mut new_phantom = writer.begin_static_async_method("newPhantom");
         self.write_parameter_list(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
-        new_phantom.result(&format!("Promise<{class_name}>"));
+        new_phantom.result(class_name);
 
         new_phantom.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
@@ -664,7 +664,7 @@ impl TypeScriptBridgeGenerator {
         let mut method = writer.begin_static_async_method("getWithConfig");
         self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
         self.write_config_parameter_list(&mut method, local_configs)?;
-        method.result(&format!("Promise<{class_name}>"));
+        method.result(class_name);
 
         method.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
@@ -692,7 +692,7 @@ impl TypeScriptBridgeGenerator {
         method.param("phantomId", "base.PhantomId");
         self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
         self.write_config_parameter_list(&mut method, local_configs)?;
-        method.result(&format!("Promise<{class_name}>"));
+        method.result(class_name);
 
         method.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
@@ -718,7 +718,7 @@ impl TypeScriptBridgeGenerator {
         let mut method = writer.begin_static_async_method("newPhantomWithConfig");
         self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
         self.write_config_parameter_list(&mut method, local_configs)?;
-        method.result(&format!("Promise<{class_name}>"));
+        method.result(class_name);
 
         method.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
