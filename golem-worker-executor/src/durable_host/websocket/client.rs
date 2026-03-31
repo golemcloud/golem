@@ -20,15 +20,15 @@ use crate::workerctx::WorkerCtx;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use golem_common::model::oplog::host_functions;
+use golem_common::model::oplog::payload::types::{
+    SerializableWebsocketCloseInfo, SerializableWebsocketError, SerializableWebsocketMessage,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestWebsocketClose, HostRequestWebsocketConnect,
     HostRequestWebsocketReceive, HostRequestWebsocketReceiveWithTimeout, HostRequestWebsocketSend,
     HostResponseWebsocketCloseResponse, HostResponseWebsocketConnectResponse,
     HostResponseWebsocketReceiveResponse, HostResponseWebsocketReceiveWithTimeoutResponse,
     HostResponseWebsocketSendResponse,
-};
-use golem_common::model::oplog::payload::types::{
-    SerializableWebsocketCloseInfo, SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -39,7 +39,7 @@ use wasmtime_wasi::IoView;
 
 type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
-pub(crate) struct ReaderState {
+struct ReaderState {
     stream: SplitStream<WsStream>,
     /// Populated by `Pollable::ready()` as a read-ahead buffer so that
     /// after the guest observes readiness, `receive()`/`receive_with_timeout()`
@@ -47,14 +47,19 @@ pub(crate) struct ReaderState {
     pending: Option<Result<Message, Error>>,
 }
 
+/// Live TCP/WebSocket state for a guest connection handle (`WebSocketConnectionEntry::Live`).
+/// Fields are private to this module; the type is `pub` only so the resource entry enum remains public.
+pub struct LiveWebSocketConnection {
+    writer: Mutex<SplitSink<WsStream, tungstenite::Message>>,
+    reader: Mutex<ReaderState>,
+    /// Held for the lifetime of the connection to limit concurrent WebSocket
+    /// connections per executor. Released when the connection is dropped.
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
 pub enum WebSocketConnectionEntry {
-    Live {
-        writer: Mutex<SplitSink<WsStream, tungstenite::Message>>,
-        reader: Mutex<ReaderState>,
-        /// Held for the lifetime of the connection to limit concurrent WebSocket
-        /// connections per executor. Released when the connection is dropped.
-        _permit: tokio::sync::OwnedSemaphorePermit,
-    },
+    /// Boxed so `Replay` stays small (`clippy::large_enum_variant`).
+    Live(Box<LiveWebSocketConnection>),
     Replay,
 }
 
@@ -62,8 +67,8 @@ pub enum WebSocketConnectionEntry {
 impl wasmtime_wasi::p2::Pollable for WebSocketConnectionEntry {
     async fn ready(&mut self) {
         match self {
-            WebSocketConnectionEntry::Live { reader, .. } => {
-                let mut reader = reader.lock().await;
+            WebSocketConnectionEntry::Live(live) => {
+                let mut reader = live.reader.lock().await;
                 if reader.pending.is_some() {
                     return;
                 }
@@ -115,27 +120,29 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             match connect_async(request).await {
                 Ok((ws_stream, _response)) => {
                     let (writer, reader) = ws_stream.split();
-                    let entry = WebSocketConnectionEntry::Live {
+                    let entry = WebSocketConnectionEntry::Live(Box::new(LiveWebSocketConnection {
                         writer: Mutex::new(writer),
                         reader: Mutex::new(ReaderState {
                             stream: reader,
                             pending: None,
                         }),
                         _permit: permit,
-                    };
+                    }));
                     let resource = self.as_wasi_view().table().push(entry)?;
                     self.register_open_websocket(resource.rep());
-                    let resp = HostResponseWebsocketConnectResponse {
-                        result: Ok(()),
-                    };
-                    durability.persist_raw(self, req.into(), resp.into()).await?;
+                    let resp = HostResponseWebsocketConnectResponse { result: Ok(()) };
+                    durability
+                        .persist_raw(self, req.into(), resp.into())
+                        .await?;
                     Ok(Ok(resource))
                 }
                 Err(e) => {
                     let resp = HostResponseWebsocketConnectResponse {
                         result: Err(SerializableWebsocketError::ConnectionFailure(e.to_string())),
                     };
-                    durability.persist_raw(self, req.into(), resp.into()).await?;
+                    durability
+                        .persist_raw(self, req.into(), resp.into())
+                        .await?;
                     Ok(Err(Error::ConnectionFailure(e.to_string())))
                 }
             }
@@ -162,9 +169,11 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), Error>> {
         self.observe_function_call("golem:websocket/client", "send");
 
-        let durability =
-            Durability::<host_functions::WebsocketClientSend>::new(self, DurableFunctionType::WriteRemote)
-                .await?;
+        let durability = Durability::<host_functions::WebsocketClientSend>::new(
+            self,
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
 
         let req = HostRequestWebsocketSend {
             message: message_to_serializable(&message),
@@ -175,8 +184,8 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             let entry = view.table().get(&self_)?;
             let tungstenite_msg = to_tungstenite_message(message);
             let live_result = match entry {
-                WebSocketConnectionEntry::Live { writer, .. } => {
-                    let mut writer = writer.lock().await;
+                WebSocketConnectionEntry::Live(live) => {
+                    let mut writer = live.writer.lock().await;
                     match writer.send(tungstenite_msg).await {
                         Ok(()) => Ok(()),
                         Err(e) => Err(Error::SendFailure(e.to_string())),
@@ -191,7 +200,9 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 Err(e) => Err(error_to_serializable(e)),
             };
             let resp = HostResponseWebsocketSendResponse { result: ser_result };
-            durability.persist_raw(self, req.into(), resp.into()).await?;
+            durability
+                .persist_raw(self, req.into(), resp.into())
+                .await?;
             Ok(live_result)
         } else {
             let _ = self.as_wasi_view().table().get(&self_)?;
@@ -221,8 +232,8 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let live_result = match entry {
-                WebSocketConnectionEntry::Live { reader, .. } => {
-                    let mut reader = reader.lock().await;
+                WebSocketConnectionEntry::Live(live) => {
+                    let mut reader = live.reader.lock().await;
                     if let Some(pending) = reader.pending.take() {
                         pending
                     } else {
@@ -241,7 +252,9 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 Err(e) => Err(error_to_serializable(e)),
             };
             let resp = HostResponseWebsocketReceiveResponse { result: ser_result };
-            durability.persist_raw(self, req.into(), resp.into()).await?;
+            durability
+                .persist_raw(self, req.into(), resp.into())
+                .await?;
             Ok(live_result)
         } else {
             let _ = self.as_wasi_view().table().get(&self_)?;
@@ -272,8 +285,8 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let live_result: Result<Option<Message>, Error> = match entry {
-                WebSocketConnectionEntry::Live { reader, .. } => {
-                    let mut reader = reader.lock().await;
+                WebSocketConnectionEntry::Live(live) => {
+                    let mut reader = live.reader.lock().await;
                     if let Some(pending) = reader.pending.take() {
                         match pending {
                             Ok(message) => Ok(Some(message)),
@@ -305,7 +318,9 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     }
                 }
                 WebSocketConnectionEntry::Replay => {
-                    unreachable!("live receive_with_timeout path must not use Replay connection entry")
+                    unreachable!(
+                        "live receive_with_timeout path must not use Replay connection entry"
+                    )
                 }
             };
             let ser_result = match &live_result {
@@ -314,7 +329,9 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 Err(e) => Err(error_to_serializable(e)),
             };
             let resp = HostResponseWebsocketReceiveWithTimeoutResponse { result: ser_result };
-            durability.persist_raw(self, req.into(), resp.into()).await?;
+            durability
+                .persist_raw(self, req.into(), resp.into())
+                .await?;
             Ok(live_result)
         } else {
             let _ = self.as_wasi_view().table().get(&self_)?;
@@ -353,14 +370,14 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let live_result = match entry {
-                WebSocketConnectionEntry::Live { writer, .. } => {
+                WebSocketConnectionEntry::Live(live) => {
                     let close_frame = tungstenite::protocol::CloseFrame {
                         code: tungstenite::protocol::frame::coding::CloseCode::from(
                             code.unwrap_or(1000),
                         ),
                         reason: reason.unwrap_or_default().into(),
                     };
-                    let mut writer = writer.lock().await;
+                    let mut writer = live.writer.lock().await;
                     match writer
                         .send(tungstenite::Message::Close(Some(close_frame)))
                         .await
@@ -378,7 +395,9 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 Err(e) => Err(error_to_serializable(e)),
             };
             let resp = HostResponseWebsocketCloseResponse { result: ser_result };
-            durability.persist_raw(self, req.into(), resp.into()).await?;
+            durability
+                .persist_raw(self, req.into(), resp.into())
+                .await?;
             if live_result.is_ok() {
                 self.unregister_open_websocket(rep_id);
             }
@@ -528,12 +547,10 @@ fn serializable_error_to_error(e: SerializableWebsocketError) -> Error {
         SerializableWebsocketError::SendFailure(s) => Error::SendFailure(s),
         SerializableWebsocketError::ReceiveFailure(s) => Error::ReceiveFailure(s),
         SerializableWebsocketError::ProtocolError(s) => Error::ProtocolError(s),
-        SerializableWebsocketError::Closed(c) => {
-            Error::Closed(c.map(|ci| CloseInfo {
-                code: ci.code,
-                reason: ci.reason,
-            }))
-        }
+        SerializableWebsocketError::Closed(c) => Error::Closed(c.map(|ci| CloseInfo {
+            code: ci.code,
+            reason: ci.reason,
+        })),
         SerializableWebsocketError::Other(s) => Error::Other(s),
     }
 }

@@ -1471,7 +1471,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.open_websocket_connections.remove(&rep);
     }
 
-    pub(crate) fn validate_no_open_websocket_after_replay(&self) -> Result<(), WorkerExecutorError> {
+    pub(crate) fn validate_no_open_websocket_after_replay(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
         if !self.state.open_websocket_connections.is_empty() {
             Err(WorkerExecutorError::runtime(
                 "WebSocket connection was still open when replay ended; close or drop the connection before the replay boundary.",
