@@ -412,7 +412,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                 "(method) CounterAgent.get(name: string): Promise<CounterAgent>",
             )?;
             repl.send_line_and_expect_str("CounterAgent.get(", "\"?\"")?;
-            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\")", "awaiting CounterAgent")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\")", "awaiting Promise<CounterAgent>")?;
             repl.send_line_and_expect_str("(await CounterAgent.get(\"xyz\")).", "increment")?;
         }
 
@@ -436,11 +436,23 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
             repl.send_tab_list_expect_regex("(await CounterAgent.get(\"xyz\")).", "increment")?;
             repl.send_line("")?;
 
+            repl.send_tab_list_expect_regex(
+                "CounterAgent.get(\"xyz\").then(x => x.",
+                "increment",
+            )?;
+            repl.send_line("")?;
+
             repl.send_tab_complete_expect_str("Sample", "Agent")?;
             repl.send_line("")?;
 
             repl.send_tab_list_expect_regex(
                 "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
+                "sampleMethod",
+            )?;
+            repl.send_line("")?;
+
+            repl.send_tab_list_expect_regex(
+                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(x => x.",
                 "sampleMethod",
             )?;
             repl.send_line("")?;
