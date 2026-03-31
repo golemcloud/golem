@@ -270,7 +270,7 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
         .await?;
 
     // Start a1 using the HttpClient2 agent. Pass the HTTP server port via env.
-    let a1 = agent_id!("HttpClient2", "concurrent-wait-http-1");
+    let a1 = agent_id!("HttpClient2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let a1_id = executor
