@@ -12,7 +12,7 @@ build = "build.rs"
 
 [features]
 default = []
-server-commands = ["rmcp"]
+server-commands = ["rmcp", "poem", "dashmap", "tower"]
 
 [lib]
 harness = false
@@ -35,6 +35,9 @@ golem-wasm = { workspace = true, default-features = true }
 
 # MCP server support (behind server-commands feature)
 rmcp = { workspace = true, optional = true }
+poem = { workspace = true, features = ["prometheus", "opentelemetry", "tower-compat"], optional = true }
+tower = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
 
 # External deps
 anyhow = { workspace = true }
