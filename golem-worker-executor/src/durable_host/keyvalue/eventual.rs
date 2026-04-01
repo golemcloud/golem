@@ -24,7 +24,7 @@ use wasmtime_wasi::IoView;
 
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx, HostFailureKind};
 use crate::preview2::wasi::keyvalue::eventual::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
@@ -54,7 +54,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .get(environment_id, bucket.clone(), key.clone())
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(
                     self,
@@ -119,7 +121,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .set(environment_id, bucket, key, outgoing_value)
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(self, input, HostResponseKVUnit { result })
                 .await
@@ -164,7 +168,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .delete(environment_id, bucket, key)
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(self, input, HostResponseKVUnit { result })
                 .await
@@ -209,7 +215,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .exists(environment_id, bucket, key)
                 .await
                 .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            durability
+                .try_trigger_retry(self, &result, |_| HostFailureKind::Transient)
+                .await?;
             durability
                 .persist(self, input, HostResponseKVDelete { result })
                 .await

@@ -831,7 +831,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .on_invocation_failure(
                         &full_function_name,
                         &TrapType::Error {
-                            error: AgentError::Unknown(error.to_string()),
+                            error: AgentError::InternalError(error.to_string()),
                             retry_from: OplogIndex::INITIAL,
                         },
                     )

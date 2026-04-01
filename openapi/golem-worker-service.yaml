@@ -5133,6 +5133,7 @@ components:
       - timestamp
       - error
       - retryFrom
+      - insideAtomicRegion
       properties:
         timestamp:
           type: string
@@ -5142,6 +5143,8 @@ components:
         retryFrom:
           type: integer
           format: uint64
+        insideAtomicRegion:
+          type: boolean
     r#ExitedParams:
       type: object
       title: r#ExitedParams
