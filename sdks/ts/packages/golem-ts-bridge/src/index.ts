@@ -142,11 +142,26 @@ export interface AgentInvocationResult {
   result?: DataValue;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+
+  if (signal.reason !== undefined) {
+    throw signal.reason;
+  }
+
+  const err = new Error('The operation was aborted.');
+  err.name = 'AbortError';
+  throw err;
+}
+
 export async function invokeAgent(
   server: GolemServer,
   request: AgentInvocationRequest,
   aroundInvokeHook: AroundInvokeHook | undefined = undefined,
+  signal?: AbortSignal,
 ): Promise<AgentInvocationResult> {
+  throwIfAborted(signal);
+
   let baseUrl: string;
   let token: string;
 
@@ -181,11 +196,14 @@ export async function invokeAgent(
     await aroundInvokeHook.beforeInvoke(request);
   }
 
+  throwIfAborted(signal);
+
   try {
     const rawResponse = await fetch(`${baseUrl}/v1/agents/invoke-agent`, {
       method: 'POST',
       headers,
       body: JSON.stringify(request),
+      signal,
     });
 
     if (!rawResponse.ok) {
@@ -215,6 +233,14 @@ export type JsonResult<Ok, Err> = { ok: Ok; err?: undefined } | { ok?: undefined
 
 export type RemoteMethod<Args extends any[], R> = {
   (...args: Args): Promise<R>;
+  /**
+   * Invoke the remote method with abort support. When the signal is aborted,
+   * the HTTP request is cancelled and the promise rejects.
+   *
+   * **Important:** Aborting cancels the HTTP request but the remote agent
+   * may still execute the invoked method if the request was already dispatched.
+   */
+  abortable: (signal: AbortSignal, ...args: Args) => Promise<R>;
   trigger: (...args: Args) => void;
   schedule: (scheduleAt: string, ...args: Args) => void;
 };
@@ -254,6 +280,22 @@ export function createRemoteMethod<Args extends any[], R>(
       mode: 'schedule',
       scheduleAt,
     });
+  };
+  result.abortable = async function (signal: AbortSignal, ...args: Args): Promise<R> {
+    throwIfAborted(signal);
+
+    const invokeResult = await invokeAgent(
+      getServer(),
+      {
+        ...getRequest(),
+        methodParameters: encode(args),
+        mode: 'await',
+        scheduleAt: undefined,
+      },
+      aroundInvokeHook(),
+      signal,
+    );
+    return decode(invokeResult);
   };
   return result;
 }

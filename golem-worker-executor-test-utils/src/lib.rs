@@ -1130,6 +1130,10 @@ impl HostFutureInvokeResult for TestWorkerCtx {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
 
+    async fn cancel(&mut self, self_: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        HostFutureInvokeResult::cancel(&mut self.durable_ctx, self_).await
+    }
+
     async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
     }

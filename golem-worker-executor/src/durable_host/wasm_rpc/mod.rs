@@ -30,8 +30,9 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
-    GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke,
-    GolemRpcWasmRpcInvokeAndAwaitResult, GolemRpcWasmRpcScheduleInvocation,
+    GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultCancel,
+    GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
+    GolemRpcWasmRpcScheduleInvocation,
 };
 use golem_common::model::oplog::types::{
     SerializableInvokeResult, SerializableScheduledInvocation,
@@ -447,6 +448,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     span_id: span.span_id().clone(),
                     begin_index,
                 }),
+                child_pollables: Vec::new(),
             })?;
             Ok(fut)
         } else {
@@ -463,6 +465,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     span_id: span.span_id().clone(),
                     begin_index,
                 }),
+                child_pollables: Vec::new(),
             })?;
             Ok(fut)
         };
@@ -598,7 +601,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
         self.observe_function_call("golem::rpc::future-invoke-result", "subscribe");
-        Ok(wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?)
+        let parent_rep = this.rep();
+        let pollable = wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?;
+        let child_rep = pollable.rep();
+        let parent: Resource<FutureInvokeResult> = Resource::new_borrow(parent_rep);
+        let entry = self.table().get_mut(&parent)?;
+        entry.child_pollables.push(child_rep);
+        Ok(pollable)
     }
 
     async fn get(
@@ -716,6 +725,31 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     } else {
                         panic!("unexpected state: not FutureInvokeResultState::Completed")
                     }
+                }
+                FutureInvokeResultState::Cancelled {
+                    request,
+                    span_id,
+                    begin_index,
+                } => {
+                    let begin_index = *begin_index;
+                    let request = request.clone();
+                    let rpc_error = InternalRpcError::ProtocolError {
+                        details: "Invocation cancelled".to_string(),
+                    };
+                    let serializable_result = SerializableInvokeResult::Completed(Err(
+                        rpc_error.clone().into(),
+                    ));
+                    *entry = FutureInvokeResultState::Consumed {
+                        request: request.clone(),
+                        span_id: span_id.clone(),
+                        begin_index,
+                    };
+                    (
+                        Ok(Some(Err(rpc_error.into()))),
+                        request,
+                        serializable_result,
+                        begin_index,
+                    )
                 }
                 FutureInvokeResultState::Deferred { begin_index, .. } => {
                     let begin_index = *begin_index;
@@ -914,8 +948,143 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         }
     }
 
+    async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        self.observe_function_call("golem::rpc::future-invoke-result", "cancel");
+
+        let (should_attempt_remote_cancel, remote_agent_id, idempotency_key, request) = {
+            let entry = self.table().get(&this)?;
+            let state = entry
+                .payload
+                .as_any()
+                .downcast_ref::<FutureInvokeResultState>()
+                .unwrap();
+            match state {
+                FutureInvokeResultState::Pending { request, .. } => (
+                    true,
+                    request.remote_agent_id.clone(),
+                    request.idempotency_key.clone(),
+                    request.clone(),
+                ),
+                FutureInvokeResultState::Deferred {
+                    remote_agent_id,
+                    idempotency_key,
+                    method_name,
+                    method_parameters,
+                    ..
+                } => (
+                    true,
+                    remote_agent_id.agent_id(),
+                    idempotency_key.clone(),
+                    HostRequestGolemRpcInvoke {
+                        remote_agent_id: remote_agent_id.agent_id(),
+                        idempotency_key: idempotency_key.clone(),
+                        method_name: method_name.clone(),
+                        input: method_parameters.clone(),
+                        remote_agent_type: None,
+                        remote_agent_parameters: None,
+                    },
+                ),
+                FutureInvokeResultState::Completed { request, .. }
+                | FutureInvokeResultState::Cancelled { request, .. }
+                | FutureInvokeResultState::Consumed { request, .. } => (
+                    false,
+                    request.remote_agent_id.clone(),
+                    request.idempotency_key.clone(),
+                    request.clone(),
+                ),
+            }
+        };
+
+        let durability = Durability::<GolemRpcFutureInvokeResultCancel>::new(
+            self,
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        if durability.is_live() {
+            if should_attempt_remote_cancel {
+                let caller_account_id = self.created_by();
+                if let Err(err) = self
+                    .worker_proxy()
+                    .cancel_invocation(&remote_agent_id, idempotency_key, caller_account_id)
+                    .await
+                {
+                    tracing::info!(err=%err, "Best-effort cancel_invocation failed");
+                }
+            }
+
+            durability
+                .persist(self, request, HostResponseGolemRpcUnit {})
+                .await
+        } else {
+            durability.replay(self).await
+        }?;
+
+        // Transition deferred/pending futures to Cancelled so they won't be initiated on recovery
+        {
+            let entry = self.table().get_mut(&this)?;
+            let state = entry
+                .payload
+                .as_any_mut()
+                .downcast_mut::<FutureInvokeResultState>()
+                .unwrap();
+            match state {
+                FutureInvokeResultState::Deferred {
+                    remote_agent_id,
+                    method_name,
+                    method_parameters,
+                    idempotency_key,
+                    span_id,
+                    begin_index,
+                    ..
+                } => {
+                    *state = FutureInvokeResultState::Cancelled {
+                        request: HostRequestGolemRpcInvoke {
+                            remote_agent_id: remote_agent_id.agent_id(),
+                            idempotency_key: idempotency_key.clone(),
+                            method_name: method_name.clone(),
+                            input: method_parameters.clone(),
+                            remote_agent_type: None,
+                            remote_agent_parameters: None,
+                        },
+                        span_id: span_id.clone(),
+                        begin_index: *begin_index,
+                    };
+                }
+                FutureInvokeResultState::Pending {
+                    request,
+                    span_id,
+                    begin_index,
+                    ..
+                } => {
+                    *state = FutureInvokeResultState::Cancelled {
+                        request: request.clone(),
+                        span_id: span_id.clone(),
+                        begin_index: *begin_index,
+                    };
+                }
+                _ => {} // Completed/Consumed/already Cancelled - no-op
+            }
+        }
+
+        Ok(())
+    }
+
     async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "drop");
+
+        let child_reps = {
+            let entry = self.table().get_mut(&this)?;
+            std::mem::take(&mut entry.child_pollables)
+        };
+
+        for rep in child_reps {
+            let child: Resource<golem_wasm::DynPollable> = Resource::new_own(rep);
+            if let Err(err) = self.table().delete(child) {
+                tracing::debug!(rep, err=%err, "Child pollable already dropped by guest");
+            }
+        }
+
         let _ = self.table().delete(this)?;
         Ok(())
     }
@@ -1103,6 +1272,11 @@ enum FutureInvokeResultState {
         span_id: SpanId,
         begin_index: OplogIndex,
     },
+    Cancelled {
+        request: HostRequestGolemRpcInvoke,
+        span_id: SpanId,
+        begin_index: OplogIndex,
+    },
     Consumed {
         request: HostRequestGolemRpcInvoke,
         span_id: SpanId,
@@ -1116,6 +1290,7 @@ impl Debug for FutureInvokeResultState {
             Self::Pending { .. } => write!(f, "Pending"),
             Self::Completed { .. } => write!(f, "Completed"),
             Self::Deferred { .. } => write!(f, "Deferred"),
+            Self::Cancelled { .. } => write!(f, "Cancelled"),
             Self::Consumed { .. } => write!(f, "Consumed"),
         }
     }
@@ -1127,6 +1302,7 @@ impl FutureInvokeResultState {
             Self::Pending { span_id, .. }
             | Self::Completed { span_id, .. }
             | Self::Deferred { span_id, .. }
+            | Self::Cancelled { span_id, .. }
             | Self::Consumed { span_id, .. } => span_id,
         }
     }
@@ -1136,6 +1312,7 @@ impl FutureInvokeResultState {
             Self::Pending { begin_index, .. } => *begin_index,
             Self::Completed { begin_index, .. } => *begin_index,
             Self::Deferred { begin_index, .. } => *begin_index,
+            Self::Cancelled { begin_index, .. } => *begin_index,
             Self::Consumed { begin_index, .. } => *begin_index,
         }
     }

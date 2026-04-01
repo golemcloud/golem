@@ -400,6 +400,7 @@ pub mod host_functions {
         (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure),
         (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocation),
         (GolemRpcCancellationTokenCancel => "golem::rpc::cancellation-token", "cancel", GolemRpcScheduledInvocationCancellation, GolemRpcUnit),
+        (GolemRpcFutureInvokeResultCancel => "golem::rpc::future-invoke-result", "cancel", GolemRpcInvoke, GolemRpcUnit),
         (IoPollReady => "io::poll::pollable", "ready", NoInput, PollReady),
         (IoPollPoll => "io::poll", "poll", PollCount, PollResult),
         (HttpTypesFutureTrailersGet => "http::types::future_trailers", "get", HttpRequest, HttpFutureTrailersGet),

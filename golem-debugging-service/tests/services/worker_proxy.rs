@@ -106,6 +106,19 @@ impl WorkerProxy for TestWorkerProxy {
         ))
     }
 
+    async fn cancel_invocation(
+        &self,
+        _agent_id: &AgentId,
+        _idempotency_key: IdempotencyKey,
+        _caller_account_id: AccountId,
+    ) -> Result<bool, WorkerProxyError> {
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::unknown(
+                "Not implemented in tests as debug service is not expected to call cancel_invocation through proxy",
+            ),
+        ))
+    }
+
     async fn update(
         &self,
         _owned_agent_id: &OwnedAgentId,

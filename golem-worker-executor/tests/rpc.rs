@@ -15,6 +15,8 @@
 use crate::Tracing;
 use golem_common::base_model::agent::{ComponentModelElementValue, ElementValue};
 use golem_common::model::agent::{DataValue, ElementValues};
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::{AgentStatus, PromiseId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
@@ -23,12 +25,18 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test};
+use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(
     #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -674,6 +682,420 @@ async fn ephemeral_worker_invocation_via_rpc2(
         .into_return_value()
         .expect("Expected a single return value");
     assert_eq!(value, Value::U32(1));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn cancel_pending_async_rpc_returns_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("CancelTester", "cancel_pending_test");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Call test_cancel_before_await - initiates async RPC to inc_by, then cancels
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "test_cancel_before_await",
+            data_value!("cancel_pending_counter"),
+        )
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // The test verifies that cancel() doesn't panic/trap and completes successfully.
+    // Cancel is "best-effort" — the remote invocation may or may not have already
+    // executed by the time cancel is processed.
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn cancel_completed_async_rpc_is_noop(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("CancelTester", "cancel_completed_test");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "test_cancel_completed",
+            data_value!("cancel_completed_counter"),
+        )
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    // The counter was incremented by 5, so get_value should return 5
+    assert_eq!(result_value, Value::U64(5));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ts_abort_before_await_returns_aborted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("TsCancelTester", "ts_abort_test1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "testAbortBeforeAwait",
+            data_value!("ts_abort_counter1"),
+        )
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    assert_eq!(result_value, Value::String("aborted".to_string()));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ts_abort_after_complete_is_noop(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("TsCancelTester", "ts_abort_test2");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "testAbortAfterComplete",
+            data_value!("ts_abort_counter2"),
+        )
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let result_value = result
+        .into_return_value()
+        .expect("Expected a single return value");
+
+    // The counter was incremented by 5, so getValue should return 5.0
+    assert_eq!(result_value, Value::F64(5.0));
+
+    Ok(())
+}
+
+fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {
+    let Value::Record(fields) = promise_id_value else {
+        panic!("Expected a record for PromiseId");
+    };
+    let Value::U64(oplog_idx) = fields[1] else {
+        panic!("Expected u64 oplog-idx field");
+    };
+    OplogIndex::from_u64(oplog_idx)
+}
+
+#[test]
+#[tracing::instrument]
+async fn ts_cancel_unblocks_caller_while_callee_blocked(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+
+    // Start agent B (TsBlockingAgent) and prepare a promise
+    let b_name = "cancel_unblocks_b";
+    let b_agent_id = agent_id!("TsBlockingAgent", b_name);
+    let b_worker_id = executor
+        .start_agent(&component.id, b_agent_id.clone())
+        .await?;
+
+    let prepare_result = executor
+        .invoke_and_await_agent(&component, &b_agent_id, "prepareBlock", data_value!())
+        .await?;
+
+    let promise_id_value = prepare_result
+        .into_return_value()
+        .expect("Expected a single return value from prepareBlock");
+
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+
+    // Start agent A (TsCancelCallerAgent)
+    let a_name = "cancel_unblocks_a";
+    let a_agent_id = agent_id!("TsCancelCallerAgent", a_name);
+    let _a_worker_id = executor
+        .start_agent(&component.id, a_agent_id.clone())
+        .await?;
+
+    // Spawn fiber: A.callAndAbort(bName, 3000ms delay before abort)
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let a_agent_id_clone = a_agent_id.clone();
+
+    let mut fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &a_agent_id_clone,
+                    "callAndAbort",
+                    data_value!(b_name, 3000.0),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait for B to suspend on the promise
+    tokio::select! {
+        result = &mut fiber => {
+            let invoke_result = result??;
+            return Err(anyhow::anyhow!("callAndAbort returned before B suspended: {:?}", invoke_result));
+        }
+        status = executor.wait_for_status(&b_worker_id, AgentStatus::Suspended, Duration::from_secs(30)) => {
+            status?;
+        }
+    }
+
+    // Now wait for A's result (abort fires at 3s, so A should complete relatively soon)
+    let a_result = fiber.await??;
+    let a_value = a_result
+        .into_return_value()
+        .expect("Expected a single return value from callAndAbort");
+    assert_eq!(a_value, Value::String("aborted".to_string()));
+
+    // B should still be suspended (cancel unblocked caller but NOT callee)
+    let b_status = executor.get_worker_metadata(&b_worker_id).await?.status;
+    assert_eq!(b_status, AgentStatus::Suspended);
+
+    // Complete the promise to unblock B
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: b_worker_id.clone(),
+                oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+
+    // Wait for B to return to Idle
+    executor
+        .wait_for_status(&b_worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // Verify B processed the call
+    let count_result = executor
+        .invoke_and_await_agent(&component, &b_agent_id, "getCompletedCount", data_value!())
+        .await?;
+
+    let count_value = count_result
+        .into_return_value()
+        .expect("Expected a single return value from getCompletedCount");
+    assert_eq!(count_value, Value::F64(1.0));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ts_cancel_survives_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+
+    // Start agent B (TsBlockingAgent) and prepare a promise
+    let b_name = "cancel_restart_b";
+    let b_agent_id = agent_id!("TsBlockingAgent", b_name);
+    let b_worker_id = executor
+        .start_agent(&component.id, b_agent_id.clone())
+        .await?;
+
+    let prepare_result = executor
+        .invoke_and_await_agent(&component, &b_agent_id, "prepareBlock", data_value!())
+        .await?;
+
+    let promise_id_value = prepare_result
+        .into_return_value()
+        .expect("Expected a single return value from prepareBlock");
+
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+
+    // Start agent A (TsCancelCallerAgent)
+    let a_name = "cancel_restart_a";
+    let a_agent_id = agent_id!("TsCancelCallerAgent", a_name);
+    let _a_worker_id = executor
+        .start_agent(&component.id, a_agent_id.clone())
+        .await?;
+
+    // Spawn fiber: A.callAndAbort(bName, 3000ms)
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let a_agent_id_clone = a_agent_id.clone();
+
+    let mut fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &a_agent_id_clone,
+                    "callAndAbort",
+                    data_value!(b_name, 3000.0),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait for B to suspend on the promise
+    tokio::select! {
+        result = &mut fiber => {
+            let invoke_result = result??;
+            return Err(anyhow::anyhow!("callAndAbort returned before B suspended: {:?}", invoke_result));
+        }
+        status = executor.wait_for_status(&b_worker_id, AgentStatus::Suspended, Duration::from_secs(30)) => {
+            status?;
+        }
+    }
+
+    // Wait for A's result
+    let a_result = fiber.await??;
+    let a_value = a_result
+        .into_return_value()
+        .expect("Expected a single return value from callAndAbort");
+    assert_eq!(a_value, Value::String("aborted".to_string()));
+
+    // Restart executor
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    // After restart, B should still be suspended (replayed from oplog)
+    executor
+        .wait_for_status(
+            &b_worker_id,
+            AgentStatus::Suspended,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    // Verify A's state survived restart
+    let outcome_result = executor
+        .invoke_and_await_agent(&component, &a_agent_id, "getLastOutcome", data_value!())
+        .await?;
+
+    let outcome_value = outcome_result
+        .into_return_value()
+        .expect("Expected a single return value from getLastOutcome");
+    assert_eq!(outcome_value, Value::String("aborted".to_string()));
+
+    // Complete the promise to unblock B
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: b_worker_id.clone(),
+                oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+
+    // Wait for B to return to Idle
+    executor
+        .wait_for_status(&b_worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // Verify B processed the call
+    let count_result = executor
+        .invoke_and_await_agent(&component, &b_agent_id, "getCompletedCount", data_value!())
+        .await?;
+
+    let count_value = count_result
+        .into_return_value()
+        .expect("Expected a single return value from getCompletedCount");
+    assert_eq!(count_value, Value::F64(1.0));
 
     Ok(())
 }
