@@ -298,7 +298,7 @@ struct TestContext {
     quiet: bool,
     golem_path: PathBuf,
     golem_cli_path: PathBuf,
-    _test_dir: TempDir,
+    _test_dir: Option<TempDir>,
     config_dir: TempDir,
     data_dir: TempDir,
     ports_file: PathBuf,
@@ -328,8 +328,25 @@ impl TestContext {
             .unwrap_or_default()
             .0;
 
-        let test_dir = TempDir::new().unwrap();
-        let working_dir = test_dir.path().to_path_buf();
+        // NOTE: GOLEM_CLI_TEST_DIR is intended to be used for debugging one test at a time,
+        //       locally, while keeping the test dir
+        let (test_dir, working_dir) = match std::env::var("GOLEM_CLI_TEST_DIR") {
+            Ok(path) if !path.trim().is_empty() => {
+                let path = PathBuf::from(path);
+                println!(
+                    "{} {}",
+                    "> using GOLEM_CLI_TEST_DIR override:".bold(),
+                    path.display()
+                );
+                fs::create_dir_all(&path).unwrap();
+                (None, path)
+            }
+            _ => {
+                let test_dir = TempDir::new().unwrap();
+                let working_dir = test_dir.path().to_path_buf();
+                (Some(test_dir), working_dir)
+            }
+        };
 
         let mut env = HashMap::new();
 
@@ -801,6 +818,7 @@ fn find_manifest_files(root: &Path) -> Vec<PathBuf> {
     manifests
 }
 
+#[allow(dead_code)]
 pub trait InteractiveSession {
     fn set_expect_timeout(&mut self, timeout: Option<Duration>);
     fn send(&mut self, line: &str) -> anyhow::Result<()>;
@@ -819,28 +837,28 @@ pub trait InteractiveSession {
     fn send_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send(line)?;
         self.expect_str(expected)
-            .with_context(|| format!("after sending: {line}"))?;
+            .with_context(|| format!("after sending: {line:?}"))?;
         Ok(())
     }
 
     fn send_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send(line)?;
         self.expect_regex(expected)
-            .with_context(|| format!("after sending: {line}"))?;
+            .with_context(|| format!("after sending: {line:?}"))?;
         Ok(())
     }
 
     fn send_line_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send_line(line)?;
         self.expect_str(expected)
-            .with_context(|| format!("after sending line: {line}"))?;
+            .with_context(|| format!("after sending line: {line:?}"))?;
         Ok(())
     }
 
     fn send_line_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send_line(line)?;
         self.expect_regex(expected)
-            .with_context(|| format!("after sending line: {line}"))?;
+            .with_context(|| format!("after sending line: {line:?}"))?;
         Ok(())
     }
 }
