@@ -5574,6 +5574,7 @@ dependencies = [
  "test-r",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite 0.25.0",
  "tracing",
  "tracing-opentelemetry",
  "uuid",
