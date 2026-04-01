@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::datetime::SqlDateTime;
 use super::environment_share::environment_roles_from_bit_vector;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
@@ -29,6 +28,7 @@ use golem_common::model::environment::{
     EnvironmentName, EnvironmentRevision, EnvironmentSummary, EnvironmentWithDetails,
 };
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use std::collections::BTreeSet;
 use uuid::Uuid;

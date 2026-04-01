@@ -34,5 +34,6 @@ declare module 'wasi:io/poll@0.2.3' {
      */
     block(): void;
     promise(): Promise<void>;
+    abortablePromise(signal: AbortSignal): Promise<void>;
   }
 }

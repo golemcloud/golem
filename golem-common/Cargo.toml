@@ -120,6 +120,7 @@ tracing-subscriber = { workspace = true, optional = true }
 tracing-serde = { workspace = true, optional = true }
 typed-path = { workspace = true }
 url = { workspace = true }
+urlencoding = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }

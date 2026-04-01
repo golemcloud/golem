@@ -208,7 +208,7 @@ async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
 async fn make_deps(pool: PostgresPool) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(pool.clone())),
-        account_usage_repo: Box::new(DbAccountUsageRepo::logged(pool.clone())),
+        account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(pool.clone())),
@@ -312,6 +312,21 @@ async fn test_http_api_deployment_stage(#[dimension(postgres_variant)] deps: &De
 #[test]
 async fn test_account_usage(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
+}
+
+#[test]
+async fn test_update_http_call_counts(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_update_http_call_counts(deps).await;
+}
+
+#[test]
+async fn test_update_rpc_call_counts(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_update_rpc_call_counts(deps).await;
+}
+
+#[test]
+async fn test_update_call_counts_batch(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_update_call_counts_batch(deps).await;
 }
 
 #[test]
